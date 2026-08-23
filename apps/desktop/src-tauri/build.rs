@@ -59,10 +59,14 @@ fn copy_singbox_resource(manifest_dir: &Path) {
             "cargo:warning=sing-box missing at {}; run scripts/fetch-singbox.sh before release build",
             src.display()
         );
-        // Keep stale resource if present so local rebuilds still package.
+        // Keep a stale resource if present so local rebuilds still package.
         if !dest.is_file() {
-            // Touch empty marker only for non-release so `cargo check` does not fail;
-            // `beforeBuildCommand` enforces a real binary for `tauri build`.
+            // Touch an empty marker so non-release builds (`cargo check` / test / clippy)
+            // work on a fresh checkout; `prepare-singbox-resource.sh` (beforeBuildCommand)
+            // enforces a real binary for `tauri build`.
+            if let Err(err) = fs::write(&dest, b"") {
+                println!("cargo:warning=create sing-box resource marker: {err}");
+            }
         }
     }
 }

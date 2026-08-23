@@ -22,6 +22,12 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev
+
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
@@ -48,6 +54,9 @@ jobs:
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
+
+      - name: Fetch sing-box binary
+        run: ./scripts/fetch-singbox.sh
 
       - name: Workspace gate (G9.10)
         run: bash scripts/gate.sh
