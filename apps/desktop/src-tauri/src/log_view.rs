@@ -172,7 +172,8 @@ fn simplify_core_line(text: &str) -> String {
     while i + 1 < toks.len() {
         let id = toks[i];
         let dur = toks[i + 1];
-        let id_ok = id.len() > 1 && id.starts_with('[') && id[1..].chars().all(|c| c.is_ascii_digit());
+        let id_ok =
+            id.len() > 1 && id.starts_with('[') && id[1..].chars().all(|c| c.is_ascii_digit());
         let body = dur.strip_suffix(']').unwrap_or(dur);
         let dur_ok = body
             .strip_suffix("ms")
@@ -287,9 +288,21 @@ mod tests {
     fn filters_by_level_and_keywords() {
         assert!(display_worthy(Source::Core, Level::Warn, "anything"));
         assert!(display_worthy(Source::App, Level::Error, "anything"));
-        assert!(display_worthy(Source::App, Level::Info, "file logging enabled"));
-        assert!(display_worthy(Source::Core, Level::Info, "sing-box started (0.00s)"));
-        assert!(display_worthy(Source::Core, Level::Info, "tcp server started at 127.0.0.1"));
+        assert!(display_worthy(
+            Source::App,
+            Level::Info,
+            "file logging enabled"
+        ));
+        assert!(display_worthy(
+            Source::Core,
+            Level::Info,
+            "sing-box started (0.00s)"
+        ));
+        assert!(display_worthy(
+            Source::Core,
+            Level::Info,
+            "tcp server started at 127.0.0.1"
+        ));
         assert!(display_worthy(
             Source::Core,
             Level::Info,
@@ -300,7 +313,11 @@ mod tests {
             Level::Info,
             "[3591829452 0ms] outbound/selector[Proxies]: outbound connection to example.com:443"
         ));
-        assert!(!display_worthy(Source::Core, Level::Info, "[TCP] dial example.com:443"));
+        assert!(!display_worthy(
+            Source::Core,
+            Level::Info,
+            "[TCP] dial example.com:443"
+        ));
         assert!(!display_worthy(Source::App, Level::Debug, "noise"));
         assert!(!display_worthy(Source::Core, Level::Trace, "noise"));
     }
@@ -318,7 +335,9 @@ mod tests {
             "2026-08-23 13:47:01 INFO sing-box started (0.00s)"
         );
         assert_eq!(
-            simplify_core_line("+0000 2026-08-23 13:47:07 ERROR outbound/direct: dial tcp: connection refused"),
+            simplify_core_line(
+                "+0000 2026-08-23 13:47:07 ERROR outbound/direct: dial tcp: connection refused"
+            ),
             "2026-08-23 13:47:07 ERROR outbound/direct: dial tcp: connection refused"
         );
     }
@@ -351,7 +370,11 @@ mod tests {
         .unwrap();
 
         let view = read_log_view(&app, &core, 500).unwrap();
-        assert_eq!(view.len(), 5, "debug hidden, outbound routing kept: {view:?}");
+        assert_eq!(
+            view.len(),
+            5,
+            "debug hidden, outbound routing kept: {view:?}"
+        );
         assert!(view[0].starts_with("[core] "), "earliest first: {view:?}");
         assert!(view[0].contains("sing-box started"));
         assert!(!view[0].contains("+0000"), "zone token stripped: {view:?}");
@@ -361,7 +384,10 @@ mod tests {
         assert!(view[3].starts_with("[core] "));
         assert!(view[3].contains("→ example.com:443"));
         assert!(!view[3].contains('\u{1b}'), "ansi stripped from view");
-        assert!(!view[3].contains("591640413"), "connection id stripped: {view:?}");
+        assert!(
+            !view[3].contains("591640413"),
+            "connection id stripped: {view:?}"
+        );
         assert!(!view[3].contains("0ms]"), "delay prefix stripped: {view:?}");
         assert!(view[4].contains("connection refused"));
         let _ = fs::remove_dir_all(&dir);

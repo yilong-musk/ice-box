@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn accepts_public_https_url() {
-        validate_subscription_url("https://cdn.example.com/sub.json").unwrap();
+        validate_subscription_url("https://example.com/sub.json").unwrap();
     }
 
     #[test]

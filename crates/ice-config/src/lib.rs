@@ -305,8 +305,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         // Custom rules are expanded the same way (they are persisted verbatim, so a
         // rule written before the add-time validation may still carry `geoip`), and
         // `geosite` is dropped in both paths.
-        let (custom_rules, all_sets) =
-            expand_geoip_rules(&custom_rules, &sub_sets, input.geoip_rule_set_dir.as_deref());
+        let (custom_rules, all_sets) = expand_geoip_rules(
+            &custom_rules,
+            &sub_sets,
+            input.geoip_rule_set_dir.as_deref(),
+        );
         final_rules.extend(custom_rules);
         final_rules.extend(sub_rules);
         rule_sets = all_sets;
@@ -891,9 +894,16 @@ mod build_tests {
         .unwrap();
 
         let rules = cfg["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 2, "custom geoip + subscription domain rule survive");
+        assert_eq!(
+            rules.len(),
+            2,
+            "custom geoip + subscription domain rule survive"
+        );
         let all = serde_json::to_string(rules).unwrap();
-        assert!(!all.contains("geosite"), "geosite rules must be dropped: {all}");
+        assert!(
+            !all.contains("geosite"),
+            "geosite rules must be dropped: {all}"
+        );
         assert!(
             cfg["route"]["rule_set"]
                 .as_array()

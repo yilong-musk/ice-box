@@ -337,9 +337,7 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let meta = mgr
-            .add("https://cdn.example.com/path/sub.json", None)
-            .unwrap();
+        let meta = mgr.add("https://example.com/path/sub.json", None).unwrap();
         assert_eq!(meta.name, "my.json");
         assert!(paths.raw(meta.id).is_file());
         assert!(paths.nodes(meta.id).is_file());
@@ -920,10 +918,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
     }
 
     /// Network fetch phase of an update: load meta, validate URL, GET (no disk writes).
-    pub fn fetch_update(
-        &self,
-        id: Uuid,
-    ) -> Result<FetchedUpdate, SubscriptionError> {
+    pub fn fetch_update(&self, id: Uuid) -> Result<FetchedUpdate, SubscriptionError> {
         assert!(self.fetcher.bypasses_system_proxy());
 
         let index = load_index(&self.paths)?;
@@ -947,10 +942,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
     }
 
     /// Disk phase of an update: normalize + persist, or record `last_error`.
-    pub fn apply_update(
-        &self,
-        upd: FetchedUpdate,
-    ) -> Result<SubscriptionMeta, SubscriptionError> {
+    pub fn apply_update(&self, upd: FetchedUpdate) -> Result<SubscriptionMeta, SubscriptionError> {
         if upd.fetched.not_modified {
             return clear_subscription_error(&self.paths, upd.meta.id);
         }

@@ -699,10 +699,14 @@ mod tests {
             }),
         };
 
-        proxy.restore(&backup).expect("restore skips missing service");
+        proxy
+            .restore(&backup)
+            .expect("restore skips missing service");
         let calls = calls.lock().unwrap();
         assert!(
-            calls.iter().any(|c| c.starts_with("-setwebproxy Wi-Fi 10.0.0.1 8080")),
+            calls
+                .iter()
+                .any(|c| c.starts_with("-setwebproxy Wi-Fi 10.0.0.1 8080")),
             "existing service must be restored, calls: {calls:?}"
         );
         assert!(

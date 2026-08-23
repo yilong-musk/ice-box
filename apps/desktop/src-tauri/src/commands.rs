@@ -103,8 +103,7 @@ fn cached_system_proxy_applied(state: &AppState, settings: &AppSettings) -> Opti
         }
     }
     let proxy = state.proxy.lock().ok()?;
-    let value =
-        is_proxy_live_applied(proxy.as_ref(), &state.paths.proxy_backup(), &endpoints);
+    let value = is_proxy_live_applied(proxy.as_ref(), &state.paths.proxy_backup(), &endpoints);
     *cache = Some((endpoints, now, value));
     Some(value)
 }
@@ -529,10 +528,11 @@ pub async fn list_nodes(state: State<'_, AppState>) -> Result<Vec<NodeInfo>, App
     let outbounds = merged_outbounds(state.inner())?;
     let settings = current_settings(&state.paths)?;
     let selections = load_group_selections(&state.paths.group_selections());
-    let live = if {
+    let core_running = {
         let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         core.state().status == CoreStatus::Running
-    } {
+    };
+    let live = if core_running {
         let endpoints = clash_endpoints(&settings);
         tauri::async_runtime::spawn_blocking(move || proxy_groups(&endpoints).ok())
             .await
@@ -1217,9 +1217,7 @@ pub async fn test_node_delay(
 }
 
 #[tauri::command]
-pub async fn get_connection_stats(
-    state: State<'_, AppState>,
-) -> Result<ConnectionStats, AppError> {
+pub async fn get_connection_stats(state: State<'_, AppState>) -> Result<ConnectionStats, AppError> {
     let settings = current_settings(&state.paths)?;
     require_running_core(&state)?;
     let endpoints = clash_endpoints(&settings);
@@ -1715,11 +1713,7 @@ mod tests {
             "tag": "cn",
             "url": "https://example.com/cn.srs",
         })];
-        fs::write(
-            sub.profile(id),
-            serde_json::to_vec(&profile).unwrap(),
-        )
-        .unwrap();
+        fs::write(sub.profile(id), serde_json::to_vec(&profile).unwrap()).unwrap();
 
         let fp = persist_add_custom_rule(
             &state,

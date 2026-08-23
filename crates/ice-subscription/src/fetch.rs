@@ -478,12 +478,8 @@ mod tests {
             location: Some("http://cdn.example.com/sub".into()),
             body: Vec::new(),
         };
-        let err = handle_hop(hop, "https://example.com/a", "https://example.com/a", 0)
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("https→http"),
-            "got {err}"
-        );
+        let err = handle_hop(hop, "https://example.com/a", "https://example.com/a", 0).unwrap_err();
+        assert!(err.to_string().contains("https→http"), "got {err}");
 
         let hop_upgrade = HopResponse {
             status: 302,
@@ -493,9 +489,14 @@ mod tests {
             location: Some("https://cdn.example.com/sub".into()),
             body: Vec::new(),
         };
-        let next = handle_hop(hop_upgrade, "https://example.com/a", "https://example.com/a", 0)
-            .unwrap()
-            .unwrap_err();
+        let next = handle_hop(
+            hop_upgrade,
+            "https://example.com/a",
+            "https://example.com/a",
+            0,
+        )
+        .unwrap()
+        .unwrap_err();
         assert_eq!(next, "https://cdn.example.com/sub");
     }
 
