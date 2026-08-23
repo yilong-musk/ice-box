@@ -276,15 +276,13 @@ fn fetch_get(
             let response = req
                 .call()
                 .map_err(|e| SubscriptionError::FetchFailed(format!("GET {current}: {e}")))?;
-            match hop_from_ureq(response) {
-                Ok(hop_resp) => match handle_hop(hop_resp, url, &current, hop)? {
-                    Ok(final_hop) => return Ok(final_hop),
-                    Err(next_url) => {
-                        current = next_url;
-                        continue;
-                    }
-                },
-                Err(err) => return Err(err),
+            let hop_resp = hop_from_ureq(response)?;
+            match handle_hop(hop_resp, url, &current, hop)? {
+                Ok(final_hop) => return Ok(final_hop),
+                Err(next_url) => {
+                    current = next_url;
+                    continue;
+                }
             }
         }
 
