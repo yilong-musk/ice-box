@@ -1,0 +1,37 @@
+# S4 fixture — Clash fake-ip DNS block.
+# listen is dropped (sing-box 1.13 removed the dns inbound);
+# fake-ip-filter rules use a local server; domain nameservers get domain_resolver.
+mode: rule
+dns:
+  enable: true
+  ipv6: false
+  listen: 127.0.0.1:7874
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+  nameserver:
+    - 223.5.5.5
+    - https://dns.alidns.com/dns-query
+    - tls://1.1.1.1:853
+  proxy-server-nameserver:
+    - udp://127.0.0.1:7874
+
+proxies:
+  - name: "n1"
+    type: ss
+    server: 203.0.113.10
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secret-ss"
+
+proxy-groups:
+  - name: "Proxies"
+    type: select
+    proxies:
+      - n1
+
+rules:
+  - DOMAIN-SUFFIX,example.com,Proxies
+  - MATCH,Proxies

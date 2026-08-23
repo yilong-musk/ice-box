@@ -1,0 +1,45 @@
+# G6.6 — five supported types + unused proxy-groups (must not become outbounds)
+proxies:
+  - name: "ss-alpha"
+    type: ss
+    server: 203.0.113.10
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secret-ss"
+  - name: "vmess-beta"
+    type: vmess
+    server: 203.0.113.20
+    port: 443
+    uuid: "11111111-2222-3333-4444-555555555555"
+    alterId: 0
+    cipher: auto
+    tls: true
+  - name: "trojan-gamma"
+    type: trojan
+    server: 203.0.113.30
+    port: 443
+    password: "trojan-pass"
+    sni: trojan.example.com
+  - name: "socks-delta"
+    type: socks5
+    server: 203.0.113.40
+    port: 1080
+  - name: "http-epsilon"
+    type: http
+    server: 203.0.113.50
+    port: 8080
+
+proxy-groups:
+  - name: "PROXY"
+    type: select
+    proxies:
+      - ss-alpha
+      - vmess-beta
+      - DIRECT
+  - name: "AUTO"
+    type: url-test
+    proxies:
+      - ss-alpha
+      - trojan-gamma
+    url: http://www.gstatic.com/generate_204
+    interval: 300

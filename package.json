@@ -1,0 +1,18 @@
+{
+  "name": "ice-box",
+  "private": true,
+  "description": "Workspace helper scripts; the desktop app lives in apps/desktop",
+  "scripts": {
+    "dev": "bash scripts/dev.sh host",
+    "dev:host": "bash scripts/dev.sh host",
+    "dev:mac-arm64": "bash scripts/dev.sh mac-arm64",
+    "dev:mac-x64": "bash scripts/dev.sh mac-x64",
+    "dev:win": "bash scripts/dev.sh win",
+    "tauri": "npm --prefix apps/desktop run tauri --",
+    "build": "npm --prefix apps/desktop run tauri -- build",
+    "fetch-singbox": "bash scripts/fetch-singbox.sh",
+    "prepare-singbox": "bash scripts/prepare-singbox-resource.sh",
+    "gate": "bash scripts/gate.sh",
+    "acceptance": "bash scripts/run-acceptance-macos.sh"
+  }
+}

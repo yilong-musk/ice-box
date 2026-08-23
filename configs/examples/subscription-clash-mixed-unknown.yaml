@@ -1,0 +1,17 @@
+# G6.8 — known + unknown mixed (skip count ≥ 1, still success)
+proxies:
+  - name: "ss-ok"
+    type: ss
+    server: 203.0.113.10
+    port: 8388
+    cipher: chacha20-ietf-poly1305
+    password: "ok"
+  - name: "hysteria-skip"
+    type: hysteria
+    server: 203.0.113.61
+    port: 443
+    auth_str: "x"
+  - name: "socks-ok"
+    type: socks5
+    server: 127.0.0.1
+    port: 1080

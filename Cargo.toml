@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop/src-tauri",
+  "crates/ice-core",
+  "crates/ice-proxy-sys",
+  "crates/ice-config",
+  "crates/ice-subscription",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["ice-box"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = "2.12"
+ice-core = { path = "crates/ice-core" }
+ice-proxy-sys = { path = "crates/ice-proxy-sys" }
+ice-config = { path = "crates/ice-config" }
+ice-subscription = { path = "crates/ice-subscription" }

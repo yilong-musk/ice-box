@@ -1,0 +1,8 @@
+# G6.4 — Clash socks5
+proxies:
+  - name: "socks-delta"
+    type: socks5
+    server: 203.0.113.40
+    port: 1080
+    username: "user"
+    password: "pass"

@@ -1,0 +1,28 @@
+{
+  "log": { "level": "info" },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "in",
+      "listen": "127.0.0.1",
+      "listen_port": 1080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "node-a",
+      "server": "1.1.1.1",
+      "server_port": 1080
+    },
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": ["node-a", "direct"]
+    },
+    { "type": "urltest", "tag": "auto", "outbounds": ["node-a"] },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" },
+    { "type": "dns", "tag": "dns-out" }
+  ]
+}

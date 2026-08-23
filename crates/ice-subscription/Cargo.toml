@@ -1,0 +1,22 @@
+[package]
+name = "ice-subscription"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Subscription import, Clash/sing-box parse, and local cache"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ice-config = { workspace = true }
+ureq = { workspace = true }
+base64 = "0.22"
+tracing = { workspace = true }
+serde_yaml = "0.9"
+url = "2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"

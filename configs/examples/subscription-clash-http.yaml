@@ -1,0 +1,8 @@
+# G6.5 — Clash http
+proxies:
+  - name: "http-epsilon"
+    type: http
+    server: 203.0.113.50
+    port: 8080
+    username: "u"
+    password: "p"

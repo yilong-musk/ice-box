@@ -1,0 +1,8 @@
+# G6.1 — Clash ss → sing-box shadowsocks
+proxies:
+  - name: "ss-alpha"
+    type: ss
+    server: 203.0.113.10
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secret-ss"

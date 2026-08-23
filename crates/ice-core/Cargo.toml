@@ -1,0 +1,25 @@
+[package]
+name = "ice-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "sing-box process lifecycle and app state machine"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+ice-config = { workspace = true }
+tracing = { workspace = true }
+ureq = { workspace = true }
+urlencoding = "2.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

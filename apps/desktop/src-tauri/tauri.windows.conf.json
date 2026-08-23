@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "targets": ["msi", "nsis"],
+    "resources": {
+      "resources/sing-box.exe": "sing-box.exe"
+    }
+  }
+}

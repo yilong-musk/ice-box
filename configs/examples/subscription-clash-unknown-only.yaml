@@ -1,0 +1,15 @@
+# G6.7 — only unsupported types → sub.empty
+proxies:
+  - name: "ssr-legacy"
+    type: ssr
+    server: 203.0.113.60
+    port: 443
+    cipher: aes-256-cfb
+    password: "x"
+    protocol: origin
+    obfs: plain
+  - name: "hysteria-node"
+    type: hysteria
+    server: 203.0.113.61
+    port: 443
+    auth_str: "x"

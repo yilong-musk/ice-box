@@ -1,0 +1,14 @@
+[package]
+name = "ice-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "sing-box config templates, merge, and validation"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

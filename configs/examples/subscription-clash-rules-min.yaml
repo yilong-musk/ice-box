@@ -1,0 +1,52 @@
+# S3 fixture — minimal coverage of every supported Clash rule type.
+# MATCH maps to route.final; GEOIP / RULE-SET are skipped with warnings.
+mode: rule
+proxies:
+  - name: "n1"
+    type: ss
+    server: 203.0.113.10
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secret-ss"
+  - name: "n2"
+    type: trojan
+    server: 203.0.113.30
+    port: 443
+    password: "trojan-pass"
+
+proxy-groups:
+  - name: "Proxies"
+    type: select
+    proxies:
+      - n1
+      - n2
+  - name: "Auto"
+    type: url-test
+    proxies:
+      - n1
+      - n2
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+  - name: "Fallback"
+    type: fallback
+    proxies:
+      - n1
+      - n2
+  - name: "Balancer"
+    type: load-balance
+    strategy: round-robin
+    proxies:
+      - n1
+      - n2
+
+rules:
+  - DOMAIN,example.com,Proxies
+  - DOMAIN-SUFFIX,google.com,Proxies
+  - DOMAIN-SUFFIX,cn.bing.com,DIRECT
+  - DOMAIN-KEYWORD,ads,block
+  - IP-CIDR,198.18.0.0/15,Proxies,no-resolve
+  - IP-CIDR6,2001:db8::/32,Proxies
+  - GEOIP,CN,DIRECT
+  - PROCESS-NAME,ssh,Proxies
+  - RULE-SET,cn-domains,Proxies
+  - MATCH,Proxies

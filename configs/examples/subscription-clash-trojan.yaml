@@ -1,0 +1,9 @@
+# G6.3 — Clash trojan
+proxies:
+  - name: "trojan-gamma"
+    type: trojan
+    server: 203.0.113.30
+    port: 443
+    password: "trojan-pass"
+    sni: trojan.example.com
+    skip-cert-verify: false

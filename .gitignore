@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Tauri generated (capabilities / schema)
+apps/desktop/src-tauri/gen/
+
+# sing-box binaries (fetched locally; keep scripts / pin)
+third_party/sing-box/**
+!third_party/sing-box/VERSION
+!third_party/sing-box/.gitkeep
+
+# Copied into the Tauri bundle at build time
+apps/desktop/src-tauri/resources/sing-box
+apps/desktop/src-tauri/resources/sing-box.exe
+!apps/desktop/src-tauri/resources/.gitkeep

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  gate-linux:
+    name: gate (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
+      - name: Workspace gate (G9.10)
+        run: bash scripts/gate.sh
+
+  gate-macos:
+    name: gate (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
+      - name: Workspace gate (G9.10)
+        run: bash scripts/gate.sh
+
+      - name: Headless macOS acceptance (G9.1 / G9.6 / G9.7)
+        run: cargo test -p ice-box --lib 'g9_' -- --nocapture
+
+      - name: macOS proxy-sys unit tests
+        run: cargo test -p ice-proxy-sys --lib
