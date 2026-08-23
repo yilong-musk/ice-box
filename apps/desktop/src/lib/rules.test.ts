@@ -1,12 +1,45 @@
 import { describe, expect, it } from "vitest";
 import type { RuleRow } from "../api/tauri";
 import {
+  MATCH_KEY_ORDER,
+  RULE_TYPE_LABELS,
   buildCustomRule,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
   ruleTypeLabel,
 } from "./rules";
+
+/**
+ * Backend classifier keys, mirrored from
+ * `crates/ice-config/src/rule_overrides.rs` (`RULE_TYPE_KEYS`).
+ * Update both files together; the parity tests below pin them.
+ */
+const BACKEND_RULE_TYPE_KEYS = [
+  "domain",
+  "domain_suffix",
+  "domain_keyword",
+  "domain_regex",
+  "ip_cidr",
+  "ip_is_private",
+  "source_ip_cidr",
+  "source_ip_is_private",
+  "rule_set",
+  "geoip",
+  "geosite",
+  "port",
+  "source_port",
+  "network",
+  "protocol",
+  "process_name",
+  "process_path",
+  "package_name",
+  "inbound",
+  "wifi_ssid",
+  "wifi_bssid",
+  "clash_mode",
+  "user",
+];
 
 function row(rule: Record<string, unknown>): RuleRow {
   return {
@@ -75,5 +108,15 @@ describe("rule helpers", () => {
     // sing-box 1.13 removed geoip/geosite rule options; not offered by the editor.
     expect(buildCustomRule("geoip", "cn", "direct")).toBeNull();
     expect(buildCustomRule("geosite", "google", "direct")).toBeNull();
+  });
+
+  it("keeps matcher keys in parity with backend RULE_TYPE_KEYS", () => {
+    expect([...MATCH_KEY_ORDER].sort()).toEqual([...BACKEND_RULE_TYPE_KEYS].sort());
+  });
+
+  it("labels every backend rule type", () => {
+    for (const key of BACKEND_RULE_TYPE_KEYS) {
+      expect(RULE_TYPE_LABELS[key], `label for ${key}`).toBeTruthy();
+    }
   });
 });

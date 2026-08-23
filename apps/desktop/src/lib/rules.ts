@@ -28,7 +28,7 @@ export const RULE_TYPE_LABELS: Record<string, string> = {
 };
 
 /** Matcher key priority, mirrored from the backend classifier. */
-const MATCH_KEY_ORDER = [
+export const MATCH_KEY_ORDER = [
   "domain",
   "domain_suffix",
   "domain_keyword",

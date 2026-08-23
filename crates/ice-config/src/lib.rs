@@ -31,6 +31,13 @@ pub use selections::{
 };
 pub use settings::{load_settings, save_settings, AppSettings, ProxyMode};
 
+/// sing-box core version the config generator targets (architecture §12 / §22).
+///
+/// Bundled desktop binaries (`third_party/sing-box/VERSION`) must match this pin;
+/// generated config features (e.g. rule options, removed in sing-box 1.13) are
+/// only tested against this version range.
+pub const ENGINE_COMPAT_CORE_VERSION: &str = "1.13.19";
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;

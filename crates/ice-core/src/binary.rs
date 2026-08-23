@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use crate::error::CoreError;
 
 /// Bundled sing-box version pin (architecture §21 / `third_party/sing-box/VERSION`).
-pub const BUNDLED_SINGBOX_VERSION: &str = "1.13.19";
+///
+/// Source of truth lives in the config engine (`ice_config::ENGINE_COMPAT_CORE_VERSION`);
+/// the desktop process layer only mirrors it for packaging checks.
+pub const BUNDLED_SINGBOX_VERSION: &str = ice_config::ENGINE_COMPAT_CORE_VERSION;
 
 /// Current packaging target directory name under `third_party/sing-box/`.
 pub fn current_target_dir() -> &'static str {

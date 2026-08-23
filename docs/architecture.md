@@ -112,7 +112,7 @@ Runtime resolution order:
 2. Release: flat `sing-box[.exe]` under the Tauri `resource_dir` (or `resource_dir/<target>/`)
 3. Neither found → `Error`, UI hints that the core is missing (`core.not_found`)
 
-**Bundled version (locked): `1.13.19`** (see `third_party/sing-box/VERSION` and `ice_core::BUNDLED_SINGBOX_VERSION`).
+**Bundled version (locked): `1.13.19`** (see `third_party/sing-box/VERSION`, `ice_config::ENGINE_COMPAT_CORE_VERSION`, and `ice_core::BUNDLED_SINGBOX_VERSION` mirroring it).
 
 Version policy: config generation is constrained by that version's JSON schema (v1 uses structural validation + startup healthcheck, no full schema compilation). Fetch script: `scripts/fetch-singbox.sh`; pre-bundle prep: `scripts/prepare-singbox-resource.sh`.
 
@@ -129,7 +129,8 @@ ice-box/
 │   ├── ice-core/
 │   ├── ice-proxy-sys/
 │   ├── ice-config/
-│   └── ice-subscription/
+│   ├── ice-subscription/
+│   └── ice-engine/               # config engine facade (§22)
 ├── third_party/sing-box/
 ├── configs/examples/
 └── docs/architecture.md
@@ -144,6 +145,10 @@ ice-box (src-tauri)
   ├── ice-config
   └── ice-subscription
         └── ice-config          # shared types such as NormalizedOutbound only
+
+ice-engine                      # facade over ice-config + ice-subscription (§22)
+  ├── ice-config
+  └── ice-subscription
 
 ice-core ──×── ice-subscription   # no direct dependency; orchestrated by the shell
 ice-proxy-sys ──×── ice-core
@@ -685,7 +690,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 
 ## 21. Locked vs. to-be-documented during implementation
 
-**Locked (do not change silently):** platforms, Tauri+React, four crates, subprocess, system proxy, subscription import/management, sing-box first + Clash compatible, hot reload first.
+**Locked (do not change silently):** platforms (macOS / Windows), Tauri+React, engine crates, subprocess, system proxy, subscription import/management, sing-box first + Clash compatible, hot reload first.
 
 **Details to write back into this document during implementation:**
 
@@ -697,7 +702,36 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 
 ---
 
-## 22. Glossary
+## 22. Config engine facade (ice-engine)
+
+`ice-engine` is the single cross-platform entry point for the config pipeline:
+**subscription body → normalized profile → final sing-box config**. It re-exports
+the engine surface from `ice-config` (build / validation / settings) and
+`ice-subscription` (import / parse / storage) and adds:
+
+- `EngineError` unifying `ConfigError` and `SubscriptionError`
+- `import_subscription(raw)` → `(SubscriptionFormat, NormalizedProfile)`
+- `build_config(&BuildInput)` → `serde_json::Value`
+- `subscription_to_config(raw, template, geoip_dir)` → pretty JSON string
+- `ENGINE_COMPAT_CORE_VERSION` — the sing-box version the generator targets
+  (`1.13.19`); bundled desktop binaries and any future embedded core must match
+
+Rules:
+
+1. Desktop shell may use the facade or the underlying crates directly; the facade
+   exists so future hosts (mobile apps embedding libsing-box) have one documented
+   API and cannot accidentally pull desktop-only crates (`ice-core`, `ice-proxy-sys`).
+2. The engine must stay free of platform dependencies (process / proxy / TUN live
+   in desktop crates). Verify with `cargo tree` after dependency changes.
+3. Supported platforms today are **macOS / Windows**. Cross-compilation checks for
+   iOS / Android require those targets and an Android NDK; set them up only when
+   mobile development starts.
+4. `ice_core::BUNDLED_SINGBOX_VERSION` mirrors `ice_config::ENGINE_COMPAT_CORE_VERSION`;
+   change the pin in the engine only.
+
+---
+
+## 23. Glossary
 
 | Term | Meaning |
 |------|---------|

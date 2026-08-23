@@ -6,6 +6,7 @@ members = [
   "crates/ice-proxy-sys",
   "crates/ice-config",
   "crates/ice-subscription",
+  "crates/ice-engine",
 ]
 
 [workspace.package]
@@ -28,3 +29,4 @@ ice-core = { path = "crates/ice-core" }
 ice-proxy-sys = { path = "crates/ice-proxy-sys" }
 ice-config = { path = "crates/ice-config" }
 ice-subscription = { path = "crates/ice-subscription" }
+ice-engine = { path = "crates/ice-engine" }
