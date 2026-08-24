@@ -9,7 +9,7 @@ The implementation spec lives in [docs/architecture.md](docs/architecture.md) (p
 - System proxy (no TUN)
 - Subscriptions: sing-box first, Clash compatible; **only one subscription is active at a time**, switching the active subscription switches the entire set of policy groups / rules / DNS
 - Runtime updates: hot reload first (**SIGHUP** in-process rebuild, PID unchanged), restart as fallback
-- **Modes**: one-click switch between Rule / Global / Direct from the home page, hot-switched while running (SIGHUP reload, no core restart needed)
+- **Modes**: one-click switch between Rule / Global / Direct from the home page, switched **live via the Clash API** (`PATCH /configs`) on macOS **and** Windows — no config rebuild, no reload, no core restart, no connection drop
 - **Nodes**: switch outbound from the home page, Clash API latency test, active connection count
 - **Rules**: query / search / filter by type / pagination (server-side filtering, tens of thousands of rules never cross IPC as a full table), disable / enable (fingerprint persisted), custom rules
 - **Traffic**: real-time upload/download chart on the home page (Clash API `/traffic`, last 60 seconds)
@@ -99,11 +99,13 @@ Tauri commands uniformly return JSON on failure:
 
 **macOS v2 routing capabilities** (2026-08-22): v1 slices 0-9 have passed the gate; **single active subscription** replaces multi-subscription merging (breaking change, see architecture §11.5); Clash `proxy-groups` → selector/urltest/fallback/loadbalance, `rules` → route.rules (**GEOIP → bundled sing-geoip rule-sets**, 30 countries, see `scripts/fetch-geoip.sh`), subscription `dns` → sing-box dns (listen stripped); bundled sing-box **1.13.19**; `.app` / `.dmg` buildable.
 
+**Windows completion** (2026-08-24, see [docs/windows-plan.md](docs/windows-plan.md)): WinInet system proxy implemented (`ice-proxy-sys` Windows backend, per-user `Internet Settings`, no elevation); mode switching is live via Clash API `PATCH /configs` on **both** platforms (no core restart, no connection drop); Windows CI runner (`gate-windows`), MSI/NSIS packaging (`npm run build:win`) and Windows acceptance (`npm run acceptance:win`) added.
+
 | Scope | Status |
 |-------|--------|
 | macOS | ✅ Release gate passed |
-| CI | `.github/workflows/ci.yml` → Linux + macOS `npm run gate` |
-| Windows | **Deferred** (slice 4b system proxy → G8.2 installer) |
+| CI | `.github/workflows/ci.yml` → Linux + macOS + **Windows** `npm run gate` |
+| Windows | ✅ System proxy (WinInet), live mode switch, MSI/NSIS build script, acceptance script |
 
 ### Common commands
 
@@ -113,8 +115,10 @@ npm run dev:mac-arm64    # dev (Apple Silicon)
 npm run dev:mac-x64      # dev (Intel Mac)
 npm run dev:win          # dev (Windows)
 npm run build            # macOS .app / .dmg
+npm run build:win        # Windows MSI + NSIS (Windows host, PowerShell fallback prepared)
 npm run gate             # fmt + clippy + test + tsc + vitest
 npm run acceptance       # full macOS acceptance (incl. live sing-box / system proxy)
+npm run acceptance:win   # full Windows acceptance (incl. live WinInet / sing-box, Git Bash)
 ```
 
 ### macOS release (local build)
@@ -123,4 +127,12 @@ npm run acceptance       # full macOS acceptance (incl. live sing-box / system p
 ./scripts/fetch-singbox.sh
 npm run build
 open target/release/bundle/dmg/ice-box_*_aarch64.dmg   # or .app
+```
+
+### Windows release (local build)
+
+```bash
+./scripts/fetch-singbox.sh win
+npm run build:win
+# artifacts: apps/desktop/src-tauri/target/release/bundle/msi/ and .../nsis/
 ```

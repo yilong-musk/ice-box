@@ -3,7 +3,7 @@
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
-    orchestrate_start, orchestrate_stop, resolve_binary,
+    orchestrate_set_proxy_mode, orchestrate_start, orchestrate_stop, resolve_binary,
 };
 use crate::shutdown::graceful_stop;
 use crate::AppState;
@@ -297,8 +297,10 @@ fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {
     }
 }
 
-/// Switch routing mode: persists `settings.proxy_mode`, regenerates config and hot
-/// reloads the core when running (rules are stripped in global / direct mode).
+/// Switch routing mode. While Running the switch is live via Clash API `PATCH /configs`
+/// (no core restart, no connection drop); the rebuild + reload/restart path is the fallback
+/// (stopped, pre-Slice 4c config, or PATCH failure). Settings are always persisted so the
+/// next apply builds the new `default_mode`.
 #[tauri::command]
 pub fn set_proxy_mode(
     app: AppHandle,
@@ -314,7 +316,34 @@ pub fn set_proxy_mode(
     let mut settings = previous.clone();
     settings.proxy_mode = mode;
     persist_settings(&state.paths.settings(), &settings)?;
-    apply_after_change(&app, &state, &settings, &previous, false)
+    let binary = binary_for(&app)?;
+    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+    match orchestrate_set_proxy_mode(
+        &state.paths,
+        &settings,
+        &previous,
+        &mut **core,
+        proxy.as_ref(),
+        binary,
+        resource_dir(&app).as_deref(),
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) if err.code == "config.empty_outbounds" => {
+            if matches!(
+                core.state().status,
+                CoreStatus::Running | CoreStatus::Starting | CoreStatus::Error
+            ) {
+                orchestrate_stop(&state.paths, &mut **core, proxy.as_ref())?;
+                return Err(AppError::new(
+                    ErrorCode::CoreStoppedNoNodes,
+                    "内核已停止：没有可用的订阅节点",
+                ));
+            }
+            Err(err)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// When `soft_empty` is true (subscription mutations), empty outbounds while Stopped is Ok;
@@ -1588,7 +1617,11 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
         let rules = config["route"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 3, "disabled rule dropped from runtime config");
+        assert_eq!(
+            rules.len(),
+            5,
+            "2 clash_mode rules + 3 remaining sample rules after the disabled one dropped"
+        );
         assert!(!serde_json::to_string(rules)
             .unwrap()
             .contains("youtube.com"));

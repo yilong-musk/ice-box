@@ -10,9 +10,11 @@
     "dev:win": "bash scripts/dev.sh win",
     "tauri": "npm --prefix apps/desktop run tauri --",
     "build": "npm --prefix apps/desktop run tauri -- build",
+    "build:win": "npm --prefix apps/desktop run tauri -- build --config tauri.windows.conf.json",
     "fetch-singbox": "bash scripts/fetch-singbox.sh",
     "prepare-singbox": "bash scripts/prepare-singbox-resource.sh",
     "gate": "bash scripts/gate.sh",
-    "acceptance": "bash scripts/run-acceptance-macos.sh"
+    "acceptance": "bash scripts/run-acceptance-macos.sh",
+    "acceptance:win": "bash scripts/run-acceptance-windows.sh"
   }
 }

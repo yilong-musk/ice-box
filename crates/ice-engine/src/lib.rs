@@ -10,10 +10,10 @@
 //! dependencies, keeping future mobile hosts (embedded libsing-box) viable.
 
 pub use ice_config::{
-    build_runtime_config, config_to_pretty_json, minimal_dns_block, redact_config_str,
-    rule_type_of, validate_template, AppSettings, BuildInput, ConfigError, GroupSelections,
-    LocalTemplate, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProxyMode,
-    RuleOverrides, ENGINE_COMPAT_CORE_VERSION, RULE_TYPE_KEYS,
+    build_runtime_config, clash_mode_name, config_to_pretty_json, minimal_dns_block,
+    redact_config_str, rule_type_of, validate_template, AppSettings, BuildInput, ConfigError,
+    GroupSelections, LocalTemplate, NormalizedOutbound, NormalizedProfile, NormalizedRoute,
+    ProxyMode, RuleOverrides, ENGINE_COMPAT_CORE_VERSION, RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
     detect_format, maybe_decode_base64, normalize_raw_body, parse_clash_profile, parse_profile,
@@ -107,6 +107,38 @@ proxies:
         assert!(tags.contains(&"server2"));
         assert_eq!(value["inbounds"][0]["type"], "mixed");
         assert_eq!(value["inbounds"][0]["listen_port"], 17890);
+    }
+
+    #[test]
+    fn built_config_emits_clash_mode_rules_and_default_mode() {
+        let value = build_config(&BuildInput {
+            template: LocalTemplate {
+                proxy_mode: ProxyMode::Global,
+                ..LocalTemplate::default()
+            },
+            profile: NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+                tag: "n1".into(),
+                outbound: serde_json::json!({
+                    "type": "socks",
+                    "tag": "n1",
+                    "server": "127.0.0.1",
+                    "server_port": 1080
+                }),
+            }]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+        })
+        .expect("build");
+        let first = &value["route"]["rules"][0];
+        assert_eq!(first["clash_mode"], "global");
+        assert_eq!(first["outbound"], "proxy");
+        assert_eq!(value["experimental"]["clash_api"]["default_mode"], "Global");
+        assert_eq!(
+            value["experimental"]["clash_api"]["mode_list"],
+            serde_json::json!(["Rule", "Global", "Direct"])
+        );
     }
 
     #[test]

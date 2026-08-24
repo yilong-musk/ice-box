@@ -204,8 +204,8 @@ mod tests {
     }
 }
 
-/// Live macOS acceptance (real sing-box / system proxy). Run with `--ignored`.
-#[cfg(all(test, target_os = "macos"))]
+/// Live acceptance (real sing-box / system proxy). Run with `--ignored`.
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod live {
     use crate::log_tail::read_log_tail;
     use crate::orchestrate::{
@@ -290,7 +290,9 @@ mod live {
         Command::new("curl")
             .args(["-x", &proxy, "-I", "--max-time", "8", "http://example.com"])
             .output()
-            .map(|o| o.status.success() || !o.stdout.is_empty() || !o.stderr.is_empty())
+            // A refused proxy connection fails with non-empty stderr, so stderr alone must
+            // not count as success; require a completed transfer or HTTP output instead.
+            .map(|o| o.status.success() || !o.stdout.is_empty())
             .unwrap_or(false)
     }
 
@@ -631,5 +633,52 @@ mod live {
             selector.tag,
             other
         );
+    }
+
+    /// Slice 4c live: runtime mode switch via Clash API `PATCH /configs` — no restart.
+    /// Start → PATCH global → mixed port keeps answering → PATCH direct → back to rule.
+    #[test]
+    #[ignore = "live: real sing-box + Clash API mode switch"]
+    fn g9_11_live_mode_switch_via_clash_api() {
+        use ice_config::clash_mode_name;
+        use ice_core::{get_mode, set_mode, HealthEndpoints};
+
+        let paths = temp_app("mode-switch");
+        seed_singbox_subscription(&paths);
+        let settings = settings(false);
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let endpoints = HealthEndpoints {
+            host: "127.0.0.1".into(),
+            port: CLASH_PORT,
+        };
+
+        let rule = clash_mode_name(ice_config::ProxyMode::Rule);
+        assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
+
+        for mode in [
+            ice_config::ProxyMode::Global,
+            ice_config::ProxyMode::Direct,
+            ice_config::ProxyMode::Rule,
+        ] {
+            let name = clash_mode_name(mode);
+            set_mode(&endpoints, name).expect("set mode");
+            assert_eq!(
+                get_mode(&endpoints).expect("re-read mode"),
+                name,
+                "runtime mode must reflect the PATCH"
+            );
+            assert!(
+                curl_via_mixed(MIXED_PORT),
+                "mixed inbound must keep answering in {name} mode"
+            );
+        }
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!("G9.11 ok: Rule -> Global -> Direct -> Rule via Clash API, no restart");
     }
 }

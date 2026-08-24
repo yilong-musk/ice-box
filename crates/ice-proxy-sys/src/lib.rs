@@ -8,11 +8,17 @@ mod record;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "windows")]
+mod windows;
+
 #[cfg(target_os = "macos")]
 pub use macos::{
     parse_bypass_output, parse_proxy_get_output, MacosSystemProxy, NetworkSetupRunner,
     RealNetworkSetup, ServiceBackup, ServiceProxyState,
 };
+
+#[cfg(target_os = "windows")]
+pub use windows::WindowsSystemProxy;
 
 pub use backup_file::{
     is_proxy_applied_on_disk, is_proxy_live_applied, recover_if_applied, ProxyBackupFile,
@@ -93,8 +99,7 @@ pub fn create_system_proxy() -> Box<dyn SystemProxy> {
     }
     #[cfg(target_os = "windows")]
     {
-        // TODO: WinInet backend in slice 4b
-        Box::new(NoopSystemProxy)
+        Box::new(WindowsSystemProxy::new())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -135,6 +140,106 @@ impl From<ProxySysError> for AppError {
                 AppError::new(ErrorCode::ProxyApplyFailed, err.to_string())
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod live_tests {
+    use super::*;
+    use crate::windows::WindowsSystemProxy;
+
+    /// G4.3-windows — real machine: backup → apply → read back → restore.
+    /// Run: `cargo test -p ice-proxy-sys g4_3 -- --ignored --nocapture` (Windows)
+    #[test]
+    #[ignore = "proxy_sys: mutates real WinInet Internet Settings"]
+    fn g4_3_backup_apply_restore_roundtrip() {
+        let proxy = WindowsSystemProxy::new();
+        let before = proxy.backup().expect("backup");
+
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        proxy.apply(&endpoints).expect("apply");
+
+        let mid = proxy.backup().expect("read after apply");
+        assert!(
+            mid.http
+                .as_deref()
+                .is_some_and(|h| h.contains("127.0.0.1") && h.contains("17890")),
+            "http after apply: {:?}",
+            mid.http
+        );
+        assert!(
+            mid.extra["proxy_override"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("<local>"),
+            "Windows bypass must include <local>"
+        );
+
+        proxy.restore(&before).expect("restore");
+        let after = proxy.backup().expect("read after restore");
+        assert_eq!(after.extra, before.extra, "raw tri-state restored exactly");
+        assert_eq!(after.enabled, before.enabled);
+        assert_eq!(after.http, before.http);
+        println!(
+            "G4.3-windows ok: restored enable={} server={:?}",
+            after.enabled, after.http
+        );
+    }
+
+    /// G4.4-windows — user already had a proxy; restore must bring it back (not merely disable).
+    #[test]
+    #[ignore = "proxy_sys: mutates real WinInet Internet Settings"]
+    fn g4_4_restore_preserves_prior_user_proxy() {
+        let proxy = WindowsSystemProxy::new();
+        let original = proxy.backup().expect("original");
+
+        // Install a distinctive "user" proxy first.
+        let user_ep = ProxyEndpoints {
+            http_host: "10.0.0.99".into(),
+            http_port: 3128,
+            socks_host: None,
+            socks_port: None,
+        };
+        proxy.apply(&user_ep).expect("set user proxy");
+        let user_backup = proxy.backup().expect("user backup");
+        assert!(
+            user_backup
+                .http
+                .as_deref()
+                .is_some_and(|h| h.contains("10.0.0.99") && h.contains("3128")),
+            "user http: {:?}",
+            user_backup.http
+        );
+
+        // ice-box apply
+        let ice_ep = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        proxy.apply(&ice_ep).expect("ice apply");
+
+        // Restore to user settings (as Stop would)
+        proxy.restore(&user_backup).expect("restore user");
+        let after = proxy.backup().expect("after");
+        assert!(
+            after
+                .http
+                .as_deref()
+                .is_some_and(|h| h.contains("10.0.0.99") && h.contains("3128")),
+            "must restore user host:port, got {:?}",
+            after.http
+        );
+
+        // Put machine back to truly original state.
+        proxy.restore(&original).expect("restore original");
+        println!("G4.4-windows ok: user proxy restored then original restored");
     }
 }
 

@@ -66,3 +66,108 @@ jobs:
 
       - name: macOS proxy-sys unit tests
         run: cargo test -p ice-proxy-sys --lib
+
+  gate-windows:
+    name: gate (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
+      - name: Fetch sing-box binary
+        run: ./scripts/fetch-singbox.sh win
+
+      - name: Workspace gate (G9.10)
+        run: bash scripts/gate.sh
+
+      - name: Headless acceptance (G9.1 / G9.6 / G9.7)
+        run: cargo test -p ice-box --lib 'g9_' -- --nocapture
+
+  build-macos:
+    name: build (macOS dmg)
+    runs-on: macos-latest
+    needs: gate-macos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
+      - name: Fetch sing-box binary
+        run: ./scripts/fetch-singbox.sh
+
+      - name: Build app bundle (tauri build)
+        run: npm run build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ice-box-macos
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            apps/desktop/src-tauri/target/release/bundle/macos/*.app
+
+  build-windows:
+    name: build (Windows msi/nsis)
+    runs-on: windows-latest
+    needs: gate-windows
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
+      - name: Fetch sing-box binary
+        run: ./scripts/fetch-singbox.sh win
+
+      - name: Build app bundle (tauri build:win)
+        run: npm run build:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ice-box-windows
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe

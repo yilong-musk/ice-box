@@ -83,6 +83,29 @@ fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result
     Ok(())
 }
 
+fn clash_patch_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
+    let url = format!("{}{}", base_url(endpoints)?, path);
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(CLASH_HTTP_TIMEOUT)
+        .timeout_read(CLASH_HTTP_TIMEOUT)
+        .timeout_write(CLASH_HTTP_TIMEOUT)
+        .build();
+    let response = agent
+        .patch(&url)
+        .set("Content-Type", "application/json")
+        .send_string(json)
+        .map_err(|e| CoreError::SpawnFailed(format!("clash api PATCH {path}: {e}")))?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        let mut text = String::new();
+        let _ = response.into_reader().take(512).read_to_string(&mut text);
+        return Err(CoreError::SpawnFailed(format!(
+            "clash api PATCH {path} HTTP {status}: {text}"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct DelayResponse {
     delay: u32,
@@ -121,6 +144,29 @@ pub fn select_group(
 /// Switch the top-level selector without full config reload (`PUT /proxies/proxy`).
 pub fn select_outbound(endpoints: &HealthEndpoints, tag: &str) -> Result<(), CoreError> {
     select_group(endpoints, SELECTOR_TAG, tag)
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigsResponse {
+    mode: String,
+}
+
+/// Read the current Clash runtime mode (`GET /configs`). Used for status display and
+/// verifying a `PATCH` took effect.
+pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
+    let body = clash_get(endpoints, "/configs")?;
+    let parsed: ConfigsResponse = serde_json::from_str(&body)
+        .map_err(|e| CoreError::SpawnFailed(format!("clash configs parse: {e}; body={body}")))?;
+    Ok(parsed.mode)
+}
+
+/// Switch the Clash runtime mode (`PATCH /configs` with `{"mode": ...}`). sing-box
+/// validates the mode against `mode-list` and updates the route at match time via the
+/// `clash_mode` rule; the process is never restarted. Pass a mode string from the emitted
+/// `mode_list` (see `ice_config::clash_mode_name`) so the reported `mode-list` stays clean.
+pub fn set_mode(endpoints: &HealthEndpoints, mode: &str) -> Result<(), CoreError> {
+    let body = serde_json::json!({ "mode": mode }).to_string();
+    clash_patch_json(endpoints, "/configs", &body)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,10 +299,200 @@ fn percent_encode_query(s: &str) -> String {
     urlencoding::encode(s).into_owned()
 }
 
+/// Test-only recorded HTTP request (shared mock Clash API, see [`MockClashApi`]).
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct RecordedRequest {
+    pub method: String,
+    pub path: String,
+    pub body: String,
+}
+
+/// Test-only stateful mock of the sing-box Clash API, shared with the desktop crate's
+/// orchestrate tests. It serves `GET /configs` with the current mode and applies a mode
+/// change on 2xx `PATCH /configs`. Not part of the public API.
+#[doc(hidden)]
+pub struct MockClashApi {
+    pub addr: std::net::SocketAddr,
+    pub requests: std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>,
+    mode: std::sync::Arc<std::sync::Mutex<String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    stop: std::sync::mpsc::Sender<()>,
+}
+
+impl MockClashApi {
+    /// Spawn a mock where a 2xx `PATCH /configs` records the request, applies the new mode,
+    /// and `GET /configs` returns it; non-2xx `patch_status` makes every request fail with
+    /// that status plus `body`.
+    pub fn start(patch_status: u16, initial_mode: &str) -> Self {
+        Self::start_with(patch_status, initial_mode, true)
+    }
+
+    /// Like [`MockClashApi::start`] but a 2xx `PATCH` does not change the served mode
+    /// (simulates a silently-ignored `PATCH /configs`).
+    pub fn start_with_ignored_patch(patch_status: u16, initial_mode: &str) -> Self {
+        Self::start_with(patch_status, initial_mode, false)
+    }
+
+    fn start_with(patch_status: u16, initial_mode: &str, patch_applies: bool) -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests: std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mode: std::sync::Arc<std::sync::Mutex<String>> =
+            std::sync::Arc::new(std::sync::Mutex::new(initial_mode.to_string()));
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let reqs = requests.clone();
+        let mode_shared = mode.clone();
+        let thread = std::thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let reqs = reqs.clone();
+                    let mode = mode_shared.clone();
+                    let _ = std::thread::spawn(move || {
+                        let mut buf = [0u8; 65536];
+                        let mut read = 0usize;
+                        loop {
+                            match stream.read(&mut buf[read..]) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    read += n;
+                                    if buf[..read].windows(4).any(|w| w == b"\r\n\r\n")
+                                        || read >= buf.len()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                        let request_line = head.lines().next().unwrap_or("").to_string();
+                        let (method, path) = request_line
+                            .split_once(' ')
+                            .map(|(m, rest)| {
+                                (
+                                    m.to_string(),
+                                    rest.split(' ').next().unwrap_or("").to_string(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        let mut content_length = 0usize;
+                        for line in head.lines().skip(1) {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-length") {
+                                    content_length = v.trim().parse().unwrap_or(0);
+                                }
+                            }
+                        }
+                        let header_end = buf[..read]
+                            .windows(4)
+                            .position(|w| w == b"\r\n\r\n")
+                            .map(|p| p + 4)
+                            .unwrap_or(read);
+                        let mut body_data =
+                            String::from_utf8_lossy(&buf[header_end..read]).to_string();
+                        while body_data.len() < content_length {
+                            let mut more = [0u8; 4096];
+                            match stream.read(&mut more) {
+                                Ok(0) => break,
+                                Ok(n) => body_data.push_str(&String::from_utf8_lossy(&more[..n])),
+                                Err(_) => break,
+                            }
+                        }
+                        let is_configs = path == "/configs";
+                        let is_2xx = (200..300).contains(&patch_status);
+                        if method == "PATCH" && is_configs && is_2xx && patch_applies {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<serde_json::Value>(&body_data)
+                            {
+                                if let Some(next) = parsed.get("mode").and_then(|m| m.as_str()) {
+                                    *mode.lock().unwrap() = next.to_string();
+                                }
+                            }
+                        }
+                        let resp = match (method.as_str(), path.as_str()) {
+                            ("GET", "/configs") if is_2xx => {
+                                let current = mode.lock().unwrap().clone();
+                                let body = serde_json::json!({
+                                    "mode": current,
+                                    "mode-list": ["Rule", "Global", "Direct"],
+                                })
+                                .to_string();
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                )
+                            }
+                            ("PATCH", "/configs") if is_2xx => {
+                                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    .to_string()
+                            }
+                            _ => {
+                                let status = if patch_status == 204 { 200 } else { patch_status };
+                                format!(
+                                    "HTTP/1.1 {status} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body_data.len(),
+                                    body_data
+                                )
+                            }
+                        };
+                        reqs.lock().unwrap().push(RecordedRequest {
+                            method,
+                            path,
+                            body: body_data,
+                        });
+                        let _ = stream.write_all(resp.as_bytes());
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stop_rx.try_recv().is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        });
+        Self {
+            addr,
+            requests,
+            mode,
+            thread: Some(thread),
+            stop: stop_tx,
+        }
+    }
+
+    pub fn endpoints(&self) -> HealthEndpoints {
+        HealthEndpoints {
+            host: "127.0.0.1".into(),
+            port: self.addr.port(),
+        }
+    }
+
+    /// Mode currently served by `GET /configs`.
+    pub fn current_mode(&self) -> String {
+        self.mode.lock().unwrap().clone()
+    }
+}
+
+impl Drop for MockClashApi {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::health::HealthEndpoints;
+    use std::time::Duration;
 
     #[test]
     fn delay_response_deserializes() {
@@ -300,6 +536,49 @@ mod tests {
             port: 19090,
         };
         let err = proxy_delay(&endpoints, "n1", 1000, DELAY_TEST_URL).expect_err("reject");
+        assert!(err.to_string().contains("loopback"));
+    }
+
+    // --- Slice 4c: runtime mode switch against the shared mock Clash API server ---
+
+    #[test]
+    fn set_mode_patches_configs_with_capitalized_mode() {
+        let server = MockClashApi::start(204, "Rule");
+        set_mode(&server.endpoints(), "Global").expect("set mode");
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            server.current_mode(),
+            "Global",
+            "mock must apply the PATCHed mode"
+        );
+        let reqs = server.requests.lock().unwrap();
+        assert_eq!(reqs.len(), 1, "expected exactly one PATCH");
+        assert_eq!(reqs[0].method, "PATCH");
+        assert_eq!(reqs[0].path, "/configs");
+        let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
+        assert_eq!(body["mode"], "Global");
+    }
+
+    #[test]
+    fn set_mode_non_2xx_is_error() {
+        let server = MockClashApi::start(400, "Rule");
+        let err = set_mode(&server.endpoints(), "Global").expect_err("400");
+        assert!(err.to_string().contains("400"), "err: {err}");
+    }
+
+    #[test]
+    fn get_mode_parses_configs_response() {
+        let server = MockClashApi::start(200, "Global");
+        assert_eq!(get_mode(&server.endpoints()).unwrap(), "Global");
+    }
+
+    #[test]
+    fn non_loopback_endpoints_rejected_for_mode() {
+        let endpoints = HealthEndpoints {
+            host: "0.0.0.0".into(),
+            port: 19090,
+        };
+        let err = set_mode(&endpoints, "Global").expect_err("reject");
         assert!(err.to_string().contains("loopback"));
     }
 }

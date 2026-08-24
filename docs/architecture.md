@@ -2,7 +2,9 @@
 
 This document is the **implementation spec** for v1. Code must follow it; if the implementation deviates, update the document first, then the code.
 
-Status: **macOS v1 implemented** (start/stop, system proxy, Clash/sing-box subscription parsing, hot reload, nodes/traffic UI); Windows system proxy and installer deferred.
+Status: **macOS + Windows v1 implemented** (start/stop, system proxy on both platforms, Clash/sing-box
+subscription parsing, hot reload for rule/subscription changes, live mode switching via Clash API on
+both platforms, nodes/traffic UI); Windows CI, MSI/NSIS installers and Windows acceptance in place.
 
 ---
 
@@ -329,8 +331,14 @@ whole service from the same config path (PID unchanged, listen port briefly rebu
 | Item | Decision |
 |------|----------|
 | Method | Unix: send **SIGHUP** to the sing-box subprocess (`ice_core::SignalReloader`); Windows: go straight to §9.2 restart |
-| Trigger | call `core.reload()` after writing the new `config.json` (mode switch, rule/subscription changes all share it) |
+| Trigger | call `core.reload()` after writing the new `config.json` (rule/subscription changes) |
 | After success | TCP healthcheck against the clash API port again (same as §16.1) |
+| Mode switch | **not** a reload — switched live via Clash API `PATCH /configs` (Slice 4c, §12.2), same on every platform |
+
+**Reload surface = rule/subscription/settings changes only.** Routing mode (Rule/Global/Direct)
+never rebuilds the config or touches the process: the generated config always carries the
+`clash_mode` rules and the runtime mode is switched with `PATCH /configs` (works identically on
+macOS and Windows, no restart needed on either platform).
 
 ### 9.2 Fallback
 
@@ -462,6 +470,41 @@ Goal: map `proxies` + `proxy-groups` + `rules` + `dns` to sing-box outbound / ro
 - `dns`: use profile.dns when present (fake-ip etc.), otherwise a minimal `dns` block
 - `experimental.clash_api.external_controller` = the local clash API
 
+### 12.4 Routing modes (Slice 4c — locked)
+
+The generated config **always** carries the full rule set regardless of mode, with two
+`clash_mode` rules prepended first (`route.rules[0..2]`):
+
+```json
+{ "route": {
+    "rules": [
+      { "clash_mode": "global", "outbound": "<global target>" },
+      { "clash_mode": "direct", "outbound": "direct" },
+      ...custom / subscription rules (unchanged)
+    ],
+    "final": "<rule-mode final>" } }
+```
+
+- `<global target>` = the outbound `ProxyMode::Global` routes everything through: the injected
+  `proxy` selector when the profile has no groups, else the top group / fallback — so homepage
+  node selection keeps working in global mode.
+- The runtime mode is switched live via Clash API `PATCH /configs` (`ice_core::set_mode`,
+  `orchestrate_set_proxy_mode`): no config rebuild, no reload, no restart, no system proxy churn.
+  `PATCH` only changes routing when the running config carries the `clash_mode` rules; on a
+  pre-Slice 4c config (or any `PATCH` failure) the switch falls back to rebuild + reload/restart.
+- `experimental.clash_api` gains `mode_list: ["Rule", "Global", "Direct"]` and
+  `default_mode` = `settings.proxy_mode` capitalized (membership is case-sensitive in sing-box
+  `NewServer`; a lowercase entry would pollute the reported `mode-list`). `settings.proxy_mode`
+  is the **default mode**: applied at build time, restored after every restart because the config
+  is rebuilt on apply.
+- **`experimental.cache_file` stays OFF** (locked): `Server.Start()` would restore the cached mode
+  and override `default_mode`, breaking mode restoration on restart.
+- `route.final` keeps the rule-mode value in all three modes; `clash_mode` rules short-circuit
+  before it at match time.
+- **Disk `config.json` lags while Running:** the `PATCH` path does not regenerate `config.json`,
+  so its baked `default_mode` stays at the pre-switch value until the next apply/restart. The
+  on-disk file is **not** authoritative for the running mode; `settings.proxy_mode` is.
+
 Minimal DNS fallback (locked in v1, kept as fallback in v2):
 
 ```json
@@ -502,10 +545,23 @@ Interface: `backup` / `apply` / `restore`.
 - Failures return `proxy.apply_failed` / `proxy.restore_failed`; **must not** mark `proxy-backup.json` as `applied: true` when apply failed (see `apply_and_record`)
 - Real-device gate: `cargo test -p ice-proxy-sys -- --ignored --nocapture` (tag `proxy_sys`)
 
-### 13.3 Windows
+### 13.3 Windows (implemented, slice 4b)
 
-- Back up and set the user-level WinInet / `Internet Settings` (`ProxyEnable`, `ProxyServer`, `ProxyOverride`)
-- After `apply`, notify via `InternetSetOption` (`INTERNET_OPTION_SETTINGS_CHANGED` / `REFRESH`)
+- Back up and set the user-level WinInet / `Internet Settings` (`ProxyEnable`, `ProxyServer`,
+  `ProxyOverride`) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`;
+  other keys (e.g. `AutoConfigURL`) are never touched
+- `ProxyServer = 127.0.0.1:mixed_port` covers HTTP/HTTPS; **WinInet's user-level settings expose
+  no separate SOCKS field**, so SOCKS is not set on Windows (the mixed inbound still accepts SOCKS
+  when an application connects directly)
+- `ProxyOverride` = bypass list (`localhost`, `127.0.0.1`, `::1`, `<local>`, `BYPASS_WINDOWS_EXTRA`)
+- After `apply` / `restore`, notify via `InternetSetOption` (`INTERNET_OPTION_SETTINGS_CHANGED` /
+  `INTERNET_OPTION_REFRESH`)
+- `backup.extra` carries the raw tri-state (`proxy_enable` / `proxy_server` / `proxy_override`)
+  for **verbatim** restore: a user who had another proxy before gets it back exactly
+- Registry writes are per-user (`HKCU`), no elevation required — matches the "no UAC" lock
+- The `auto_set_system_proxy` settings gate is removed; the flag is accepted on Windows
+- Live gates mirror G4.3/G4.4 (`cargo test -p ice-proxy-sys g4_3 -- --ignored` on Windows);
+  temp-hive unit tests run on Windows CI
 - No WinTUN / elevated UAC driver in v1
 
 ### 13.4 Relationship to "local-only mixed"

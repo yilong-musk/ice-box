@@ -29,7 +29,7 @@ pub use rule_overrides::{
 pub use selections::{
     apply_group_selections, load_group_selections, save_group_selections, GroupSelections,
 };
-pub use settings::{load_settings, save_settings, AppSettings, ProxyMode};
+pub use settings::{clash_mode_name, load_settings, save_settings, AppSettings, ProxyMode};
 
 /// sing-box core version the config generator targets (architecture §12 / §22).
 ///
@@ -256,39 +256,39 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         tag_set.insert("proxy".into());
     }
 
-    let route_final = match input.template.proxy_mode {
-        ProxyMode::Rule => {
-            if input.profile.route.final_outbound == "proxy" && input.profile.groups.is_empty() {
-                "proxy".to_string()
-            } else {
-                input.profile.route.final_outbound.clone()
-            }
-        }
-        // Global: ignore rules, send everything through the selected proxy / top group.
-        // With no groups the injected `proxy` selector is the natural target so homepage
-        // node selection keeps working.
-        ProxyMode::Global => {
-            if input.profile.groups.is_empty() {
-                "proxy".to_string()
-            } else {
-                fallback.clone()
-            }
-        }
-        // Direct: ignore rules, send everything out `direct`.
-        ProxyMode::Direct => "direct".to_string(),
+    // Routing mode (Slice 4c): the generated config always carries the full rule set plus
+    // two `clash_mode` rules prepended first. The runtime mode is switched live via Clash
+    // API `PATCH /configs` (no rebuild / reload / restart), so `route.final` stays at the
+    // rule-mode value in every mode — the `clash_mode` rules short-circuit before it.
+    //
+    // `<global target>` is the same outbound `ProxyMode::Global` routed `final` to before
+    // (the injected `proxy` selector when the profile has no groups, else the top
+    // group / fallback), so homepage node selection keeps working in global mode.
+    let global_target = if input.profile.groups.is_empty() {
+        "proxy".to_string()
+    } else {
+        fallback.clone()
     };
+    let route_final =
+        if input.profile.route.final_outbound == "proxy" && input.profile.groups.is_empty() {
+            "proxy".to_string()
+        } else {
+            input.profile.route.final_outbound.clone()
+        };
 
     let mut route = json!({
         "final": route_final,
         "auto_detect_interface": true,
     });
+
     // Disabled (fingerprint-matched) subscription rules are dropped; custom rules are
-    // prepended so they take priority over subscription rules. In global / direct mode
-    // all rules are stripped (route rules and rule_sets).
-    let rule_mode = matches!(input.template.proxy_mode, ProxyMode::Rule);
-    let mut final_rules: Vec<Value> = Vec::new();
-    let mut rule_sets: Vec<Value> = Vec::new();
-    if rule_mode {
+    // prepended after the `clash_mode` rules so a custom / subscription rule can never
+    // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
+    let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
+        let mut final_rules: Vec<Value> = vec![
+            json!({ "clash_mode": "global", "outbound": global_target }),
+            json!({ "clash_mode": "direct", "outbound": "direct" }),
+        ];
         let enabled_sub_rules: Vec<Value> = input
             .profile
             .route
@@ -319,8 +319,8 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         );
         final_rules.extend(custom_rules);
         final_rules.extend(sub_rules);
-        rule_sets = all_sets;
-    }
+        (final_rules, all_sets)
+    };
     if !final_rules.is_empty() {
         route
             .as_object_mut()
@@ -378,6 +378,12 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
                     "{}:{}",
                     input.template.clash_api_listen, input.template.clash_api_port
                 ),
+                // Slice 4c: runtime mode switch surface. `default_mode` is baked from
+                // settings.proxy_mode and restored on every apply/restart because the
+                // config is rebuilt on apply. `experimental.cache_file` must stay OFF so
+                // the cached mode cannot override `default_mode` on restart.
+                "mode_list": ["Rule", "Global", "Direct"],
+                "default_mode": clash_mode_name(input.template.proxy_mode),
             }
         }
     });
@@ -605,6 +611,20 @@ mod build_tests {
         }
     }
 
+    /// Extract the two prepended `clash_mode` rules as (mode, outbound) pairs, in order.
+    fn clash_rules(cfg: &Value) -> Vec<(&str, &str)> {
+        cfg["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| {
+                let mode = r.get("clash_mode").and_then(|v| v.as_str())?;
+                let outbound = r.get("outbound").and_then(|v| v.as_str())?;
+                Some((mode, outbound))
+            })
+            .collect()
+    }
+
     #[test]
     fn g5_8_selected_tag_missing_falls_back_to_first() {
         let cfg = build_runtime_config(&build_input_from_nodes(
@@ -815,9 +835,17 @@ mod build_tests {
         })
         .unwrap();
 
-        let rule = &cfg["route"]["rules"][0];
-        assert_eq!(rule["rule_set"][0], "geoip-cn");
-        assert!(rule.get("geoip").is_none(), "geoip option must be removed");
+        let geoip_rule = cfg["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r.get("rule_set").is_some())
+            .expect("geoip rule survives behind the clash_mode rules");
+        assert_eq!(geoip_rule["rule_set"][0], "geoip-cn");
+        assert!(
+            geoip_rule.get("geoip").is_none(),
+            "geoip option must be removed"
+        );
         let set = &cfg["route"]["rule_set"][0];
         assert_eq!(set["type"], "local");
         assert_eq!(set["format"], "binary");
@@ -849,12 +877,15 @@ mod build_tests {
         })
         .unwrap();
 
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        assert_eq!(
+            rules.len(),
+            2,
+            "only the two clash_mode rules survive; the unresolvable geoip rule is dropped"
+        );
         assert!(
-            cfg["route"]
-                .get("rules")
-                .and_then(|v| v.as_array())
-                .is_none_or(|r| r.is_empty()),
-            "unresolvable geoip rule must be dropped, not fail the build"
+            rules.iter().all(|r| r.get("rule_set").is_none()),
+            "no rule_set references for dropped codes"
         );
         assert!(
             cfg["route"].get("rule_set").is_none(),
@@ -903,8 +934,8 @@ mod build_tests {
         let rules = cfg["route"]["rules"].as_array().unwrap();
         assert_eq!(
             rules.len(),
-            2,
-            "custom geoip + subscription domain rule survive"
+            4,
+            "2 clash_mode rules + custom geoip + subscription domain rule survive"
         );
         let all = serde_json::to_string(rules).unwrap();
         assert!(
@@ -965,6 +996,7 @@ mod build_tests {
         let rules = cfg["route"]["rules"].as_array().unwrap();
         let tags: Vec<String> = rules
             .iter()
+            .filter(|r| r.get("domain_suffix").is_some() || r.get("domain").is_some())
             .map(|r| {
                 r["domain_suffix"][0]
                     .as_str()
@@ -976,7 +1008,7 @@ mod build_tests {
         assert_eq!(
             tags,
             ["custom.com", "keep.com"],
-            "custom first, disabled dropped"
+            "clash_mode rules first, then custom, disabled dropped"
         );
         assert!(!tags.iter().any(|t| t == "drop.com"));
         assert!(!tags.iter().any(|t| t == "off.com"));
@@ -1000,11 +1032,16 @@ mod build_tests {
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "direct");
-        assert_eq!(cfg["route"]["rules"].as_array().unwrap().len(), 2);
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 4, "2 clash_mode rules + 2 subscription rules");
+        assert_eq!(
+            clash_rules(&cfg),
+            [("global", "proxy"), ("direct", "direct")]
+        );
     }
 
     #[test]
-    fn proxy_mode_global_strips_rules_and_uses_selected_proxy() {
+    fn proxy_mode_global_keeps_rules_with_clash_mode_global_target() {
         let profile = NormalizedProfile {
             nodes: vec![socks("a"), socks("b")],
             groups: vec![NormalizedOutbound {
@@ -1040,14 +1077,20 @@ mod build_tests {
             rule_overrides: RuleOverrides::default(),
         })
         .unwrap();
-        assert_eq!(cfg["route"]["final"], "Proxies");
-        assert!(
-            cfg["route"].get("rules").is_none(),
-            "global mode must strip route rules"
+        assert_eq!(
+            cfg["route"]["final"], "direct",
+            "final stays at rule-mode value"
+        );
+        assert_eq!(
+            clash_rules(&cfg),
+            [("global", "Proxies"), ("direct", "direct")],
+            "global clash rule targets the top group so node selection keeps working"
         );
         assert!(
-            cfg["route"].get("rule_set").is_none(),
-            "global mode must strip rule_sets"
+            cfg["route"]["rule_set"]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|e| e["tag"] == "set-a")),
+            "global mode must keep rule_sets"
         );
     }
 
@@ -1067,7 +1110,12 @@ mod build_tests {
             rule_overrides: RuleOverrides::default(),
         })
         .unwrap();
-        assert_eq!(cfg["route"]["final"], "proxy");
+        assert_eq!(cfg["route"]["final"], "direct");
+        assert_eq!(
+            clash_rules(&cfg)[0],
+            ("global", "proxy"),
+            "flat profiles route global through the injected proxy selector"
+        );
         assert!(
             cfg["outbounds"]
                 .as_array()
@@ -1079,7 +1127,7 @@ mod build_tests {
     }
 
     #[test]
-    fn proxy_mode_direct_strips_rules_and_routes_direct() {
+    fn proxy_mode_direct_keeps_rules_with_clash_mode_direct() {
         let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
         profile.route.final_outbound = "a".into();
         profile.route.rules = vec![json!({ "domain_suffix": ["keep.com"], "outbound": "a" })];
@@ -1095,15 +1143,34 @@ mod build_tests {
             rule_overrides: RuleOverrides::default(),
         })
         .unwrap();
-        assert_eq!(cfg["route"]["final"], "direct");
-        assert!(
-            cfg["route"].get("rules").is_none(),
-            "direct mode must strip route rules"
+        assert_eq!(cfg["route"]["final"], "a", "final stays at rule-mode value");
+        assert_eq!(
+            clash_rules(&cfg)[1],
+            ("direct", "direct"),
+            "direct clash rule routes everything direct"
         );
-        assert!(
-            cfg["route"].get("rule_set").is_none(),
-            "direct mode must strip rule_sets"
-        );
+    }
+
+    #[test]
+    fn clash_api_block_carries_mode_list_and_default_mode_in_all_modes() {
+        for mode in [ProxyMode::Rule, ProxyMode::Global, ProxyMode::Direct] {
+            let cfg = build_runtime_config(&build_input_from_nodes(
+                LocalTemplate {
+                    proxy_mode: mode,
+                    ..LocalTemplate::default()
+                },
+                vec![socks("a")],
+                None,
+            ))
+            .unwrap();
+            let api = &cfg["experimental"]["clash_api"];
+            assert_eq!(api["mode_list"], json!(["Rule", "Global", "Direct"]));
+            assert_eq!(api["default_mode"], clash_mode_name(mode));
+            assert!(
+                cfg["experimental"].get("cache_file").is_none(),
+                "cache_file must stay disabled (Slice 4c lock)"
+            );
+        }
     }
 
     #[test]

@@ -1,11 +1,14 @@
 //! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
 
 use ice_config::{
-    build_runtime_config, load_group_selections, load_rule_overrides, load_settings,
-    restore_runtime_config_from_bak, save_settings, write_runtime_config_file, AppError, AppPaths,
-    AppSettings, BuildInput, ErrorCode, NormalizedProfile,
+    build_runtime_config, clash_mode_name, load_group_selections, load_rule_overrides,
+    load_settings, restore_runtime_config_from_bak, save_settings, write_runtime_config_file,
+    AppError, AppPaths, AppSettings, BuildInput, ErrorCode, NormalizedProfile,
 };
-use ice_core::{resolve_singbox_binary, CoreHandle, CorePaths, CoreStatus, ReloadOutcome};
+use ice_core::{
+    get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
+    ReloadOutcome,
+};
 use ice_proxy_sys::{apply_and_record, restore_and_clear_flag, ProxyEndpoints, SystemProxy};
 use ice_subscription::{
     load_active_profile, load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
@@ -318,6 +321,80 @@ pub fn current_settings(app_paths: &AppPaths) -> Result<AppSettings, AppError> {
     load_settings(&app_paths.settings())
 }
 
+/// True when the on-disk `config.json` (the config the running core was started from)
+/// carries the Slice 4c `clash_mode` route rules, i.e. `PATCH /configs` actually changes
+/// routing. Old-style configs (pre-Slice 4c) stripped rules in global/direct mode and have
+/// no `clash_mode` rule; for those the first mode switch must take the rebuild +
+/// reload/restart fallback so the switch is not silently ignored.
+pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
+    let Ok(raw) = std::fs::read_to_string(app_paths.config()) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    config["route"]["rules"]
+        .as_array()
+        .is_some_and(|rules| rules.iter().any(|r| r.get("clash_mode").is_some()))
+}
+
+/// Switch routing mode (Slice 4c): when the core is running and the running config carries
+/// the `clash_mode` rules, switch live via Clash API `PATCH /configs` — no rebuild, no
+/// reload, no restart, no system proxy churn (inbound is unchanged). The PATCH is
+/// verified with a follow-up `GET /configs` so a silently-ignored 2xx PATCH falls back.
+/// Falls back to the rebuild + reload/restart path when stopped, the config predates
+/// Slice 4c, the PATCH fails, or the mode did not actually change (capability gate, fully
+/// backward compatible). The caller persists `settings.proxy_mode` beforehand; on-disk
+/// `config.json` intentionally lags while running (its baked `default_mode` is refreshed
+/// on the next apply/restart).
+pub fn orchestrate_set_proxy_mode(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    previous_settings: &AppSettings,
+    core: &mut dyn CoreHandle,
+    proxy: &dyn SystemProxy,
+    binary: PathBuf,
+    resource_dir: Option<&Path>,
+) -> Result<(), AppError> {
+    if core.state().status != CoreStatus::Running {
+        return Ok(());
+    }
+    if running_config_supports_clash_mode(app_paths) {
+        let endpoints = HealthEndpoints {
+            host: settings.clash_api_listen.clone(),
+            port: settings.clash_api_port,
+        };
+        let mode_name = clash_mode_name(settings.proxy_mode);
+        match set_mode(&endpoints, mode_name) {
+            Ok(()) if get_mode(&endpoints).ok().as_deref() == Some(mode_name) => {
+                tracing::info!(mode = %mode_name, "routing mode switched live via Clash API");
+                return Ok(());
+            }
+            Ok(()) => {
+                tracing::warn!(
+                    mode = %mode_name,
+                    "clash PATCH /configs accepted but runtime mode did not change; falling back to rebuild + reload"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "clash PATCH /configs failed; falling back to rebuild + reload"
+                );
+            }
+        }
+    }
+    orchestrate_apply(
+        app_paths,
+        settings,
+        previous_settings,
+        core,
+        proxy,
+        binary,
+        resource_dir,
+    )
+}
+
 /// Prefer restoring the last good on-disk config; fall back to regenerating from settings.
 fn rollback_runtime_config_after_reload_failure(
     app_paths: &AppPaths,
@@ -355,9 +432,10 @@ fn rollback_runtime_config_after_reload_failure(
 mod tests {
     use super::*;
     use ice_config::NormalizedOutbound as NO;
+    use ice_config::ProxyMode;
     use ice_core::{
-        CoreController, ImmediateHealthProbe, MockReloadMode, MockReloader, MockSpawner,
-        SequenceHealthProbe,
+        CoreController, ImmediateHealthProbe, MockClashApi, MockReloadMode, MockReloader,
+        MockSpawner, SequenceHealthProbe,
     };
     use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxySysError};
     use ice_subscription::{
@@ -470,6 +548,18 @@ mod tests {
             MockSpawner::with_start_pid(5000),
             ImmediateHealthProbe,
             Box::new(MockReloader::new(MockReloadMode::Ok)),
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+        )
+    }
+
+    fn mock_core_with_reloader(
+        reloader: MockReloader,
+    ) -> CoreController<MockSpawner, ImmediateHealthProbe> {
+        CoreController::with_deps(
+            MockSpawner::with_start_pid(5000),
+            ImmediateHealthProbe,
+            Box::new(reloader),
             Duration::from_millis(50),
             Duration::from_millis(50),
         )
@@ -965,6 +1055,185 @@ mod tests {
 
         let on_disk = ice_config::load_settings(&settings_path).unwrap();
         assert_eq!(on_disk.selected_tag.as_deref(), Some("n1"));
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    // --- Slice 4c: live mode switch via Clash API ---
+
+    fn start_running(
+        paths: &AppPaths,
+        reloader: &MockReloader,
+    ) -> CoreController<MockSpawner, ImmediateHealthProbe> {
+        let settings = AppSettings::default();
+        let mut core = mock_core_with_reloader(reloader.clone());
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(paths);
+        orchestrate_start(paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        assert_eq!(core.state().status, CoreStatus::Running);
+        core
+    }
+
+    #[test]
+    fn g7_15_set_mode_running_patches_and_does_not_reload() {
+        let paths = temp_app("mode-patch");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = start_running(&paths, &reloader);
+        assert!(
+            running_config_supports_clash_mode(&paths),
+            "generated config must carry clash_mode rules"
+        );
+
+        let server = MockClashApi::start(204, "Rule");
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            clash_api_port: server.addr.port(),
+            proxy_mode: ProxyMode::Global,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
+            .unwrap();
+
+        assert_eq!(reloader.call_count(), 0, "live mode switch must not reload");
+        std::thread::sleep(Duration::from_millis(100));
+        let reqs = server.requests.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "expected PATCH then verification GET");
+        assert_eq!(reqs[0].method, "PATCH");
+        assert_eq!(reqs[0].path, "/configs");
+        let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
+        assert_eq!(body["mode"], "Global");
+        assert_eq!(reqs[1].method, "GET");
+        assert_eq!(reqs[1].path, "/configs");
+        assert_eq!(
+            proxy.apply_calls.get(),
+            0,
+            "no system proxy churn on mode switch"
+        );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_16_set_mode_running_patch_failure_falls_back_to_reload() {
+        let paths = temp_app("mode-patch-fail");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = start_running(&paths, &reloader);
+
+        let server = MockClashApi::start(400, "Rule");
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            clash_api_port: server.addr.port(),
+            proxy_mode: ProxyMode::Direct,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
+            .unwrap();
+
+        assert_eq!(
+            reloader.call_count(),
+            1,
+            "PATCH failure must fall back to the rebuild + reload path"
+        );
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_16b_set_mode_running_silently_ignored_patch_falls_back_to_reload() {
+        let paths = temp_app("mode-patch-ignored");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = start_running(&paths, &reloader);
+
+        // 2xx PATCH that the core silently ignores (mock never applies the mode).
+        let server = MockClashApi::start_with_ignored_patch(204, "Rule");
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            clash_api_port: server.addr.port(),
+            proxy_mode: ProxyMode::Global,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
+            .unwrap();
+
+        assert_eq!(
+            reloader.call_count(),
+            1,
+            "a 2xx PATCH that does not change the mode must fall back to the rebuild + reload path"
+        );
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_17_set_mode_running_old_style_config_reloads_once() {
+        let paths = temp_app("mode-old-config");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = start_running(&paths, &reloader);
+
+        // Simulate a pre-Slice 4c config: rules present but no clash_mode rule.
+        ice_config::write_json_atomic(
+            &paths.config(),
+            &serde_json::json!({
+                "route": {
+                    "final": "proxy",
+                    "rules": [ { "domain_suffix": ["keep.com"], "outbound": "direct" } ]
+                }
+            }),
+        )
+        .unwrap();
+        assert!(!running_config_supports_clash_mode(&paths));
+
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            proxy_mode: ProxyMode::Global,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
+            .unwrap();
+
+        assert_eq!(
+            reloader.call_count(),
+            1,
+            "first switch on an old-style config must rebuild + reload"
+        );
+        assert!(
+            running_config_supports_clash_mode(&paths),
+            "rebuild must regenerate a clash_mode config"
+        );
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_18_set_mode_stopped_persists_without_patch_or_reload() {
+        let paths = temp_app("mode-stopped");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = mock_core_with_reloader(reloader.clone());
+        assert_eq!(core.state().status, CoreStatus::Stopped);
+
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            proxy_mode: ProxyMode::Global,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
+            .unwrap();
+
+        assert_eq!(reloader.call_count(), 0);
+        assert_eq!(core.state().status, CoreStatus::Stopped);
         let _ = fs::remove_dir_all(paths.root());
     }
 }

@@ -1661,6 +1661,8 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "windows-sys 0.59.0",
+ "winreg",
 ]
 
 [[package]]

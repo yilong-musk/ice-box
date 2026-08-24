@@ -23,6 +23,21 @@ pub enum ProxyMode {
     Direct,
 }
 
+/// Capitalized Clash runtime mode matching the `mode_list` the config generator emits.
+///
+/// sing-box `experimental/clashapi` `NewServer` checks `default_mode` membership against
+/// `mode_list` with a case-sensitive `common.Contains` and prepends a missing entry — a
+/// lowercase `"global"` would pollute `GET /configs` `mode-list` with a mixed-case
+/// duplicate. The `clash_mode` route rule matches case-insensitively, so routing behaves
+/// the same either way; the capitalized form keeps the reported `mode-list` clean.
+pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
+    match mode {
+        ProxyMode::Rule => "Rule",
+        ProxyMode::Global => "Global",
+        ProxyMode::Direct => "Direct",
+    }
+}
+
 /// Application settings (not the sing-box runtime config).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -93,13 +108,6 @@ impl AppSettings {
             return Err(AppError::new(
                 ErrorCode::ConfigInvalid,
                 "mixed_port must differ from clash_api_port",
-            ));
-        }
-        #[cfg(target_os = "windows")]
-        if self.auto_set_system_proxy {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                "Windows 系统代理尚未实现，无法启用 auto_set_system_proxy",
             ));
         }
         Ok(())
@@ -245,6 +253,29 @@ mod tests {
         )
         .expect("save direct");
         assert_eq!(load_settings(&path).unwrap().proxy_mode, ProxyMode::Direct);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn clash_mode_name_matches_emitted_mode_list() {
+        assert_eq!(clash_mode_name(ProxyMode::Rule), "Rule");
+        assert_eq!(clash_mode_name(ProxyMode::Global), "Global");
+        assert_eq!(clash_mode_name(ProxyMode::Direct), "Direct");
+    }
+
+    /// The WinInet backend (slice 4b) made the Windows system proxy real, so the flag must
+    /// be accepted on every platform (settings files carrying it must load).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_accepts_auto_set_system_proxy() {
+        let path = temp_settings_path("win-proxy");
+        let settings = AppSettings {
+            auto_set_system_proxy: true,
+            ..AppSettings::default()
+        };
+        save_settings(&path, &settings).expect("win auto proxy accepted");
+        let loaded = load_settings(&path).expect("reload");
+        assert!(loaded.auto_set_system_proxy);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

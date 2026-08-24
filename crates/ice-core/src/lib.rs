@@ -11,8 +11,9 @@ pub use binary::{
     binary_in_target_root, current_target_dir, resolve_singbox_binary, BUNDLED_SINGBOX_VERSION,
 };
 pub use clash_api::{
-    connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, traffic_sample,
-    ConnectionStats, GroupState, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
+    connection_stats, get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode,
+    traffic_sample, ConnectionStats, GroupState, MockClashApi, RecordedRequest, TrafficSample,
+    DELAY_TEST_URL, SELECTOR_TAG,
 };
 pub use error::CoreError;
 pub use health::{
@@ -549,7 +550,6 @@ fn looks_like_singbox_process(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::ffi::c_void;
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -1058,9 +1058,15 @@ mod tests {
         fs::write(&config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
 
         let outcome = core.reload(&paths).expect("reload");
-        assert_eq!(outcome, ReloadOutcome::HotReloaded);
         assert_eq!(core.state().status, CoreStatus::Running);
+        // SIGHUP keeps the process (Unix); Windows has no in-process reload and the
+        // controller restarts the process from config.json (Slice 4c §9.1 / §9.2).
+        #[cfg(unix)]
+        assert_eq!(outcome, ReloadOutcome::HotReloaded);
+        #[cfg(unix)]
         assert_eq!(read_pid(&paths.pid_file).unwrap(), pid_before);
+        #[cfg(windows)]
+        assert_eq!(outcome, ReloadOutcome::Restarted);
 
         // Clash API should still answer.
         let url = format!("http://127.0.0.1:{}/configs", paths.clash_api_port);
