@@ -1052,6 +1052,7 @@ mod tests {
 
         let mut core = CoreController::new();
         core.start(&paths).expect("start");
+        #[cfg(unix)]
         let pid_before = read_pid(&paths.pid_file).unwrap();
 
         cfg["log"]["level"] = serde_json::json!("debug");
