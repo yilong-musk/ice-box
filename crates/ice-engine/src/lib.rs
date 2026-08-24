@@ -135,9 +135,11 @@ proxies:
         assert_eq!(first["clash_mode"], "global");
         assert_eq!(first["outbound"], "proxy");
         assert_eq!(value["experimental"]["clash_api"]["default_mode"], "Global");
-        assert_eq!(
-            value["experimental"]["clash_api"]["mode_list"],
-            serde_json::json!(["Rule", "Global", "Direct"])
+        assert!(
+            value["experimental"]["clash_api"]
+                .get("mode_list")
+                .is_none(),
+            "mode_list must not be emitted (rejected by pinned sing-box 1.13.19)"
         );
     }
 

@@ -170,16 +170,17 @@ describe("Home", () => {
     });
   });
 
-  it("shows empty-node hint and disables start when no nodes", async () => {
-    const { container } = render(<Home />);
+  it("shows empty-state guide and allows direct-only start when no nodes", async () => {
+    const onNavigate = vi.fn();
+    const { container } = render(<Home onNavigate={onNavigate} />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(
-        view.getByText("暂无节点，请先在「订阅」页导入。"),
-      ).toBeInTheDocument();
+      expect(view.getByText("还没有可用节点")).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: "启动" })).toBeDisabled();
+    expect(view.getByRole("button", { name: "启动" })).not.toBeDisabled();
+    fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
+    expect(onNavigate).toHaveBeenCalledWith("subs");
   });
 
   it("shows delay result even while status polling continues", async () => {

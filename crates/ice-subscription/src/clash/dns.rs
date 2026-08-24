@@ -115,10 +115,7 @@ pub fn parse_dns(doc: &Value) -> (Option<Value>, Vec<String>) {
         }
 
         // Clash `dns.listen` (LAN DNS server) has no sing-box 1.13 equivalent (the
-        // `dns` inbound type was removed); it is dropped rather than kept.
-        if dns.get("listen").is_some() {
-            warnings.push("dns: listen unsupported by sing-box 1.13+; dropped".into());
-        }
+        // `dns` inbound type was removed); it is dropped silently rather than kept.
     }
 
     (Some(out), warnings)

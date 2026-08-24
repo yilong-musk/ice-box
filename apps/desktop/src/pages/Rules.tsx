@@ -7,6 +7,7 @@ import {
   type RuleOverview,
   type RuleRow,
 } from "../api/tauri";
+import { EmptyState } from "../components/EmptyState";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   buildCustomRule,
@@ -29,6 +30,10 @@ type Filters = {
   status: StatusFilter;
 };
 
+type Props = {
+  onNavigate?: (tab: "subs") => void;
+};
+
 const EMPTY_OVERVIEW: RuleOverview = {
   total: 0,
   disabled: 0,
@@ -37,7 +42,7 @@ const EMPTY_OVERVIEW: RuleOverview = {
   types: [],
 };
 
-export function Rules() {
+export function Rules({ onNavigate }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
   const [rows, setRows] = useState<RuleRow[]>([]);
@@ -416,9 +421,12 @@ export function Rules() {
       )}
 
       {!showList ? (
-        <p className="muted">
-          当前订阅没有规则。导入含规则的订阅后可在此查询与管理。
-        </p>
+        <EmptyState
+          title="暂无规则"
+          description="当前没有订阅规则，也没有自定义规则。导入含规则的订阅后可在此查询、禁用规则或添加自定义规则。"
+          actionLabel="前往订阅页导入"
+          onAction={() => onNavigate?.("subs")}
+        />
       ) : (
         <>
           <ul className="node-table rule-table" aria-label="规则列表">

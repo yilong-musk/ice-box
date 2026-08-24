@@ -268,6 +268,31 @@ select {
   font-size: 0.9rem;
 }
 
+.empty-state {
+  border: 1px dashed #2a3544;
+  background: #121820;
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.empty-state-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #dfe8f5;
+}
+
+.empty-state-desc {
+  margin: 0 0 0.35rem;
+  font-size: 0.88rem;
+  color: #8b9bb4;
+}
+
 .node-row {
   display: flex;
   flex-wrap: wrap;

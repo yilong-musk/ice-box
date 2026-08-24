@@ -72,8 +72,10 @@ pub(crate) fn tls_get_pinned(
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: tls: {e}")))?;
     let mut tls = rustls::Stream::new(&mut conn, &mut stream);
 
+    // `Accept` must be present: some subscription frontends WAF-reject requests
+    // without it (HTTP 403) regardless of TLS/HTTP version.
     let mut req = format!(
-        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\n"
+        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\n"
     );
     for (k, v) in conditional {
         let safe = sanitize_http_header_value(v)?;

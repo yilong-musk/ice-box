@@ -69,10 +69,10 @@ function App() {
       )}
 
       <main>
-        {tab === "home" && <Home />}
-        {tab === "nodes" && <Nodes />}
+        {tab === "home" && <Home onNavigate={setTab} />}
+        {tab === "nodes" && <Nodes onNavigate={setTab} />}
         {tab === "subs" && <Subscriptions />}
-        {tab === "rules" && <Rules />}
+        {tab === "rules" && <Rules onNavigate={setTab} />}
         {tab === "logs" && <Logs />}
         {tab === "settings" && <Settings />}
       </main>

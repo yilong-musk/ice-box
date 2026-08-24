@@ -244,14 +244,6 @@ mod fixture_tests {
             dns.get("__ice_dns_listen").is_none(),
             "no internal listen carrying remains"
         );
-        assert!(
-            profile
-                .parse_stats
-                .warnings
-                .iter()
-                .any(|w| w.contains("listen") && w.contains("dropped")),
-            "dropped dns.listen must warn"
-        );
         let fakeip = &dns["servers"][1];
         assert_eq!(fakeip["type"], "fakeip");
         assert_eq!(fakeip["inet4_range"], "198.18.0.1/16");

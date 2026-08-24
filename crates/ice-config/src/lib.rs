@@ -111,6 +111,66 @@ pub fn build_input_from_nodes(
     }
 }
 
+/// Minimal config for running with no subscription: only builtin `direct` /
+/// `block` outbounds, every route final is `direct`. Lets a first-run user start
+/// the core (system proxy, inbound) before importing any subscription; importing
+/// one later hot-reloads to the real config.
+pub fn build_direct_only_config(template: &LocalTemplate) -> Result<Value, ConfigError> {
+    validate_template(template)?;
+
+    let outbounds = vec![
+        json!({"type": "direct", "tag": "direct"}),
+        json!({"type": "block", "tag": "block"}),
+    ];
+
+    // Slice 4c: keep the `clash_mode` rules so a later reload to a real config keeps the
+    // mode switch wired; without proxy outbounds every mode routes direct anyway.
+    let route = json!({
+        "final": "direct",
+        "auto_detect_interface": true,
+        "rules": [
+            { "clash_mode": "global", "outbound": "direct" },
+            { "clash_mode": "direct", "outbound": "direct" },
+        ],
+        "default_domain_resolver": "local",
+    });
+
+    let inbounds = vec![json!({
+        "type": "mixed",
+        "tag": "mixed-in",
+        "listen": if template.allow_lan {
+            "0.0.0.0"
+        } else {
+            template.mixed_listen.as_str()
+        },
+        "listen_port": template.mixed_port,
+    })];
+
+    let config = json!({
+        "log": { "level": "info", "timestamp": true },
+        "dns": minimal_dns_block(),
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "route": route,
+        "experimental": {
+            "clash_api": {
+                "external_controller": format!(
+                    "{}:{}",
+                    template.clash_api_listen, template.clash_api_port
+                ),
+                // NOTE: `mode_list` must NOT be emitted — the pinned sing-box 1.13.19
+                // rejects it ("unknown field"). The runtime mode-list is `[<default_mode>]`
+                // only, so a PATCH to another mode is silently ignored and mode switching
+                // always takes the rebuild + reload path (see `orchestrate_set_proxy_mode`).
+                "default_mode": clash_mode_name(template.proxy_mode),
+            }
+        }
+    });
+
+    validate_config(&config)?;
+    Ok(config)
+}
+
 /// Validate listen ports before build (architecture §12.3).
 pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
     if template.mixed_port < 1024 || template.clash_api_port < 1024 {
@@ -382,7 +442,10 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
                 // settings.proxy_mode and restored on every apply/restart because the
                 // config is rebuilt on apply. `experimental.cache_file` must stay OFF so
                 // the cached mode cannot override `default_mode` on restart.
-                "mode_list": ["Rule", "Global", "Direct"],
+                // NOTE: `mode_list` must NOT be emitted — the pinned sing-box 1.13.19
+                // rejects it ("unknown field"). The runtime mode-list is `[<default_mode>]`
+                // only, so a PATCH to another mode is silently ignored and mode switching
+                // always takes the rebuild + reload path (see `orchestrate_set_proxy_mode`).
                 "default_mode": clash_mode_name(input.template.proxy_mode),
             }
         }
@@ -623,6 +686,32 @@ mod build_tests {
                 Some((mode, outbound))
             })
             .collect()
+    }
+
+    #[test]
+    fn direct_only_config_has_builtin_outbounds_and_direct_final() {
+        let cfg = build_direct_only_config(&LocalTemplate::default()).expect("build");
+        let outbounds = cfg["outbounds"].as_array().unwrap();
+        let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
+        assert_eq!(tags, ["direct", "block"]);
+        assert_eq!(cfg["route"]["final"], "direct");
+        assert_eq!(cfg["inbounds"][0]["type"], "mixed");
+        assert_eq!(cfg["inbounds"][0]["listen_port"], 17890);
+        assert_eq!(
+            clash_rules(&cfg),
+            [("global", "direct"), ("direct", "direct")],
+            "mode switching stays wired; every mode routes direct"
+        );
+        assert_eq!(cfg["experimental"]["clash_api"]["default_mode"], "Rule");
+    }
+
+    #[test]
+    fn direct_only_config_validates_template() {
+        let invalid = LocalTemplate {
+            mixed_port: 80,
+            ..LocalTemplate::default()
+        };
+        assert!(build_direct_only_config(&invalid).is_err());
     }
 
     #[test]
@@ -1152,7 +1241,7 @@ mod build_tests {
     }
 
     #[test]
-    fn clash_api_block_carries_mode_list_and_default_mode_in_all_modes() {
+    fn clash_api_block_carries_default_mode_in_all_modes() {
         for mode in [ProxyMode::Rule, ProxyMode::Global, ProxyMode::Direct] {
             let cfg = build_runtime_config(&build_input_from_nodes(
                 LocalTemplate {
@@ -1164,8 +1253,11 @@ mod build_tests {
             ))
             .unwrap();
             let api = &cfg["experimental"]["clash_api"];
-            assert_eq!(api["mode_list"], json!(["Rule", "Global", "Direct"]));
             assert_eq!(api["default_mode"], clash_mode_name(mode));
+            assert!(
+                api.get("mode_list").is_none(),
+                "mode_list must not be emitted (rejected by pinned sing-box 1.13.19)"
+            );
             assert!(
                 cfg["experimental"].get("cache_file").is_none(),
                 "cache_file must stay disabled (Slice 4c lock)"

@@ -55,7 +55,9 @@ describe("Subscriptions", () => {
         within(container).getByPlaceholderText("订阅 URL（https 优先）"),
       ).toBeInTheDocument();
     });
-    expect(screen.queryByText("暂无订阅。导入 URL 后可启动内核。")).toBeInTheDocument();
+    expect(
+      screen.queryByText("暂无订阅。可直接以直连模式启动内核，也可导入订阅 URL。"),
+    ).toBeInTheDocument();
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {
@@ -84,16 +86,45 @@ describe("Subscriptions", () => {
     });
   });
 
-  it("shows apply warning when remove stops core", async () => {
+  it("shows 更新中 on update buttons while updating", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+    let resolveUpdate: (v: unknown) => void = () => {};
+    updateAllSubscriptions.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: "全部更新" }).click();
+
+    await waitFor(() => {
+      const updatingButtons = view.getAllByRole("button", { name: "更新中" });
+      expect(updatingButtons.length).toBeGreaterThanOrEqual(2);
+      for (const btn of updatingButtons) {
+        expect(btn).toBeDisabled();
+      }
+    });
+
+    resolveUpdate({ results: [] });
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "全部更新" })).toBeInTheDocument();
+    });
+  });
+
+  it("shows an apply warning from a remove response", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    listSubscriptions.mockResolvedValue([
-      sampleMeta({ name: "only-one" }),
-    ]);
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({
       ok: true,
       apply_warning: {
-        code: "core.stopped_no_nodes",
-        message: "内核已停止：没有可用的订阅节点",
+        code: "proxy.restore_failed",
+        message: "内核已重载，但系统代理未能恢复",
       },
     });
 
@@ -106,7 +137,7 @@ describe("Subscriptions", () => {
     view.getByRole("button", { name: "删除" }).click();
 
     await waitFor(() => {
-      expect(view.getByText(/core.stopped_no_nodes/)).toBeInTheDocument();
+      expect(view.getByText(/系统代理未能恢复/)).toBeInTheDocument();
     });
   });
 

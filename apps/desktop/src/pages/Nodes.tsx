@@ -4,6 +4,7 @@ import {
   formatInvokeError,
   type NodeInfo,
 } from "../api/tauri";
+import { EmptyState } from "../components/EmptyState";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   delaySortKey,
@@ -14,7 +15,11 @@ import {
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
-export function Nodes() {
+type Props = {
+  onNavigate?: (tab: "subs") => void;
+};
+
+export function Nodes({ onNavigate }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [selectedTag, setSelectedTag] = useState<string>("");
@@ -193,7 +198,12 @@ export function Nodes() {
       )}
 
       {nodes.length === 0 ? (
-        <p className="muted">暂无节点，请先在「订阅」页导入。</p>
+        <EmptyState
+          title="暂无节点"
+          description="未导入任何订阅节点。导入订阅后即可在此查看节点、测速并切换出口。"
+          actionLabel="前往订阅页导入"
+          onAction={() => onNavigate?.("subs")}
+        />
       ) : (
         <>
           <div className="node-toolbar">

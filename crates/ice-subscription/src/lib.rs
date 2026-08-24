@@ -843,6 +843,16 @@ pub struct FetchedUpdate {
     pub fetched: FetchResponse,
 }
 
+/// Result of the network phase of an add; the disk phase consumes it via
+/// `SubscriptionManager::apply_add`.
+#[derive(Debug)]
+pub struct FetchedAdd {
+    pub id: Uuid,
+    pub url: String,
+    pub name: Option<String>,
+    pub fetched: FetchResponse,
+}
+
 impl SubscriptionManager<DirectFetcher> {
     pub fn open(paths: SubscriptionPaths) -> Self {
         Self {
@@ -871,6 +881,15 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         url: &str,
         name: Option<&str>,
     ) -> Result<SubscriptionMeta, SubscriptionError> {
+        self.apply_add(self.fetch_add(url, name)?)
+    }
+
+    /// Network fetch phase of an add: validate URL, GET (no disk writes).
+    pub fn fetch_add(
+        &self,
+        url: &str,
+        name: Option<&str>,
+    ) -> Result<FetchedAdd, SubscriptionError> {
         assert!(
             self.fetcher.bypasses_system_proxy(),
             "subscription fetch must bypass system proxy"
@@ -880,6 +899,22 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
         let id = Uuid::new_v4();
         let fetched = self.fetcher.get(url, None, None)?;
+        Ok(FetchedAdd {
+            id,
+            url: url.to_string(),
+            name: name.map(str::to_string),
+            fetched,
+        })
+    }
+
+    /// Disk phase of an add: normalize + persist (or leave no success artifacts on failure).
+    pub fn apply_add(&self, add: FetchedAdd) -> Result<SubscriptionMeta, SubscriptionError> {
+        let FetchedAdd {
+            id,
+            url,
+            name,
+            fetched,
+        } = add;
         match normalize_raw_body(&fetched.body) {
             Ok((format, profile)) => {
                 let index = load_index(&self.paths)?;
@@ -887,12 +922,12 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 let meta = meta_from_profile(
                     id,
                     resolve_subscription_name(
-                        name,
+                        name.as_deref(),
                         fetched.content_disposition.as_deref(),
-                        url,
+                        &url,
                         id,
                     ),
-                    url.to_string(),
+                    url,
                     format,
                     &profile,
                     make_active,
@@ -945,6 +980,18 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Disk phase of an update: normalize + persist, or record `last_error`.
     pub fn apply_update(&self, upd: FetchedUpdate) -> Result<SubscriptionMeta, SubscriptionError> {
+        // A subscription removed while its fetch was in flight must not be resurrected:
+        // the index no longer contains the id, so stop before writing any files.
+        if !load_index(&self.paths)?
+            .items
+            .iter()
+            .any(|m| m.id == upd.meta.id)
+        {
+            return Err(SubscriptionError::ParseFailed(format!(
+                "subscription {} not found",
+                upd.meta.id
+            )));
+        }
         if upd.fetched.not_modified {
             return clear_subscription_error(&self.paths, upd.meta.id);
         }
@@ -970,24 +1017,32 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         }
     }
 
-    /// Update every subscription. Network fetches run in parallel (up to one `FETCH_TIMEOUT`
-    /// of wall time instead of N×), disk writes stay serialized so `index.json` updates
-    /// never interleave.
-    pub fn update_all(&self) -> Vec<(Uuid, Result<SubscriptionMeta, SubscriptionError>)>
+    /// Network phase of updating every subscription. Fetches run in parallel (up to one
+    /// `FETCH_TIMEOUT` of wall time instead of N×) and write nothing to disk, so the caller
+    /// can run them without holding the orchestrate lock.
+    pub fn fetch_all(&self) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
     where
         F: Sync,
     {
         let ids: Vec<Uuid> = load_index(&self.paths)
             .map(|i| i.items.into_iter().map(|m| m.id).collect())
             .unwrap_or_default();
-        let fetched: Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)> =
-            std::thread::scope(|scope| {
-                let handles: Vec<_> = ids
-                    .iter()
-                    .map(|id| scope.spawn(move || (*id, self.fetch_update(*id))))
-                    .collect();
-                handles.into_iter().map(|h| h.join().unwrap()).collect()
-            });
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = ids
+                .iter()
+                .map(|id| scope.spawn(move || (*id, self.fetch_update(*id))))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        })
+    }
+
+    /// Disk phase of [`SubscriptionManager::fetch_all`]: persists each fetched update
+    /// serially so `index.json` writes never interleave. Under the orchestrate lock this
+    /// cannot race with add/remove/set_active.
+    pub fn apply_all(
+        &self,
+        fetched: Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>,
+    ) -> Vec<(Uuid, Result<SubscriptionMeta, SubscriptionError>)> {
         fetched
             .into_iter()
             .map(|(id, result)| match result {
@@ -998,6 +1053,15 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 }
             })
             .collect()
+    }
+
+    /// Update every subscription. Network fetches run in parallel, disk writes stay
+    /// serialized so `index.json` updates never interleave.
+    pub fn update_all(&self) -> Vec<(Uuid, Result<SubscriptionMeta, SubscriptionError>)>
+    where
+        F: Sync,
+    {
+        self.apply_all(self.fetch_all())
     }
 
     pub fn remove(&self, id: Uuid) -> Result<(), SubscriptionError> {

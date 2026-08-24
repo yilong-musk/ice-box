@@ -42,12 +42,15 @@ already covers the restart path.
 **Verified upstream facts (sing-box 1.13.19 source, `experimental/clashapi/`):**
 
 - `PUT /configs` → `updateConfigs` → `render.NoContent` (**204 no-op** — reload through it is impossible).
-- `PATCH /configs` with `{"mode": "global"}` → `server.SetMode(mode)` — **real runtime mode switch**:
-  validates against `mode-list`, updates `s.mode`, emits the mode hook, clears the DNS cache, persists
-  to the cache file when enabled. It is a plain HTTP handler, so it works identically on Windows.
+- `PATCH /configs` with `{"mode": "global"}` → `server.SetMode(mode)` — a runtime mode switch
+  **only when the mode is in the runtime `mode-list`**. `NewServer` starts with an empty
+  `mode-list` (emitting `mode_list` in the config is rejected) and prepends `default_mode`,
+  so the list is always `[<default_mode>]` — a single entry. A `PATCH` to any other mode is
+  **silently ignored** (`SetMode` returns without changing `s.mode`), identically on Windows
+  and macOS, so the real mode switch must rebuild + reload/restart the core (see below).
 - Routing reacts at match time via the `clash_mode` rule item in `route.rules`.
-- `GET /configs` returns `mode` and `mode-list`; `default_mode` + `mode-list` come from the
-  `experimental.clash_api` config block.
+- `GET /configs` returns `mode` and `mode-list`; `mode-list` is the runtime list
+  (`[<default_mode>]`) and `default_mode` comes from the `experimental.clash_api` config block.
 
 **Design change:** mode is no longer baked into the config build. The generated config always
 carries the full rule set plus two `clash_mode` rules prepended at the top:
@@ -66,15 +69,19 @@ carries the full rule set plus two `clash_mode` rules prepended at the top:
   (injected `proxy` selector when the profile has no groups, else the top group/fallback), so
   homepage node selection keeps working in global mode.
 - Rule mode needs no `clash_mode` rule: nothing matches → normal rules run.
-- `experimental.clash_api` gains `mode_list: ["Rule", "Global", "Direct"]` and
-  `default_mode: <settings.proxy_mode, capitalized>`; `settings.proxy_mode` becomes the
-  **default mode** (applied at build time, restored after every restart because the config is
-  rebuilt on apply).
-  - **Casing:** emit `default_mode` in the same case as `mode_list`
+- `experimental.clash_api` gains `default_mode: <settings.proxy_mode, capitalized>`;
+  `settings.proxy_mode` becomes the **default mode** (applied at build time, restored after
+  every restart because the config is rebuilt on apply).
+  - **Do NOT emit `mode_list`:** the pinned sing-box 1.13.19 rejects the field
+    (`json: unknown field "mode_list"`). The runtime `mode-list` is `[<default_mode>]` only,
+    so a `PATCH` to another mode is silently ignored and every switch takes the rebuild +
+    reload/restart path (SIGHUP on Unix, restart on Windows).
+  - **Casing:** emit `default_mode` capitalized
     (`"rule"→"Rule"`, `"global"→"Global"`, `"direct"→"Direct"`). sing-box `NewServer`
     (`experimental/clashapi/server.go`) checks membership with case-sensitive `common.Contains`;
-    a lowercase `"global"` would be prepended as a duplicate mixed-case entry, so `GET /configs`
-    would report a polluted `mode-list` (`["global","Rule","Global","Direct"]`).
+    a lowercase `"global"` would be silently ignored (and would pollute `GET /configs`
+    `mode-list` with a mixed-case duplicate were the list ever to contain the capitalized
+    entry).
   - **No `cache_file`:** do not enable `experimental.cache_file` in the generated config.
     `Server.Start()` restores the mode from the cache file when present and overrides
     `default_mode`, breaking mode restoration on restart (runtime `SetMode` persistence to the
@@ -88,7 +95,7 @@ carries the full rule set plus two `clash_mode` rules prepended at the top:
    - Prepend the two `clash_mode` rules as the **first** route rules, ahead of the
      custom-rule expansion, so they precede every custom / subscription rule (a custom `direct`
      rule must never win over `clash_mode: "global"`; the JSON sketch above is the intended order).
-   - Add `mode_list` + `default_mode` to the `experimental.clash_api` block.
+   - Add `default_mode` to the `experimental.clash_api` block (no `mode_list`).
    - Keep `route.final` at the rule-mode value in all three modes.
    - Update `route_final` logic and the `rule_mode` gate accordingly.
 2. `crates/ice-core/src/clash_api.rs`:
@@ -96,35 +103,35 @@ carries the full rule set plus two `clash_mode` rules prepended at the top:
    - Add `get_mode(endpoints)` → `GET /configs` (for status display / tests), reusing
      `HealthEndpoints`.
 3. `apps/desktop/src-tauri/src/commands.rs` (`set_proxy_mode`) + `orchestrate.rs`:
-   - Running: try `set_mode` via Clash API — **no config rebuild, no reload, no restart**.
-   - `PATCH` failure (e.g. future sing-box without the endpoint): fall back to the current
-     rebuild + reload/restart path (capability gate, fully backward compatible).
+   - Running: attempt `set_mode` via Clash API and verify with `GET /configs` (forward-compatible
+     capability gate — with the pinned core the runtime `mode-list` is `[<default_mode>]`, the
+     `PATCH` is silently ignored, and the verification fails). The actual switch is always the
+     rebuild + SIGHUP reload/restart path.
+   - `PATCH` failure (e.g. future sing-box without the endpoint): same fallback.
    - Stopped: persist settings only (next apply builds with the new `default_mode`).
    - System proxy stays applied in both paths (inbound unchanged).
-   - **Disk `config.json` lags while Running:** the PATCH path does not regenerate
-     `config.json`, so its baked `default_mode` stays at the pre-switch value until the next
-     apply/restart rebuilds it. Harmless — the runtime mode comes from `PATCH` and every apply
-     rebuilds the config — but keep the on-disk file as *not* authoritative for the running mode
-     and say so in `architecture.md` §12/§13.
+   - **Disk `config.json` reflects the switch:** the rebuild + reload path regenerates
+     `config.json` (baking the new `default_mode`) before the SIGHUP reload, so after every
+     switch the running mode matches `settings.proxy_mode`, which remains authoritative.
    - **PATCH precondition:** `PATCH` only changes routing if the running config carries the
      `clash_mode` rules. After an app upgrade where an old-style core (rules stripped in
-     Global/Direct) is still running, the first mode switch must take the rebuild + reload/restart
-     fallback once (e.g. always reload on the first PATCH after an upgrade) so the switch is not
-     silently ignored.
+     Global/Direct) is still running, `running_config_supports_clash_mode` skips even the
+     (never-successful) PATCH attempt and goes straight to the rebuild + reload/restart path.
 4. Frontend: no structural change (`Home.tsx` mode buttons and `set_proxy_mode` contract stay);
    optional copy update to drop "切换模式会中断连接" wording.
 
 **Tests:**
 
 - `ice-config`: config in all three modes contains full rules + `clash_mode` rules in the right
-  order; route references validate; `default_mode`/`mode_list` present; Global/Direct no longer
+  order; route references validate; `default_mode` present (and `mode_list` absent); Global/Direct no longer
   strip rules (update existing `proxy_mode_*` tests).
 - `ice-core`: `set_mode` request shape against a mock HTTP server; `get_mode` parse.
 - desktop crate: `set_proxy_mode` while Running issues `PATCH` and does not restart (mock core);
   `PATCH` failure falls back to rebuild; while Stopped only persists.
-- Live test (real sing-box, `#[ignore]`): start → `PATCH` global → curl through mixed port
-  confirms all traffic goes via proxy; `PATCH` direct → curl confirms direct; back to rule.
-  Reuse on Windows in Slice 7.
+- Live test (real sing-box, `#[ignore]`): start → switch to global via the app-level path
+  (persists `settings.proxy_mode`, rebuilds + reloads) → curl through mixed port confirms all
+  traffic goes via proxy; switch to direct → curl confirms direct; back to rule. Reuse on
+  Windows in Slice 7.
 
 **Docs:** update `architecture.md` §9.1 (reload surface = rule/subscription changes only),
 §12/§13 mode notes; update README Status.

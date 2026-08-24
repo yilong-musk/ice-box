@@ -1,9 +1,10 @@
 //! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
 
 use ice_config::{
-    build_runtime_config, clash_mode_name, load_group_selections, load_rule_overrides,
-    load_settings, restore_runtime_config_from_bak, save_settings, write_runtime_config_file,
-    AppError, AppPaths, AppSettings, BuildInput, ErrorCode, NormalizedProfile,
+    build_direct_only_config, build_runtime_config, clash_mode_name, load_group_selections,
+    load_rule_overrides, load_settings, restore_runtime_config_from_bak, save_settings,
+    write_runtime_config_file, AppError, AppPaths, AppSettings, BuildInput, ErrorCode,
+    NormalizedProfile,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
@@ -129,13 +130,23 @@ pub fn generate_config(
     let profile = match load_active_profile(&sub_paths, &index) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => {
-            return Err(AppError::new(
-                ErrorCode::ConfigEmptyOutbounds,
-                "no active subscription",
-            ));
+            // First-run / all subscriptions removed: fall back to a direct-only
+            // config so Start keeps working (system proxy + inbound, all traffic
+            // direct) until a subscription is imported.
+            let config = build_direct_only_config(&settings.to_local_template())?;
+            write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
+            return Ok(());
         }
         Err(err) => return Err(AppError::from(err)),
     };
+    if profile.nodes.is_empty() {
+        // Active subscription exists but yields no leaf outbounds (e.g. groups-only, or a
+        // hand-edited profile): nothing usable to route through — direct-only fallback so
+        // Start/Apply keep working (build_runtime_config errors on empty nodes).
+        let config = build_direct_only_config(&settings.to_local_template())?;
+        write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
+        return Ok(());
+    }
     let settings = reconcile_selected_tag_in_settings(app_paths, settings, &profile)?;
     let selected = resolve_selected_tag(settings.selected_tag.as_deref(), &profile);
     let geoip_dir = ensure_geoip_rule_sets(app_paths, resource_dir);
@@ -231,8 +242,8 @@ pub fn orchestrate_apply(
     binary: PathBuf,
     resource_dir: Option<&Path>,
 ) -> Result<(), AppError> {
-    // Allow empty → write failure as empty_outbounds only when generating;
-    // if no nodes, clear is caller's problem for Start; Apply with empty should error.
+    // generate_config falls back to a direct-only config when no subscription /
+    // no usable nodes exist, so Apply always writes a valid config.json.
     generate_config(app_paths, settings, resource_dir)?;
 
     let status = core.state().status;
@@ -322,10 +333,13 @@ pub fn current_settings(app_paths: &AppPaths) -> Result<AppSettings, AppError> {
 }
 
 /// True when the on-disk `config.json` (the config the running core was started from)
-/// carries the Slice 4c `clash_mode` route rules, i.e. `PATCH /configs` actually changes
-/// routing. Old-style configs (pre-Slice 4c) stripped rules in global/direct mode and have
-/// no `clash_mode` rule; for those the first mode switch must take the rebuild +
-/// reload/restart fallback so the switch is not silently ignored.
+/// carries the `clash_mode` route rules. Under the pinned sing-box 1.13.19 the runtime
+/// `mode-list` is always `[<default_mode>]`, so a `PATCH /configs` to a different mode is
+/// silently ignored and mode switching must rebuild + reload (SIGHUP on Unix) so the new
+/// `default_mode` is baked in; the `clash_mode` rules make the baked mode take effect at
+/// match time. Old-style configs (pre-Slice 4c) strip rules in global/direct mode and have
+/// no `clash_mode` rule. This check gates whether the running config already routes by
+/// `clash_mode` before attempting the forward-compatible PATCH fast path.
 pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
     let Ok(raw) = std::fs::read_to_string(app_paths.config()) else {
         return false;
@@ -338,15 +352,16 @@ pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
         .is_some_and(|rules| rules.iter().any(|r| r.get("clash_mode").is_some()))
 }
 
-/// Switch routing mode (Slice 4c): when the core is running and the running config carries
-/// the `clash_mode` rules, switch live via Clash API `PATCH /configs` — no rebuild, no
-/// reload, no restart, no system proxy churn (inbound is unchanged). The PATCH is
-/// verified with a follow-up `GET /configs` so a silently-ignored 2xx PATCH falls back.
-/// Falls back to the rebuild + reload/restart path when stopped, the config predates
-/// Slice 4c, the PATCH fails, or the mode did not actually change (capability gate, fully
-/// backward compatible). The caller persists `settings.proxy_mode` beforehand; on-disk
-/// `config.json` intentionally lags while running (its baked `default_mode` is refreshed
-/// on the next apply/restart).
+/// Switch routing mode. Under the pinned sing-box 1.13.19 the runtime Clash `mode-list`
+/// is `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored: the
+/// PATCH + `GET /configs` verification below always falls through to the rebuild +
+/// reload/restart path (SIGHUP on Unix, restart on Windows). The PATCH attempt is kept as
+/// a forward-compatible capability gate — if a future core accepts live mode switches it
+/// activates automatically — and `running_config_supports_clash_mode` skips even that
+/// attempt for pre-Slice 4c configs. While stopped the switch just persists settings (the
+/// next apply builds the new `default_mode`). The caller persists `settings.proxy_mode`
+/// beforehand; on-disk `config.json` intentionally lags while running (its baked
+/// `default_mode` is refreshed on the next apply/restart).
 pub fn orchestrate_set_proxy_mode(
     app_paths: &AppPaths,
     settings: &AppSettings,
@@ -591,18 +606,34 @@ mod tests {
     }
 
     #[test]
-    fn g7_1_start_empty_outbounds_no_spawn_no_apply() {
+    fn g7_1_start_without_subscription_runs_direct_only() {
         let paths = temp_app("empty");
         let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        let err =
-            orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect_err("empty");
-        assert_eq!(err.code, "config.empty_outbounds");
-        assert_eq!(core.state().status, CoreStatus::Stopped);
-        assert_eq!(proxy.apply_calls.get(), 0);
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect("direct-only");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        assert_eq!(
+            proxy.apply_calls.get(),
+            cfg!(target_os = "macos") as usize,
+            "auto system proxy applies only when the platform default enables it"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
+        let tags: Vec<&str> = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        assert_eq!(
+            tags,
+            ["direct", "block"],
+            "no-subscription config is direct-only"
+        );
+        assert_eq!(config["route"]["final"], "direct");
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -894,16 +925,36 @@ mod tests {
         .unwrap();
         generate_config(&paths, &AppSettings::default(), None).unwrap();
 
+        fn direct_only_tags(paths: &AppPaths) -> Vec<String> {
+            let config: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(paths.config()).unwrap()).unwrap();
+            config["outbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|o| o["tag"].as_str().map(String::from))
+                .collect()
+        }
+
         ice_subscription::set_enabled(&sub, id, false).unwrap();
-        let err = generate_config(&paths, &AppSettings::default(), None).expect_err("disabled");
-        assert_eq!(err.code, "config.empty_outbounds");
+        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        assert_eq!(
+            direct_only_tags(&paths),
+            ["direct", "block"],
+            "no active subscription falls back to direct-only config"
+        );
 
         ice_subscription::set_enabled(&sub, id, true).unwrap();
         generate_config(&paths, &AppSettings::default(), None).unwrap();
+        assert_ne!(direct_only_tags(&paths), ["direct", "block"]);
 
         ice_subscription::remove_subscription(&sub, id).unwrap();
-        let err = generate_config(&paths, &AppSettings::default(), None).expect_err("removed");
-        assert_eq!(err.code, "config.empty_outbounds");
+        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        assert_eq!(
+            direct_only_tags(&paths),
+            ["direct", "block"],
+            "all subscriptions removed falls back to direct-only config"
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -1058,7 +1109,62 @@ mod tests {
         let _ = fs::remove_dir_all(paths.root());
     }
 
-    // --- Slice 4c: live mode switch via Clash API ---
+    #[test]
+    fn generate_config_groups_only_profile_falls_back_to_direct_only() {
+        let paths = temp_app("groups-only");
+        let sub = SubscriptionPaths::from_app(&paths);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "groups-only".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::Clash,
+            node_count: 0,
+            group_count: 1,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+        };
+        let profile = ice_config::NormalizedProfile {
+            nodes: vec![],
+            groups: vec![NO {
+                tag: "Proxies".into(),
+                outbound: serde_json::json!({
+                    "type": "selector",
+                    "tag": "Proxies",
+                    "outbounds": ["direct"],
+                }),
+            }],
+            route: Default::default(),
+            dns: None,
+            default_outbound: Some("Proxies".into()),
+            parse_stats: Default::default(),
+        };
+        write_subscription_success(&sub, &meta, "{}", &profile).unwrap();
+
+        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(paths.config()).unwrap()).unwrap();
+        let tags: Vec<String> = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o["tag"].as_str().map(String::from))
+            .collect();
+        assert_eq!(
+            tags,
+            ["direct", "block"],
+            "groups-only profile must fall back to direct-only config"
+        );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    // --- Slice 4c: mode switch (capability-gate fast path + rebuild/reload fallback) ---
 
     fn start_running(
         paths: &AppPaths,
@@ -1075,6 +1181,11 @@ mod tests {
 
     #[test]
     fn g7_15_set_mode_running_patches_and_does_not_reload() {
+        // Exercises the forward-compatible PATCH capability gate in isolation: this mock
+        // applies the PATCH (a real 1.13.19 core never does — its runtime mode-list is
+        // `[<default_mode>]` — so in production this branch is never taken and every mode
+        // switch reloads). The gate is kept so a future core that accepts live switches
+        // activates without code changes.
         let paths = temp_app("mode-patch");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
@@ -1096,7 +1207,11 @@ mod tests {
         orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
             .unwrap();
 
-        assert_eq!(reloader.call_count(), 0, "live mode switch must not reload");
+        assert_eq!(
+            reloader.call_count(),
+            0,
+            "capability-gate fast path must not reload (mock applies the PATCH)"
+        );
         std::thread::sleep(Duration::from_millis(100));
         let reqs = server.requests.lock().unwrap();
         assert_eq!(reqs.len(), 2, "expected PATCH then verification GET");

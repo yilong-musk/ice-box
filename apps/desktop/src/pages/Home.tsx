@@ -7,17 +7,19 @@ import {
   type ProxyMode,
   type StatusResponse,
 } from "../api/tauri";
+import { EmptyState } from "../components/EmptyState";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { resolveSelectedTag } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
+  onNavigate?: (tab: "subs") => void;
 };
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
-export function Home({ onBusyChange }: Props) {
+export function Home({ onBusyChange, onNavigate }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -162,10 +164,10 @@ export function Home({ onBusyChange }: Props) {
     }
   }
 
+  // Without a subscription the core still starts in direct-only mode
+  // (system proxy works, all traffic goes direct).
   const canStart =
-    !busy &&
-    nodes.length > 0 &&
-    (core?.status === "stopped" || core?.status === "error");
+    !busy && (core?.status === "stopped" || core?.status === "error");
   const canStop =
     !busy &&
     (core?.status === "running" || core?.status === "error");
@@ -264,7 +266,16 @@ export function Home({ onBusyChange }: Props) {
           </div>
         </>
       ) : (
-        <p className="muted">暂无节点，请先在「订阅」页导入。</p>
+        <EmptyState
+          title={running ? "仅直连模式运行中" : "还没有可用节点"}
+          description={
+            running
+              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。"
+              : "未导入任何订阅。可以直接启动进入仅直连模式（系统代理可用，流量全部直连），或先导入订阅解锁节点与规则分流。"
+          }
+          actionLabel="前往订阅页导入"
+          onAction={() => onNavigate?.("subs")}
+        />
       )}
 
       <div className="actions">

@@ -161,9 +161,12 @@ pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
 }
 
 /// Switch the Clash runtime mode (`PATCH /configs` with `{"mode": ...}`). sing-box
-/// validates the mode against `mode-list` and updates the route at match time via the
-/// `clash_mode` rule; the process is never restarted. Pass a mode string from the emitted
-/// `mode_list` (see `ice_config::clash_mode_name`) so the reported `mode-list` stays clean.
+/// validates the mode against its runtime `mode-list`, which under the pinned 1.13.19 is
+/// always `[<default_mode>]` (an emitted `mode_list` is rejected; the built-in list is just
+/// `default_mode` prepended onto an empty list). A `PATCH` targeting a different mode is
+/// therefore silently ignored — `GET /configs` keeps returning the old mode — so callers
+/// must verify with [`get_mode`] and fall back to a rebuild + reload. Pass a mode string
+/// from `ice_config::clash_mode_name` so the reported mode stays capitalized.
 pub fn set_mode(endpoints: &HealthEndpoints, mode: &str) -> Result<(), CoreError> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     clash_patch_json(endpoints, "/configs", &body)

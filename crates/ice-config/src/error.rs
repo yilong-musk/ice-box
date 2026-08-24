@@ -18,8 +18,6 @@ pub enum ErrorCode {
     CoreHealthcheckFailed,
     #[serde(rename = "core.invalid_state")]
     CoreInvalidState,
-    #[serde(rename = "core.stopped_no_nodes")]
-    CoreStoppedNoNodes,
     #[serde(rename = "config.empty_outbounds")]
     ConfigEmptyOutbounds,
     #[serde(rename = "config.invalid")]
@@ -47,7 +45,6 @@ impl ErrorCode {
             Self::CoreSpawnFailed => "core.spawn_failed",
             Self::CoreHealthcheckFailed => "core.healthcheck_failed",
             Self::CoreInvalidState => "core.invalid_state",
-            Self::CoreStoppedNoNodes => "core.stopped_no_nodes",
             Self::ConfigEmptyOutbounds => "config.empty_outbounds",
             Self::ConfigInvalid => "config.invalid",
             Self::ProxyApplyFailed => "proxy.apply_failed",

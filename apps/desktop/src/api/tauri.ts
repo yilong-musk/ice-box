@@ -122,11 +122,20 @@ export type ListRulesResponse = {
   items: RuleRow[];
 };
 
+/**
+ * Error codes whose raw message is technical / English and confusing in the UI;
+ * display the friendly text instead. Codes not listed keep `${code}: ${message}`.
+ */
+const FRIENDLY_ERROR_CODES: Record<string, string> = {
+  "config.empty_outbounds":
+    "没有可用的订阅节点，请先在「订阅」页导入订阅，或保持仅直连模式运行",
+};
+
 export function formatInvokeError(err: unknown): string {
   if (err && typeof err === "object") {
     const o = err as Record<string, unknown>;
     if (typeof o.code === "string" && typeof o.message === "string") {
-      return `${o.code}: ${o.message}`;
+      return FRIENDLY_ERROR_CODES[o.code] ?? `${o.code}: ${o.message}`;
     }
     if (typeof o.message === "string") return o.message;
   }

@@ -23,13 +23,16 @@ pub enum ProxyMode {
     Direct,
 }
 
-/// Capitalized Clash runtime mode matching the `mode_list` the config generator emits.
+/// Capitalized Clash runtime mode, matching sing-box's case-sensitive `mode-list`
+/// membership checks (the pinned 1.13.19 does not accept an emitted `mode_list`).
 ///
-/// sing-box `experimental/clashapi` `NewServer` checks `default_mode` membership against
-/// `mode_list` with a case-sensitive `common.Contains` and prepends a missing entry — a
-/// lowercase `"global"` would pollute `GET /configs` `mode-list` with a mixed-case
-/// duplicate. The `clash_mode` route rule matches case-insensitively, so routing behaves
-/// the same either way; the capitalized form keeps the reported `mode-list` clean.
+/// sing-box `experimental/clashapi` `NewServer` starts with an empty `mode-list` and
+/// prepends `default_mode` when it is missing, so the runtime list is `[<default_mode>]`
+/// — a single entry, not `["Rule", "Global", "Direct"]`. `SetMode` checks membership
+/// case-sensitively, so a lowercase `"global"` would be silently ignored (and, were the
+/// entry present, pollute `GET /configs` `mode-list` with a mixed-case duplicate). The
+/// `clash_mode` route rule matches case-insensitively, so routing behaves the same either
+/// way; the capitalized form keeps the reported `mode` / `mode-list` clean.
 pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
     match mode {
         ProxyMode::Rule => "Rule",
@@ -257,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn clash_mode_name_matches_emitted_mode_list() {
+    fn clash_mode_name_covers_all_supported_modes() {
         assert_eq!(clash_mode_name(ProxyMode::Rule), "Rule");
         assert_eq!(clash_mode_name(ProxyMode::Global), "Global");
         assert_eq!(clash_mode_name(ProxyMode::Direct), "Direct");

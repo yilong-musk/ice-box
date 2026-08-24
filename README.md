@@ -99,13 +99,13 @@ Tauri commands uniformly return JSON on failure:
 
 **macOS v2 routing capabilities** (2026-08-22): v1 slices 0-9 have passed the gate; **single active subscription** replaces multi-subscription merging (breaking change, see architecture §11.5); Clash `proxy-groups` → selector/urltest/fallback/loadbalance, `rules` → route.rules (**GEOIP → bundled sing-geoip rule-sets**, 30 countries, see `scripts/fetch-geoip.sh`), subscription `dns` → sing-box dns (listen stripped); bundled sing-box **1.13.19**; `.app` / `.dmg` buildable.
 
-**Windows completion** (2026-08-24, see [docs/windows-plan.md](docs/windows-plan.md)): WinInet system proxy implemented (`ice-proxy-sys` Windows backend, per-user `Internet Settings`, no elevation); mode switching is live via Clash API `PATCH /configs` on **both** platforms (no core restart, no connection drop); Windows CI runner (`gate-windows`), NSIS packaging (`npm run build:win`) and Windows acceptance (`npm run acceptance:win`) added.
+**Windows completion** (2026-08-24, see [docs/windows-plan.md](docs/windows-plan.md)): WinInet system proxy implemented (`ice-proxy-sys` Windows backend, per-user `Internet Settings`, no elevation); mode switching rebuilds + reloads the core on both platforms (SIGHUP on macOS, restart on Windows — the Clash API `PATCH /configs` fast path is a forward-compatible gate that the pinned sing-box never honors); Windows CI runner (`gate-windows`), NSIS packaging (`npm run build:win`) and Windows acceptance (`npm run acceptance:win`) added.
 
 | Scope | Status |
 |-------|--------|
 | macOS | ✅ Release gate passed |
 | CI | `.github/workflows/ci.yml` → Linux + macOS + **Windows** `npm run gate` |
-| Windows | ✅ System proxy (WinInet), live mode switch, NSIS build script, acceptance script |
+| Windows | ✅ System proxy (WinInet), mode switching, NSIS build script, acceptance script |
 
 ### Common commands
 

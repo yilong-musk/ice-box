@@ -3,7 +3,7 @@
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
-    orchestrate_set_proxy_mode, orchestrate_start, orchestrate_stop, resolve_binary,
+    orchestrate_set_proxy_mode, orchestrate_start, resolve_binary,
 };
 use crate::shutdown::graceful_stop;
 use crate::AppState;
@@ -20,7 +20,8 @@ use ice_core::{
 use ice_proxy_sys::is_proxy_live_applied;
 use ice_subscription::{
     list_profile_outbounds, load_index, redact_subscription_url_for_log,
-    redact_subscription_url_for_ui, SubscriptionError, SubscriptionManager, SubscriptionPaths,
+    redact_subscription_url_for_ui, write_subscription_error, SubscriptionError,
+    SubscriptionManager, SubscriptionPaths,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::MutexGuard;
@@ -123,6 +124,34 @@ fn active_profile(state: &AppState) -> Result<NormalizedProfile, AppError> {
 
 fn merged_outbounds(state: &AppState) -> Result<Vec<NormalizedOutbound>, AppError> {
     Ok(list_profile_outbounds(&active_profile(state)?))
+}
+
+/// Like `merged_outbounds`, but `Ok(None)` when no active subscription exists
+/// (first-run / all subscriptions removed). Read paths use this so the UI gets
+/// an empty list instead of an error; mutation paths keep erroring via
+/// `merged_outbounds`.
+fn merged_outbounds_opt(state: &AppState) -> Result<Option<Vec<NormalizedOutbound>>, AppError> {
+    let sub_paths = SubscriptionPaths::from_app(&state.paths);
+    let index = load_index(&sub_paths).map_err(AppError::from)?;
+    match ice_subscription::load_active_profile(&sub_paths, &index) {
+        Ok(profile) => Ok(Some(list_profile_outbounds(&profile))),
+        Err(SubscriptionError::NoActiveSubscription) => Ok(None),
+        Err(err) => Err(AppError::from(err)),
+    }
+}
+
+/// Active subscription profile, or an empty profile when none exists (so rule
+/// read paths return empty data instead of `config.empty_outbounds`).
+fn active_profile_or_empty(state: &AppState) -> Result<NormalizedProfile, AppError> {
+    let sub_paths = SubscriptionPaths::from_app(&state.paths);
+    let index = load_index(&sub_paths).map_err(AppError::from)?;
+    match ice_subscription::load_active_profile(&sub_paths, &index) {
+        Ok(profile) => Ok(profile),
+        Err(SubscriptionError::NoActiveSubscription) => {
+            Ok(NormalizedProfile::from_nodes_only(vec![]))
+        }
+        Err(err) => Err(AppError::from(err)),
+    }
 }
 
 fn require_known_node_tag(state: &AppState, tag: &str) -> Result<(), AppError> {
@@ -276,7 +305,7 @@ pub fn save_settings(
     let _orch = lock_orchestrate(&state)?;
     let previous = current_settings(&state.paths).unwrap_or_default();
     persist_settings(&state.paths.settings(), &settings)?;
-    apply_after_change(&app, &state, &settings, &previous, false)
+    apply_after_change(&app, &state, &settings, &previous)
 }
 
 #[derive(Deserialize)]
@@ -297,10 +326,11 @@ fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {
     }
 }
 
-/// Switch routing mode. While Running the switch is live via Clash API `PATCH /configs`
-/// (no core restart, no connection drop); the rebuild + reload/restart path is the fallback
-/// (stopped, pre-Slice 4c config, or PATCH failure). Settings are always persisted so the
-/// next apply builds the new `default_mode`.
+/// Switch routing mode. With the pinned sing-box 1.13.19 the runtime Clash `mode-list` is
+/// only `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored and
+/// the switch always takes the rebuild + reload/restart path (the PATCH attempt is a
+/// forward-compatible capability gate). Settings are always persisted so the next apply
+/// builds the new `default_mode`.
 #[tauri::command]
 pub fn set_proxy_mode(
     app: AppHandle,
@@ -319,7 +349,7 @@ pub fn set_proxy_mode(
     let binary = binary_for(&app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    match orchestrate_set_proxy_mode(
+    orchestrate_set_proxy_mode(
         &state.paths,
         &settings,
         &previous,
@@ -327,38 +357,22 @@ pub fn set_proxy_mode(
         proxy.as_ref(),
         binary,
         resource_dir(&app).as_deref(),
-    ) {
-        Ok(()) => Ok(()),
-        Err(err) if err.code == "config.empty_outbounds" => {
-            if matches!(
-                core.state().status,
-                CoreStatus::Running | CoreStatus::Starting | CoreStatus::Error
-            ) {
-                orchestrate_stop(&state.paths, &mut **core, proxy.as_ref())?;
-                return Err(AppError::new(
-                    ErrorCode::CoreStoppedNoNodes,
-                    "内核已停止：没有可用的订阅节点",
-                ));
-            }
-            Err(err)
-        }
-        Err(err) => Err(err),
-    }
+    )
 }
 
-/// When `soft_empty` is true (subscription mutations), empty outbounds while Stopped is Ok;
-/// while Running we Stop. Explicit Apply / save_settings should pass false to surface the error.
+/// Apply after a settings / subscription mutation. `generate_config` falls back
+/// to a direct-only config when no subscription exists, so this always writes a
+/// valid config.json (and reloads while Running).
 fn apply_after_change(
     app: &AppHandle,
     state: &AppState,
     settings: &AppSettings,
     previous_settings: &AppSettings,
-    soft_empty: bool,
 ) -> Result<(), AppError> {
     let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    match orchestrate_apply(
+    orchestrate_apply(
         &state.paths,
         settings,
         previous_settings,
@@ -366,27 +380,7 @@ fn apply_after_change(
         proxy.as_ref(),
         binary,
         resource_dir(app).as_deref(),
-    ) {
-        Ok(()) => Ok(()),
-        Err(err) if err.code == "config.empty_outbounds" => {
-            if matches!(
-                core.state().status,
-                CoreStatus::Running | CoreStatus::Starting | CoreStatus::Error
-            ) {
-                orchestrate_stop(&state.paths, &mut **core, proxy.as_ref())?;
-                return Err(AppError::new(
-                    ErrorCode::CoreStoppedNoNodes,
-                    "内核已停止：没有可用的订阅节点",
-                ));
-            }
-            if soft_empty {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        }
-        Err(err) => Err(err),
-    }
+    )
 }
 
 fn apply_after_subscription_change(
@@ -394,7 +388,7 @@ fn apply_after_subscription_change(
     state: &AppState,
     settings: &AppSettings,
 ) -> Option<AppError> {
-    match apply_after_change(app, state, settings, settings, true) {
+    match apply_after_change(app, state, settings, settings) {
         Ok(()) => None,
         Err(err) => {
             tracing::warn!(code = %err.code, error = %err.message, "apply after subscription change failed");
@@ -419,22 +413,27 @@ pub struct AddSubscriptionRequest {
 }
 
 #[tauri::command]
-pub fn add_subscription(
+pub async fn add_subscription(
     app: AppHandle,
     state: State<'_, AppState>,
     req: AddSubscriptionRequest,
 ) -> Result<serde_json::Value, AppError> {
     let redacted = redact_subscription_url_for_log(&req.url);
     tracing::info!(url = %redacted, name = ?req.name, "add_subscription: start");
-    let _orch = lock_orchestrate(&state)?;
+    // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
+    // save_settings are not queued behind it; the lock is taken for the disk write + Apply.
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths);
-    let meta = mgr
-        .add(&req.url, req.name.as_deref())
-        .map_err(|e| {
-            tracing::warn!(url = %redacted, error = %e.redacted_display(), code = %e.code().as_str(), "add_subscription: fetch/parse failed");
-            AppError::from(e)
-        })?;
+    let fetched = mgr.fetch_add(&req.url, req.name.as_deref()).map_err(|e| {
+        tracing::warn!(url = %redacted, error = %e.redacted_display(), code = %e.code().as_str(), "add_subscription: fetch/parse failed");
+        AppError::from(e)
+    })?;
+
+    let _orch = lock_orchestrate(&state)?;
+    let meta = mgr.apply_add(fetched).map_err(|e| {
+        tracing::warn!(url = %redacted, error = %e.redacted_display(), code = %e.code().as_str(), "add_subscription: apply failed");
+        AppError::from(e)
+    })?;
     tracing::info!(url = %redacted, id = %meta.id, name = %meta.name, nodes = meta.node_count, format = ?meta.format, "add_subscription: imported");
 
     let settings = current_settings(&state.paths)?;
@@ -471,15 +470,28 @@ pub fn remove_subscription(
 }
 
 #[tauri::command]
-pub fn update_subscription(
+pub async fn update_subscription(
     app: AppHandle,
     state: State<'_, AppState>,
     req: IdRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
+    // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock; the lock is taken
+    // for the disk write + Apply step.
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths);
-    let meta = mgr.update(req.id).map_err(AppError::from)?;
+    let fetched = match mgr.fetch_update(req.id) {
+        Ok(upd) => upd,
+        Err(err) => {
+            // Keep the pre-split behavior: record `last_error` on a failed fetch.
+            let _orch = lock_orchestrate(&state)?;
+            write_subscription_error(mgr.paths(), req.id, err.to_string())
+                .map_err(AppError::from)?;
+            return Err(AppError::from(err));
+        }
+    };
+
+    let _orch = lock_orchestrate(&state)?;
+    let meta = mgr.apply_update(fetched).map_err(AppError::from)?;
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(&app, &state, &settings);
@@ -490,19 +502,21 @@ pub fn update_subscription(
 }
 
 #[tauri::command]
-pub fn update_all_subscriptions(
+pub async fn update_all_subscriptions(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
     // Fetches (parallel, up to one FETCH_TIMEOUT) run without the orchestrate lock so a
-    // long batch doesn't queue Start/Stop/Settings behind it; the lock is re-acquired
-    // for the final Apply step. Subscription writes are atomic file renames, so
-    // concurrent readers see a consistent snapshot.
+    // long batch doesn't queue Start/Stop/Settings behind it. The lock is re-acquired for
+    // the disk phase + Apply step so a concurrent add/remove/set_active cannot interleave
+    // with the subscription writes (atomic file renames keep readers consistent, and
+    // `apply_update` refuses to resurrect a subscription removed mid-flight).
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths);
-    let results = mgr.update_all();
+    let fetched = mgr.fetch_all();
 
     let _orch = lock_orchestrate(&state)?;
+    let results = mgr.apply_all(fetched);
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(&app, &state, &settings);
     let summary: Vec<_> = results
@@ -545,10 +559,13 @@ pub fn set_active_subscription(
 }
 
 #[tauri::command]
-pub fn apply_subscriptions(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+pub async fn apply_subscriptions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
     let _orch = lock_orchestrate(&state)?;
     let settings = current_settings(&state.paths)?;
-    apply_after_change(&app, &state, &settings, &settings, false)
+    apply_after_change(&app, &state, &settings, &settings)
 }
 
 #[derive(Serialize)]
@@ -563,7 +580,9 @@ pub struct NodeInfo {
 
 #[tauri::command]
 pub async fn list_nodes(state: State<'_, AppState>) -> Result<Vec<NodeInfo>, AppError> {
-    let outbounds = merged_outbounds(state.inner())?;
+    let Some(outbounds) = merged_outbounds_opt(state.inner())? else {
+        return Ok(vec![]);
+    };
     let settings = current_settings(&state.paths)?;
     let selections = load_group_selections(&state.paths.group_selections());
     let core_running = {
@@ -722,7 +741,7 @@ fn apply_after_rule_change(
 
 /// Rules for the active subscription only (single-active model, architecture §11.5).
 fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> {
-    let profile = active_profile(state)?;
+    let profile = active_profile_or_empty(state)?;
     let overrides = load_overrides(state);
     let mut counts: std::collections::HashMap<&'static str, usize> =
         std::collections::HashMap::new();
@@ -764,7 +783,7 @@ pub fn get_rule_overview(state: State<'_, AppState>) -> Result<RuleOverview, App
 /// Query rules with server-side filtering + pagination. Never ships the full rule list
 /// over IPC: big subscriptions (up to 10k rules) stay cheap for the UI.
 fn query_rules(state: &AppState, req: &ListRulesRequest) -> Result<ListRulesResponse, AppError> {
-    let profile = active_profile(state)?;
+    let profile = active_profile_or_empty(state)?;
     let overrides = load_overrides(state);
     let limit = req.limit.clamp(1, MAX_RULES_PAGE_SIZE);
     let keyword = req

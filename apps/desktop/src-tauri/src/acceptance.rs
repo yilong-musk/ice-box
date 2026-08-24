@@ -82,21 +82,32 @@ mod tests {
     }
 
     #[test]
-    fn g9_1_empty_start_no_spawn_no_proxy() {
+    fn g9_1_empty_start_runs_direct_only_no_proxy() {
         let paths = temp_app("empty-start");
         let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        let err =
-            orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect_err("empty");
-        assert_eq!(err.code, "config.empty_outbounds");
-        assert_eq!(core.state().status, CoreStatus::Stopped);
-        assert_eq!(proxy.apply_calls.get(), 0);
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect("direct-only");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        assert_eq!(
+            proxy.apply_calls.get(),
+            cfg!(target_os = "macos") as usize,
+            "auto system proxy applies only when the platform default enables it"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
+        let tags: Vec<&str> = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        assert_eq!(tags, ["direct", "block"]);
         if paths.proxy_backup().exists() {
             let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-            assert!(!b.applied);
+            assert_eq!(b.applied, cfg!(target_os = "macos"));
         }
         let _ = fs::remove_dir_all(paths.root());
     }
@@ -209,7 +220,8 @@ mod tests {
 mod live {
     use crate::log_tail::read_log_tail;
     use crate::orchestrate::{
-        orchestrate_apply, orchestrate_start, orchestrate_stop, repo_third_party_singbox,
+        orchestrate_apply, orchestrate_set_proxy_mode, orchestrate_start, orchestrate_stop,
+        repo_third_party_singbox,
     };
     use ice_config::{AppPaths, AppSettings};
     use ice_core::{resolve_singbox_binary, CoreController, CoreStatus};
@@ -635,13 +647,14 @@ mod live {
         );
     }
 
-    /// Slice 4c live: runtime mode switch via Clash API `PATCH /configs` — no restart.
-    /// Start → PATCH global → mixed port keeps answering → PATCH direct → back to rule.
+    /// Slice 4c live: runtime mode switch against real sing-box. With the pinned 1.13.19 the
+    /// runtime Clash `mode-list` is `[<default_mode>]`, so a raw `PATCH /configs` to another
+    /// mode is silently ignored; the app-level path persists `settings.proxy_mode` and then
+    /// rebuilds + reloads (SIGHUP), baking the new `default_mode`. Verify that path end to end.
     #[test]
     #[ignore = "live: real sing-box + Clash API mode switch"]
     fn g9_11_live_mode_switch_via_clash_api() {
-        use ice_config::clash_mode_name;
-        use ice_core::{get_mode, set_mode, HealthEndpoints};
+        use ice_core::{get_mode, HealthEndpoints};
 
         let paths = temp_app("mode-switch");
         seed_singbox_subscription(&paths);
@@ -650,35 +663,58 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            proxy.as_ref(),
+            bin.clone(),
+            None,
+        )
+        .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         let endpoints = HealthEndpoints {
             host: "127.0.0.1".into(),
             port: CLASH_PORT,
         };
 
-        let rule = clash_mode_name(ice_config::ProxyMode::Rule);
+        let rule = ice_config::clash_mode_name(ice_config::ProxyMode::Rule);
         assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
 
+        let mut previous = settings.clone();
         for mode in [
             ice_config::ProxyMode::Global,
             ice_config::ProxyMode::Direct,
             ice_config::ProxyMode::Rule,
         ] {
-            let name = clash_mode_name(mode);
-            set_mode(&endpoints, name).expect("set mode");
+            let mut next = previous.clone();
+            next.proxy_mode = mode;
+            // App-level switch: persists settings, rebuilds + reloads (the PATCH gate never
+            // fires under the pinned core), and the reloaded config bakes the new default_mode.
+            orchestrate_set_proxy_mode(
+                &paths,
+                &next,
+                &previous,
+                &mut core,
+                proxy.as_ref(),
+                bin.clone(),
+                None,
+            )
+            .expect("set mode");
             assert_eq!(
                 get_mode(&endpoints).expect("re-read mode"),
-                name,
-                "runtime mode must reflect the PATCH"
+                ice_config::clash_mode_name(mode),
+                "runtime mode must reflect the rebuild + reload"
             );
             assert!(
                 curl_via_mixed(MIXED_PORT),
-                "mixed inbound must keep answering in {name} mode"
+                "mixed inbound must keep answering in {} mode",
+                ice_config::clash_mode_name(mode)
             );
+            previous = next;
         }
 
         cleanup(&paths, &mut core, proxy.as_ref());
-        println!("G9.11 ok: Rule -> Global -> Direct -> Rule via Clash API, no restart");
+        println!("G9.11 ok: Rule -> Global -> Direct -> Rule via rebuild + reload, no restart");
     }
 }

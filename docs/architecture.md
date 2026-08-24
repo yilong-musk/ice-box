@@ -3,8 +3,9 @@
 This document is the **implementation spec** for v1. Code must follow it; if the implementation deviates, update the document first, then the code.
 
 Status: **macOS + Windows v1 implemented** (start/stop, system proxy on both platforms, Clash/sing-box
-subscription parsing, hot reload for rule/subscription changes, live mode switching via Clash API on
-both platforms, nodes/traffic UI); Windows CI, NSIS installer and Windows acceptance in place.
+subscription parsing, hot reload for rule/subscription changes, mode switching (rebuild + reload,
+SIGHUP on macOS / restart on Windows) on both platforms, nodes/traffic UI); Windows CI, NSIS installer
+and Windows acceptance in place.
 
 ---
 
@@ -439,7 +440,7 @@ Goal: map `proxies` + `proxy-groups` + `rules` + `dns` to sing-box outbound / ro
 **v1's simultaneous multi-subscription behavior is removed.**
 
 - `SubscriptionMeta.active: bool`, at most one `true` globally (the old `enabled` field is read compatibly via an alias; a forced migration runs when reading the index)
-- At any moment only the **active** subscription's `profile.json` is read to generate the config; no active subscription → `config.empty_outbounds`
+- At any moment only the **active** subscription's `profile.json` is read to generate the config; no active subscription (or one with zero usable outbounds) → the generated config falls back to **direct-only** (builtin `direct` / `block` outbounds, every route final `direct`), so Start and Apply always work and the core can run before any subscription is imported
 - Switching active = switching the whole set of outbounds / route / dns
 - When the active subscription changes, if `selected_tag` does not exist in the new profile it falls back to `default_outbound` (the Clash entry group, preferring `Proxies` / `Final` / the first group), and `settings.json` is written back
 - `selected_tag` may point at a **policy group or node** tag; the Clash API `PUT /proxies/{tag}` is unchanged
@@ -448,8 +449,8 @@ Goal: map `proxies` + `proxy-groups` + `rules` + `dns` to sing-box outbound / ro
 
 - `update`: re-fetch; on failure keep the old raw/nodes/profile, only write `last_error`
 - `update_all`: serial updates; a single failure does not affect the others
-- `remove`: delete the directory; if the removed one was active and no active remains → Start not allowed; if Running, stop and prompt
-- No active subscription → Start not allowed; if Running, stop and prompt
+- `remove`: delete the directory; if the removed one was active and no active remains → Start falls back to direct-only mode; if Running, apply reloads to the direct-only config
+- No active subscription → Start runs in direct-only mode; if Running, apply reloads to the direct-only config
 
 ---
 
@@ -488,22 +489,27 @@ The generated config **always** carries the full rule set regardless of mode, wi
 - `<global target>` = the outbound `ProxyMode::Global` routes everything through: the injected
   `proxy` selector when the profile has no groups, else the top group / fallback — so homepage
   node selection keeps working in global mode.
-- The runtime mode is switched live via Clash API `PATCH /configs` (`ice_core::set_mode`,
-  `orchestrate_set_proxy_mode`): no config rebuild, no reload, no restart, no system proxy churn.
-  `PATCH` only changes routing when the running config carries the `clash_mode` rules; on a
-  pre-Slice 4c config (or any `PATCH` failure) the switch falls back to rebuild + reload/restart.
-- `experimental.clash_api` gains `mode_list: ["Rule", "Global", "Direct"]` and
-  `default_mode` = `settings.proxy_mode` capitalized (membership is case-sensitive in sing-box
-  `NewServer`; a lowercase entry would pollute the reported `mode-list`). `settings.proxy_mode`
-  is the **default mode**: applied at build time, restored after every restart because the config
-  is rebuilt on apply.
+- **Mode switching always rebuilds + reloads.** The pinned sing-box 1.13.19 `NewServer`
+  starts with an empty runtime `mode-list` and prepends `default_mode`, so the list is always
+  `[<default_mode>]` — a single entry, not `["Rule", "Global", "Direct"]` — and `SetMode`
+  silently ignores any `PATCH /configs` targeting another mode. `orchestrate_set_proxy_mode`
+  still attempts the `PATCH` and verifies it with `GET /configs` as a forward-compatible
+  capability gate (it never fires against the pinned core), so every switch falls back to the
+  rebuild + SIGHUP reload/restart path; `running_config_supports_clash_mode` skips even the
+  attempt on pre-Slice 4c configs.
+- `experimental.clash_api` gains `default_mode` = `settings.proxy_mode` capitalized (membership
+  is case-sensitive in sing-box `NewServer`; a lowercase entry would be silently ignored — and,
+  were the list to contain it, pollute the reported `mode-list`). **`mode_list` must NOT be
+  emitted**: the pinned sing-box 1.13.19 rejects the field (`json: unknown field "mode_list"`).
+  `settings.proxy_mode` is the **default mode**: applied at build time, restored after every
+  restart because the config is rebuilt on apply.
 - **`experimental.cache_file` stays OFF** (locked): `Server.Start()` would restore the cached mode
   and override `default_mode`, breaking mode restoration on restart.
 - `route.final` keeps the rule-mode value in all three modes; `clash_mode` rules short-circuit
   before it at match time.
-- **Disk `config.json` lags while Running:** the `PATCH` path does not regenerate `config.json`,
-  so its baked `default_mode` stays at the pre-switch value until the next apply/restart. The
-  on-disk file is **not** authoritative for the running mode; `settings.proxy_mode` is.
+- **Disk `config.json` reflects the switch:** the rebuild + reload path regenerates
+  `config.json` (baking the new `default_mode`) before the SIGHUP reload, so after every
+  switch the running mode matches `settings.proxy_mode`, which remains authoritative.
 
 Minimal DNS fallback (locked in v1, kept as fallback in v2):
 
@@ -689,7 +695,7 @@ A successful healthcheck may log one info line: `sing-box ready on 127.0.0.1:178
 | `core.spawn_failed` | failed to launch |
 | `core.healthcheck_failed` | healthcheck failed |
 | `core.invalid_state` | illegal state transition |
-| `config.empty_outbounds` | no usable nodes |
+| `config.empty_outbounds` | no usable nodes (selection/test paths; Start/Apply fall back to direct-only) |
 | `config.invalid` | generation/validation failed |
 | `proxy.apply_failed` / `proxy.restore_failed` | system proxy |
 | `sub.fetch_failed` | network/timeout |

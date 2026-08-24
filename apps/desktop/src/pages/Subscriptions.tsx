@@ -16,6 +16,7 @@ export function Subscriptions() {
   const [warning, setWarning] = useState<string | null>(null);
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
@@ -33,9 +34,10 @@ export function Subscriptions() {
     void refresh();
   }, [refresh]);
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<unknown>, isUpdate = false) {
     nextGeneration();
     setBusy(true);
+    if (isUpdate) setUpdating(true);
     setError(null);
     setWarning(null);
     setUpdateFailures(null);
@@ -55,6 +57,7 @@ export function Subscriptions() {
       setError(formatInvokeError(e));
       await refresh();
     } finally {
+      setUpdating(false);
       setBusy(false);
     }
   }
@@ -104,9 +107,9 @@ export function Subscriptions() {
         <button
           type="button"
           disabled={busy || items.length === 0}
-          onClick={() => void run(() => api.updateAllSubscriptions())}
+          onClick={() => void run(() => api.updateAllSubscriptions(), true)}
         >
-          全部更新
+          {updating ? "更新中" : "全部更新"}
         </button>
         <button
           type="button"
@@ -121,7 +124,7 @@ export function Subscriptions() {
       )}
 
       {items.length === 0 ? (
-        <p className="muted">暂无订阅。导入 URL 后可启动内核。</p>
+        <p className="muted">暂无订阅。可直接以直连模式启动内核，也可导入订阅 URL。</p>
       ) : (
         <ul className="sub-list">
           {items.map((s) => (
@@ -163,9 +166,9 @@ export function Subscriptions() {
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void run(() => api.updateSubscription(s.id))}
+                  onClick={() => void run(() => api.updateSubscription(s.id), true)}
                 >
-                  更新
+                  {updating ? "更新中" : "更新"}
                 </button>
                 <button
                   type="button"
