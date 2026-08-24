@@ -1068,9 +1068,29 @@ mod tests {
         #[cfg(windows)]
         assert_eq!(outcome, ReloadOutcome::Restarted);
 
-        // Clash API should still answer.
+        // Clash API should still answer. After SIGHUP the HTTP listener can briefly
+        // drop in-flight connections while sing-box rebuilds it, so retry until the
+        // controller actually serves (TCP connect alone is not enough).
         let url = format!("http://127.0.0.1:{}/configs", paths.clash_api_port);
-        let body = ureq::get(&url).call().unwrap().into_string().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let body = loop {
+            match ureq::get(&url).call() {
+                Ok(resp) => match resp.into_string() {
+                    Ok(body) => break body,
+                    Err(e) => {
+                        if std::time::Instant::now() >= deadline {
+                            panic!("clash API not ready after reload: {e}");
+                        }
+                    }
+                },
+                Err(e) => {
+                    if std::time::Instant::now() >= deadline {
+                        panic!("clash API not ready after reload: {e}");
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
         assert!(body.contains("log-level"), "configs body: {body}");
 
         core.stop(&paths.pid_file).expect("stop");

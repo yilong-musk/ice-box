@@ -42,7 +42,16 @@ if [[ -z "$EXPECTED" ]]; then
   echo "no SHA-256 entry for $ASSET in $CHECKSUMS" >&2
   exit 1
 fi
-ACTUAL="$(shasum -a 256 "$TMP/sb.archive" | awk '{ print $1 }')"
+if command -v shasum >/dev/null 2>&1; then
+  SHA256_CMD="shasum -a 256"
+elif command -v sha256sum >/dev/null 2>&1; then
+  SHA256_CMD="sha256sum"
+else
+  echo "no SHA-256 tool (shasum/sha256sum) available" >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+ACTUAL="$($SHA256_CMD "$TMP/sb.archive" | awk '{ print $1 }')"
 if [[ "$ACTUAL" != "$EXPECTED" ]]; then
   echo "SHA-256 mismatch for $ASSET" >&2
   echo "  expected: $EXPECTED" >&2
