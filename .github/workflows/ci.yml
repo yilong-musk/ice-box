@@ -135,7 +135,7 @@ jobs:
             apps/desktop/src-tauri/target/release/bundle/macos/*.app
 
   build-windows:
-    name: build (Windows msi/nsis)
+    name: build (Windows nsis)
     runs-on: windows-latest
     needs: gate-windows
     defaults:
@@ -169,5 +169,4 @@ jobs:
         with:
           name: ice-box-windows
           path: |
-            apps/desktop/src-tauri/target/release/bundle/msi/*.msi
             apps/desktop/src-tauri/target/release/bundle/nsis/*.exe

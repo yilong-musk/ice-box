@@ -99,13 +99,13 @@ Tauri commands uniformly return JSON on failure:
 
 **macOS v2 routing capabilities** (2026-08-22): v1 slices 0-9 have passed the gate; **single active subscription** replaces multi-subscription merging (breaking change, see architecture §11.5); Clash `proxy-groups` → selector/urltest/fallback/loadbalance, `rules` → route.rules (**GEOIP → bundled sing-geoip rule-sets**, 30 countries, see `scripts/fetch-geoip.sh`), subscription `dns` → sing-box dns (listen stripped); bundled sing-box **1.13.19**; `.app` / `.dmg` buildable.
 
-**Windows completion** (2026-08-24, see [docs/windows-plan.md](docs/windows-plan.md)): WinInet system proxy implemented (`ice-proxy-sys` Windows backend, per-user `Internet Settings`, no elevation); mode switching is live via Clash API `PATCH /configs` on **both** platforms (no core restart, no connection drop); Windows CI runner (`gate-windows`), MSI/NSIS packaging (`npm run build:win`) and Windows acceptance (`npm run acceptance:win`) added.
+**Windows completion** (2026-08-24, see [docs/windows-plan.md](docs/windows-plan.md)): WinInet system proxy implemented (`ice-proxy-sys` Windows backend, per-user `Internet Settings`, no elevation); mode switching is live via Clash API `PATCH /configs` on **both** platforms (no core restart, no connection drop); Windows CI runner (`gate-windows`), NSIS packaging (`npm run build:win`) and Windows acceptance (`npm run acceptance:win`) added.
 
 | Scope | Status |
 |-------|--------|
 | macOS | ✅ Release gate passed |
 | CI | `.github/workflows/ci.yml` → Linux + macOS + **Windows** `npm run gate` |
-| Windows | ✅ System proxy (WinInet), live mode switch, MSI/NSIS build script, acceptance script |
+| Windows | ✅ System proxy (WinInet), live mode switch, NSIS build script, acceptance script |
 
 ### Common commands
 
@@ -115,7 +115,7 @@ npm run dev:mac-arm64    # dev (Apple Silicon)
 npm run dev:mac-x64      # dev (Intel Mac)
 npm run dev:win          # dev (Windows)
 npm run build            # macOS .app / .dmg
-npm run build:win        # Windows MSI + NSIS (Windows host, PowerShell fallback prepared)
+npm run build:win        # Windows NSIS (Windows host, PowerShell fallback prepared)
 npm run gate             # fmt + clippy + test + tsc + vitest
 npm run acceptance       # full macOS acceptance (incl. live sing-box / system proxy)
 npm run acceptance:win   # full Windows acceptance (incl. live WinInet / sing-box, Git Bash)
@@ -134,5 +134,5 @@ open target/release/bundle/dmg/ice-box_*_aarch64.dmg   # or .app
 ```bash
 ./scripts/fetch-singbox.sh win
 npm run build:win
-# artifacts: apps/desktop/src-tauri/target/release/bundle/msi/ and .../nsis/
+# artifacts: apps/desktop/src-tauri/target/release/bundle/nsis/
 ```

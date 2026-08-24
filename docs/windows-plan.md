@@ -2,7 +2,7 @@
 
 Status: **implemented** (2026-08-24) — slices 4b/4c/5/6/7 landed; what still needs a real Windows host
 is the live verification: WinInet G4.3/G4.4 gates, the live sing-box mode-switch gate, and installing
-the MSI/NSIS artifacts.
+the NSIS installer artifact.
 Related: `docs/architecture.md` (§9 hot reload, §13 system proxy, §19 slices, §21 locked).
 
 ## 1. Goal
@@ -12,7 +12,7 @@ Bring the Windows desktop app to the same functional level as macOS:
 1. System proxy actually works (WinInet backend).
 2. Mode switching no longer needs a core restart on any platform.
 3. Windows is compiled and tested in CI.
-4. MSI / NSIS installers build and run.
+4. The NSIS installer builds and runs.
 5. Automated acceptance covers Windows.
 
 **Locked decisions (do not change silently):** sing-box first (no mihomo fork), no TUN / elevated
@@ -27,7 +27,7 @@ Windows (§9.2), config engine stays platform-free.
 | 2 | Mode switching (Rule/Global/Direct) | SIGHUP hot reload | process restart | Slice 4c |
 | 3 | Rule / subscription changes | SIGHUP hot reload | process restart (§9.2, 500 ms port wait) | accepted, no change |
 | 4 | CI | Linux + macOS gate | no Windows runner; `cfg(windows)` never compiled | Slice 5 |
-| 5 | Installer (G8.2) | `.app` / `.dmg` buildable | MSI/NSIS config exists (`tauri.windows.conf.json`) but never built | Slice 6 |
+| 5 | Installer (G8.2) | `.app` / `.dmg` buildable | NSIS config exists (`tauri.windows.conf.json`) but never built | Slice 6 |
 | 6 | Acceptance | `scripts/run-acceptance-macos.sh` | none | Slice 7 |
 | 7 | Process termination | SIGTERM graceful | `child.kill()` hard kill; `taskkill /F` for orphan pids | accepted (note below) |
 
@@ -181,7 +181,7 @@ it on Windows in acceptance.
   run on a Windows host (or a Windows CI job).
 - `scripts/prepare-singbox-resource.sh` already copies `windows-x86_64/sing-box.exe` when the
   target is win — verify end-to-end; add a PowerShell fallback if Git Bash is unavailable.
-- Validate: MSI and NSIS artifacts install; `sing-box.exe` lands in the install dir;
+- Validate: the NSIS artifact installs; `sing-box.exe` lands in the install dir;
   WebView2 bootstrapper path works.
 
 ### Slice 7 — Windows acceptance
@@ -212,7 +212,7 @@ it on Windows in acceptance.
       exactly (live G4.3/G4.4 analogues in `ice-proxy-sys` — must run on a Windows host)
 - [x] Windows runner green in CI (fmt, clippy, tests, tsc, vitest) — `gate-windows` job added;
       `cargo check/clippy --target x86_64-pc-windows-gnu` verified locally
-- [~] MSI and NSIS install on a clean Windows host and launch with bundled `sing-box.exe`
+- [~] NSIS installer installs on a clean Windows host and launches with bundled `sing-box.exe`
       (`npm run build:win` — must run on a Windows host)
 - [~] `run-acceptance-windows` fully green (script added — must run on a Windows host)
 

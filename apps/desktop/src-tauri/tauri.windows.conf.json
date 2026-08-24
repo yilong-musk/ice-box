@@ -3,7 +3,7 @@
     "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-singbox-resource.ps1 -Platform win && npm run build"
   },
   "bundle": {
-    "targets": ["msi", "nsis"],
+    "targets": ["nsis"],
     "resources": {
       "resources/sing-box.exe": "sing-box.exe",
       "resources/sing-box": null,

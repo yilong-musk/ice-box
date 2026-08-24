@@ -4,7 +4,7 @@ This document is the **implementation spec** for v1. Code must follow it; if the
 
 Status: **macOS + Windows v1 implemented** (start/stop, system proxy on both platforms, Clash/sing-box
 subscription parsing, hot reload for rule/subscription changes, live mode switching via Clash API on
-both platforms, nodes/traffic UI); Windows CI, MSI/NSIS installers and Windows acceptance in place.
+both platforms, nodes/traffic UI); Windows CI, NSIS installer and Windows acceptance in place.
 
 ---
 
