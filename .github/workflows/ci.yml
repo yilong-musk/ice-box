@@ -16,6 +16,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -44,6 +48,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
 
       - uses: actions/setup-node@v5
         with:
@@ -80,6 +88,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -109,6 +121,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
 
       - uses: actions/setup-node@v5
         with:
@@ -147,6 +163,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
 
       - uses: actions/setup-node@v5
         with:
