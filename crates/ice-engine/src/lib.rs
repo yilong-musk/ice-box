@@ -129,7 +129,10 @@ proxies:
             rule_overrides: RuleOverrides::default(),
         })
         .expect_err("empty profile");
-        assert!(matches!(err, EngineError::Config(ConfigError::EmptyOutbounds)));
+        assert!(matches!(
+            err,
+            EngineError::Config(ConfigError::EmptyOutbounds)
+        ));
     }
 
     #[test]
