@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Compliance
+
+The rules in this document are mandatory. Strictly follow every rule constraint. If an action would violate, or could potentially violate, any rule below, stop and ask the user first before proceeding.
+
 ## Rules
 
 1. **Code comments**: All code comments must be written in English.

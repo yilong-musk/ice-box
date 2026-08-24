@@ -12,9 +12,47 @@ use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle};
 use ice_proxy_sys::{create_system_proxy, recover_if_applied, ProxyEndpoints, SystemProxy};
-use std::sync::Mutex;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{Manager, RunEvent, WindowEvent};
+
+/// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
+/// written here so a crash on Windows (where the release binary has no console and
+/// stderr is discarded) still leaves a trace in `ice-box.log`.
+static PANIC_LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Route panics to stderr (if any) and append them to the app log file.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let line = format!("{payload} (at {location})");
+        let _ = writeln!(std::io::stderr(), "ice-box PANIC: {line}");
+        if let Some(path) = PANIC_LOG_PATH.get() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(file, "{} PANIC {line}", chrono::Utc::now().to_rfc3339());
+            }
+        }
+    }));
+}
 
 pub struct AppState {
     pub paths: AppPaths,
@@ -78,6 +116,7 @@ fn bootstrap_data_dir(paths: &AppPaths) -> Result<(Box<dyn CoreHandle>, Option<S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_hook();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -86,6 +125,7 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("resolve app_data_dir: {e}"))?;
             let paths = AppPaths::new(root);
+            let _ = PANIC_LOG_PATH.set(paths.app_log());
             let instance_lock = acquire_instance_lock(&paths)?;
             let paths_for_focus = paths.clone();
             let (core, proxy_recovery_warning) = bootstrap_data_dir(&paths)?;

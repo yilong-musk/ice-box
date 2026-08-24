@@ -354,8 +354,13 @@ impl HttpFetcher for DirectFetcher {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<FetchResponse, SubscriptionError> {
+        let redacted = crate::redact_subscription_url_for_log(url);
+        tracing::debug!(url = %redacted, "subscription fetch: start");
         let agent = build_direct_agent();
-        let hop = fetch_get(&agent, url, etag, last_modified)?;
+        let hop = fetch_get(&agent, url, etag, last_modified).inspect_err(
+            |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "subscription fetch: failed"),
+        )?;
+        tracing::debug!(url = %redacted, status = hop.status, bytes = hop.body.len(), "subscription fetch: response");
 
         if hop.status == 304 {
             return Ok(FetchResponse {

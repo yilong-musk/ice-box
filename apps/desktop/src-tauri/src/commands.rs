@@ -19,8 +19,8 @@ use ice_core::{
 };
 use ice_proxy_sys::is_proxy_live_applied;
 use ice_subscription::{
-    list_profile_outbounds, load_index, redact_subscription_url_for_ui, SubscriptionError,
-    SubscriptionManager, SubscriptionPaths,
+    list_profile_outbounds, load_index, redact_subscription_url_for_log,
+    redact_subscription_url_for_ui, SubscriptionError, SubscriptionManager, SubscriptionPaths,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::MutexGuard;
@@ -424,15 +424,24 @@ pub fn add_subscription(
     state: State<'_, AppState>,
     req: AddSubscriptionRequest,
 ) -> Result<serde_json::Value, AppError> {
+    let redacted = redact_subscription_url_for_log(&req.url);
+    tracing::info!(url = %redacted, name = ?req.name, "add_subscription: start");
     let _orch = lock_orchestrate(&state)?;
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths);
     let meta = mgr
         .add(&req.url, req.name.as_deref())
-        .map_err(AppError::from)?;
+        .map_err(|e| {
+            tracing::warn!(url = %redacted, error = %e.redacted_display(), code = %e.code().as_str(), "add_subscription: fetch/parse failed");
+            AppError::from(e)
+        })?;
+    tracing::info!(url = %redacted, id = %meta.id, name = %meta.name, nodes = meta.node_count, format = ?meta.format, "add_subscription: imported");
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(&app, &state, &settings);
+    if let Some(w) = &apply_warning {
+        tracing::warn!(code = %w.code, error = %w.message, "add_subscription: apply warning");
+    }
     let mut value = serde_json::to_value(meta)
         .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
     attach_apply_warning(&mut value, apply_warning);

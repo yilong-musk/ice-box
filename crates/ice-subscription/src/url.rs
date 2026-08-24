@@ -61,6 +61,50 @@ pub fn redact_subscription_url_for_ui(raw: &str) -> String {
     format!("{}://{}{}", parsed.scheme(), host, path)
 }
 
+/// Redact subscription URL secrets before writing to logs: keep only scheme + host.
+/// Unlike [`redact_subscription_url_for_ui`], the path is stripped too, since some
+/// providers embed tokens in the path (e.g. `/api/v1/<uuid>`).
+pub fn redact_subscription_url_for_log(raw: &str) -> String {
+    let Ok(parsed) = url::Url::parse(raw.trim()) else {
+        return "***".into();
+    };
+    let host = parsed.host_str().unwrap_or("unknown");
+    format!("{}://{}", parsed.scheme(), host)
+}
+
+/// Replace any `http(s)://` substring in `text` with its log-redacted form.
+/// Used to scrub URLs that get embedded in error messages before logging.
+pub fn redact_urls_in_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(rel) = find_url_start(rest) {
+        out.push_str(&rest[..rel]);
+        let url_end = rest[rel..]
+            .find(char::is_whitespace)
+            .map(|e| rel + e)
+            .unwrap_or(rest.len());
+        let candidate = rest[rel..url_end].trim_end_matches(':');
+        let n_colons = rest[rel..url_end].len() - candidate.len();
+        out.push_str(&redact_subscription_url_for_log(candidate));
+        out.push_str(&":".repeat(n_colons));
+        rest = &rest[url_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn find_url_start(text: &str) -> Option<usize> {
+    let mut offset = 0;
+    loop {
+        let rel = text[offset..].find("http")? + offset;
+        let candidate = &text[rel..];
+        if candidate.starts_with("https://") || candidate.starts_with("http://") {
+            return Some(rel);
+        }
+        offset = rel + 4;
+    }
+}
+
 /// Resolve a subscription URL to vetted socket addresses for pinned connect.
 pub fn resolve_allowed_fetch_addrs(
     url: &str,
@@ -123,9 +167,12 @@ fn lookup_host_socket_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, Su
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|e| {
+            tracing::warn!(host, port, error = %e, "subscription DNS resolution failed");
             SubscriptionError::FetchFailed(format!("resolve subscription host {host}: {e}"))
         })?
         .collect();
+
+    tracing::debug!(host, port, addrs = ?addrs, "subscription DNS resolved");
 
     if addrs.is_empty() {
         return Err(SubscriptionError::FetchFailed(format!(
@@ -231,5 +278,23 @@ mod tests {
             "https://token:secret@sub.example.com/path/to/sub?key=abc&token=xyz",
         );
         assert_eq!(redacted, "https://sub.example.com/path/to/sub");
+    }
+
+    #[test]
+    fn redact_subscription_url_for_log_strips_path_and_query() {
+        let redacted = redact_subscription_url_for_log(
+            "https://token:secret@sub.example.com/api/v1/abc123?token=xyz",
+        );
+        assert_eq!(redacted, "https://sub.example.com");
+    }
+
+    #[test]
+    fn redact_urls_in_text_scrubs_embedded_urls() {
+        let text = "GET https://sub.example.com/api/v1/abc123?token=xyz: connect: timeout";
+        assert_eq!(
+            redact_urls_in_text(text),
+            "GET https://sub.example.com: connect: timeout"
+        );
+        assert_eq!(redact_urls_in_text("no urls here"), "no urls here");
     }
 }

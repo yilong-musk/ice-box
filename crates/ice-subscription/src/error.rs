@@ -37,6 +37,11 @@ impl SubscriptionError {
             Self::ProfileParseFailed(_) => ErrorCode::SubParseFailed,
         }
     }
+
+    /// Display text with any embedded subscription URLs redacted, safe for logs.
+    pub fn redacted_display(&self) -> String {
+        crate::url::redact_urls_in_text(&self.to_string())
+    }
 }
 
 impl From<SubscriptionError> for AppError {

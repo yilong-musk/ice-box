@@ -550,7 +550,9 @@ pub use store::{
     save_index, set_active, set_enabled, write_subscription_error, write_subscription_success,
     SubscriptionPaths,
 };
-pub use url::redact_subscription_url_for_ui;
+pub use url::{
+    redact_subscription_url_for_log, redact_subscription_url_for_ui, redact_urls_in_text,
+};
 
 use chrono::{DateTime, Utc};
 use ice_config::{NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats};
