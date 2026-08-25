@@ -44,12 +44,6 @@ h1 {
   letter-spacing: -0.02em;
 }
 
-.tagline {
-  margin: 0;
-  color: #8b9bb4;
-  font-size: 0.9rem;
-}
-
 .tabs {
   display: flex;
   gap: 0.35rem;
@@ -424,15 +418,31 @@ select {
   color: #7dcea0;
 }
 
-.group-select {
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   min-width: 0;
-  max-width: 100%;
-  padding: 0.2rem 0.3rem;
-  font-size: 0.85rem;
-  background: #121820;
-  color: #e6edf3;
-  border: 1px solid #2a3544;
-  border-radius: 5px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-toggle:hover .node-tag {
+  color: #c5d4e8;
+}
+
+.group-chevron {
+  flex-shrink: 0;
+  width: 0.85rem;
+  color: #8b9bb4;
+  font-size: 0.75rem;
+  line-height: 1;
 }
 
 .group-now {
@@ -442,6 +452,95 @@ select {
   white-space: nowrap;
   color: #7dcea0;
   font-size: 0.85rem;
+}
+
+.group-members-wrap {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid #2a3544;
+  background: #10161e;
+}
+
+.group-members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.group-member-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.35rem 0.65rem 0.35rem 1.55rem;
+  font-size: 0.88rem;
+  border-top: 1px solid #1c2530;
+}
+
+.group-member-row:first-child {
+  border-top: none;
+}
+
+.group-member-row.exit {
+  background: #162018;
+}
+
+.group-member-select,
+.group-member-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.group-member-select {
+  cursor: pointer;
+}
+
+.group-member-select:hover:not(:disabled) .node-tag {
+  color: #c5d4e8;
+}
+
+.group-member-select:disabled {
+  cursor: default;
+}
+
+.group-member-select.exit .node-tag,
+.group-member-label.exit .node-tag {
+  color: #7dcea0;
+}
+
+.group-member-mark {
+  flex-shrink: 0;
+  width: 0.75rem;
+  color: #8b9bb4;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.group-member-select.exit .group-member-mark,
+.group-member-label.exit .group-member-mark {
+  color: #7dcea0;
+}
+
+.group-member-exit-badge {
+  flex-shrink: 0;
+  color: #7dcea0;
+  font-size: 0.78rem;
+}
+
+.group-member-row > .delay-badge,
+.group-member-row > .delay-error,
+.group-member-row > .muted {
+  flex-shrink: 0;
 }
 
 .node-row-actions {

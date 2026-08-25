@@ -1,6 +1,6 @@
 //! Clash API / mixed inbound health probe.
 
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ impl HealthEndpoints {
     }
 }
 
-pub trait HealthProbe: Send {
+pub trait HealthProbe: Send + Clone + 'static {
     fn wait_ready(&self, endpoints: &HealthEndpoints, timeout: Duration) -> Result<(), CoreError>;
 }
 
@@ -101,6 +101,39 @@ pub fn wait_tcp_ready_until(
 /// Shared cancel flag for interrupting an in-flight healthcheck (quit during auto-start).
 pub type HealthCancel = Arc<AtomicBool>;
 
+/// Whether something is already accepting TCP on `host:port` (port conflict).
+pub fn tcp_port_is_in_use(host: &str, port: u16) -> bool {
+    let addr = format!("{host}:{port}");
+    let Ok(addrs) = addr.to_socket_addrs() else {
+        return false;
+    };
+    for a in addrs {
+        if TcpStream::connect_timeout(&a, Duration::from_millis(150)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Try to bind `host:port` briefly to confirm we could own the listen address.
+/// Used as a stronger check for `0.0.0.0` / dual-stack conflicts.
+pub fn tcp_bind_available(host: &str, port: u16) -> bool {
+    let addr = format!("{host}:{port}");
+    let Ok(addrs) = addr.to_socket_addrs() else {
+        return true;
+    };
+    for a in addrs {
+        match TcpListener::bind(a) {
+            Ok(listener) => {
+                drop(listener);
+                return true;
+            }
+            Err(_) => continue,
+        }
+    }
+    false
+}
+
 /// Probe that never succeeds (for unit tests).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FailingHealthProbe;
@@ -159,6 +192,7 @@ impl HealthProbe for SequenceHealthProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
     use std::thread;
 
     #[test]
@@ -180,5 +214,14 @@ mod tests {
         assert!(err.to_string().contains("cancelled"));
         assert!(t0.elapsed() < Duration::from_secs(2));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn tcp_port_is_in_use_detects_bound_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(tcp_port_is_in_use("127.0.0.1", port));
+        drop(listener);
+        assert!(!tcp_port_is_in_use("127.0.0.1", port));
     }
 }

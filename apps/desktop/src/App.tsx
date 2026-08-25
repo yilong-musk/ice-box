@@ -37,7 +37,6 @@ function App() {
       <header className="top">
         <div>
           <h1>ice-box</h1>
-          <p className="tagline">macOS · Windows · sing-box · 订阅管理</p>
         </div>
         <nav className="tabs" aria-label="主导航">
           {(

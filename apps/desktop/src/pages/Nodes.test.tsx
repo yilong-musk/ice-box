@@ -75,20 +75,29 @@ describe("Nodes", () => {
 
     await waitFor(() => {
       expect(view.getByText("→ node-b")).toBeInTheDocument();
+      expect(view.getByText("→ node-a")).toBeInTheDocument();
     });
-    expect(view.getByLabelText("选择组 出口")).toHaveValue("node-a");
   });
 
-  it("switches selector group member via dropdown", async () => {
+  async function expandGroup(
+    view: ReturnType<typeof within>,
+    groupName: string,
+  ) {
+    const toggle = await view.findByRole("button", {
+      name: groupName,
+      expanded: false,
+    });
+    fireEvent.click(toggle);
+    expect(await view.findByLabelText(`${groupName} 成员`)).toBeInTheDocument();
+  }
+
+  it("expands selector group and switches exit by clicking a member", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    await waitFor(() => {
-      expect(view.getByLabelText("选择组 出口")).toBeInTheDocument();
-    });
-    fireEvent.change(view.getByLabelText("选择组 出口"), {
-      target: { value: "node-b" },
-    });
+    await expandGroup(view, "选择组");
+    fireEvent.click(view.getByLabelText("将 node-b 设为 选择组 出口"));
+
     await waitFor(() => {
       expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
     });
@@ -106,14 +115,39 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    await waitFor(() => {
-      expect(view.getByLabelText("选择组 出口")).toBeInTheDocument();
-    });
-    fireEvent.change(view.getByLabelText("选择组 出口"), {
-      target: { value: "node-b" },
-    });
+    await expandGroup(view, "选择组");
+    fireEvent.click(view.getByLabelText("将 node-b 设为 选择组 出口"));
+
     await waitFor(() => {
       expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
     });
+  });
+
+  it("expands non-selector groups as read-only member list", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await expandGroup(view, "自动组");
+
+    expect(view.queryByLabelText("将 node-a 设为 自动组 出口")).not.toBeInTheDocument();
+    expect(setGroupSelection).not.toHaveBeenCalled();
+  });
+
+  it("uses a space-safe id for group member panels", async () => {
+    listNodes.mockResolvedValue([
+      {
+        tag: "My Group",
+        outbound_type: "selector",
+        group_now: "node-a",
+        group_all: ["node-a", "node-b"],
+      },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await expandGroup(view, "My Group");
+    const panel = view.getByLabelText("My Group 成员").closest("[id]");
+    expect(panel?.id).toBe("group-members-My_20Group");
+    expect(panel?.id.includes(" ")).toBe(false);
   });
 });

@@ -17,8 +17,9 @@ pub use clash_api::{
 };
 pub use error::CoreError;
 pub use health::{
-    wait_tcp_ready, wait_tcp_ready_until, FailingHealthProbe, HealthCancel, HealthEndpoints,
-    HealthProbe, ImmediateHealthProbe, SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_TIMEOUT,
+    tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,
+    FailingHealthProbe, HealthCancel, HealthEndpoints, HealthProbe, ImmediateHealthProbe,
+    SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
 pub use process::{
     stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, ProcessSpawner,
@@ -32,10 +33,13 @@ pub use reload::{
 
 use ice_config::{clear_pid, write_pid};
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// High-level runtime status exposed to the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +85,8 @@ pub struct CorePaths {
     /// Clash API listen used for healthcheck (TCP connect).
     pub clash_api_host: String,
     pub clash_api_port: u16,
+    /// When true, mixed inbound binds `0.0.0.0` (LAN share); port probe must check wildcard.
+    pub allow_lan: bool,
 }
 
 impl CorePaths {
@@ -160,7 +166,7 @@ impl CoreController<CommandSpawner, TcpHealthProbe> {
     }
 }
 
-impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
+impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     pub fn with_deps(
         spawner: S,
         health: H,
@@ -219,6 +225,8 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
                 paths.binary.display()
             )));
         }
+
+        ensure_listen_ports_free(paths)?;
 
         self.state.status = CoreStatus::Starting;
         self.state.message = None;
@@ -368,11 +376,114 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
 
         self.child = Some(child);
 
-        if let Err(err) = self.wait_health(&paths.health_endpoints()) {
+        if let Err(err) = self.wait_health_while_running(paths) {
             self.kill_child_and_clear_pid(&paths.pid_file);
-            return Err(CoreError::HealthcheckFailed(err.to_string()));
+            return Err(err);
         }
         Ok(())
+    }
+
+    /// Probe clash API while watching for an early sing-box exit (config/bind errors).
+    fn wait_health_while_running(&mut self, paths: &CorePaths) -> Result<(), CoreError> {
+        let endpoints = paths.health_endpoints();
+
+        // Unit tests inject Immediate/Failing/Sequence probes and leave `health_cancel`
+        // unset; run the probe on a helper thread so we can still poll for early exit
+        // without needing a real TCP listener or consuming SequenceHealthProbe twice.
+        if self.health_cancel.is_none() {
+            if let Some(err) = self.early_exit_health_error(paths) {
+                return Err(err);
+            }
+            let probe = self.health.clone();
+            let ep = endpoints.clone();
+            let timeout = self.health_timeout;
+            let handle = std::thread::spawn(move || probe.wait_ready(&ep, timeout));
+            loop {
+                if let Some(err) = self.early_exit_health_error(paths) {
+                    // Leave the probe thread to finish on its own (at most health_timeout).
+                    return Err(err);
+                }
+                if handle.is_finished() {
+                    return match handle.join().unwrap_or_else(|_| {
+                        Err(CoreError::HealthcheckFailed(
+                            "health probe thread panicked".into(),
+                        ))
+                    }) {
+                        Ok(()) => Ok(()),
+                        Err(err) => {
+                            Err(self.healthcheck_err_with_exit_hint(paths, err.to_string()))
+                        }
+                    };
+                }
+                std::thread::sleep(HEALTHCHECK_POLL_INTERVAL);
+            }
+        }
+
+        let deadline = Instant::now() + self.health_timeout;
+        let mut last_err = String::from("not attempted");
+
+        while Instant::now() < deadline {
+            if self
+                .health_cancel
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return Err(CoreError::HealthcheckFailed(
+                    "cancelled while waiting for clash API".into(),
+                ));
+            }
+
+            if let Some(err) = self.early_exit_health_error(paths) {
+                return Err(err);
+            }
+
+            match try_tcp_connect_once(&endpoints) {
+                Ok(()) => return Ok(()),
+                Err(e) => last_err = e,
+            }
+            std::thread::sleep(HEALTHCHECK_POLL_INTERVAL);
+        }
+
+        Err(self.healthcheck_err_with_exit_hint(
+            paths,
+            format!(
+                "timeout after {}ms waiting for {}:{}: {last_err}",
+                self.health_timeout.as_millis(),
+                endpoints.host,
+                endpoints.port
+            ),
+        ))
+    }
+
+    fn early_exit_health_error(&mut self, paths: &CorePaths) -> Option<CoreError> {
+        let child = self.child.as_mut()?;
+        match child.try_wait() {
+            Ok(Some(code)) => {
+                let excerpt = singbox_log_failure_excerpt(&paths.log_file);
+                Some(CoreError::HealthcheckFailed(format!(
+                    "sing-box 启动后立即退出 (code {code}){}",
+                    if excerpt.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {excerpt}")
+                    }
+                )))
+            }
+            Ok(None) => None,
+            Err(e) => Some(CoreError::SpawnFailed(format!("try_wait: {e}"))),
+        }
+    }
+
+    fn healthcheck_err_with_exit_hint(&mut self, paths: &CorePaths, base: String) -> CoreError {
+        if let Some(err) = self.early_exit_health_error(paths) {
+            return err;
+        }
+        let excerpt = singbox_log_failure_excerpt(&paths.log_file);
+        if excerpt.is_empty() {
+            CoreError::HealthcheckFailed(base)
+        } else {
+            CoreError::HealthcheckFailed(format!("{base}; {excerpt}"))
+        }
     }
 
     fn wait_health(&self, endpoints: &crate::HealthEndpoints) -> Result<(), CoreError> {
@@ -494,7 +605,7 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
 }
 
 #[cfg(test)]
-impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
+impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     /// Test helper: simulate a running core whose child already exited.
     pub(crate) fn inject_exited_child_for_test(&mut self) {
         struct ExitedChild;
@@ -517,6 +628,120 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
         self.state.inbound_host = Some("127.0.0.1".into());
         self.state.inbound_port = Some(17890);
     }
+}
+
+fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
+    // Probe the hosts we will healthcheck / show in the UI. allow_lan binds mixed on
+    // 0.0.0.0, but a listener on that port is still reachable via 127.0.0.1.
+    let checks = [
+        ("mixed", paths.inbound_host.as_str(), paths.inbound_port),
+        (
+            "clash API",
+            paths.clash_api_host.as_str(),
+            paths.clash_api_port,
+        ),
+    ];
+    for (label, host, port) in checks {
+        if tcp_port_is_in_use(host, port) {
+            return Err(CoreError::SpawnFailed(format!(
+                "{label} 端口 {host}:{port} 已被占用，请关闭占用该端口的程序（如其他代理软件）或在设置中更换端口"
+            )));
+        }
+    }
+    // Only when LAN share is on does sing-box bind 0.0.0.0; probing wildcard while
+    // allow_lan is off false-positives if another process holds the port on a
+    // non-probe address (e.g. another loopback alias or a LAN NIC).
+    if paths.allow_lan && !tcp_bind_available("0.0.0.0", paths.inbound_port) {
+        return Err(CoreError::SpawnFailed(format!(
+            "mixed 端口 {}:{} 无法绑定（可能已被占用），请关闭占用程序或在设置中更换端口",
+            "0.0.0.0", paths.inbound_port
+        )));
+    }
+    Ok(())
+}
+
+fn try_tcp_connect_once(endpoints: &HealthEndpoints) -> Result<(), String> {
+    if !ice_config::is_loopback_host(&endpoints.host) {
+        return Err(format!(
+            "healthcheck host must be loopback, got {}",
+            endpoints.host
+        ));
+    }
+    let addr_str = endpoints.socket_addr_hint();
+    let addrs: Vec<_> = addr_str
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {addr_str}: {e}"))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(format!("no addresses for {addr_str}"));
+    }
+    let mut last = String::from("not attempted");
+    for addr in addrs {
+        match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+            Ok(_) => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(last)
+}
+
+fn singbox_log_failure_excerpt(log_file: &Path) -> String {
+    let Ok(mut file) = File::open(log_file) else {
+        return String::new();
+    };
+    let Ok(len) = file.seek(SeekFrom::End(0)) else {
+        return String::new();
+    };
+    let window = 8 * 1024u64;
+    let start = len.saturating_sub(window);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut raw = Vec::new();
+    if file.read_to_end(&mut raw).is_err() {
+        return String::new();
+    }
+    // A fixed byte window may start mid-character; skip leading UTF-8 continuations.
+    let text = String::from_utf8_lossy(skip_partial_utf8_prefix(&raw));
+    let clean = strip_ansi_light(&text);
+    clean
+        .lines()
+        .rev()
+        .find(|line| {
+            let upper = line.to_ascii_uppercase();
+            upper.contains("FATAL") || upper.contains("BIND:") || upper.contains("LISTEN ")
+        })
+        .map(|line| line.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Skip leading UTF-8 continuation bytes so a mid-rune window still decodes.
+fn skip_partial_utf8_prefix(bytes: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] & 0xc0 == 0x80 {
+        i += 1;
+    }
+    &bytes[i..]
+}
+
+fn strip_ansi_light(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c2 in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c2) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn pid_is_alive(pid: u32) -> bool {
@@ -647,20 +872,34 @@ mod tests {
         bin
     }
 
+    fn free_loopback_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral")
+            .local_addr()
+            .expect("local_addr")
+            .port()
+    }
+
     fn paths_in(dir: &Path, binary: PathBuf) -> CorePaths {
+        let inbound_port = free_loopback_port();
+        let mut clash_api_port = free_loopback_port();
+        while clash_api_port == inbound_port {
+            clash_api_port = free_loopback_port();
+        }
         CorePaths {
             binary,
             config: dir.join("config.json"),
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
             inbound_host: "127.0.0.1".into(),
-            inbound_port: 17890,
+            inbound_port,
             clash_api_host: "127.0.0.1".into(),
-            clash_api_port: 19090,
+            clash_api_port,
+            allow_lan: false,
         }
     }
 
-    fn mock_ctrl<S: ProcessSpawner, H: HealthProbe>(
+    fn mock_ctrl<S: ProcessSpawner, H: HealthProbe + 'static>(
         spawner: S,
         health: H,
         reloader: MockReloader,
@@ -848,6 +1087,30 @@ mod tests {
     }
 
     #[test]
+    fn start_rejects_when_mixed_port_already_in_use() {
+        let dir = temp_root("port-busy");
+        let bin = marker_binary(&dir);
+        let paths = paths_in(&dir, bin);
+        fs::write(&paths.config, b"{}").unwrap();
+        let listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", paths.inbound_port))
+            .expect("occupy mixed port");
+
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        let err = core.start(&paths).expect_err("port busy");
+        assert_eq!(err.code().as_str(), "core.spawn_failed");
+        assert!(
+            err.to_string().contains("已被占用"),
+            "message should mention port conflict: {err}"
+        );
+        drop(listener);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn g2_6_pid_written_on_start_cleared_on_stop() {
         let dir = temp_root("pid");
         let bin = marker_binary(&dir);
@@ -892,6 +1155,7 @@ mod tests {
             inbound_port: 17890,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port: 19090,
+            allow_lan: false,
         };
 
         let mut core = CoreController::new();
@@ -1063,6 +1327,7 @@ mod tests {
             inbound_port: 27891,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port: 29091,
+            allow_lan: false,
         };
 
         let mut core = CoreController::new();
@@ -1117,5 +1382,62 @@ mod tests {
     fn mock_spawner_increments_pid() {
         let s = MockSpawner::with_start_pid(1);
         assert_eq!(s.next_pid.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn strip_ansi_light_preserves_utf8() {
+        let raw = "\u{1b}[31m致命错误\u{1b}[0m bind: address already in use";
+        assert_eq!(
+            strip_ansi_light(raw),
+            "致命错误 bind: address already in use"
+        );
+    }
+
+    #[test]
+    fn skip_partial_utf8_prefix_drops_leading_continuations() {
+        // UTF-8 for "中" is E4 B8 AD; start mid-character with B8 AD + rest.
+        let full = "中国".as_bytes();
+        let mid = &full[1..];
+        let skipped = skip_partial_utf8_prefix(mid);
+        assert_eq!(std::str::from_utf8(skipped).unwrap(), "国");
+    }
+
+    #[test]
+    fn ensure_ports_skips_wildcard_when_allow_lan_off() {
+        // Hold the mixed port on another loopback alias so 0.0.0.0 cannot bind,
+        // while 127.0.0.1:port stays free — the false-positive case.
+        let Ok(holder) = std::net::TcpListener::bind("127.0.0.2:0") else {
+            eprintln!("skip: 127.0.0.2 bind unavailable on this host");
+            return;
+        };
+        let port = holder.local_addr().unwrap().port();
+        let mut clash_port = free_loopback_port();
+        while clash_port == port {
+            clash_port = free_loopback_port();
+        }
+        let dir = temp_root("ports-lan");
+        let paths = CorePaths {
+            binary: dir.join("x"),
+            config: dir.join("c.json"),
+            log_file: dir.join("l.log"),
+            pid_file: dir.join("p.pid"),
+            inbound_host: "127.0.0.1".into(),
+            inbound_port: port,
+            clash_api_host: "127.0.0.1".into(),
+            clash_api_port: clash_port,
+            allow_lan: false,
+        };
+        ensure_listen_ports_free(&paths).expect("loopback-only probe must succeed");
+
+        let lan = CorePaths {
+            allow_lan: true,
+            ..paths
+        };
+        let err = ensure_listen_ports_free(&lan).expect_err("wildcard probe must fail");
+        assert!(
+            err.to_string().contains("0.0.0.0"),
+            "unexpected error: {err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

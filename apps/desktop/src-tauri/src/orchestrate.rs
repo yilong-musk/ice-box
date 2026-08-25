@@ -86,6 +86,7 @@ pub fn build_core_paths(
         inbound_port: settings.mixed_port,
         clash_api_host: settings.clash_api_listen.clone(),
         clash_api_port: settings.clash_api_port,
+        allow_lan: settings.allow_lan,
     }
 }
 

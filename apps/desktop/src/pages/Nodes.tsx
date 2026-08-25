@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   formatInvokeError,
@@ -19,6 +19,15 @@ type Props = {
   onNavigate?: (tab: "subs") => void;
 };
 
+function isGroupType(outboundType: string): boolean {
+  return GROUP_TYPES.includes(outboundType);
+}
+
+/** HTML id-safe token derived from a possibly spaced group tag. */
+function groupMembersDomId(tag: string): string {
+  return `group-members-${encodeURIComponent(tag).replace(/%/g, "_")}`;
+}
+
 export function Nodes({ onNavigate }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
@@ -26,6 +35,9 @@ export function Nodes({ onNavigate }: Props) {
   const [running, setRunning] = useState(false);
   const [delays, setDelays] = useState<Record<string, DelayCell>>({});
   const [sortByDelay, setSortByDelay] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
@@ -69,6 +81,15 @@ export function Nodes({ onNavigate }: Props) {
         (a, b) => delaySortKey(delays[a.tag]) - delaySortKey(delays[b.tag]),
       )
     : nodes;
+
+  function toggleGroup(tag: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
 
   async function testOne(tag: string) {
     nextGeneration();
@@ -154,36 +175,30 @@ export function Nodes({ onNavigate }: Props) {
   }
 
   function groupExitCell(n: NodeInfo) {
-    if (!GROUP_TYPES.includes(n.outbound_type)) {
+    if (!isGroupType(n.outbound_type)) {
       return <span className="muted">—</span>;
-    }
-    const members = n.group_all ?? [];
-    if (n.outbound_type === "selector" && members.length > 0) {
-      return (
-        <select
-          aria-label={`${n.tag} 出口`}
-          className="group-select"
-          value={n.group_now ?? members[0]}
-          disabled={busy}
-          title={
-            running
-              ? "切换策略组出口"
-              : "代理服务未运行：选择会保存，启动后生效"
-          }
-          onChange={(e) => void onGroupSelect(n.tag, e.target.value)}
-        >
-          {members.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      );
     }
     if (n.group_now) {
       return <span className="group-now">→ {n.group_now}</span>;
     }
     return <span className="muted">代理服务未运行</span>;
+  }
+
+  function delayCell(tag: string) {
+    const delay = delays[tag] ?? null;
+    return (
+      <span
+        className={
+          typeof delay === "number"
+            ? "delay-badge"
+            : delay === "error"
+              ? "delay-error"
+              : "muted"
+        }
+      >
+        {formatDelay(delay)}
+      </span>
+    );
   }
 
   return (
@@ -241,55 +256,171 @@ export function Nodes({ onNavigate }: Props) {
               <span>操作</span>
             </li>
             {displayNodes.map((n) => {
-              const delay = delays[n.tag] ?? null;
               const isSelected = n.tag === selectedTag;
+              const members = n.group_all ?? [];
+              const expandable = isGroupType(n.outbound_type) && members.length > 0;
+              const expanded = expandable && expandedGroups.has(n.tag);
+              const selectable = n.outbound_type === "selector";
+              const membersId = groupMembersDomId(n.tag);
+
               return (
-                <li
-                  key={n.tag}
-                  className={isSelected ? "node-table-row selected" : "node-table-row"}
-                >
-                  <span className="node-tag" title={n.tag}>
-                    {isSelected && <span className="node-current">● </span>}
-                    {n.tag}
-                  </span>
-                  <span className="muted">
-                    {GROUP_TYPES.includes(n.outbound_type) ? (
-                      <>
-                        策略组 · {n.outbound_type}
-                      </>
-                    ) : (
-                      n.outbound_type
-                    )}
-                  </span>
-                  {groupExitCell(n)}
-                  <span
+                <Fragment key={n.tag}>
+                  <li
                     className={
-                      typeof delay === "number"
-                        ? "delay-badge"
-                        : delay === "error"
-                          ? "delay-error"
-                          : "muted"
+                      isSelected ? "node-table-row selected" : "node-table-row"
                     }
                   >
-                    {formatDelay(delay)}
-                  </span>
-                  <span className="node-row-actions">
-                    <button
-                      type="button"
-                      disabled={!running || busy}
-                      onClick={() => void testOne(n.tag)}
-                    >
-                      测速
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || isSelected}
-                      onClick={() => void onSelect(n.tag)}
-                    >
-                      选用
-                    </button>
-                  </span>
-                </li>
+                    {expandable ? (
+                      <button
+                        type="button"
+                        className="group-toggle"
+                        aria-label={n.tag}
+                        aria-expanded={expanded}
+                        aria-controls={membersId}
+                        title={expanded ? "收起成员" : "展开成员"}
+                        onClick={() => toggleGroup(n.tag)}
+                      >
+                        <span className="group-chevron" aria-hidden="true">
+                          {expanded ? "▾" : "▸"}
+                        </span>
+                        {isSelected && (
+                          <span className="node-current">● </span>
+                        )}
+                        <span className="node-tag" title={n.tag}>
+                          {n.tag}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="node-tag" title={n.tag}>
+                        {isSelected && (
+                          <span className="node-current">● </span>
+                        )}
+                        {n.tag}
+                      </span>
+                    )}
+                    <span className="muted">
+                      {isGroupType(n.outbound_type) ? (
+                        <>策略组 · {n.outbound_type}</>
+                      ) : (
+                        n.outbound_type
+                      )}
+                    </span>
+                    {groupExitCell(n)}
+                    {delayCell(n.tag)}
+                    <span className="node-row-actions">
+                      <button
+                        type="button"
+                        disabled={!running || busy}
+                        onClick={() => void testOne(n.tag)}
+                      >
+                        测速
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || isSelected}
+                        onClick={() => void onSelect(n.tag)}
+                      >
+                        选用
+                      </button>
+                    </span>
+                  </li>
+                  {expanded && (
+                    <li className="group-members-wrap" id={membersId}>
+                      <ul
+                        className="group-members"
+                        aria-label={`${n.tag} 成员`}
+                      >
+                        {members.map((member) => {
+                          const isExit = member === n.group_now;
+                          const memberDelay = delays[member] ?? null;
+                          return (
+                            <li
+                              key={`${n.tag}::${member}`}
+                              className={
+                                isExit
+                                  ? "group-member-row exit"
+                                  : "group-member-row"
+                              }
+                            >
+                              {selectable ? (
+                                <button
+                                  type="button"
+                                  className={
+                                    isExit
+                                      ? "group-member-select exit"
+                                      : "group-member-select"
+                                  }
+                                  disabled={busy || isExit}
+                                  aria-current={isExit ? "true" : undefined}
+                                  aria-label={
+                                    isExit
+                                      ? `${member}（当前出口）`
+                                      : `将 ${member} 设为 ${n.tag} 出口`
+                                  }
+                                  title={
+                                    isExit
+                                      ? "当前出口"
+                                      : running
+                                        ? "设为出口"
+                                        : "设为出口（保存后启动生效）"
+                                  }
+                                  onClick={() =>
+                                    void onGroupSelect(n.tag, member)
+                                  }
+                                >
+                                  <span
+                                    className="group-member-mark"
+                                    aria-hidden="true"
+                                  >
+                                    {isExit ? "●" : "○"}
+                                  </span>
+                                  <span className="node-tag" title={member}>
+                                    {member}
+                                  </span>
+                                </button>
+                              ) : (
+                                <span
+                                  className={
+                                    isExit
+                                      ? "group-member-label exit"
+                                      : "group-member-label"
+                                  }
+                                  title={isExit ? "当前出口" : undefined}
+                                >
+                                  <span
+                                    className="group-member-mark"
+                                    aria-hidden="true"
+                                  >
+                                    {isExit ? "●" : "○"}
+                                  </span>
+                                  <span className="node-tag" title={member}>
+                                    {member}
+                                  </span>
+                                </span>
+                              )}
+                              {isExit && (
+                                <span className="group-member-exit-badge">
+                                  当前
+                                </span>
+                              )}
+                              <span
+                                className={
+                                  typeof memberDelay === "number"
+                                    ? "delay-badge"
+                                    : memberDelay === "error"
+                                      ? "delay-error"
+                                      : "muted"
+                                }
+                              >
+                                {formatDelay(memberDelay)}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </li>
+                  )}
+                </Fragment>
               );
             })}
           </ul>
