@@ -8,6 +8,13 @@
       "resources/sing-box.exe": "sing-box.exe",
       "resources/sing-box": null,
       "resources/geoip": "geoip"
+    },
+    "nsis": {
+      "languages": ["SimpChinese", "English"],
+      "customLanguageFiles": {
+        "English": "nsis/English.nsh",
+        "SimpChinese": "nsis/SimpChinese.nsh"
+      }
     }
   }
 }

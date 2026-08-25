@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:win": "tauri build --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "react": "^19.1.0",

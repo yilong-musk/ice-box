@@ -39,8 +39,8 @@ jobs:
       - name: Workspace gate (G9.10)
         run: bash scripts/gate.sh
 
-  gate-macos:
-    name: gate (macOS)
+  gate-build-macos:
+    name: gate + build (macOS dmg)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -52,6 +52,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ice-box-${{ runner.os }}
+          cache-on-failure: true
 
       - uses: actions/setup-node@v5
         with:
@@ -75,8 +76,20 @@ jobs:
       - name: macOS proxy-sys unit tests
         run: cargo test -p ice-proxy-sys --lib
 
-  gate-windows:
-    name: gate (Windows)
+      - name: Build app bundle (tauri build)
+        run: npm run tauri build
+        working-directory: apps/desktop
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ice-box-macos
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
+
+  gate-build-windows:
+    name: gate + build (Windows nsis)
     runs-on: windows-latest
     defaults:
       run:
@@ -91,6 +104,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ice-box-${{ runner.os }}
+          cache-on-failure: true
 
       - uses: actions/setup-node@v5
         with:
@@ -111,78 +125,9 @@ jobs:
       - name: Headless acceptance (G9.1 / G9.6 / G9.7)
         run: cargo test -p ice-box --lib 'g9_' -- --nocapture
 
-  build-macos:
-    name: build (macOS dmg)
-    runs-on: macos-latest
-    needs: gate-macos
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ice-box-${{ runner.os }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Install frontend deps
-        run: npm ci
-        working-directory: apps/desktop
-
-      - name: Fetch sing-box binary
-        run: ./scripts/fetch-singbox.sh
-
-      - name: Build app bundle (tauri build)
-        run: npm run build
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: ice-box-macos
-          path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app
-
-  build-windows:
-    name: build (Windows nsis)
-    runs-on: windows-latest
-    needs: gate-windows
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ice-box-${{ runner.os }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Install frontend deps
-        run: npm ci
-        working-directory: apps/desktop
-
-      - name: Fetch sing-box binary
-        run: ./scripts/fetch-singbox.sh win
-
-      - name: Build app bundle (tauri build:win)
+      - name: Build app bundle (tauri build, NSIS)
         run: npm run build:win
+        working-directory: apps/desktop
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
