@@ -572,9 +572,17 @@ Interface: `backup` / `apply` / `restore`.
   (`pszConnection = null`), RAS/VPN entries from `RasEnumEntriesW`, and additional names under
   `HKCU\...\Internet Settings\Connections` (skipping `DefaultConnectionSettings` /
   `SavedLegacySettings`). Each connection is snapshotted and restored independently. A named
-  connection that cannot be queried (backup) or written (restore — e.g. VPN deleted since
-  apply) is skipped with a warning rather than failing the whole operation; the LAN connection
-  is required, and WinHTTP restore still runs after named-connection skips.
+  connection that cannot be queried (backup) or written (apply / restore — e.g. VPN deleted,
+  stale Connections-key name, or WinInet rejecting a non-ASCII dial-up name) is skipped with a
+  warning rather than failing the whole operation; the LAN connection is required, and WinHTTP
+  apply/restore still runs after named-connection skips.
+- System-proxy endpoints on Windows include SOCKS at the same mixed host/port.
+  WinInet has no separate SOCKS checkbox; apply writes a multi-protocol
+  `ProxyServer` (`http=host:port;https=host:port;socks=host:port`). `backup` /
+  `is_proxy_live_applied` parse that string into `http` / `https` / `socks`.
+  WinHTTP still uses a plain `host:port` (HTTP proxy only; no SOCKS).
+  Chrome/Edge usually still tunnel HTTPS via the HTTP proxy entry; `socks=` mainly
+  helps apps that read the WinInet multi-protocol form.
 - Live `backup` must snapshot LAN flags, proxy server, bypass, and `INTERNET_PER_CONN_AUTOCONFIG_URL`,
   plus the WinHTTP default proxy (`WinHttpGetDefaultProxyConfiguration`). If that snapshot cannot
   be taken, `backup` / `apply` fail — do not mutate a live hive you cannot restore. Inference of
@@ -594,9 +602,7 @@ Interface: `backup` / `apply` / `restore`.
   `ERROR_ACCESS_DENIED` / `ERROR_PRIVILEGE_NOT_HELD` without elevation; that case is a warning,
   not an apply/restore failure (no-UAC lock). Any other WinHTTP error fails the operation.
   Restore still records the original WinHTTP snapshot so an elevated session can put it back.
-- `ProxyServer = 127.0.0.1:mixed_port` covers HTTP/HTTPS; **WinInet's user-level settings expose
-  no separate SOCKS field**, so SOCKS is not set on Windows (the mixed inbound still accepts SOCKS
-  when an application connects directly)
+- `ProxyServer` (WinInet) = `http=127.0.0.1:mixed_port;https=127.0.0.1:mixed_port;socks=127.0.0.1:mixed_port`
 - `ProxyOverride` = bypass list (`localhost`, `127.0.0.1`, `::1`, `<local>`, `BYPASS_WINDOWS_EXTRA`)
 - After `apply` / `restore`, notify via `InternetSetOption` (`INTERNET_OPTION_SETTINGS_CHANGED` /
   `INTERNET_OPTION_PROXY_SETTINGS_CHANGED` / `INTERNET_OPTION_REFRESH`)

@@ -551,6 +551,55 @@ mod tests {
         assert!(!proxy_backup_matches_endpoints(&port_suffix, &endpoints));
     }
 
+    /// Multi-protocol WinInet backups expose socks= as `backup.socks`.
+    #[test]
+    fn windows_style_multi_protocol_backup_matches_with_socks() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        let backup = ProxyBackup {
+            enabled: true,
+            http: Some("127.0.0.1:17890".into()),
+            https: Some("127.0.0.1:17890".into()),
+            socks: Some("127.0.0.1:17890".into()),
+            extra: serde_json::json!({}),
+        };
+        assert!(proxy_backup_matches_endpoints(&backup, &endpoints));
+    }
+
+    /// Legacy plain `host:port` applies had no socks=; live-applied must not
+    /// require SOCKS when endpoints also omit it.
+    #[test]
+    fn windows_style_http_only_backup_matches_without_socks() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        let backup = ProxyBackup {
+            enabled: true,
+            http: Some("127.0.0.1:17890".into()),
+            https: Some("127.0.0.1:17890".into()),
+            socks: None,
+            extra: serde_json::json!({}),
+        };
+        assert!(proxy_backup_matches_endpoints(&backup, &endpoints));
+
+        let still_expects_socks = ProxyEndpoints {
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+            ..endpoints.clone()
+        };
+        assert!(
+            !proxy_backup_matches_endpoints(&backup, &still_expects_socks),
+            "endpoints that expect SOCKS must not match an HTTP-only snapshot"
+        );
+    }
+
     #[test]
     fn applied_true_restores_once_and_clears_flag_keeps_file() {
         let path = temp_backup_path("applied");

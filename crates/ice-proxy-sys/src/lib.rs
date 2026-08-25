@@ -194,8 +194,8 @@ mod live_tests {
         let endpoints = ProxyEndpoints {
             http_host: "127.0.0.1".into(),
             http_port: 17890,
-            socks_host: None,
-            socks_port: None,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
         };
         proxy.apply(&endpoints).expect("apply");
 
@@ -206,6 +206,11 @@ mod live_tests {
                 .is_some_and(|h| h.contains("127.0.0.1") && h.contains("17890")),
             "http after apply: {:?}",
             mid.http
+        );
+        assert_eq!(
+            mid.socks.as_deref(),
+            Some("127.0.0.1:17890"),
+            "WinInet multi-protocol ProxyServer must expose socks="
         );
         assert!(
             mid.extra["proxy_override"]

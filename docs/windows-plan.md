@@ -145,8 +145,10 @@ Implement per architecture §13.3:
   - `backup`: read user-level `Internet Settings` (`ProxyEnable`, `ProxyServer`, `ProxyOverride`,
     keep other keys untouched) into `ProxyBackup` (`extra` carries the raw tri-state for faithful
     restore).
-  - `apply`: write the three values (`ProxyServer = 127.0.0.1:mixed` covering HTTP/HTTPS, SOCKS
-    has no separate user-level field on WinInet — document that), set per-connection flags to
+  - `apply`: write the three values (`ProxyServer =
+    http=127.0.0.1:mixed;https=127.0.0.1:mixed;socks=127.0.0.1:mixed` — WinInet has no
+    separate SOCKS checkbox, so SOCKS is declared in the multi-protocol string), set
+    per-connection flags to
     `PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT` (WPAD/PAC otherwise outrank the manual proxy), then
     notify via `InternetSetOption(SETTINGS_CHANGED | PROXY_SETTINGS_CHANGED | REFRESH)`.
   - `restore`: write the backup values back verbatim; `ProxyEnable` state restored exactly

@@ -11,9 +11,9 @@
 //! Temp-hive unit tests still read/write `ProxyEnable` / `ProxyServer` /
 //! `ProxyOverride` because they cannot call live WinInet.
 //!
-//! WinInet's user-level settings expose a single `ProxyServer` string covering
-//! HTTP/HTTPS; SOCKS is not set on Windows. The mixed inbound still accepts SOCKS
-//! when an application connects to it directly.
+//! WinInet has no separate SOCKS checkbox; apply writes a multi-protocol
+//! `ProxyServer` (`http=…;https=…;socks=…`) so clients that read `socks=` can
+//! follow mixed. WinHTTP stays on a plain `host:port` (HTTP proxy only).
 
 mod connections;
 mod wide;
@@ -149,19 +149,90 @@ fn snapshot_live() -> Result<LiveSnapshot, ProxySysError> {
     })
 }
 
+/// WinInet `ProxyServer` multi-protocol form used by Clash / v2rayN-style clients.
+fn format_wininet_proxy_server(endpoints: &ProxyEndpoints) -> String {
+    let http = format!("{}:{}", endpoints.http_host, endpoints.http_port);
+    let socks = match (&endpoints.socks_host, endpoints.socks_port) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        _ => http.clone(),
+    };
+    format!("http={http};https={http};socks={socks}")
+}
+
+/// Plain host:port for WinHTTP (HTTP proxy; does not consume WinInet `socks=`).
+fn format_winhttp_proxy_server(endpoints: &ProxyEndpoints) -> String {
+    format!("{}:{}", endpoints.http_host, endpoints.http_port)
+}
+
+/// Split a WinInet `ProxyServer` into http / https / socks `host:port` values.
+///
+/// Accepts both `host:port` and `http=…;https=…;socks=…`. Unknown protocol keys
+/// are ignored. When only a plain address is present, it is treated as HTTP/HTTPS
+/// (no SOCKS), matching historical ice-box applies.
+fn parse_wininet_proxy_server(raw: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return (None, None, None);
+    }
+    if !raw.contains('=') {
+        let plain = raw.to_string();
+        return (Some(plain.clone()), Some(plain), None);
+    }
+
+    let mut http = None;
+    let mut https = None;
+    let mut socks = None;
+    for part in raw.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((proto, addr)) = part.split_once('=') else {
+            continue;
+        };
+        let addr = addr.trim();
+        if addr.is_empty() {
+            continue;
+        }
+        match proto.trim().to_ascii_lowercase().as_str() {
+            "http" => http = Some(addr.to_string()),
+            "https" => https = Some(addr.to_string()),
+            "socks" | "socks5" => socks = Some(addr.to_string()),
+            _ => {}
+        }
+    }
+    let http = http.or_else(|| https.clone());
+    let https = https.or_else(|| http.clone());
+    (http, https, socks)
+}
+
 fn apply_live(endpoints: &ProxyEndpoints, snapshot: &LiveSnapshot) -> Result<(), ProxySysError> {
-    let proxy_server = format!("{}:{}", endpoints.http_host, endpoints.http_port);
+    let wininet_server = format_wininet_proxy_server(endpoints);
+    let winhttp_server = format_winhttp_proxy_server(endpoints);
     let proxy_override = bypass_domains().join(";");
     for conn in &snapshot.connections {
-        apply_per_conn(
+        if let Err(err) = apply_per_conn(
             conn.name.as_deref(),
-            &proxy_server,
+            &wininet_server,
             &proxy_override,
             APPLY_FLAGS,
             None,
-        )?;
+        ) {
+            // LAN is required. A bad RAS/VPN name (or a stale Connections-key
+            // entry) must not roll back a successful LAN apply — same skip rule
+            // as restore (§13.3). Chinese dial-up names are a known WinInet footgun.
+            if skip_named_connection_failure(conn) {
+                tracing::warn!(
+                    connection = conn.name.as_deref().unwrap_or(""),
+                    error = %err,
+                    "skipping apply on unwritable named connection; LAN still applied"
+                );
+                continue;
+            }
+            return Err(err);
+        }
     }
-    match apply_winhttp(&proxy_server, &proxy_override)? {
+    match apply_winhttp(&winhttp_server, &proxy_override)? {
         WinHttpWrite::Applied => {}
         WinHttpWrite::AccessDenied => {
             tracing::warn!("WinHTTP default proxy requires elevation; WinInet still applied")
@@ -188,7 +259,7 @@ fn restore_live(state: &WinInetState) -> Result<(), ProxySysError> {
     } else {
         for conn in &state.connections {
             if let Err(err) = restore_per_conn(conn) {
-                if skip_named_restore_failure(conn) {
+                if skip_named_connection_failure(conn) {
                     tracing::warn!(
                         connection = conn.name.as_deref().unwrap_or(""),
                         error = %err,
@@ -211,8 +282,9 @@ fn restore_live(state: &WinInetState) -> Result<(), ProxySysError> {
     notify_settings_changed().map_err(|e| ProxySysError::RestoreFailed(e.to_string()))
 }
 
-/// A RAS/VPN removed since apply must not abort LAN / WinHTTP restore.
-fn skip_named_restore_failure(conn: &PerConnSnapshot) -> bool {
+/// A RAS/VPN removed since apply, or unwritable during apply, must not abort
+/// LAN / WinHTTP apply or restore.
+fn skip_named_connection_failure(conn: &PerConnSnapshot) -> bool {
     conn.name.is_some()
 }
 
@@ -292,12 +364,16 @@ impl WinInetState {
     fn to_backup(&self) -> ProxyBackup {
         use windows_sys::Win32::Networking::WinInet::PROXY_TYPE_PROXY;
         let lan = self.lan();
-        let server = lan.and_then(|c| c.proxy_server.clone()).or_else(|| {
-            self.proxy_server
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-        });
+        let raw = lan
+            .and_then(|c| c.proxy_server.clone())
+            .or_else(|| {
+                self.proxy_server
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            })
+            .unwrap_or_default();
+        let (http, https, socks) = parse_wininet_proxy_server(&raw);
         let enabled = if let Some(lan) = lan {
             (lan.flags & PROXY_TYPE_PROXY) != 0 || self.proxy_enable.unwrap_or(0) != 0
         } else {
@@ -305,9 +381,9 @@ impl WinInetState {
         };
         ProxyBackup {
             enabled,
-            http: server.clone(),
-            https: server,
-            socks: None,
+            http,
+            https,
+            socks,
             extra: json!({
                 "proxy_enable": self.proxy_enable,
                 "proxy_server": self.proxy_server,
@@ -391,10 +467,9 @@ impl SystemProxy for WindowsSystemProxy {
     }
 
     fn apply(&self, endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
-        let proxy_server = format!("{}:{}", endpoints.http_host, endpoints.http_port);
         let proxy_override = bypass_domains().join(";");
         if !self.is_live_hive() {
-            return self.apply_registry(&proxy_server, &proxy_override);
+            return self.apply_registry(&format_wininet_proxy_server(endpoints), &proxy_override);
         }
         let rollback = snapshot_live()?;
         if let Err(err) = apply_live(endpoints, &rollback) {
@@ -481,20 +556,26 @@ mod tests {
         let before = proxy.backup().expect("backup");
         assert!(before.enabled);
         assert_eq!(before.http.as_deref(), Some("10.0.0.99:3128"));
-        assert_eq!(before.socks, None, "WinInet user-level has no SOCKS field");
+        assert_eq!(before.socks, None, "plain ProxyServer has no socks= entry");
         assert_eq!(before.extra["proxy_enable"], 1);
 
         let endpoints = ProxyEndpoints {
             http_host: "127.0.0.1".into(),
             http_port: 17890,
-            socks_host: None,
-            socks_port: None,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
         };
         proxy.apply(&endpoints).expect("apply");
 
         let mid = proxy.backup().expect("read after apply");
         assert!(mid.enabled);
         assert_eq!(mid.http.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(mid.https.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(mid.socks.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(
+            mid.extra["proxy_server"].as_str(),
+            Some("http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890")
+        );
         let override_list = mid.extra["proxy_override"]
             .as_str()
             .unwrap_or_default()
@@ -740,6 +821,48 @@ mod tests {
     }
 
     #[test]
+    fn format_and_parse_wininet_proxy_server_roundtrip() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        let raw = format_wininet_proxy_server(&endpoints);
+        assert_eq!(
+            raw,
+            "http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890"
+        );
+        let (http, https, socks) = parse_wininet_proxy_server(&raw);
+        assert_eq!(http.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(https.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(socks.as_deref(), Some("127.0.0.1:17890"));
+    }
+
+    #[test]
+    fn parse_plain_proxy_server_has_no_socks() {
+        let (http, https, socks) = parse_wininet_proxy_server("10.0.0.99:3128");
+        assert_eq!(http.as_deref(), Some("10.0.0.99:3128"));
+        assert_eq!(https.as_deref(), Some("10.0.0.99:3128"));
+        assert!(socks.is_none());
+    }
+
+    #[test]
+    fn format_wininet_falls_back_to_http_when_socks_missing() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        assert_eq!(
+            format_wininet_proxy_server(&endpoints),
+            "http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890"
+        );
+        assert_eq!(format_winhttp_proxy_server(&endpoints), "127.0.0.1:17890");
+    }
+
+    #[test]
     fn named_restore_failures_are_skippable_lan_is_not() {
         let lan = PerConnSnapshot {
             name: None,
@@ -751,8 +874,8 @@ mod tests {
             flags: APPLY_FLAGS,
             ..PerConnSnapshot::default()
         };
-        assert!(!skip_named_restore_failure(&lan));
-        assert!(skip_named_restore_failure(&vpn));
+        assert!(!skip_named_connection_failure(&lan));
+        assert!(skip_named_connection_failure(&vpn));
     }
 
     #[test]

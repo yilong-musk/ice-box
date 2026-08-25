@@ -95,7 +95,10 @@ pub fn endpoints_from_settings(settings: &AppSettings) -> ProxyEndpoints {
     ProxyEndpoints {
         http_host: host.clone(),
         http_port: settings.mixed_port,
-        socks_host: Some(host.clone()),
+        // Windows WinInet stores SOCKS in the multi-protocol ProxyServer string
+        // (`socks=host:port`); macOS sets a real SOCKS service. Both expose it here
+        // so `is_proxy_live_applied` can verify the apply.
+        socks_host: Some(host),
         socks_port: Some(settings.mixed_port),
     }
 }
