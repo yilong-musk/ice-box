@@ -1404,8 +1404,10 @@ mod tests {
 
     #[test]
     fn ensure_ports_skips_wildcard_when_allow_lan_off() {
-        // Hold the mixed port on another loopback alias so 0.0.0.0 cannot bind,
-        // while 127.0.0.1:port stays free — the false-positive case.
+        // Hold the mixed port on another loopback alias so 127.0.0.1:port stays free.
+        // On Linux this also blocks binding 0.0.0.0:port; Windows often still allows
+        // the wildcard bind (different exclusivity), so the allow_lan=true assertion
+        // is gated on an actual failed wildcard probe.
         let Ok(holder) = std::net::TcpListener::bind("127.0.0.2:0") else {
             eprintln!("skip: 127.0.0.2 bind unavailable on this host");
             return;
@@ -1428,6 +1430,14 @@ mod tests {
             allow_lan: false,
         };
         ensure_listen_ports_free(&paths).expect("loopback-only probe must succeed");
+
+        if tcp_bind_available("0.0.0.0", port) {
+            eprintln!(
+                "skip allow_lan=true assertion: platform allows 0.0.0.0 bind alongside 127.0.0.2"
+            );
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
 
         let lan = CorePaths {
             allow_lan: true,
