@@ -19,4 +19,6 @@ winreg = "0.55"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Networking_WinInet",
+    "Win32_Networking_WinHttp",
+    "Win32_NetworkManagement_Rras",
 ] }

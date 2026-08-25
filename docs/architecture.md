@@ -555,18 +555,53 @@ Interface: `backup` / `apply` / `restore`.
 
 ### 13.3 Windows (implemented, slice 4b)
 
-- Back up and set the user-level WinInet / `Internet Settings` (`ProxyEnable`, `ProxyServer`,
-  `ProxyOverride`) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`;
-  other keys (e.g. `AutoConfigURL`) are never touched
+- Live hive source of truth is WinInet `InternetSetOption(INTERNET_OPTION_PER_CONNECTION_OPTION)`,
+  not raw registry writes. `apply` does not dual-write `ProxyEnable` / `ProxyServer` /
+  `ProxyOverride`; those keys update as a side effect of the per-connection API. Temp-hive unit
+  tests still write the three keys directly because they cannot call live WinInet.
+- `apply` sets per-connection flags to `PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT`. Connection type
+  is written via `INTERNET_PER_CONN_FLAGS` first (MSDN restore/set rule), then
+  `INTERNET_PER_CONN_FLAGS_UI` so Internet Options stays in sync. Live **backup** reads
+  `FLAGS_UI` (fall back to `FLAGS`): `FLAGS` may hide WPAD on the current network, and
+  restoring that would drop the user's auto-detect checkbox. Live apply gates assert the
+  **effective** `FLAGS` bits. WPAD (`PROXY_TYPE_AUTO_DETECT`) and PAC
+  (`PROXY_TYPE_AUTO_PROXY_URL`) outrank the manual `ProxyEnable` key; leaving them on is why
+  Chrome/Edge can stay DIRECT after Start. The `AutoConfigURL` **string is never written on
+  apply** — PAC is disabled only by clearing the flag so restore can turn it back on.
+- Coverage is every WinInet connection ice-box can name: the default LAN connection
+  (`pszConnection = null`), RAS/VPN entries from `RasEnumEntriesW`, and additional names under
+  `HKCU\...\Internet Settings\Connections` (skipping `DefaultConnectionSettings` /
+  `SavedLegacySettings`). Each connection is snapshotted and restored independently. A named
+  connection that cannot be queried (backup) or written (restore — e.g. VPN deleted since
+  apply) is skipped with a warning rather than failing the whole operation; the LAN connection
+  is required, and WinHTTP restore still runs after named-connection skips.
+- Live `backup` must snapshot LAN flags, proxy server, bypass, and `INTERNET_PER_CONN_AUTOCONFIG_URL`,
+  plus the WinHTTP default proxy (`WinHttpGetDefaultProxyConfiguration`). If that snapshot cannot
+  be taken, `backup` / `apply` fail — do not mutate a live hive you cannot restore. Inference of
+  WPAD/PAC from `ProxyEnable` + leftover `AutoConfigURL` is **legacy-only** (pre-upgrade
+  `proxy-backup.json` with no `connections` / `per_conn_flags`).
+- `backup.extra` carries the registry tri-state (`proxy_enable` / `proxy_server` / `proxy_override`)
+  for temp-hive tests and extra round-trip, `per_conn_flags` / `autoconfig_url` for the LAN
+  connection, `connections[]` (name, flags, server, bypass, PAC URL) for verbatim restore, and
+  `winhttp` (`access_type` / `proxy` / `bypass`).
+- `restore` writes the registry tri-state back, then pushes each snapshotted connection through
+  the per-connection API and restores the WinHTTP default proxy. Proxy server/bypass use empty
+  strings to clear apply (WinInet has no delete); `AutoConfigURL` is written only when the
+  snapshot had a PAC URL — `None` leaves the leftover string alone, matching apply. Partial
+  `apply` failure rolls back from an apply-start snapshot, matching macOS per-service rollback.
+- WinHTTP (`WinHttpSetDefaultProxyConfiguration`) is part of live apply/restore so `curl.exe` and
+  other WinHTTP clients follow mixed. The write is machine-default and may return
+  `ERROR_ACCESS_DENIED` / `ERROR_PRIVILEGE_NOT_HELD` without elevation; that case is a warning,
+  not an apply/restore failure (no-UAC lock). Any other WinHTTP error fails the operation.
+  Restore still records the original WinHTTP snapshot so an elevated session can put it back.
 - `ProxyServer = 127.0.0.1:mixed_port` covers HTTP/HTTPS; **WinInet's user-level settings expose
   no separate SOCKS field**, so SOCKS is not set on Windows (the mixed inbound still accepts SOCKS
   when an application connects directly)
 - `ProxyOverride` = bypass list (`localhost`, `127.0.0.1`, `::1`, `<local>`, `BYPASS_WINDOWS_EXTRA`)
 - After `apply` / `restore`, notify via `InternetSetOption` (`INTERNET_OPTION_SETTINGS_CHANGED` /
-  `INTERNET_OPTION_REFRESH`)
-- `backup.extra` carries the raw tri-state (`proxy_enable` / `proxy_server` / `proxy_override`)
-  for **verbatim** restore: a user who had another proxy before gets it back exactly
-- Registry writes are per-user (`HKCU`), no elevation required — matches the "no UAC" lock
+  `INTERNET_OPTION_PROXY_SETTINGS_CHANGED` / `INTERNET_OPTION_REFRESH`)
+- Registry writes that remain (temp hive, restore tri-state) are per-user (`HKCU`); WinHTTP is
+  best-effort without UAC — matches the "no UAC" lock
 - The `auto_set_system_proxy` settings gate is removed; the flag is accepted on Windows
 - Live gates mirror G4.3/G4.4 (`cargo test -p ice-proxy-sys g4_3 -- --ignored` on Windows);
   temp-hive unit tests run on Windows CI

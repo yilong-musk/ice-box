@@ -16,8 +16,9 @@ Bring the Windows desktop app to the same functional level as macOS:
 5. Automated acceptance covers Windows.
 
 **Locked decisions (do not change silently):** sing-box first (no mihomo fork), no TUN / elevated
-UAC in v1, system proxy = WinInet user-level Internet Settings, hot reload = restart fallback on
-Windows (§9.2), config engine stays platform-free.
+UAC in v1, system proxy = WinInet per-connection settings (LAN + RAS/VPN) plus best-effort WinHTTP
+without requiring UAC, hot reload = restart fallback on Windows (§9.2), config engine stays
+platform-free.
 
 ## 2. Gap inventory (Windows vs macOS today)
 
@@ -145,8 +146,9 @@ Implement per architecture §13.3:
     keep other keys untouched) into `ProxyBackup` (`extra` carries the raw tri-state for faithful
     restore).
   - `apply`: write the three values (`ProxyServer = 127.0.0.1:mixed` covering HTTP/HTTPS, SOCKS
-    has no separate user-level field on WinInet — document that), then notify via
-    `InternetSetOption(INTERNET_OPTION_SETTINGS_CHANGED | INTERNET_OPTION_REFRESH)`.
+    has no separate user-level field on WinInet — document that), set per-connection flags to
+    `PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT` (WPAD/PAC otherwise outrank the manual proxy), then
+    notify via `InternetSetOption(SETTINGS_CHANGED | PROXY_SETTINGS_CHANGED | REFRESH)`.
   - `restore`: write the backup values back verbatim; `ProxyEnable` state restored exactly
     (user originally had another proxy → it comes back).
   - Bypass: `BYPASS_COMMON` + `<local>` (`BYPASS_WINDOWS_EXTRA` already exists in `bypass.rs`).

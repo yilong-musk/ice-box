@@ -214,6 +214,38 @@ mod live_tests {
                 .contains("<local>"),
             "Windows bypass must include <local>"
         );
+        let flags = crate::windows::query_effective_flags(None).expect("effective LAN flags");
+        assert_eq!(
+            flags & 8,
+            0,
+            "apply must clear PROXY_TYPE_AUTO_DETECT on FLAGS (effective): {flags}"
+        );
+        assert_eq!(
+            flags & 4,
+            0,
+            "apply must clear PROXY_TYPE_AUTO_PROXY_URL on FLAGS (effective): {flags}"
+        );
+        assert_ne!(
+            flags & 2,
+            0,
+            "apply must set PROXY_TYPE_PROXY on FLAGS: {flags}"
+        );
+        // Backup stores FLAGS_UI for restore fidelity; after apply both should match.
+        assert_eq!(
+            mid.extra["per_conn_flags"].as_u64().unwrap_or(0),
+            u64::from(flags),
+            "FLAGS_UI readback after apply must match effective FLAGS"
+        );
+        assert!(
+            before.extra["connections"]
+                .as_array()
+                .is_some_and(|c| !c.is_empty()),
+            "live backup must snapshot at least the LAN connection"
+        );
+        assert!(
+            before.extra["winhttp"].is_object(),
+            "live backup must snapshot WinHTTP default proxy"
+        );
 
         proxy.restore(&before).expect("restore");
         let after = proxy.backup().expect("read after restore");
