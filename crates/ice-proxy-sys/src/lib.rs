@@ -23,7 +23,7 @@ pub use windows::WindowsSystemProxy;
 pub use backup_file::{
     is_proxy_applied_on_disk, is_proxy_live_applied, recover_if_applied, ProxyBackupFile,
 };
-pub use bypass::{bypass_domains, BYPASS_COMMON, BYPASS_WINDOWS_EXTRA};
+pub use bypass::{bypass_domains, BYPASS_COMMON, BYPASS_WINDOWS, BYPASS_WINDOWS_EXTRA};
 pub use record::{apply_and_record, restore_and_clear_flag};
 
 use ice_config::{AppError, ErrorCode};
@@ -71,6 +71,12 @@ pub trait SystemProxy: Send {
     fn backup(&self) -> Result<ProxyBackup, ProxySysError>;
     fn apply(&self, endpoints: &ProxyEndpoints) -> Result<(), ProxySysError>;
     fn restore(&self, backup: &ProxyBackup) -> Result<(), ProxySysError>;
+
+    /// Whether this backend can actually change the OS system proxy.
+    /// `NoopSystemProxy` returns false so the UI can hide enable/disable controls.
+    fn is_available(&self) -> bool {
+        true
+    }
 }
 
 /// Placeholder used on platforms without a system-proxy backend.
@@ -92,6 +98,10 @@ impl SystemProxy for NoopSystemProxy {
 
     fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
         Ok(())
+    }
+
+    fn is_available(&self) -> bool {
+        false
     }
 }
 

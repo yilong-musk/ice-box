@@ -41,6 +41,8 @@ describe("App", () => {
       subscription_count: 0,
       proxy_recovery_warning: null,
       system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
     });
   });
 
@@ -55,6 +57,8 @@ describe("App", () => {
       subscription_count: 1,
       proxy_recovery_warning: "sing-box 意外退出后系统代理恢复失败: mock",
       system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
     });
 
     const { container } = render(<App />);

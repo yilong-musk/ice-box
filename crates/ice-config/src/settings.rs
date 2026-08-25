@@ -41,10 +41,12 @@ pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
     }
 }
 
-/// Default for `auto_set_system_proxy`: on when the platform has a real backend
-/// (architecture §6.1). Linux and other stubs stay off so Start does not call apply.
+/// Legacy default for `auto_set_system_proxy` in `settings.json`.
+///
+/// Product: the core follows the app; system proxy is toggled from the home page.
+/// Start never applies the OS proxy from this flag. Kept for serde compatibility.
 pub const fn default_auto_set_system_proxy() -> bool {
-    cfg!(any(target_os = "macos", target_os = "windows"))
+    false
 }
 
 /// Application settings (not the sing-box runtime config).
@@ -208,9 +210,9 @@ mod tests {
 
     #[test]
     fn default_auto_set_system_proxy_matches_real_backends() {
-        assert_eq!(
-            default_auto_set_system_proxy(),
-            cfg!(any(target_os = "macos", target_os = "windows"))
+        assert!(
+            !default_auto_set_system_proxy(),
+            "system proxy is home-button controlled, not auto on Start"
         );
         assert_eq!(
             AppSettings::default().auto_set_system_proxy,

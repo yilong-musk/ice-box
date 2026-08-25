@@ -14,6 +14,10 @@ fn lock_poisoned(context: &str) -> AppError {
 
 /// Stop core + restore system proxy under the orchestrate lock (same serialization as `start`).
 pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
+    // Abort any in-flight auto-start healthcheck before waiting on the orchestrate lock.
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let _orch = state
         .orchestrate
         .lock()
@@ -28,12 +32,21 @@ pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
             Ok(())
         }
         Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
+            // Stay open: allow another quit attempt / UI retry.
+            state
+                .shutdown_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                 *slot = Some(err.message.clone());
             }
             Err(err)
         }
-        Err(err) => Err(err),
+        Err(err) => {
+            state
+                .shutdown_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            Err(err)
+        }
     }
 }
 
@@ -154,6 +167,7 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
         }
     }

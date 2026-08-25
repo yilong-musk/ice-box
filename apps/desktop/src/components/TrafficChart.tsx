@@ -83,7 +83,7 @@ export function TrafficChart({ running }: Props) {
     return (
       <div className="traffic-panel">
         <h3 className="traffic-title">流量</h3>
-        <p className="muted">启动内核后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。</p>
+        <p className="muted">启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。</p>
       </div>
     );
   }

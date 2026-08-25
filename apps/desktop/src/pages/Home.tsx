@@ -164,14 +164,13 @@ export function Home({ onBusyChange, onNavigate }: Props) {
     }
   }
 
-  // Without a subscription the core still starts in direct-only mode
-  // (system proxy works, all traffic goes direct).
-  const canStart =
-    !busy && (core?.status === "stopped" || core?.status === "error");
-  const canStop =
-    !busy &&
-    (core?.status === "running" || core?.status === "error");
+  // Core follows the app; these buttons only toggle OS system proxy.
   const running = core?.status === "running";
+  const proxyAvailable = status?.system_proxy_available !== false;
+  const proxyLive = status?.system_proxy_applied === true;
+  const proxyRecorded = status?.system_proxy_recorded === true;
+  const canEnableProxy = proxyAvailable && !busy && !proxyLive;
+  const canDisableProxy = proxyAvailable && !busy && running && proxyRecorded;
 
   function nodeLabel(n: NodeInfo): string {
     if (GROUP_TYPES.includes(n.outbound_type)) {
@@ -184,14 +183,29 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   return (
     <section className="panel">
       <h2>主页</h2>
-      {running && status?.system_proxy_applied === false && (
-        <p className="warn">系统代理同步中…</p>
+      {proxyAvailable && running && status?.system_proxy_applied === false && (
+        <p className="warn">系统代理未接管或已不同步</p>
+      )}
+      {!proxyAvailable && running && (
+        <p className="muted">当前平台不支持系统代理接管</p>
       )}
       {error && <p className="error">{error}</p>}
       <dl className="kv">
         <dt>内核</dt>
         <dd className={`status status-${core?.status ?? "unknown"}`}>
           {core?.status ?? "—"}
+        </dd>
+        <dt>系统代理</dt>
+        <dd>
+          {!proxyAvailable
+            ? "不支持"
+            : proxyLive
+              ? "已接管"
+              : running
+                ? proxyRecorded
+                  ? "已不同步"
+                  : "未接管"
+                : "—"}
         </dd>
         <dt>订阅数</dt>
         <dd>{status?.subscription_count ?? "—"}</dd>
@@ -270,30 +284,32 @@ export function Home({ onBusyChange, onNavigate }: Props) {
           title={running ? "仅直连模式运行中" : "还没有可用节点"}
           description={
             running
-              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。"
-              : "未导入任何订阅。可以直接启动进入仅直连模式（系统代理可用，流量全部直连），或先导入订阅解锁节点与规则分流。"
+              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时点击「启动代理服务」接管系统代理。"
+              : "未导入任何订阅。打开软件会自动启动内核（仅直连）；点击「启动代理服务」接管系统代理，或先导入订阅。"
           }
           actionLabel="前往订阅页导入"
           onAction={() => onNavigate?.("subs")}
         />
       )}
 
-      <div className="actions">
-        <button
-          type="button"
-          disabled={!canStart}
-          onClick={() => void run(() => api.start())}
-        >
-          启动
-        </button>
-        <button
-          type="button"
-          disabled={!canStop}
-          onClick={() => void run(() => api.stop())}
-        >
-          停止
-        </button>
-      </div>
+      {proxyAvailable ? (
+        <div className="actions">
+          <button
+            type="button"
+            disabled={!canEnableProxy}
+            onClick={() => void run(() => api.start())}
+          >
+            启动代理服务
+          </button>
+          <button
+            type="button"
+            disabled={!canDisableProxy}
+            onClick={() => void run(() => api.stopSystemProxy())}
+          >
+            停止代理服务
+          </button>
+        </div>
+      ) : null}
 
       <TrafficChart running={running} />
     </section>

@@ -168,7 +168,7 @@ export function Nodes({ onNavigate }: Props) {
           title={
             running
               ? "切换策略组出口"
-              : "内核未运行：选择会保存，启动后生效"
+              : "代理服务未运行：选择会保存，启动后生效"
           }
           onChange={(e) => void onGroupSelect(n.tag, e.target.value)}
         >
@@ -183,7 +183,7 @@ export function Nodes({ onNavigate }: Props) {
     if (n.group_now) {
       return <span className="group-now">→ {n.group_now}</span>;
     }
-    return <span className="muted">内核未运行</span>;
+    return <span className="muted">代理服务未运行</span>;
   }
 
   return (
@@ -193,7 +193,7 @@ export function Nodes({ onNavigate }: Props) {
 
       {!running && nodes.length > 0 && (
         <p className="warn">
-          内核未运行：测延迟不可用；切换出口会保存，启动后生效。
+          代理服务未运行：测延迟不可用；切换出口会保存，启动后生效。
         </p>
       )}
 

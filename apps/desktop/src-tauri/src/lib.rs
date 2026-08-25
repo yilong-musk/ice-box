@@ -14,7 +14,8 @@ use ice_core::{CoreController, CoreHandle};
 use ice_proxy_sys::{create_system_proxy, recover_if_applied, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{Manager, RunEvent, WindowEvent};
 
@@ -66,6 +67,8 @@ pub struct AppState {
     /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
     /// `start` command and on endpoints change (cache key).
     pub proxy_applied_cache: Mutex<Option<(ProxyEndpoints, Instant, bool)>>,
+    /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking ~5s.
+    pub shutdown_requested: Arc<AtomicBool>,
     /// Held for app lifetime; releasing the file unlocks the data directory.
     _instance_lock: std::fs::File,
 }
@@ -77,7 +80,10 @@ fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
     }
 }
 
-fn bootstrap_data_dir(paths: &AppPaths) -> Result<(Box<dyn CoreHandle>, Option<String>), String> {
+fn bootstrap_data_dir(
+    paths: &AppPaths,
+    shutdown_requested: Arc<AtomicBool>,
+) -> Result<(Box<dyn CoreHandle>, Option<String>), String> {
     paths
         .ensure_dirs()
         .map_err(|e| format!("ensure data dirs: {e}"))?;
@@ -91,6 +97,7 @@ fn bootstrap_data_dir(paths: &AppPaths) -> Result<(Box<dyn CoreHandle>, Option<S
     }
 
     let mut core = CoreController::new();
+    core.set_health_cancel(shutdown_requested);
     if let Err(err) = core.reclaim_orphan_pid(&paths.pid()) {
         tracing::warn!(error = %err, "failed to reclaim orphan sing-box pid");
     }
@@ -128,7 +135,9 @@ pub fn run() {
             let _ = PANIC_LOG_PATH.set(paths.app_log());
             let instance_lock = acquire_instance_lock(&paths)?;
             let paths_for_focus = paths.clone();
-            let (core, proxy_recovery_warning) = bootstrap_data_dir(&paths)?;
+            let shutdown_requested = Arc::new(AtomicBool::new(false));
+            let (core, proxy_recovery_warning) =
+                bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let proxy = create_system_proxy();
             app.manage(AppState {
                 paths,
@@ -137,11 +146,31 @@ pub fn run() {
                 orchestrate: Mutex::new(()),
                 proxy_recovery_warning: Mutex::new(proxy_recovery_warning),
                 proxy_applied_cache: Mutex::new(None),
+                shutdown_requested,
                 _instance_lock: instance_lock,
             });
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             tray::setup_tray(app.handle())?;
             core_watch::spawn_core_watchdog(app.handle().clone());
+            // Product: opening the app starts the core only; system proxy is
+            // toggled from the home page. Quit still restores an applied proxy.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let state = handle.state::<AppState>();
+                if state.shutdown_requested.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Err(err) = commands::start_core(&handle, &state) {
+                    if state.shutdown_requested.load(Ordering::SeqCst) {
+                        tracing::info!(error = %err, "auto-start aborted by quit");
+                        return;
+                    }
+                    tracing::error!(error = %err, "auto-start core failed");
+                    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                        *slot = Some(format!("内核自动启动失败（{err}）"));
+                    }
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -154,6 +183,7 @@ pub fn run() {
             commands::get_status,
             commands::list_subscriptions,
             commands::start,
+            commands::stop_system_proxy,
             commands::stop,
             commands::get_log_view,
             commands::get_runtime_config,

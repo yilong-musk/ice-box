@@ -124,7 +124,7 @@ export function Subscriptions() {
       )}
 
       {items.length === 0 ? (
-        <p className="muted">暂无订阅。可直接以直连模式启动内核，也可导入订阅 URL。</p>
+        <p className="muted">暂无订阅。打开软件会自动启动内核；需要时在主页启动代理服务接管系统代理，也可导入订阅 URL。</p>
       ) : (
         <ul className="sub-list">
           {items.map((s) => (

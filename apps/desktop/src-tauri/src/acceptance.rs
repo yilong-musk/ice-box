@@ -93,8 +93,8 @@ mod tests {
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
-            ice_config::default_auto_set_system_proxy() as usize,
-            "auto system proxy applies on start by default only when a platform backend exists"
+            0,
+            "start launches core only; system proxy is home-button controlled"
         );
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -105,10 +105,12 @@ mod tests {
             .filter_map(|o| o["tag"].as_str())
             .collect();
         assert_eq!(tags, ["direct", "block"]);
-        if paths.proxy_backup().exists() {
-            let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-            assert_eq!(b.applied, ice_config::default_auto_set_system_proxy());
-        }
+        assert!(
+            !paths.proxy_backup().exists() || {
+                let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
+                !b.applied
+            }
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -192,6 +194,7 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
         });
 
@@ -220,8 +223,8 @@ mod tests {
 mod live {
     use crate::log_tail::read_log_tail;
     use crate::orchestrate::{
-        orchestrate_apply, orchestrate_set_proxy_mode, orchestrate_start, orchestrate_stop,
-        repo_third_party_singbox,
+        orchestrate_apply, orchestrate_enable_system_proxy, orchestrate_set_proxy_mode,
+        orchestrate_start, orchestrate_stop, repo_third_party_singbox,
     };
     use ice_config::{AppPaths, AppSettings};
     use ice_core::{resolve_singbox_binary, CoreController, CoreStatus};
@@ -263,11 +266,10 @@ mod live {
             .expect("third_party sing-box required for live acceptance")
     }
 
-    fn settings(auto_proxy: bool) -> AppSettings {
+    fn settings() -> AppSettings {
         AppSettings {
             mixed_port: MIXED_PORT,
             clash_api_port: CLASH_PORT,
-            auto_set_system_proxy: auto_proxy,
             ..AppSettings::default()
         }
     }
@@ -313,7 +315,7 @@ mod live {
     fn g9_2_live_import_start_curl_stop() {
         let paths = temp_app("start-curl");
         seed_singbox_subscription(&paths);
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -334,17 +336,15 @@ mod live {
     fn g9_3_live_stop_restores_system_proxy() {
         let paths = temp_app("stop-restore");
         seed_singbox_subscription(&paths);
-        assert!(
-            AppSettings::default().auto_set_system_proxy,
-            "live platforms must default auto system proxy on"
-        );
-        let settings = settings(true);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let before = proxy.backup().expect("backup before");
         let bin = real_binary();
 
         orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
+            .expect("enable system proxy");
         orchestrate_stop(&paths, &mut core, proxy.as_ref()).expect("stop");
 
         let after = proxy.backup().expect("backup after stop");
@@ -362,7 +362,7 @@ mod live {
     fn g9_4_live_running_apply_after_fixture_update() {
         let paths = temp_app("apply-reload");
         seed_singbox_subscription(&paths);
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -399,7 +399,7 @@ mod live {
     fn g9_5_live_port_change_updates_system_proxy() {
         let paths = temp_app("port-change");
         seed_singbox_subscription(&paths);
-        let settings = settings(true);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -413,6 +413,8 @@ mod live {
             None,
         )
         .expect("start");
+        orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
+            .expect("enable system proxy");
         let new_settings = AppSettings {
             mixed_port: MIXED_PORT + 1,
             clash_api_port: CLASH_PORT + 1,
@@ -452,7 +454,7 @@ mod live {
     fn g9_8_live_core_log_tail_nonempty() {
         let paths = temp_app("logs");
         seed_singbox_subscription(&paths);
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -502,7 +504,7 @@ mod live {
             "GEOIP must parse to bundled rule-sets, no warning expected"
         );
 
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -558,7 +560,7 @@ mod live {
         mgr.add("https://example.com/clash-groups", Some("G9 groups"))
             .expect("import");
 
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();
@@ -662,7 +664,7 @@ mod live {
 
         let paths = temp_app("mode-switch");
         seed_singbox_subscription(&paths);
-        let settings = settings(false);
+        let settings = settings();
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
         let bin = real_binary();

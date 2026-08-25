@@ -21,6 +21,10 @@ export type StatusResponse = {
   subscription_count: number;
   proxy_recovery_warning: string | null;
   system_proxy_applied: boolean | null;
+  /** On-disk applied flag; drives「停止代理服务」when OS proxy was changed externally. */
+  system_proxy_recorded: boolean | null;
+  /** False when the platform has no system-proxy backend (e.g. Linux). */
+  system_proxy_available: boolean;
 };
 
 export type ProxyMode = "rule" | "global" | "direct";
@@ -155,6 +159,7 @@ export const api = {
   getConnectionStats: () => invoke<ConnectionStats>("get_connection_stats"),
   getTrafficSample: () => invoke<TrafficSample>("get_traffic_sample"),
   start: () => invoke<void>("start"),
+  stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),
   getLogView: (n: number) =>
     invoke<string[]>("get_log_view", { req: { n } }),

@@ -17,8 +17,8 @@ pub use clash_api::{
 };
 pub use error::CoreError;
 pub use health::{
-    FailingHealthProbe, HealthEndpoints, HealthProbe, ImmediateHealthProbe, SequenceHealthProbe,
-    TcpHealthProbe, HEALTHCHECK_TIMEOUT,
+    wait_tcp_ready, wait_tcp_ready_until, FailingHealthProbe, HealthCancel, HealthEndpoints,
+    HealthProbe, ImmediateHealthProbe, SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_TIMEOUT,
 };
 pub use process::{
     stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, ProcessSpawner,
@@ -33,6 +33,8 @@ pub use reload::{
 use ice_config::{clear_pid, write_pid};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// High-level runtime status exposed to the UI.
@@ -136,6 +138,8 @@ pub struct CoreController<S: ProcessSpawner = CommandSpawner, H: HealthProbe = T
     stop_grace: Duration,
     /// Set when reload + restart both failed; shell must restore system proxy.
     needs_proxy_restore: bool,
+    /// When set, healthchecks abort early so quit is not blocked by the 5s probe.
+    health_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for CoreController<CommandSpawner, TcpHealthProbe> {
@@ -173,7 +177,13 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
             health_timeout,
             stop_grace,
             needs_proxy_restore: false,
+            health_cancel: None,
         }
+    }
+
+    /// Install a shared cancel flag checked during healthchecks (desktop quit path).
+    pub fn set_health_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.health_cancel = Some(cancel);
     }
 
     pub fn state(&self) -> &CoreState {
@@ -291,11 +301,7 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
 
         match signal_result {
             Ok(()) => {
-                if self
-                    .health
-                    .wait_ready(&paths.health_endpoints(), self.health_timeout)
-                    .is_ok()
-                {
+                if self.wait_health(&paths.health_endpoints()).is_ok() {
                     tracing::info!("sing-box hot reload ok");
                     return Ok(ReloadOutcome::HotReloaded);
                 }
@@ -362,14 +368,21 @@ impl<S: ProcessSpawner, H: HealthProbe> CoreController<S, H> {
 
         self.child = Some(child);
 
-        if let Err(err) = self
-            .health
-            .wait_ready(&paths.health_endpoints(), self.health_timeout)
-        {
+        if let Err(err) = self.wait_health(&paths.health_endpoints()) {
             self.kill_child_and_clear_pid(&paths.pid_file);
             return Err(CoreError::HealthcheckFailed(err.to_string()));
         }
         Ok(())
+    }
+
+    fn wait_health(&self, endpoints: &crate::HealthEndpoints) -> Result<(), CoreError> {
+        match &self.health_cancel {
+            // Cancel-aware path used by the desktop shell so quit can abort the 5s probe.
+            Some(cancel) => {
+                health::wait_tcp_ready_until(endpoints, self.health_timeout, Some(cancel.as_ref()))
+            }
+            None => self.health.wait_ready(endpoints, self.health_timeout),
+        }
     }
 
     /// On app start: if pid file points at a live sing-box process, kill it and enter Stopped.

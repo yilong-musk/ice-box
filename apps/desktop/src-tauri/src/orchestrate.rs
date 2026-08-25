@@ -10,7 +10,10 @@ use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
     ReloadOutcome,
 };
-use ice_proxy_sys::{apply_and_record, restore_and_clear_flag, ProxyEndpoints, SystemProxy};
+use ice_proxy_sys::{
+    apply_and_record, is_proxy_applied_on_disk, is_proxy_live_applied, restore_and_clear_flag,
+    ProxyEndpoints, SystemProxy,
+};
 use ice_subscription::{
     load_active_profile, load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
 };
@@ -171,16 +174,16 @@ pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> 
     resolve_singbox_binary(&repo_third_party_singbox(), resource_dir).map_err(AppError::from)
 }
 
-/// Start: generate config → core.start → (optional) apply system proxy last.
+/// Start: generate config → core.start.
 ///
-/// Returns `Ok(None)` on a clean start. If the core is healthy but system proxy
-/// apply fails, returns `Ok(Some(warning))` and leaves the core Running
-/// (architecture §8.1); the caller surfaces the warning in the UI.
+/// System proxy is **not** applied here — the home-page「启动代理服务」button
+/// calls [`orchestrate_enable_system_proxy`]. Quitting the app still restores
+/// any applied system proxy via [`orchestrate_stop`].
 pub fn orchestrate_start(
     app_paths: &AppPaths,
     settings: &AppSettings,
     core: &mut dyn CoreHandle,
-    proxy: &dyn SystemProxy,
+    _proxy: &dyn SystemProxy,
     binary: PathBuf,
     resource_dir: Option<&Path>,
 ) -> Result<Option<String>, AppError> {
@@ -188,23 +191,51 @@ pub fn orchestrate_start(
 
     let core_paths = build_core_paths(app_paths, settings, binary);
     core.start(&core_paths).map_err(AppError::from)?;
-
-    if settings.auto_set_system_proxy {
-        let endpoints = endpoints_from_settings(settings);
-        if let Err(err) = apply_and_record(&app_paths.proxy_backup(), proxy, &endpoints) {
-            let _ = restore_and_clear_flag(&app_paths.proxy_backup(), proxy);
-            tracing::error!(error = %err, "system proxy apply failed; core stays running");
-            return Ok(Some(proxy_apply_warning(&AppError::from(err), &endpoints)));
-        }
-    }
     Ok(None)
 }
 
-fn proxy_apply_warning(err: &AppError, endpoints: &ProxyEndpoints) -> String {
-    format!(
-        "系统代理设置失败（{err}）。内核已在运行，可在设置中关闭「启动时设置系统代理」，或手动将系统代理指向 {}:{}",
-        endpoints.http_host, endpoints.http_port
-    )
+/// Take over the OS system proxy while the core is already Running.
+///
+/// If a previous apply is still recorded on disk (including after the OS proxy was
+/// changed externally), restore first so [`apply_and_record`] can snapshot cleanly.
+pub fn orchestrate_enable_system_proxy(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    core: &dyn CoreHandle,
+    proxy: &dyn SystemProxy,
+) -> Result<(), AppError> {
+    if core.state().status != CoreStatus::Running {
+        return Err(AppError::new(
+            ErrorCode::CoreInvalidState,
+            "内核未运行，无法启动系统代理",
+        ));
+    }
+    if !proxy.is_available() {
+        return Err(AppError::new(
+            ErrorCode::ProxyApplyFailed,
+            "当前平台不支持系统代理",
+        ));
+    }
+    let endpoints = endpoints_from_settings(settings);
+    if is_proxy_live_applied(proxy, &app_paths.proxy_backup(), &endpoints) {
+        return Ok(());
+    }
+    let backup_path = app_paths.proxy_backup();
+    if let Ok(record) = ice_proxy_sys::ProxyBackupFile::load(&backup_path) {
+        if record.applied || record.pending_apply {
+            restore_and_clear_flag(&backup_path, proxy).map_err(AppError::from)?;
+        }
+    }
+    apply_and_record(&backup_path, proxy, &endpoints).map_err(AppError::from)
+}
+
+/// Restore the OS system proxy without stopping the core.
+pub fn orchestrate_disable_system_proxy(
+    app_paths: &AppPaths,
+    proxy: &dyn SystemProxy,
+) -> Result<(), AppError> {
+    restore_and_clear_flag(&app_paths.proxy_backup(), proxy).map_err(AppError::from)?;
+    Ok(())
 }
 
 /// Stop: restore proxy first (if applied), then kill core.
@@ -300,44 +331,37 @@ pub fn orchestrate_apply(
 }
 
 /// Reconcile system proxy after a successful hot reload / restart.
+/// Only touches the OS proxy when the user already enabled it (on-disk applied).
 fn sync_system_proxy_after_reload(
     app_paths: &AppPaths,
     proxy: &dyn SystemProxy,
-    previous_settings: &AppSettings,
-    settings: &AppSettings,
+    _previous_settings: &AppSettings,
+    _settings: &AppSettings,
     new_endpoints: &ProxyEndpoints,
     inbound_changed: bool,
 ) -> Result<(), AppError> {
-    let prev_auto = previous_settings.auto_set_system_proxy;
-    let new_auto = settings.auto_set_system_proxy;
-
-    if new_auto {
-        if inbound_changed || !prev_auto {
-            if let Err(err) = restore_and_clear_flag(&app_paths.proxy_backup(), proxy) {
-                return Err(AppError::new(
-                    ErrorCode::ProxyRestoreFailed,
-                    format!(
-                        "内核已重载，但在同步系统代理前无法恢复旧设置，已中止以免覆盖备份（{err}）"
-                    ),
-                ));
-            }
-            if let Err(err) = apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints) {
-                // Best-effort retry once; core is already on the new inbound.
-                if apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints).is_err() {
-                    return Err(AppError::new(
-                        ErrorCode::ProxyApplyFailedCoreReloaded,
-                        format!(
-                            "内核已在新端口 {}:{} 运行，但系统代理未能同步，请检查权限或手动设置系统代理（{}）",
-                            new_endpoints.http_host,
-                            new_endpoints.http_port,
-                            err
-                        ),
-                    ));
-                }
-            }
+    if !is_proxy_applied_on_disk(&app_paths.proxy_backup()) {
+        return Ok(());
+    }
+    if !inbound_changed {
+        return Ok(());
+    }
+    if let Err(err) = restore_and_clear_flag(&app_paths.proxy_backup(), proxy) {
+        return Err(AppError::new(
+            ErrorCode::ProxyRestoreFailed,
+            format!("内核已重载，但在同步系统代理前无法恢复旧设置，已中止以免覆盖备份（{err}）"),
+        ));
+    }
+    if let Err(err) = apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints) {
+        if apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints).is_err() {
+            return Err(AppError::new(
+                ErrorCode::ProxyApplyFailedCoreReloaded,
+                format!(
+                    "内核已在新端口 {}:{} 运行，但系统代理未能同步，请检查权限或手动设置系统代理（{}）",
+                    new_endpoints.http_host, new_endpoints.http_port, err
+                ),
+            ));
         }
-    } else if prev_auto {
-        let _ = restore_and_clear_flag(&app_paths.proxy_backup(), proxy);
     }
     Ok(())
 }
@@ -460,7 +484,6 @@ fn rollback_runtime_config_after_reload_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ice_config::default_auto_set_system_proxy;
     use ice_config::NormalizedOutbound as NO;
     use ice_config::ProxyMode;
     use ice_core::{
@@ -634,8 +657,8 @@ mod tests {
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
-            default_auto_set_system_proxy() as usize,
-            "auto system proxy applies on start by default only when a platform backend exists"
+            0,
+            "start must not take over system proxy; home button does"
         );
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -655,13 +678,10 @@ mod tests {
     }
 
     #[test]
-    fn g7_2_start_apply_last() {
+    fn g7_2_enable_system_proxy_after_start() {
         let paths = temp_app("start-ok");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -672,10 +692,11 @@ mod tests {
 
         orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
+        assert_eq!(proxy.apply_calls.get(), 0);
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert_eq!(proxy.apply_calls.get(), 1);
         let backup = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
         assert!(backup.applied);
-        // apply happens after start success — only "apply" in proxy order
         assert_eq!(order.lock().unwrap().as_slice(), &["apply"]);
         assert!(paths.config().is_file());
         let _ = fs::remove_dir_all(paths.root());
@@ -685,10 +706,7 @@ mod tests {
     fn g7_3_healthcheck_fail_no_applied() {
         let paths = temp_app("hc-fail");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_fail_health();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -705,13 +723,10 @@ mod tests {
     }
 
     #[test]
-    fn g7_4_apply_fail_keeps_core_and_warns() {
+    fn g7_4_enable_system_proxy_fail_keeps_core() {
         let paths = temp_app("apply-fail");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
             fail_apply: Cell::new(true),
@@ -719,12 +734,12 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        let warning = orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None)
-            .expect("core stays running");
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
-        let warning = warning.expect("proxy apply warning");
-        assert!(warning.contains("系统代理设置失败"), "warning: {warning}");
-        assert!(warning.contains("启动时设置系统代理"), "warning: {warning}");
+        let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
+            .expect_err("apply fail");
+        assert_eq!(err.code, "proxy.apply_failed");
+        assert_eq!(core.state().status, CoreStatus::Running);
         if paths.proxy_backup().exists() {
             let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
             assert!(!b.applied);
@@ -734,52 +749,38 @@ mod tests {
     }
 
     #[test]
-    fn start_auto_proxy_with_noop_keeps_core_and_clears_pending() {
+    fn enable_system_proxy_with_noop_rejected_as_unavailable() {
         let paths = temp_app("noop-auto");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = NoopSystemProxy;
         let bin = marker_bin(&paths);
 
-        let warning = orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None)
-            .expect("noop apply must not abort start");
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
-        assert!(
-            warning
-                .as_deref()
-                .is_some_and(|w| w.contains("系统代理设置失败")),
-            "warning: {warning:?}"
-        );
-        if paths.proxy_backup().exists() {
-            let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-            assert!(!b.applied, "failed apply must not mark applied");
-            assert!(
-                !b.pending_apply,
-                "noop restore must clear pending_apply so later starts are not blocked"
-            );
-        }
+        let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
+            .expect_err("noop unavailable");
+        assert_eq!(err.code, "proxy.apply_failed");
+        assert!(err.message.contains("不支持"));
+        assert!(!paths.proxy_backup().exists());
         let _ = fs::remove_dir_all(paths.root());
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
-    fn default_start_with_create_system_proxy_skips_missing_backend() {
+    fn default_start_never_applies_system_proxy() {
         let paths = temp_app("platform-default");
         let settings = AppSettings::default();
         assert!(
             !settings.auto_set_system_proxy,
-            "unsupported platforms must default auto proxy off"
+            "legacy auto_set flag defaults off; home button controls system proxy"
         );
         let mut core = mock_core_ok();
         let proxy = create_system_proxy();
         let bin = marker_bin(&paths);
 
         let warning = orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None)
-            .expect("start without system proxy backend");
+            .expect("start core only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(warning, None);
         assert!(!ice_proxy_sys::is_proxy_applied_on_disk(
@@ -790,11 +791,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn default_auto_proxy_is_on_and_backend_can_backup() {
-        assert!(
-            AppSettings::default().auto_set_system_proxy,
-            "macOS/Windows default must enable auto system proxy"
-        );
+    fn real_backend_can_backup_without_mutating() {
         create_system_proxy()
             .backup()
             .expect("read-only backup must work in CI without mutating the OS proxy");
@@ -804,10 +801,7 @@ mod tests {
     fn g7_5_stop_restores_then_kills_idempotent() {
         let paths = temp_app("stop");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -816,6 +810,7 @@ mod tests {
         };
         let bin = marker_bin(&paths);
         orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         order.lock().unwrap().clear();
         orchestrate_stop(&paths, &mut core, &proxy).unwrap();
@@ -830,10 +825,7 @@ mod tests {
     fn g7_5b_stop_restore_failure_still_stops_core() {
         let paths = temp_app("stop-restore-fail");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let start_proxy = TrackProxy::default();
         let stop_proxy = TrackProxy {
@@ -842,6 +834,7 @@ mod tests {
         };
         let bin = marker_bin(&paths);
         orchestrate_start(&paths, &settings, &mut core, &start_proxy, bin, None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
 
         let err = orchestrate_stop(&paths, &mut core, &stop_proxy).expect_err("restore fail");
@@ -870,14 +863,12 @@ mod tests {
     fn g7_7_apply_running_same_inbound_reloads_no_proxy() {
         let paths = temp_app("apply-reload");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
         orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         let apply_before = proxy.apply_calls.get();
         let restore_before = proxy.restore_calls.get();
 
@@ -892,10 +883,7 @@ mod tests {
     fn g7_8_apply_running_port_change_restore_apply() {
         let paths = temp_app("apply-port");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -904,6 +892,7 @@ mod tests {
         };
         let bin = marker_bin(&paths);
         orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         let new_settings = AppSettings {
             mixed_port: 17900,
@@ -926,57 +915,75 @@ mod tests {
     }
 
     #[test]
-    fn g7_10_apply_running_disable_auto_proxy_restores() {
-        let paths = temp_app("apply-auto-off");
+    fn g7_10_disable_system_proxy_keeps_core_running() {
+        let paths = temp_app("disable-proxy");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
-        assert_eq!(proxy.apply_calls.get(), 1);
-
-        let disabled = AppSettings {
-            auto_set_system_proxy: false,
-            ..settings.clone()
-        };
-        orchestrate_apply(&paths, &disabled, &settings, &mut core, &proxy, bin, None).unwrap();
-        assert_eq!(
-            proxy.restore_calls.get(),
-            1,
-            "disable auto proxy restores once"
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
+        assert!(
+            ProxyBackupFile::load(&paths.proxy_backup())
+                .unwrap()
+                .applied
         );
-        assert_eq!(proxy.apply_calls.get(), 1, "no extra apply when disabled");
-        let backup = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-        assert!(!backup.applied);
+
+        orchestrate_disable_system_proxy(&paths, &proxy).unwrap();
+        assert_eq!(core.state().status, CoreStatus::Running);
+        assert_eq!(proxy.restore_calls.get(), 1);
+        assert!(
+            !ProxyBackupFile::load(&paths.proxy_backup())
+                .unwrap()
+                .applied
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
     #[test]
-    fn g7_11_apply_running_enable_auto_proxy_applies() {
-        let paths = temp_app("apply-auto-on");
+    fn g7_11_enable_system_proxy_while_running() {
+        let paths = temp_app("enable-proxy");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: false,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
         assert_eq!(proxy.apply_calls.get(), 0);
 
-        let enabled = AppSettings {
-            auto_set_system_proxy: true,
-            ..settings.clone()
-        };
-        orchestrate_apply(&paths, &enabled, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert_eq!(proxy.apply_calls.get(), 1);
-        let backup = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-        assert!(backup.applied);
+        assert!(
+            ProxyBackupFile::load(&paths.proxy_backup())
+                .unwrap()
+                .applied
+        );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_11b_enable_restores_then_reapplies_when_disk_still_marked() {
+        let paths = temp_app("enable-reapply");
+        seed_one_node(&paths);
+        let settings = AppSettings::default();
+        let mut core = mock_core_ok();
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
+        assert_eq!(proxy.apply_calls.get(), 1);
+
+        // Disk still applied but live check fails (TrackProxy backup never matches) —
+        // re-enable must restore first, then apply again.
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
+        assert_eq!(proxy.restore_calls.get(), 1);
+        assert_eq!(proxy.apply_calls.get(), 2);
+        assert!(
+            ProxyBackupFile::load(&paths.proxy_backup())
+                .unwrap()
+                .applied
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -1053,26 +1060,17 @@ mod tests {
     fn g7_12_proxy_apply_failed_after_reload_returns_core_reloaded_code() {
         let paths = temp_app("proxy-reload-fail");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let mut core = mock_core_ok();
+        let good = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_start(&paths, &settings, &mut core, &good, bin.clone(), None).unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &good).unwrap();
+
         let proxy = TrackProxy {
             fail_apply: Cell::new(true),
             ..TrackProxy::default()
         };
-        let bin = marker_bin(&paths);
-        orchestrate_start(
-            &paths,
-            &settings,
-            &mut core,
-            &TrackProxy::default(),
-            bin.clone(),
-            None,
-        )
-        .unwrap();
-
         let new_settings = AppSettings {
             mixed_port: 17900,
             ..settings.clone()
@@ -1097,10 +1095,7 @@ mod tests {
     fn g7_13_port_change_aborts_when_pre_restore_fails() {
         let paths = temp_app("restore-before-apply");
         seed_one_node(&paths);
-        let settings = AppSettings {
-            auto_set_system_proxy: true,
-            ..AppSettings::default()
-        };
+        let settings = AppSettings::default();
         let start_proxy = TrackProxy::default();
         let mut core = mock_core_ok();
         let bin = marker_bin(&paths);
@@ -1113,6 +1108,7 @@ mod tests {
             None,
         )
         .unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(start_proxy.apply_calls.get(), 1);
 
         let sync_proxy = TrackProxy {

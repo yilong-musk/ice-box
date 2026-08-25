@@ -153,7 +153,8 @@ Implement per architecture §13.3:
     notify via `InternetSetOption(SETTINGS_CHANGED | PROXY_SETTINGS_CHANGED | REFRESH)`.
   - `restore`: write the backup values back verbatim; `ProxyEnable` state restored exactly
     (user originally had another proxy → it comes back).
-  - Bypass: `BYPASS_COMMON` + `<local>` (`BYPASS_WINDOWS_EXTRA` already exists in `bypass.rs`).
+  - Bypass: `BYPASS_WINDOWS` (`localhost`, `127.0.0.1`, `[::1]`, `<local>`). Bare `::1` is
+    rejected by WinInet with error 87; do not use `BYPASS_COMMON` verbatim on Windows.
 - `create_system_proxy()` returns the real backend on Windows.
 - Dependency: `winreg` + `windows-sys` (or `windows` crate) — keep it in `ice-proxy-sys` only;
   engine crates stay platform-free (§22 rule 2).

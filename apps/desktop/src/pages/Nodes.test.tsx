@@ -53,6 +53,8 @@ describe("Nodes", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
     });
     setGroupSelection.mockResolvedValue(undefined);
   });
@@ -98,6 +100,8 @@ describe("Nodes", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
     });
     const { container } = render(<Nodes />);
     const view = within(container);

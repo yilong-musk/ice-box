@@ -22,6 +22,7 @@ vi.mock("../api/tauri", () => ({
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
     start: vi.fn(),
+    stopSystemProxy: vi.fn(),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -40,6 +41,8 @@ describe("Home", () => {
       subscription_count: 0,
       proxy_recovery_warning: null,
       system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
     });
     listNodes.mockResolvedValue([]);
     getSettings.mockResolvedValue({
@@ -67,6 +70,8 @@ describe("Home", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
     });
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks" },
@@ -119,6 +124,8 @@ describe("Home", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
     });
     listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
     let currentMode = "rule";
@@ -170,7 +177,7 @@ describe("Home", () => {
     });
   });
 
-  it("shows empty-state guide and allows direct-only start when no nodes", async () => {
+  it("shows empty-state guide and system-proxy buttons when no nodes", async () => {
     const onNavigate = vi.fn();
     const { container } = render(<Home onNavigate={onNavigate} />);
     const view = within(container);
@@ -178,7 +185,8 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText("还没有可用节点")).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: "启动" })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeDisabled();
     fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
     expect(onNavigate).toHaveBeenCalledWith("subs");
   });
@@ -194,6 +202,8 @@ describe("Home", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
     });
     listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
     getSettings.mockResolvedValue({
@@ -227,7 +237,7 @@ describe("Home", () => {
     });
   });
 
-  it("shows proxy sync hint when core running but system proxy pending", async () => {
+  it("shows proxy-off hint when core running but system proxy not applied", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -238,6 +248,8 @@ describe("Home", () => {
       subscription_count: 1,
       proxy_recovery_warning: null,
       system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
     });
     listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
 
@@ -245,7 +257,60 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("系统代理同步中…")).toBeInTheDocument();
+      expect(view.getByText("系统代理未接管或已不同步")).toBeInTheDocument();
     });
+    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeDisabled();
+  });
+
+  it("hides system-proxy controls when backend is unavailable", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: false,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText("当前平台不支持系统代理接管")).toBeInTheDocument();
+    });
+    expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
+    expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
+  });
+
+  it("keeps stop enabled when disk recorded but live check is false", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+    });
+    listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "停止代理服务" })).not.toBeDisabled();
+    });
+    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    expect(view.getByText("已不同步")).toBeInTheDocument();
   });
 });

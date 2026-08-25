@@ -199,14 +199,17 @@ Root path:
   "clash_api_listen": "127.0.0.1",
   "clash_api_port": 19090,
   "selected_tag": null,
-  "auto_set_system_proxy": true,
+  "auto_set_system_proxy": false,
   "allow_lan": false
 }
 ```
 
 - `clash_api_*` **binds 127.0.0.1 only**; `0.0.0.0` is forbidden.
 - v1 may run without a clash API secret, but if enabled it must be local-only.
-- `auto_set_system_proxy`: defaults to `true` on macOS and Windows (the platforms with a real system-proxy backend). On platforms without a backend it defaults to `false` so Start does not call `apply`. The example JSON above is the macOS / Windows default. Missing `settings.json` uses this default and does not create the file.
+- `auto_set_system_proxy`: retained in `settings.json` for serde compatibility only. The product
+  no longer uses this flag to apply or skip the OS proxy. Default is `false`. System proxy is
+  toggled from the home page (**启动代理服务** / **停止代理服务**). Missing `settings.json` uses
+  this default and does not create the file.
 - `allow_lan`: LAN sharing switch (default `false`, read compatibly from older settings.json). When on, the Mixed inbound binds `0.0.0.0`, while the system proxy / healthcheck still use `127.0.0.1`; the Clash API stays local-only.
 
 ### 6.2 `proxy-backup.json`
@@ -265,34 +268,49 @@ Illegal transitions are rejected outright (error returned, state unchanged), e.g
 
 ### 7.2 Coupling of system proxy and core
 
-The system proxy is **not** an independent state machine; it is a side effect of Start/Stop:
+The system proxy is **not** an independent process lifecycle, but it **is** user-toggled
+separately from the core:
 
-- Applied **only as the last step** of entering `Running` (if `auto_set_system_proxy`).
-- Restored **as the first step** of leaving `Running` (as long as `applied == true`).
-- `Starting` failure: must not leave a system proxy behind.
-- If apply fails **after** the core healthcheck succeeded: restore best-effort (must not leave `applied: true`), keep `Running`, and surface a warning. The mixed inbound stays usable; this is not a `Starting` failure.
+- **App launch** starts the core only (`start_core`); does **not** apply the OS proxy.
+- **Home「启动代理服务」** (`start`) ensures the core is Running, then applies the OS proxy.
+- **Home「停止代理服务」** (`stop_system_proxy`) restores the OS proxy and **keeps the core Running**.
+- **App quit** (`stop` / `graceful_stop`) restores the OS proxy if `applied == true`, then stops the core.
+- Apply while Running re-syncs the OS proxy **only if** it is already applied on disk (port change).
+- If enable fails after the core is Running: keep `Running`, surface a warning; mixed inbound stays usable.
 
 ---
 
 ## 8. Key sequences
 
-### 8.1 Start
+### 8.1 Start (core only)
 
 ```
-1. If already Running/Starting → reject
-2. ice-config: no usable nodes → Error (no process started)
-3. Generate config.json (keep the old file as .bak)
-4. status = Starting
-5. spawn sing-box -c config.json (log goes to sing-box.log)
-6. Healthcheck: TCP connect (not HTTP) to the **clash API listen**; timeout **5000 ms**, poll interval 100 ms (`ice_core::HEALTHCHECK_TIMEOUT`)
-7. Healthcheck failed → kill process → restore (if already applied) → Error
-8. Backup the system proxy (if not yet applied) → write proxy-backup.json
-9. Apply the system proxy → applied=true
-10. Apply failed → restore (must not leave `applied: true`) → status = Running, record a proxy-apply warning; **do not stop the core**. Mixed inbound stays usable. The user can turn off `auto_set_system_proxy` in Settings or set the OS proxy manually.
-11. status = Running
+1. If already Running/Starting → reject (or no-op for app-launch path)
+2. Generate config.json (keep the old file as .bak); empty nodes → direct-only config
+3. status = Starting
+4. spawn sing-box -c config.json (log goes to sing-box.log)
+5. Healthcheck: TCP connect (not HTTP) to the **clash API listen**; timeout **5000 ms**, poll interval 100 ms (`ice_core::HEALTHCHECK_TIMEOUT`)
+6. Healthcheck failed → kill process → Error
+7. status = Running
 ```
 
-### 8.2 Stop
+System proxy is **not** part of this sequence. See §8.1b / §7.2.
+
+### 8.1b Enable / disable system proxy (home page)
+
+```
+Enable (启动代理服务):
+1. If core not Running → run §8.1 first
+2. Backup the system proxy (if not yet applied) → write proxy-backup.json
+3. Apply the system proxy → applied=true
+4. Apply failed → restore (must not leave applied: true) → keep Running; surface warning
+
+Disable (停止代理服务):
+1. If applied → restore → applied=false
+2. Core stays Running
+```
+
+### 8.2 Stop (app quit)
 
 ```
 1. status = Stopping
@@ -542,7 +560,9 @@ Interface: `backup` / `apply` / `restore`.
 ### 13.1 Semantics
 
 - `apply`: HTTP and HTTPS point at mixed; SOCKS points at the same port when the system API allows it (mixed supports SOCKS)
-- Bypass list: at least `localhost`, `127.0.0.1`, `::1`; macOS per-service and Windows `<local>` follow platform conventions
+- Bypass list: at least `localhost`, `127.0.0.1`, `::1`; macOS per-service and Windows `<local>`
+  follow platform conventions. On Windows WinInet, IPv6 loopback must be `[::1]` — a bare `::1`
+  in `ProxyOverride` / `INTERNET_PER_CONN_PROXY_BYPASS` returns `ERROR_INVALID_PARAMETER` (87).
 - `restore`: fully write back the backup instead of just "turning the proxy off" (if the user originally had another proxy, restore it)
 
 ### 13.2 macOS (implemented, slice 4a)
@@ -603,19 +623,22 @@ Interface: `backup` / `apply` / `restore`.
   not an apply/restore failure (no-UAC lock). Any other WinHTTP error fails the operation.
   Restore still records the original WinHTTP snapshot so an elevated session can put it back.
 - `ProxyServer` (WinInet) = `http=127.0.0.1:mixed_port;https=127.0.0.1:mixed_port;socks=127.0.0.1:mixed_port`
-- `ProxyOverride` = bypass list (`localhost`, `127.0.0.1`, `::1`, `<local>`, `BYPASS_WINDOWS_EXTRA`)
+- `ProxyOverride` = bypass list (`localhost`, `127.0.0.1`, `[::1]`, `<local>` via `BYPASS_WINDOWS`)
 - After `apply` / `restore`, notify via `InternetSetOption` (`INTERNET_OPTION_SETTINGS_CHANGED` /
   `INTERNET_OPTION_PROXY_SETTINGS_CHANGED` / `INTERNET_OPTION_REFRESH`)
 - Registry writes that remain (temp hive, restore tri-state) are per-user (`HKCU`); WinHTTP is
   best-effort without UAC — matches the "no UAC" lock
-- The `auto_set_system_proxy` settings gate is removed; the flag is accepted on Windows
+- The `auto_set_system_proxy` settings gate is removed from Start; the flag remains in
+  `settings.json` for serde compatibility (default `false`) and is unused for apply/skip
 - Live gates mirror G4.3/G4.4 (`cargo test -p ice-proxy-sys g4_3 -- --ignored` on Windows);
   temp-hive unit tests run on Windows CI
 - No WinTUN / elevated UAC driver in v1
 
 ### 13.4 Relationship to "local-only mixed"
 
-The system proxy points at `127.0.0.1:mixed_port`. "Proxy only the browser extension, don't touch the system" is not a v1 main path (a "don't change the system proxy" switch can be added later; `auto_set_system_proxy: false` is already reserved).
+The system proxy points at `127.0.0.1:mixed_port`. Opening the app starts the **core only**;
+the home page **启动代理服务** / **停止代理服务** toggles the OS system proxy while the core
+stays up. Quitting the app restores the system proxy (if applied) and then stops the core.
 
 ---
 
@@ -638,8 +661,10 @@ Conventions:
 
 | Command | Description |
 |---------|-------------|
-| `start` | §8.1 |
-| `stop` | §8.2 |
+| `start_core` | §8.1 — app-launch path; core only |
+| `start` | §8.1b enable — ensure core Running, then apply OS system proxy |
+| `stop_system_proxy` | §8.1b disable — restore OS proxy; keep core Running |
+| `stop` | §8.2 — app quit: restore OS proxy if applied, then kill core |
 | `get_log_view` | `{ n: number }` → text lines: merged app+core logs, warnings/errors and key events only (display filter, log files untouched) |
 | `get_runtime_config` | current `config.json` text (read-only) |
 | `reveal_data_dir` | open the data directory (opener plugin) |
@@ -689,7 +714,7 @@ apps/desktop/src/
 ├── main.tsx
 ├── App.tsx                 # layout: status bar + pages
 ├── api/tauri.ts            # invoke wrapper and types
-├── pages/Home.tsx          # start/stop, current node, errors
+├── pages/Home.tsx          # core status, system-proxy enable/disable, current node, errors
 ├── pages/Subscriptions.tsx
 ├── pages/Logs.tsx
 └── pages/Settings.tsx
@@ -697,7 +722,8 @@ apps/desktop/src/
 
 v1 minimal UI set:
 
-- Start/stop buttons disabled per the state machine
+- Core follows the app (auto-start on launch, stop on quit); home **启动代理服务** /
+  **停止代理服务** toggle OS system proxy only; quit restores proxy if still applied
 - Subscription list: name, format, node count / policy group count / rule count / DNS marker, last update, error, **active switch (single-select)**, parse_warnings, update/delete
 - Import input (URL)
 - Read-only log tail
@@ -787,7 +813,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 | `ice-subscription` | sample JSON / Clash fixture detection and parsing |
 | `ice-core` | illegal state machine transitions; mock process can stand in for real sing-box |
 | `ice-proxy-sys` | platform tests marked `#[ignore]` or manual checklist; CI never touches the real system proxy by default |
-| `ice-config` / ice-box start | default `auto_set_system_proxy` matches backend availability; `create_system_proxy()` + defaults must not mutate the OS in CI (unsupported platforms: Start succeeds without apply; macOS/Windows live apply stays `#[ignore]`) |
+| `ice-config` / ice-box start | default `auto_set_system_proxy` is `false` (legacy field); Start never applies OS proxy; `create_system_proxy()` + defaults must not mutate the OS in CI (macOS/Windows live apply stays `#[ignore]`) |
 | Manual | Start then curl the mixed port; Stop then verify the system proxy is restored |
 
 `configs/examples/` serves as the fixture source.

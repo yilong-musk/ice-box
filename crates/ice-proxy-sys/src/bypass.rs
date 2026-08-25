@@ -1,18 +1,24 @@
 //! Bypass domain lists for system proxy (architecture §13.1).
 
 /// Domains that must never go through the mixed inbound (all platforms).
+///
+/// On Windows, prefer [`BYPASS_WINDOWS`] — a bare `::1` in WinInet
+/// `ProxyOverride` / `INTERNET_PER_CONN_PROXY_BYPASS` returns
+/// `ERROR_INVALID_PARAMETER` (87). The OS itself stores `[::1]`.
 pub const BYPASS_COMMON: &[&str] = &["localhost", "127.0.0.1", "::1"];
 
-/// Extra Windows ProxyOverride token (WinInet).
+/// Windows WinInet ProxyOverride tokens (IPv6 loopback must be bracketed).
+pub const BYPASS_WINDOWS: &[&str] = &["localhost", "127.0.0.1", "[::1]", "<local>"];
+
+/// Extra Windows ProxyOverride token (WinInet). Kept for callers that append
+/// to a common list; prefer [`BYPASS_WINDOWS`] for a complete Windows list.
 pub const BYPASS_WINDOWS_EXTRA: &[&str] = &["<local>"];
 
 /// Bypass list for the current OS (used by apply).
 pub fn bypass_domains() -> Vec<&'static str> {
     #[cfg(target_os = "windows")]
     {
-        let mut list: Vec<&'static str> = BYPASS_COMMON.to_vec();
-        list.extend_from_slice(BYPASS_WINDOWS_EXTRA);
-        list
+        BYPASS_WINDOWS.to_vec()
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -33,12 +39,20 @@ mod tests {
         let list = bypass_domains();
         assert!(list.contains(&"localhost"));
         assert!(list.contains(&"127.0.0.1"));
-        assert!(list.contains(&"::1"));
 
         #[cfg(target_os = "windows")]
         {
+            assert!(
+                list.contains(&"[::1]"),
+                "WinInet rejects bare ::1 in ProxyOverride (error 87)"
+            );
+            assert!(!list.contains(&"::1"));
             assert!(list.contains(&"<local>"));
-            assert!(BYPASS_WINDOWS_EXTRA.contains(&"<local>"));
+            assert_eq!(list, BYPASS_WINDOWS);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(list.contains(&"::1"));
         }
     }
 }

@@ -20,7 +20,7 @@ describe("TrafficChart", () => {
   it("shows hint when core is not running", () => {
     const { container } = render(<TrafficChart running={false} />);
     const view = within(container);
-    expect(view.getByText(/启动内核后显示/)).toBeInTheDocument();
+    expect(view.getByText(/启动代理服务后显示/)).toBeInTheDocument();
   });
 
   it("samples traffic when running", async () => {

@@ -1,6 +1,8 @@
 //! Clash API / mixed inbound health probe.
 
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::CoreError;
@@ -41,6 +43,15 @@ impl HealthProbe for TcpHealthProbe {
 }
 
 pub fn wait_tcp_ready(endpoints: &HealthEndpoints, timeout: Duration) -> Result<(), CoreError> {
+    wait_tcp_ready_until(endpoints, timeout, None)
+}
+
+/// Like [`wait_tcp_ready`], but aborts early when `cancel` is set (app quit during auto-start).
+pub fn wait_tcp_ready_until(
+    endpoints: &HealthEndpoints,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), CoreError> {
     if !is_loopback_host(&endpoints.host) {
         return Err(CoreError::HealthcheckFailed(format!(
             "healthcheck host must be loopback, got {}",
@@ -63,6 +74,11 @@ pub fn wait_tcp_ready(endpoints: &HealthEndpoints, timeout: Duration) -> Result<
     let mut last_err = String::from("not attempted");
 
     while Instant::now() < deadline {
+        if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            return Err(CoreError::HealthcheckFailed(
+                "cancelled while waiting for clash API".into(),
+            ));
+        }
         for addr in &addrs {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -81,6 +97,9 @@ pub fn wait_tcp_ready(endpoints: &HealthEndpoints, timeout: Duration) -> Result<
         timeout.as_millis()
     )))
 }
+
+/// Shared cancel flag for interrupting an in-flight healthcheck (quit during auto-start).
+pub type HealthCancel = Arc<AtomicBool>;
 
 /// Probe that never succeeds (for unit tests).
 #[derive(Debug, Default, Clone, Copy)]
@@ -134,5 +153,32 @@ impl HealthProbe for SequenceHealthProbe {
             Some(r) => r,
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn wait_tcp_ready_until_aborts_when_cancel_set() {
+        let endpoints = HealthEndpoints {
+            host: "127.0.0.1".into(),
+            // Unlikely to be listening; cancel should win before full timeout.
+            port: 1,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_bg = cancel.clone();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancel_bg.store(true, Ordering::SeqCst);
+        });
+        let t0 = Instant::now();
+        let err = wait_tcp_ready_until(&endpoints, Duration::from_secs(5), Some(cancel.as_ref()))
+            .expect_err("cancelled");
+        assert!(err.to_string().contains("cancelled"));
+        assert!(t0.elapsed() < Duration::from_secs(2));
+        handle.join().unwrap();
     }
 }

@@ -3,7 +3,8 @@
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
-    orchestrate_set_proxy_mode, orchestrate_start, resolve_binary,
+    orchestrate_disable_system_proxy, orchestrate_enable_system_proxy, orchestrate_set_proxy_mode,
+    orchestrate_start, resolve_binary,
 };
 use crate::shutdown::graceful_stop;
 use crate::AppState;
@@ -17,7 +18,7 @@ use ice_core::{
     connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, traffic_sample,
     ConnectionStats, CoreState, CoreStatus, HealthEndpoints, TrafficSample, DELAY_TEST_URL,
 };
-use ice_proxy_sys::is_proxy_live_applied;
+use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied};
 use ice_subscription::{
     list_profile_outbounds, load_index, redact_subscription_url_for_log,
     redact_subscription_url_for_ui, write_subscription_error, SubscriptionError,
@@ -80,8 +81,12 @@ pub struct StatusResponse {
     pub core: CoreState,
     pub subscription_count: usize,
     pub proxy_recovery_warning: Option<String>,
-    /// When auto system proxy is enabled and core is running: `true` = applied, `false` = pending.
+    /// Live OS match when the platform backend is available and core is running.
     pub system_proxy_applied: Option<bool>,
+    /// On-disk `applied` flag (enables「停止代理服务」even when the OS was changed externally).
+    pub system_proxy_recorded: Option<bool>,
+    /// False on platforms without a real system-proxy backend (e.g. Linux Noop).
+    pub system_proxy_available: bool,
 }
 
 /// How long a `system_proxy_applied` check result is reused. The check spawns
@@ -92,9 +97,6 @@ const PROXY_APPLIED_CACHE_TTL: std::time::Duration = std::time::Duration::from_s
 
 /// Live check of `is_proxy_live_applied`, memoized per endpoints for `PROXY_APPLIED_CACHE_TTL`.
 fn cached_system_proxy_applied(state: &AppState, settings: &AppSettings) -> Option<bool> {
-    if !settings.auto_set_system_proxy {
-        return None;
-    }
     let endpoints = endpoints_from_settings(settings);
     let now = std::time::Instant::now();
     let mut cache = state.proxy_applied_cache.lock().ok()?;
@@ -178,7 +180,19 @@ pub fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, AppError
         .lock()
         .ok()
         .and_then(|g| g.clone());
-    let system_proxy_applied = if core.state().status == CoreStatus::Running {
+    let proxy_available = state
+        .proxy
+        .lock()
+        .ok()
+        .map(|p| p.is_available())
+        .unwrap_or(false);
+    let running = core.state().status == CoreStatus::Running;
+    let system_proxy_recorded = if running {
+        Some(is_proxy_applied_on_disk(&state.paths.proxy_backup()))
+    } else {
+        None
+    };
+    let system_proxy_applied = if running && proxy_available {
         current_settings(&state.paths)
             .ok()
             .and_then(|settings| cached_system_proxy_applied(state.inner(), &settings))
@@ -190,6 +204,8 @@ pub fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, AppError
         subscription_count: count,
         proxy_recovery_warning,
         system_proxy_applied,
+        system_proxy_recorded,
+        system_proxy_available: proxy_available,
     })
 }
 
@@ -224,6 +240,31 @@ pub fn list_subscriptions(state: State<'_, AppState>) -> Result<serde_json::Valu
     })
 }
 
+/// Start the core only (no system proxy). Used on app launch.
+pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
+    let settings = current_settings(&state.paths)?;
+    let binary = binary_for(app)?;
+    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+    if core.state().status == CoreStatus::Running {
+        return Ok(());
+    }
+    let _ = orchestrate_start(
+        &state.paths,
+        &settings,
+        &mut **core,
+        proxy.as_ref(),
+        binary,
+        resource_dir(app).as_deref(),
+    )?;
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        *slot = None;
+    }
+    Ok(())
+}
+
+/// Home「启动代理服务」: ensure core is running, then take over the OS system proxy.
 #[tauri::command]
 pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
     let _orch = lock_orchestrate(&state)?;
@@ -231,16 +272,22 @@ pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError>
     let binary = binary_for(&app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    let proxy_warning = orchestrate_start(
-        &state.paths,
-        &settings,
-        &mut **core,
-        proxy.as_ref(),
-        binary,
-        resource_dir(&app).as_deref(),
-    )?;
+    if core.state().status != CoreStatus::Running {
+        let _ = orchestrate_start(
+            &state.paths,
+            &settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary,
+            resource_dir(&app).as_deref(),
+        )?;
+        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+            *slot = None;
+        }
+    }
+    orchestrate_enable_system_proxy(&state.paths, &settings, &**core, proxy.as_ref())?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = proxy_warning;
+        *slot = None;
     }
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
@@ -248,6 +295,22 @@ pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError>
     Ok(())
 }
 
+/// Home「停止代理服务」: restore OS system proxy; keep the core running.
+#[tauri::command]
+pub fn stop_system_proxy(state: State<'_, AppState>) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(&state)?;
+    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+    orchestrate_disable_system_proxy(&state.paths, proxy.as_ref())?;
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        *slot = None;
+    }
+    if let Ok(mut cache) = state.proxy_applied_cache.lock() {
+        *cache = None;
+    }
+    Ok(())
+}
+
+/// Full stop used by tray Quit / app exit (restore system proxy, then kill core).
 #[tauri::command]
 pub fn stop(state: State<'_, AppState>) -> Result<(), AppError> {
     graceful_stop(state.inner())
@@ -1357,6 +1420,7 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
         }
     }
@@ -1407,6 +1471,7 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
         }
     }

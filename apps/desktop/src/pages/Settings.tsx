@@ -19,7 +19,7 @@ const defaults: AppSettings = {
   clash_api_listen: "127.0.0.1",
   clash_api_port: 19090,
   selected_tag: null,
-  auto_set_system_proxy: true,
+  auto_set_system_proxy: false,
   allow_lan: false,
   proxy_mode: "rule",
 };
@@ -228,17 +228,6 @@ export function Settings() {
             连接；Clash API 仍仅限本机
           </p>
         )}
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={form.auto_set_system_proxy}
-            onChange={(e) =>
-              setForm({ ...form, auto_set_system_proxy: e.target.checked })
-            }
-            disabled={busy || !loaded}
-          />
-          启动时设置系统代理
-        </label>
         <div className="actions">
           <button type="submit" disabled={busy || !loaded}>
             保存
