@@ -203,7 +203,6 @@ export function Nodes({ onNavigate }: Props) {
 
   return (
     <section className="panel">
-      <h2>节点</h2>
       {error && <p className="error">{error}</p>}
 
       {!running && nodes.length > 0 && (

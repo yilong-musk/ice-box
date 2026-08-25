@@ -3,11 +3,15 @@ import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
 import { formatRate } from "../lib/traffic";
 
 const MAX_POINTS = 60;
+/** Consecutive sample failures before surfacing a stale/error hint. */
+const FAILURE_THRESHOLD = 3;
 
 type Point = TrafficSample & { t: number };
 
 type Props = {
   running: boolean;
+  /** Pause sampling (e.g. while mode switch reloads Clash API). */
+  paused?: boolean;
 };
 
 function buildPath(values: number[], width: number, height: number, max: number): string {
@@ -22,17 +26,25 @@ function buildPath(values: number[], width: number, height: number, max: number)
     .join(" ");
 }
 
-export function TrafficChart({ running }: Props) {
+export function TrafficChart({ running, paused = false }: Props) {
   const [points, setPoints] = useState<Point[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [latest, setLatest] = useState<TrafficSample | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     if (!running) {
       setPoints([]);
       setLatest(null);
       setError(null);
+      failCountRef.current = 0;
+      inFlightRef.current = false;
+      return;
+    }
+
+    // Drop any abandoned in-flight sample so unpause can resume.
+    if (paused) {
       inFlightRef.current = false;
       return;
     }
@@ -45,14 +57,20 @@ export function TrafficChart({ running }: Props) {
       try {
         const sample = await api.getTrafficSample();
         if (cancelled) return;
-        setLatest(sample);
+        failCountRef.current = 0;
         setError(null);
+        setLatest(sample);
         setPoints((prev) => {
           const next = [...prev, { ...sample, t: Date.now() }];
           return next.length > MAX_POINTS ? next.slice(-MAX_POINTS) : next;
         });
       } catch (e) {
-        if (!cancelled) setError(formatInvokeError(e));
+        if (cancelled) return;
+        // Brief Clash API drops are skipped; only surface after sustained failure.
+        failCountRef.current += 1;
+        if (failCountRef.current >= FAILURE_THRESHOLD) {
+          setError(formatInvokeError(e));
+        }
       } finally {
         inFlightRef.current = false;
       }
@@ -63,8 +81,10 @@ export function TrafficChart({ running }: Props) {
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      // Allow the next effect run to sample even if this invoke never settles.
+      inFlightRef.current = false;
     };
-  }, [running]);
+  }, [running, paused]);
 
   const { upPath, downPath, maxVal } = useMemo(() => {
     const ups = points.map((p) => p.up);
@@ -101,7 +121,7 @@ export function TrafficChart({ running }: Props) {
           </span>
         </div>
       </div>
-      {error && <p className="error traffic-error">{error}</p>}
+      {error && <p className="error traffic-error">采样中断：{error}</p>}
       <svg
         className="traffic-chart"
         viewBox="0 0 320 72"

@@ -10,6 +10,81 @@ import "./App.css";
 
 type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
 
+const NAV_ITEMS: { id: Tab; label: string }[] = [
+  { id: "home", label: "主页" },
+  { id: "nodes", label: "节点" },
+  { id: "rules", label: "规则" },
+  { id: "subs", label: "订阅" },
+  { id: "logs", label: "日志" },
+  { id: "settings", label: "设置" },
+];
+
+/** SVG refraction filter for Chromium (WebView2). WebKit ignores url() in backdrop-filter. */
+function LiquidGlassFilters() {
+  return (
+    <svg
+      className="liquid-glass-defs"
+      aria-hidden="true"
+      width="0"
+      height="0"
+      focusable="false"
+    >
+      <defs>
+        {/* Soft liquid warp — low-frequency noise displacement */}
+        <filter
+          id="liquid-refract"
+          x="-8%"
+          y="-8%"
+          width="116%"
+          height="116%"
+          colorInterpolationFilters="sRGB"
+        >
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.012 0.018"
+            numOctaves="2"
+            seed="3"
+            result="noise"
+          />
+          <feGaussianBlur in="noise" stdDeviation="1.2" result="map" />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="map"
+            scale="22"
+            xChannelSelector="R"
+            yChannelSelector="G"
+          />
+        </filter>
+        {/* Stronger lens warp for the power button hero */}
+        <filter
+          id="liquid-refract-strong"
+          x="-12%"
+          y="-12%"
+          width="124%"
+          height="124%"
+          colorInterpolationFilters="sRGB"
+        >
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.01 0.014"
+            numOctaves="2"
+            seed="7"
+            result="noise"
+          />
+          <feGaussianBlur in="noise" stdDeviation="1.6" result="map" />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="map"
+            scale="32"
+            xChannelSelector="R"
+            yChannelSelector="G"
+          />
+        </filter>
+      </defs>
+    </svg>
+  );
+}
+
 function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
@@ -33,48 +108,49 @@ function App() {
   }, []);
 
   return (
-    <div className="app">
-      <header className="top">
-        <div>
-          <h1>ice-box</h1>
+    <div className="app-root">
+      <LiquidGlassFilters />
+
+      <div className="app-atmosphere" aria-hidden="true" />
+
+      <div className="app">
+        <aside className="sidebar liquid-glass">
+          <div className="sidebar-brand">
+            <span className="brand-mark" aria-hidden="true" />
+            <h1>ice-box</h1>
+          </div>
+          <nav className="sidebar-nav" aria-label="主导航">
+            {NAV_ITEMS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className={tab === id ? "nav-item active" : "nav-item"}
+                aria-current={tab === id ? "page" : undefined}
+                onClick={() => setTab(id)}
+              >
+                <span className="nav-item-label">{label}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="content">
+          {globalStatus?.proxy_recovery_warning && (
+            <p className="global-banner error" role="alert">
+              {globalStatus.proxy_recovery_warning}
+            </p>
+          )}
+
+          <main className="content-main">
+            {tab === "home" && <Home onNavigate={setTab} />}
+            {tab === "nodes" && <Nodes onNavigate={setTab} />}
+            {tab === "subs" && <Subscriptions />}
+            {tab === "rules" && <Rules onNavigate={setTab} />}
+            {tab === "logs" && <Logs />}
+            {tab === "settings" && <Settings />}
+          </main>
         </div>
-        <nav className="tabs" aria-label="主导航">
-          {(
-            [
-              ["home", "主页"],
-              ["nodes", "节点"],
-              ["rules", "规则"],
-              ["subs", "订阅"],
-              ["logs", "日志"],
-              ["settings", "设置"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={tab === id ? "tab active" : "tab"}
-              onClick={() => setTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
-      </header>
-
-      {globalStatus?.proxy_recovery_warning && (
-        <p className="global-banner error" role="alert">
-          {globalStatus.proxy_recovery_warning}
-        </p>
-      )}
-
-      <main>
-        {tab === "home" && <Home onNavigate={setTab} />}
-        {tab === "nodes" && <Nodes onNavigate={setTab} />}
-        {tab === "subs" && <Subscriptions />}
-        {tab === "rules" && <Rules onNavigate={setTab} />}
-        {tab === "logs" && <Logs />}
-        {tab === "settings" && <Settings />}
-      </main>
+      </div>
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { EmptyState } from "../components/EmptyState";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { resolveSelectedTag } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
+import { ProxyPowerButton } from "../components/ProxyPowerButton";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -19,6 +20,17 @@ type Props = {
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
+function formatOutbound(tag: string, nodes: NodeInfo[]): string {
+  const node = nodes.find((n) => n.tag === tag);
+  if (!node) return tag;
+  if (GROUP_TYPES.includes(node.outbound_type)) {
+    return node.group_now
+      ? `${node.tag} → ${node.group_now}`
+      : `${node.tag}（${node.outbound_type}）`;
+  }
+  return `${node.tag}（${node.outbound_type}）`;
+}
+
 export function Home({ onBusyChange, onNavigate }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const pollGenRef = useRef(0);
@@ -26,12 +38,12 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [proxyMode, setProxyMode] = useState<ProxyMode>("rule");
-  const [delayMs, setDelayMs] = useState<number | null>(null);
   const [connCount, setConnCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [nodeBusy, setNodeBusy] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
+  const modeBusyRef = useRef(false);
+  const pendingRef = useRef(false);
 
   const refresh = useCallback(async (pollGen?: number) => {
     const gen = pollGen ?? pollGenRef.current;
@@ -46,11 +58,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
       setStatus(s);
       setNodes(n);
       setProxyMode(settings.proxy_mode);
-      const nextTag = resolveSelectedTag(settings.selected_tag, n);
-      setSelectedTag((prev) => {
-        if (prev !== nextTag) setDelayMs(null);
-        return nextTag;
-      });
+      setSelectedTag(resolveSelectedTag(settings.selected_tag, n));
       setError(null);
 
       if (s.core.status === "running") {
@@ -63,10 +71,16 @@ export function Home({ onBusyChange, onNavigate }: Props) {
         }
       } else {
         setConnCount(null);
-        setDelayMs(null);
       }
     } catch (e) {
-      if (gen === pollGenRef.current) setError(formatInvokeError(e));
+      // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
+      if (
+        gen === pollGenRef.current &&
+        !modeBusyRef.current &&
+        !pendingRef.current
+      ) {
+        setError(formatInvokeError(e));
+      }
     }
   }, []);
 
@@ -90,28 +104,13 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   }, [busy, onBusyChange]);
 
   async function run(action: () => Promise<void>) {
+    // Invalidate in-flight poll so mid-start API misses cannot flash a red error.
     pollGenRef.current += 1;
+    pendingRef.current = true;
     setPending(true);
     setError(null);
     try {
       await action();
-      await refresh();
-    } catch (e) {
-      setError(formatInvokeError(e));
-      await refresh();
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function onSelectNode(tag: string) {
-    nextGeneration();
-    setSelectedTag(tag);
-    setDelayMs(null);
-    setNodeBusy(true);
-    setError(null);
-    try {
-      await api.setSelectedNode(tag);
       pollGenRef.current += 1;
       await refresh();
     } catch (e) {
@@ -120,13 +119,17 @@ export function Home({ onBusyChange, onNavigate }: Props) {
       await refresh();
       setError(message);
     } finally {
-      setNodeBusy(false);
+      pendingRef.current = false;
+      setPending(false);
     }
   }
 
   async function onSetMode(mode: ProxyMode) {
     if (mode === proxyMode) return;
     const gen = nextGeneration();
+    // Invalidate in-flight poll so a mid-reload sample cannot flash a red error.
+    pollGenRef.current += 1;
+    modeBusyRef.current = true;
     setModeBusy(true);
     setError(null);
     setProxyMode(mode);
@@ -141,177 +144,154 @@ export function Home({ onBusyChange, onNavigate }: Props) {
       await refresh();
       setError(message);
     } finally {
-      if (!isStale(gen)) setModeBusy(false);
+      if (!isStale(gen)) {
+        modeBusyRef.current = false;
+        setModeBusy(false);
+      }
     }
   }
 
-  async function onTestDelay() {
-    if (!selectedTag) return;
-    const tag = selectedTag;
-    const gen = nextGeneration();
-    setNodeBusy(true);
-    setError(null);
-    try {
-      const r = await api.testNodeDelay(tag);
-      if (isStale(gen)) return;
-      setDelayMs(r.delay_ms);
-    } catch (e) {
-      if (isStale(gen)) return;
-      setError(formatInvokeError(e));
-      setDelayMs(null);
-    } finally {
-      setNodeBusy(false);
-    }
-  }
-
-  // Core follows the app; these buttons only toggle OS system proxy.
+  // Core follows the app; this control only toggles OS system proxy.
   const running = core?.status === "running";
   const proxyAvailable = status?.system_proxy_available !== false;
   const proxyLive = status?.system_proxy_applied === true;
   const proxyRecorded = status?.system_proxy_recorded === true;
   const canEnableProxy = proxyAvailable && !busy && !proxyLive;
   const canDisableProxy = proxyAvailable && !busy && running && proxyRecorded;
+  // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
+  const proxyOn = proxyLive || (proxyRecorded && running);
+  const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
+  const outboundLabel =
+    nodes.length === 0
+      ? running
+        ? "直连"
+        : "—"
+      : selectedTag
+        ? formatOutbound(selectedTag, nodes)
+        : "—";
 
-  function nodeLabel(n: NodeInfo): string {
-    if (GROUP_TYPES.includes(n.outbound_type)) {
-      const exit = n.group_now ? ` → ${n.group_now}` : "";
-      return `${n.tag} (${n.outbound_type}${exit})`;
+  function onToggleProxy() {
+    if (proxyOn) {
+      void run(() => api.stopSystemProxy());
+    } else {
+      void run(() => api.start());
     }
-    return `${n.tag} (${n.outbound_type})`;
   }
 
   return (
-    <section className="panel">
-      <h2>主页</h2>
-      {proxyAvailable && running && status?.system_proxy_applied === false && (
-        <p className="warn">系统代理未接管或已不同步</p>
-      )}
+    <section className="panel home-panel">
+      {proxyAvailable &&
+        running &&
+        proxyRecorded &&
+        status?.system_proxy_applied === false && (
+          <p className="warn">系统代理未接管或已不同步</p>
+        )}
       {!proxyAvailable && running && (
         <p className="muted">当前平台不支持系统代理接管</p>
       )}
       {error && <p className="error">{error}</p>}
-      <dl className="kv">
-        <dt>内核</dt>
-        <dd className={`status status-${core?.status ?? "unknown"}`}>
-          {core?.status ?? "—"}
-        </dd>
-        <dt>系统代理</dt>
-        <dd>
-          {!proxyAvailable
-            ? "不支持"
-            : proxyLive
-              ? "已接管"
-              : running
-                ? proxyRecorded
-                  ? "已不同步"
-                  : "未接管"
-                : "—"}
-        </dd>
-        <dt>订阅数</dt>
-        <dd>{status?.subscription_count ?? "—"}</dd>
-        <dt>入站</dt>
-        <dd>
-          {core?.inbound_host && core.inbound_port
-            ? `${core.inbound_host}:${core.inbound_port}`
-            : "—"}
-        </dd>
-        {running && connCount !== null && (
-          <>
-            <dt>连接</dt>
-            <dd>{connCount}</dd>
-          </>
-        )}
-        {core?.message && (
-          <>
-            <dt>消息</dt>
-            <dd>{core.message}</dd>
-          </>
-        )}
-      </dl>
 
-      {nodes.length > 0 ? (
-        <>
-          <div className="node-row">
-            <div className="mode-buttons" role="group" aria-label="模式">
-              {(
-                [
-                  ["rule", "规则"],
-                  ["global", "全局"],
-                  ["direct", "直连"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={`mode-button${proxyMode === value ? " active" : ""}`}
-                  disabled={modeBusy || busy}
-                  onClick={() => void onSetMode(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="node-row">
-            <label className="node-label">
-              节点
-              <select
-                value={selectedTag}
-                disabled={nodeBusy || busy}
-                onChange={(e) => void onSelectNode(e.target.value)}
+      {proxyAvailable ? (
+        <div className="proxy-power-wrap">
+          <ProxyPowerButton
+            proxyOn={proxyOn}
+            busy={busy}
+            disabled={!canToggleProxy}
+            ariaLabel={proxyOn ? "停止代理服务" : "启动代理服务"}
+            title={proxyOn ? "停止代理服务" : "启动代理服务"}
+            subtitle={
+              busy
+                ? "处理中…"
+                : proxyLive
+                  ? "系统代理已接管"
+                  : proxyOn
+                    ? "已记录，可恢复系统代理"
+                    : "点击接管系统代理"
+            }
+            onClick={onToggleProxy}
+          />
+        </div>
+      ) : null}
+
+      <div className="home-status-row">
+        <dl className="kv">
+          <dt>内核</dt>
+          <dd className={`status status-${core?.status ?? "unknown"}`}>
+            {core?.status ?? "—"}
+          </dd>
+          <dt>系统代理</dt>
+          <dd>
+            {!proxyAvailable
+              ? "不支持"
+              : proxyLive
+                ? "已接管"
+                : running
+                  ? proxyRecorded
+                    ? "已不同步"
+                    : "未接管"
+                  : "—"}
+          </dd>
+          <dt>当前出站</dt>
+          <dd title={outboundLabel}>{outboundLabel}</dd>
+          <dt>订阅数</dt>
+          <dd>{status?.subscription_count ?? "—"}</dd>
+          <dt>入站</dt>
+          <dd>
+            {core?.inbound_host && core.inbound_port
+              ? `${core.inbound_host}:${core.inbound_port}`
+              : "—"}
+          </dd>
+          {running && connCount !== null && (
+            <>
+              <dt>连接</dt>
+              <dd>{connCount}</dd>
+            </>
+          )}
+          {core?.message && (
+            <>
+              <dt>消息</dt>
+              <dd>{core.message}</dd>
+            </>
+          )}
+        </dl>
+
+        {nodes.length > 0 ? (
+          <div className="mode-buttons" role="group" aria-label="模式">
+            {(
+              [
+                ["rule", "规则"],
+                ["global", "全局"],
+                ["direct", "直连"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`mode-button${proxyMode === value ? " active" : ""}`}
+                disabled={modeBusy || busy}
+                onClick={() => void onSetMode(value)}
               >
-                {nodes.map((n) => (
-                  <option key={n.tag} value={n.tag}>
-                    {nodeLabel(n)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={!running || !selectedTag || nodeBusy}
-              onClick={() => void onTestDelay()}
-            >
-              测延迟
-            </button>
-            {delayMs !== null && (
-              <span className="delay-badge">{delayMs} ms</span>
-            )}
+                {label}
+              </button>
+            ))}
           </div>
-        </>
-      ) : (
+        ) : null}
+      </div>
+
+      {nodes.length === 0 ? (
         <EmptyState
           title={running ? "仅直连模式运行中" : "还没有可用节点"}
           description={
             running
-              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时点击「启动代理服务」接管系统代理。"
-              : "未导入任何订阅。打开软件会自动启动内核（仅直连）；点击「启动代理服务」接管系统代理，或先导入订阅。"
+              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管系统代理。"
+              : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管系统代理，或先导入订阅。"
           }
           actionLabel="前往订阅页导入"
           onAction={() => onNavigate?.("subs")}
         />
-      )}
-
-      {proxyAvailable ? (
-        <div className="actions">
-          <button
-            type="button"
-            disabled={!canEnableProxy}
-            onClick={() => void run(() => api.start())}
-          >
-            启动代理服务
-          </button>
-          <button
-            type="button"
-            disabled={!canDisableProxy}
-            onClick={() => void run(() => api.stopSystemProxy())}
-          >
-            停止代理服务
-          </button>
-        </div>
       ) : null}
 
-      <TrafficChart running={running} />
+      <TrafficChart running={running} paused={modeBusy || busy} />
     </section>
   );
 }

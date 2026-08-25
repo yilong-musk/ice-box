@@ -58,7 +58,6 @@ export function Logs() {
 
   return (
     <section className="panel">
-      <h2>日志</h2>
       <div className="actions">
         <span className="hint">
           自动刷新，显示警告 / 错误、关键事件与每连接出站节点；完整日志见数据目录

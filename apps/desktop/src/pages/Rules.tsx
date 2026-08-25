@@ -221,7 +221,6 @@ export function Rules({ onNavigate }: Props) {
 
   return (
     <section className="panel">
-      <h2>规则</h2>
       {error && <p className="error">{error}</p>}
       {applyWarning && (
         <p className="warn" role="alert">

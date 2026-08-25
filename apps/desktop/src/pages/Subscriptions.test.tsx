@@ -57,7 +57,7 @@ describe("Subscriptions", () => {
     });
     expect(
       screen.queryByText(
-        "暂无订阅。打开软件会自动启动内核；需要时在主页启动代理服务接管系统代理，也可导入订阅 URL。",
+        "暂无订阅。打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。",
       ),
     ).toBeInTheDocument();
   });

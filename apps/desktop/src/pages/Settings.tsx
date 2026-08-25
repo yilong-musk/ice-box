@@ -100,7 +100,6 @@ export function Settings() {
 
   return (
     <section className="panel">
-      <h2>设置</h2>
       {error && <p className="error">{error}</p>}
       {saved && <p className="ok">已保存</p>}
       <form className="settings-form" onSubmit={(e) => void onSave(e)}>

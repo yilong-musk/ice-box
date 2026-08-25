@@ -66,7 +66,6 @@ export function Subscriptions() {
 
   return (
     <section className="panel">
-      <h2>订阅</h2>
       {error && <p className="error">{error}</p>}
       {warning && <p className="warn">{warning}</p>}
       {updateFailures && (
@@ -124,7 +123,7 @@ export function Subscriptions() {
       )}
 
       {items.length === 0 ? (
-        <p className="muted">暂无订阅。打开软件会自动启动内核；需要时在主页启动代理服务接管系统代理，也可导入订阅 URL。</p>
+        <p className="muted">暂无订阅。打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。</p>
       ) : (
         <ul className="sub-list">
           {items.map((s) => (
