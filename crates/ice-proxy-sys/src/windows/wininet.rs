@@ -161,6 +161,10 @@ fn query_string_option(
 
 /// Effective WinInet flags (`INTERNET_PER_CONN_FLAGS`). May hide `AUTO_DETECT`
 /// when WinINET decides the current network does not use WPAD.
+///
+/// Only used by live gates (`g4_3`) to assert apply cleared WPAD/PAC on the
+/// effective FLAGS path, not the FLAGS_UI backup snapshot.
+#[cfg(all(test, target_os = "windows"))]
 pub fn query_effective_flags(connection: Option<&str>) -> Result<u32, ProxySysError> {
     query_flags_option(connection, INTERNET_PER_CONN_FLAGS)
 }
