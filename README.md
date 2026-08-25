@@ -2,6 +2,14 @@
 
 A lightweight network proxy client for macOS / Windows: Tauri 2 + React shell with a **sing-box** core, supporting subscription import and management.
 
+## License
+
+ice-box is released under the [MIT License](LICENSE).
+
+Bundled **sing-box** remains under its upstream GPL-3.0-or-later terms (with the
+upstream naming restriction). See [NOTICE](NOTICE) and
+[third_party/sing-box/LICENSE](third_party/sing-box/LICENSE).
+
 ## Architecture overview
 
 The implementation spec lives in [docs/architecture.md](docs/architecture.md) (process model, state machine, single active subscription, IPC, failure rollback).

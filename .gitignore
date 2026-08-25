@@ -28,10 +28,11 @@ Thumbs.db
 # Tauri generated (capabilities / schema)
 apps/desktop/src-tauri/gen/
 
-# sing-box binaries (fetched locally; keep scripts / pin)
+# sing-box binaries (fetched locally; keep scripts / pin / license notice)
 third_party/sing-box/**
 !third_party/sing-box/VERSION
 !third_party/sing-box/CHECKSUMS.sha256
+!third_party/sing-box/LICENSE
 !third_party/sing-box/.gitkeep
 
 # Copied into the Tauri bundle at build time

@@ -1,6 +1,7 @@
 {
   "name": "ice-box",
   "private": true,
+  "license": "MIT",
   "description": "Workspace helper scripts; the desktop app lives in apps/desktop",
   "scripts": {
     "dev": "bash scripts/dev.sh host",

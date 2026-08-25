@@ -1,0 +1,35 @@
+ice-box
+Copyright (c) 2026 ice-box contributors
+
+This product is licensed under the MIT License. See the LICENSE file for the
+full text.
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+This repository and its release packages may redistribute the following
+third-party component as a separate binary (spawned as a subprocess; not
+linked into the ice-box process):
+
+### sing-box
+
+- Project: https://github.com/SagerNet/sing-box
+- Upstream license: GNU General Public License v3.0 or later, with an
+  additional naming restriction (see third_party/sing-box/LICENSE)
+- Bundled pin: see third_party/sing-box/VERSION
+- Source corresponding to the pinned release (see third_party/sing-box/VERSION):
+  https://github.com/SagerNet/sing-box/releases/tag/v1.13.19
+
+When redistributing a binary build of ice-box that includes sing-box:
+
+1. Preserve the sing-box copyright and license notices.
+2. Provide recipients with access to the corresponding sing-box source code
+   under the terms of its license (for example by pointing to the upstream
+   release tag above).
+3. Do not use the name "sing-box" or imply association with that project
+   without prior consent, as required by the upstream additional clause.
+
+Other Rust and JavaScript dependencies retain their own licenses as declared
+by their upstream packages (typically MIT, Apache-2.0, or similar permissive
+licenses). Their full texts are available from the respective package sources.
