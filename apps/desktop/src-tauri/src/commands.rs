@@ -231,7 +231,7 @@ pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError>
     let binary = binary_for(&app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    orchestrate_start(
+    let proxy_warning = orchestrate_start(
         &state.paths,
         &settings,
         &mut **core,
@@ -240,7 +240,7 @@ pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError>
         resource_dir(&app).as_deref(),
     )?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = None;
+        *slot = proxy_warning;
     }
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;

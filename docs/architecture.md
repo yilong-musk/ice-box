@@ -206,6 +206,7 @@ Root path:
 
 - `clash_api_*` **binds 127.0.0.1 only**; `0.0.0.0` is forbidden.
 - v1 may run without a clash API secret, but if enabled it must be local-only.
+- `auto_set_system_proxy`: defaults to `true` on macOS and Windows (the platforms with a real system-proxy backend). On platforms without a backend it defaults to `false` so Start does not call `apply`. The example JSON above is the macOS / Windows default. Missing `settings.json` uses this default and does not create the file.
 - `allow_lan`: LAN sharing switch (default `false`, read compatibly from older settings.json). When on, the Mixed inbound binds `0.0.0.0`, while the system proxy / healthcheck still use `127.0.0.1`; the Clash API stays local-only.
 
 ### 6.2 `proxy-backup.json`
@@ -269,6 +270,7 @@ The system proxy is **not** an independent state machine; it is a side effect of
 - Applied **only as the last step** of entering `Running` (if `auto_set_system_proxy`).
 - Restored **as the first step** of leaving `Running` (as long as `applied == true`).
 - `Starting` failure: must not leave a system proxy behind.
+- If apply fails **after** the core healthcheck succeeded: restore best-effort (must not leave `applied: true`), keep `Running`, and surface a warning. The mixed inbound stays usable; this is not a `Starting` failure.
 
 ---
 
@@ -286,7 +288,7 @@ The system proxy is **not** an independent state machine; it is a side effect of
 7. Healthcheck failed → kill process → restore (if already applied) → Error
 8. Backup the system proxy (if not yet applied) → write proxy-backup.json
 9. Apply the system proxy → applied=true
-10. Apply failed → restore → stop core → Error
+10. Apply failed → restore (must not leave `applied: true`) → status = Running, record a proxy-apply warning; **do not stop the core**. Mixed inbound stays usable. The user can turn off `auto_set_system_proxy` in Settings or set the OS proxy manually.
 11. status = Running
 ```
 
@@ -744,6 +746,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 | `ice-subscription` | sample JSON / Clash fixture detection and parsing |
 | `ice-core` | illegal state machine transitions; mock process can stand in for real sing-box |
 | `ice-proxy-sys` | platform tests marked `#[ignore]` or manual checklist; CI never touches the real system proxy by default |
+| `ice-config` / ice-box start | default `auto_set_system_proxy` matches backend availability; `create_system_proxy()` + defaults must not mutate the OS in CI (unsupported platforms: Start succeeds without apply; macOS/Windows live apply stays `#[ignore]`) |
 | Manual | Start then curl the mixed port; Stop then verify the system proxy is restored |
 
 `configs/examples/` serves as the fixture source.

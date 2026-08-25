@@ -41,6 +41,12 @@ pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
     }
 }
 
+/// Default for `auto_set_system_proxy`: on when the platform has a real backend
+/// (architecture §6.1). Linux and other stubs stay off so Start does not call apply.
+pub const fn default_auto_set_system_proxy() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
 /// Application settings (not the sing-box runtime config).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -67,7 +73,7 @@ impl Default for AppSettings {
             clash_api_listen: "127.0.0.1".into(),
             clash_api_port: 19090,
             selected_tag: None,
-            auto_set_system_proxy: cfg!(target_os = "macos"),
+            auto_set_system_proxy: default_auto_set_system_proxy(),
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
         }
@@ -193,11 +199,23 @@ mod tests {
         assert_eq!(s.clash_api_listen, "127.0.0.1");
         assert_eq!(s.clash_api_port, 19090);
         assert_eq!(s.selected_tag, None);
-        assert_eq!(s.auto_set_system_proxy, cfg!(target_os = "macos"));
+        assert_eq!(s.auto_set_system_proxy, default_auto_set_system_proxy());
         assert!(!s.allow_lan);
         assert_eq!(s, d);
         assert!(!path.exists(), "load must not create settings file");
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn default_auto_set_system_proxy_matches_real_backends() {
+        assert_eq!(
+            default_auto_set_system_proxy(),
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
+        assert_eq!(
+            AppSettings::default().auto_set_system_proxy,
+            default_auto_set_system_proxy()
+        );
     }
 
     #[test]

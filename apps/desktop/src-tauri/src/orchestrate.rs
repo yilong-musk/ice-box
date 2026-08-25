@@ -169,6 +169,10 @@ pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> 
 }
 
 /// Start: generate config → core.start → (optional) apply system proxy last.
+///
+/// Returns `Ok(None)` on a clean start. If the core is healthy but system proxy
+/// apply fails, returns `Ok(Some(warning))` and leaves the core Running
+/// (architecture §8.1); the caller surfaces the warning in the UI.
 pub fn orchestrate_start(
     app_paths: &AppPaths,
     settings: &AppSettings,
@@ -176,7 +180,7 @@ pub fn orchestrate_start(
     proxy: &dyn SystemProxy,
     binary: PathBuf,
     resource_dir: Option<&Path>,
-) -> Result<(), AppError> {
+) -> Result<Option<String>, AppError> {
     generate_config(app_paths, settings, resource_dir)?;
 
     let core_paths = build_core_paths(app_paths, settings, binary);
@@ -186,11 +190,18 @@ pub fn orchestrate_start(
         let endpoints = endpoints_from_settings(settings);
         if let Err(err) = apply_and_record(&app_paths.proxy_backup(), proxy, &endpoints) {
             let _ = restore_and_clear_flag(&app_paths.proxy_backup(), proxy);
-            let _ = core.stop(&app_paths.pid());
-            return Err(AppError::from(err));
+            tracing::error!(error = %err, "system proxy apply failed; core stays running");
+            return Ok(Some(proxy_apply_warning(&AppError::from(err), &endpoints)));
         }
     }
-    Ok(())
+    Ok(None)
+}
+
+fn proxy_apply_warning(err: &AppError, endpoints: &ProxyEndpoints) -> String {
+    format!(
+        "系统代理设置失败（{err}）。内核已在运行，可在设置中关闭「启动时设置系统代理」，或手动将系统代理指向 {}:{}",
+        endpoints.http_host, endpoints.http_port
+    )
 }
 
 /// Stop: restore proxy first (if applied), then kill core.
@@ -446,13 +457,16 @@ fn rollback_runtime_config_after_reload_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ice_config::default_auto_set_system_proxy;
     use ice_config::NormalizedOutbound as NO;
     use ice_config::ProxyMode;
     use ice_core::{
         CoreController, ImmediateHealthProbe, MockClashApi, MockReloadMode, MockReloader,
         MockSpawner, SequenceHealthProbe,
     };
-    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxySysError};
+    use ice_proxy_sys::{
+        create_system_proxy, NoopSystemProxy, ProxyBackup, ProxyBackupFile, ProxySysError,
+    };
     use ice_subscription::{
         write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
     };
@@ -617,8 +631,8 @@ mod tests {
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
-            cfg!(target_os = "macos") as usize,
-            "auto system proxy applies only when the platform default enables it"
+            default_auto_set_system_proxy() as usize,
+            "auto system proxy applies on start by default only when a platform backend exists"
         );
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -688,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn g7_4_apply_fail_stops_core() {
+    fn g7_4_apply_fail_keeps_core_and_warns() {
         let paths = temp_app("apply-fail");
         seed_one_node(&paths);
         let settings = AppSettings {
@@ -702,11 +716,85 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        let err =
-            orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect_err("apply");
-        assert_eq!(err.code, "proxy.apply_failed");
-        assert_eq!(core.state().status, CoreStatus::Stopped);
+        let warning = orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None)
+            .expect("core stays running");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let warning = warning.expect("proxy apply warning");
+        assert!(warning.contains("系统代理设置失败"), "warning: {warning}");
+        assert!(warning.contains("启动时设置系统代理"), "warning: {warning}");
+        if paths.proxy_backup().exists() {
+            let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
+            assert!(!b.applied);
+            assert!(!b.pending_apply);
+        }
         let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn start_auto_proxy_with_noop_keeps_core_and_clears_pending() {
+        let paths = temp_app("noop-auto");
+        seed_one_node(&paths);
+        let settings = AppSettings {
+            auto_set_system_proxy: true,
+            ..AppSettings::default()
+        };
+        let mut core = mock_core_ok();
+        let proxy = NoopSystemProxy;
+        let bin = marker_bin(&paths);
+
+        let warning = orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None)
+            .expect("noop apply must not abort start");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|w| w.contains("系统代理设置失败")),
+            "warning: {warning:?}"
+        );
+        if paths.proxy_backup().exists() {
+            let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
+            assert!(!b.applied, "failed apply must not mark applied");
+            assert!(
+                !b.pending_apply,
+                "noop restore must clear pending_apply so later starts are not blocked"
+            );
+        }
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn default_start_with_create_system_proxy_skips_missing_backend() {
+        let paths = temp_app("platform-default");
+        let settings = AppSettings::default();
+        assert!(
+            !settings.auto_set_system_proxy,
+            "unsupported platforms must default auto proxy off"
+        );
+        let mut core = mock_core_ok();
+        let proxy = create_system_proxy();
+        let bin = marker_bin(&paths);
+
+        let warning = orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None)
+            .expect("start without system proxy backend");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        assert_eq!(warning, None);
+        assert!(!ice_proxy_sys::is_proxy_applied_on_disk(
+            &paths.proxy_backup()
+        ));
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn default_auto_proxy_is_on_and_backend_can_backup() {
+        assert!(
+            AppSettings::default().auto_set_system_proxy,
+            "macOS/Windows default must enable auto system proxy"
+        );
+        create_system_proxy()
+            .backup()
+            .expect("read-only backup must work in CI without mutating the OS proxy");
     }
 
     #[test]

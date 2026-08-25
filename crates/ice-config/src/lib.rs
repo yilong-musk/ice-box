@@ -29,7 +29,10 @@ pub use rule_overrides::{
 pub use selections::{
     apply_group_selections, load_group_selections, save_group_selections, GroupSelections,
 };
-pub use settings::{clash_mode_name, load_settings, save_settings, AppSettings, ProxyMode};
+pub use settings::{
+    clash_mode_name, default_auto_set_system_proxy, load_settings, save_settings, AppSettings,
+    ProxyMode,
+};
 
 /// sing-box core version the config generator targets (architecture §12 / §22).
 ///

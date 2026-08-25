@@ -73,7 +73,11 @@ pub trait SystemProxy: Send {
     fn restore(&self, backup: &ProxyBackup) -> Result<(), ProxySysError>;
 }
 
-/// Placeholder implementation used until platform backends land.
+/// Placeholder used on platforms without a system-proxy backend.
+///
+/// `apply` stays unimplemented so Start can warn instead of pretending the OS
+/// proxy changed. `restore` succeeds so a failed apply can clear `pending_apply`
+/// instead of poisoning crash recovery and Stop.
 #[derive(Debug, Default)]
 pub struct NoopSystemProxy;
 
@@ -87,7 +91,7 @@ impl SystemProxy for NoopSystemProxy {
     }
 
     fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
-        Err(ProxySysError::NotImplemented("restore"))
+        Ok(())
     }
 }
 
@@ -140,6 +144,37 @@ impl From<ProxySysError> for AppError {
                 AppError::new(ErrorCode::ProxyApplyFailed, err.to_string())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::*;
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn unsupported_platform_uses_noop_that_does_not_poison_restore() {
+        let proxy = create_system_proxy();
+        proxy
+            .restore(&ProxyBackup::default())
+            .expect("restore is a no-op so pending_apply can clear");
+        let err = proxy
+            .apply(&ProxyEndpoints {
+                http_host: "127.0.0.1".into(),
+                http_port: 17890,
+                socks_host: None,
+                socks_port: None,
+            })
+            .expect_err("apply stays unimplemented");
+        assert!(matches!(err, ProxySysError::NotImplemented(_)));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn supported_platform_backend_can_backup_without_mutating() {
+        create_system_proxy()
+            .backup()
+            .expect("read-only backup must work without changing the OS proxy");
     }
 }
 

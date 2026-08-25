@@ -281,6 +281,31 @@ mod tests {
     }
 
     #[test]
+    fn unimplemented_apply_clears_pending_when_restore_succeeds() {
+        let path = temp_path("noop");
+        let err = apply_and_record(
+            &path,
+            &crate::NoopSystemProxy,
+            &ProxyEndpoints {
+                http_host: "127.0.0.1".into(),
+                http_port: 17890,
+                socks_host: None,
+                socks_port: None,
+            },
+        )
+        .expect_err("noop apply");
+        assert!(matches!(err, ProxySysError::NotImplemented(_)));
+
+        let after = ProxyBackupFile::load(&path).unwrap();
+        assert!(!after.applied);
+        assert!(
+            !after.pending_apply,
+            "noop restore must clear pending so later applies are not blocked"
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn apply_success_sets_applied_true() {
         let path = temp_path("ok");
         apply_and_record(

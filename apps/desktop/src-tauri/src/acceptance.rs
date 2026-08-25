@@ -93,8 +93,8 @@ mod tests {
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
-            cfg!(target_os = "macos") as usize,
-            "auto system proxy applies only when the platform default enables it"
+            ice_config::default_auto_set_system_proxy() as usize,
+            "auto system proxy applies on start by default only when a platform backend exists"
         );
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(tags, ["direct", "block"]);
         if paths.proxy_backup().exists() {
             let b = ProxyBackupFile::load(&paths.proxy_backup()).unwrap();
-            assert_eq!(b.applied, cfg!(target_os = "macos"));
+            assert_eq!(b.applied, ice_config::default_auto_set_system_proxy());
         }
         let _ = fs::remove_dir_all(paths.root());
     }
@@ -334,6 +334,10 @@ mod live {
     fn g9_3_live_stop_restores_system_proxy() {
         let paths = temp_app("stop-restore");
         seed_singbox_subscription(&paths);
+        assert!(
+            AppSettings::default().auto_set_system_proxy,
+            "live platforms must default auto system proxy on"
+        );
         let settings = settings(true);
         let mut core = CoreController::new();
         let proxy = create_system_proxy();
