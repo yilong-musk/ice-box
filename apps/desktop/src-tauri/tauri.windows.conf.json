@@ -9,11 +9,13 @@
       "resources/sing-box": null,
       "resources/geoip": "geoip"
     },
-    "nsis": {
-      "languages": ["SimpChinese", "English"],
-      "customLanguageFiles": {
-        "English": "nsis/English.nsh",
-        "SimpChinese": "nsis/SimpChinese.nsh"
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "customLanguageFiles": {
+          "English": "nsis/English.nsh",
+          "SimpChinese": "nsis/SimpChinese.nsh"
+        }
       }
     }
   }

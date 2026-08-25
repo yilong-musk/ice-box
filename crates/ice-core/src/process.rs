@@ -106,21 +106,28 @@ impl ProcessSpawner for CommandSpawner {
             .try_clone()
             .map_err(|e| CoreError::SpawnFailed(format!("clone log handle: {e}")))?;
 
-        let child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("run")
             .arg("-c")
             .arg(config)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err))
-            .spawn()
-            .map_err(|e| {
-                CoreError::SpawnFailed(format!(
-                    "spawn {} -c {}: {e}",
-                    binary.display(),
-                    config.display()
-                ))
-            })?;
+            .stderr(Stdio::from(log_err));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: do not pop a console window for the child,
+            // and closing the console must not take the core down with it.
+            command.creation_flags(0x08000000);
+        }
+        let child = command.spawn().map_err(|e| {
+            CoreError::SpawnFailed(format!(
+                "spawn {} -c {}: {e}",
+                binary.display(),
+                config.display()
+            ))
+        })?;
 
         Ok(Box::new(RealChild { child }))
     }

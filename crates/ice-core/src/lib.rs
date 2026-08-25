@@ -588,9 +588,11 @@ fn force_kill_pid(pid: u32) {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
         let _ = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
+            .creation_flags(0x08000000)
             .status();
     }
     #[cfg(not(any(unix, windows)))]
