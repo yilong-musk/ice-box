@@ -8,6 +8,11 @@ import {
   type RuleRow,
 } from "../api/tauri";
 import { EmptyState } from "../components/EmptyState";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   buildCustomRule,
@@ -220,21 +225,22 @@ export function Rules({ onNavigate }: Props) {
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
 
   return (
-    <section className="panel">
-      {error && <p className="error">{error}</p>}
+    <div className="flex flex-col gap-4">
+      {error && <ErrorAlert>{error}</ErrorAlert>}
       {applyWarning && (
-        <p className="warn" role="alert">
+        <WarnAlert role="alert">
           已保存，但应用失败：{applyWarning}
-        </p>
+        </WarnAlert>
       )}
 
       <div className="rule-stats" aria-label="规则统计">
         <span className="rule-stat">
           规则 <strong>{overview.total}</strong>
         </span>
-        <button
+        <Button
           type="button"
-          className={filters.status === "disabled" ? "rule-chip active" : "rule-chip"}
+          size="xs"
+          variant={filters.status === "disabled" ? "secondary" : "outline"}
           onClick={() =>
             changeFilters({
               status: filters.status === "disabled" ? "all" : "disabled",
@@ -242,7 +248,7 @@ export function Rules({ onNavigate }: Props) {
           }
         >
           已禁用 {overview.disabled}
-        </button>
+        </Button>
         <span className="rule-stat">
           自定义 <strong>{overview.custom}</strong>
         </span>
@@ -253,40 +259,42 @@ export function Rules({ onNavigate }: Props) {
 
       {overview.types.length > 0 && (
         <div className="rule-type-chips" aria-label="规则类型筛选">
-          <button
+          <Button
             type="button"
-            className={filters.type === "" ? "rule-chip active" : "rule-chip"}
+            size="xs"
+            variant={filters.type === "" ? "secondary" : "outline"}
             onClick={() => changeFilters({ type: "" })}
           >
             全部
-          </button>
+          </Button>
           {overview.types.map((t) => (
-            <button
+            <Button
               key={t.rule_type}
               type="button"
-              className={
-                filters.type === t.rule_type ? "rule-chip active" : "rule-chip"
-              }
+              size="xs"
+              variant={filters.type === t.rule_type ? "secondary" : "outline"}
               onClick={() =>
                 changeFilters({ type: filters.type === t.rule_type ? "" : t.rule_type })
               }
             >
               {ruleTypeLabel(t.rule_type)} {t.count}
-            </button>
+            </Button>
           ))}
         </div>
       )}
 
       <div className="rule-toolbar">
-        <input
+        <Input
           type="search"
+          className="min-w-48 flex-1"
           placeholder="搜索域名 / 出口 / 规则集…"
           aria-label="搜索规则"
           value={filters.keyword}
           onChange={(e) => changeFilters({ keyword: e.target.value })}
         />
-        <select
+        <NativeSelect
           aria-label="禁用状态筛选"
+          className="w-auto"
           value={filters.status}
           onChange={(e) =>
             changeFilters({ status: e.target.value as StatusFilter })
@@ -295,9 +303,10 @@ export function Rules({ onNavigate }: Props) {
           <option value="all">全部状态</option>
           <option value="enabled">仅启用</option>
           <option value="disabled">仅禁用</option>
-        </select>
-        <select
+        </NativeSelect>
+        <NativeSelect
           aria-label="每页条数"
+          className="w-auto"
           value={limit}
           onChange={(e) => {
             setLimit(Number(e.target.value));
@@ -309,23 +318,27 @@ export function Rules({ onNavigate }: Props) {
               每页 {n}
             </option>
           ))}
-        </select>
-        <button
+        </NativeSelect>
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           onClick={() => void load()}
           disabled={busy}
         >
           刷新
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           onClick={() => {
             setShowCustomForm((v) => !v);
             setCustomError(null);
           }}
         >
           {showCustomForm ? "收起" : "+ 自定义规则"}
-        </button>
+        </Button>
       </div>
 
       {showCustomForm && (
@@ -333,7 +346,7 @@ export function Rules({ onNavigate }: Props) {
           <div className="rule-custom-fields">
             <label>
               匹配类型
-              <select
+              <NativeSelect
                 aria-label="匹配类型"
                 value={matcherKey}
                 onChange={(e) => {
@@ -347,7 +360,7 @@ export function Rules({ onNavigate }: Props) {
                     {d.label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             {previewDef?.kind === "boolean" ? (
               <label>
@@ -365,7 +378,7 @@ export function Rules({ onNavigate }: Props) {
             ) : (
               <label>
                 匹配值
-                <input
+                <Input
                   type="text"
                   aria-label="匹配值"
                   placeholder={previewDef?.placeholder}
@@ -379,7 +392,7 @@ export function Rules({ onNavigate }: Props) {
             )}
             <label>
               出口
-              <select
+              <NativeSelect
                 aria-label="出口"
                 value={outbound}
                 onChange={(e) => setOutbound(e.target.value)}
@@ -394,24 +407,25 @@ export function Rules({ onNavigate }: Props) {
                       : ""}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
           </div>
           {customError && <p className="error">{customError}</p>}
           {previewRule && (
-            <p className="rule-preview">
+            <p className="text-xs">
               <span className="muted">预览：</span>
               <code>{JSON.stringify(previewRule)}</code>
             </p>
           )}
-          <div className="rule-custom-actions">
-            <button
+          <div className="flex gap-2">
+            <Button
               type="button"
+              size="sm"
               disabled={busy || !previewRule}
               onClick={() => void onAddCustomRule()}
             >
               添加
-            </button>
+            </Button>
           </div>
           <p className="hint">
             自定义规则优先于订阅规则生效，出口需为 direct / block 或现有节点 / 策略组标签。
@@ -427,7 +441,8 @@ export function Rules({ onNavigate }: Props) {
           onAction={() => onNavigate?.("subs")}
         />
       ) : (
-        <>
+        <Card size="sm">
+          <CardContent className="space-y-3">
           <ul className="node-table rule-table" aria-label="规则列表">
             <li className="node-table-head rule-table-head">
               <span>#</span>
@@ -463,22 +478,25 @@ export function Rules({ onNavigate }: Props) {
                     {ruleOutbound(row) || "—"}
                   </span>
                   <span className="node-row-actions">
-                    <button
+                    <Button
                       type="button"
+                      size="sm"
+                      variant="outline"
                       disabled={busy}
                       onClick={() => void onToggleDisabled(row)}
                     >
                       {row.disabled ? "启用" : "禁用"}
-                    </button>
+                    </Button>
                     {row.custom && (
-                      <button
+                      <Button
                         type="button"
-                        className="danger"
+                        size="sm"
+                        variant="destructive"
                         disabled={busy}
                         onClick={() => void onRemoveCustom(row)}
                       >
                         删除
-                      </button>
+                      </Button>
                     )}
                   </span>
                 </li>
@@ -487,26 +505,31 @@ export function Rules({ onNavigate }: Props) {
           </ul>
 
           <div className="rule-pager">
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant="outline"
               disabled={busy || offset === 0}
               onClick={() => setOffset((o) => Math.max(0, o - limit))}
             >
               上一页
-            </button>
-            <span className="muted">
+            </Button>
+            <span className="muted text-sm">
               第 {page} / {pages} 页 · 共 {total} 条
             </span>
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant="outline"
               disabled={busy || offset + limit >= total}
               onClick={() => setOffset((o) => o + limit)}
             >
               下一页
-            </button>
+            </Button>
           </div>
-        </>
+          </CardContent>
+        </Card>
       )}
-    </section>
+    </div>
   );
 }

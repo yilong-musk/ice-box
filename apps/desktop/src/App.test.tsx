@@ -1,4 +1,4 @@
-import { render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -69,5 +69,67 @@ describe("App", () => {
         "sing-box 意外退出后系统代理恢复失败",
       );
     });
+  });
+
+  it("lets the logs panel fill the content pane", async () => {
+    const { container } = render(<App />);
+    const view = within(container);
+    fireEvent.click(view.getByRole("button", { name: "日志" }));
+    await waitFor(() => {
+      expect(container.querySelector(".logs-panel")).not.toBeNull();
+    });
+
+    const main = container.querySelector("main");
+    const panel = container.querySelector(".logs-panel");
+    const logView = container.querySelector(".log-view");
+    expect(main).not.toBeNull();
+    expect(panel).not.toBeNull();
+    expect(logView).not.toBeNull();
+    expect(main!.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "content-fill",
+        "min-h-0",
+        "flex-1",
+        "overflow-hidden",
+      ]),
+    );
+    expect(main!.className.split(/\s+/)).not.toContain("overflow-auto");
+    expect(panel!.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["logs-panel", "min-h-0", "flex-1", "overflow-hidden"]),
+    );
+    expect(logView!.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["log-view", "min-h-0", "flex-1", "overflow-auto"]),
+    );
+    expect(main!.contains(panel)).toBe(true);
+    expect(panel!.contains(logView)).toBe(true);
+    expect(logView!.parentElement?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["min-h-0", "flex-1", "flex", "flex-col"]),
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "主页" }));
+    expect(container.querySelector(".content-fill")).toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toContain(
+      "overflow-auto",
+    );
+  });
+
+  it("applies appearance changes from settings to the document", async () => {
+    const { container } = render(<App />);
+    const view = within(container);
+    fireEvent.click(view.getByRole("button", { name: "设置" }));
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "跟随系统" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "深色" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    fireEvent.click(view.getByRole("button", { name: "浅色" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    fireEvent.click(view.getByRole("button", { name: "跟随系统" }));
+    expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

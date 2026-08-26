@@ -39,6 +39,10 @@ describe("Logs", () => {
     });
     expect(getLogView).toHaveBeenCalledWith(500);
     expect(view.queryByRole("combobox")).toBeNull();
+    const logView = container.querySelector(".log-view");
+    expect(logView?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["min-h-0", "flex-1", "overflow-auto"]),
+    );
   });
 
   it("polls automatically", async () => {

@@ -5,6 +5,9 @@ import {
   type NodeInfo,
 } from "../api/tauri";
 import { EmptyState } from "../components/EmptyState";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   delaySortKey,
@@ -202,13 +205,13 @@ export function Nodes({ onNavigate }: Props) {
   }
 
   return (
-    <section className="panel">
-      {error && <p className="error">{error}</p>}
+    <div className="flex flex-col gap-4">
+      {error && <ErrorAlert>{error}</ErrorAlert>}
 
       {!running && nodes.length > 0 && (
-        <p className="warn">
+        <WarnAlert>
           代理服务未运行：测延迟不可用；切换出口会保存，启动后生效。
-        </p>
+        </WarnAlert>
       )}
 
       {nodes.length === 0 ? (
@@ -219,31 +222,34 @@ export function Nodes({ onNavigate }: Props) {
           onAction={() => onNavigate?.("subs")}
         />
       ) : (
-        <>
-          <div className="node-toolbar">
-            <button
+        <Card size="sm">
+          <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
               type="button"
+              size="sm"
               disabled={!running || busy}
               onClick={() => void onBatchTest()}
             >
               批量测延迟
-            </button>
+            </Button>
             {busy && batchProgress && (
               <>
-                <span className="muted batch-progress">{batchProgress}</span>
-                <button type="button" onClick={onCancelBatch}>
+                <span className="muted text-sm">{batchProgress}</span>
+                <Button type="button" size="sm" variant="outline" onClick={onCancelBatch}>
                   取消
-                </button>
+                </Button>
               </>
             )}
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant={sortByDelay ? "secondary" : "outline"}
               disabled={busy}
-              className={sortByDelay ? "tab active" : "tab"}
               onClick={() => setSortByDelay((v) => !v)}
             >
               {sortByDelay ? "按延迟排序 ✓" : "按延迟排序"}
-            </button>
+            </Button>
           </div>
 
           <ul className="node-table" aria-label="节点列表">
@@ -307,20 +313,23 @@ export function Nodes({ onNavigate }: Props) {
                     {groupExitCell(n)}
                     {delayCell(n.tag)}
                     <span className="node-row-actions">
-                      <button
+                      <Button
                         type="button"
+                        size="sm"
+                        variant="outline"
                         disabled={!running || busy}
                         onClick={() => void testOne(n.tag)}
                       >
                         测速
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        size="sm"
                         disabled={busy || isSelected}
                         onClick={() => void onSelect(n.tag)}
                       >
                         选用
-                      </button>
+                      </Button>
                     </span>
                   </li>
                   {expanded && (
@@ -423,8 +432,9 @@ export function Nodes({ onNavigate }: Props) {
               );
             })}
           </ul>
-        </>
+          </CardContent>
+        </Card>
       )}
-    </section>
+    </div>
   );
 }

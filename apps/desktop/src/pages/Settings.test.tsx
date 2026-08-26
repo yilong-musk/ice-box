@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { THEME_STORAGE_KEY } from "../lib/theme";
 import { Settings } from "./Settings";
 
 const getSettings = vi.fn();
@@ -17,6 +18,8 @@ vi.mock("../api/tauri", () => ({
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem(THEME_STORAGE_KEY);
+    document.documentElement.classList.remove("dark");
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -151,6 +154,40 @@ describe("Settings", () => {
     const saveButton = view.getByRole("button", { name: "保存" });
     expect(saveButton).toBeDisabled();
     fireEvent.submit(saveButton.closest("form")!);
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("defaults appearance to follow the system and applies immediately", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "浅色" }));
+    expect(view.getByRole("button", { name: "浅色" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("button", { name: "深色" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("button", { name: "跟随系统" }));
+    expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
   });
 });

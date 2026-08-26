@@ -8,10 +8,13 @@ import {
   type StatusResponse,
 } from "../api/tauri";
 import { EmptyState } from "../components/EmptyState";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { resolveSelectedTag } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 import { ProxyPowerButton } from "../components/ProxyPowerButton";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -179,20 +182,20 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   }
 
   return (
-    <section className="panel home-panel">
+    <div className="flex flex-col gap-4">
       {proxyAvailable &&
         running &&
         proxyRecorded &&
         status?.system_proxy_applied === false && (
-          <p className="warn">系统代理未接管或已不同步</p>
+          <WarnAlert>系统代理未接管或已不同步</WarnAlert>
         )}
       {!proxyAvailable && running && (
-        <p className="muted">当前平台不支持系统代理接管</p>
+        <p className="muted text-sm">当前平台不支持系统代理接管</p>
       )}
-      {error && <p className="error">{error}</p>}
+      {error && <ErrorAlert>{error}</ErrorAlert>}
 
       {proxyAvailable ? (
-        <div className="proxy-power-wrap">
+        <div className="flex justify-center">
           <ProxyPowerButton
             proxyOn={proxyOn}
             busy={busy}
@@ -213,70 +216,81 @@ export function Home({ onBusyChange, onNavigate }: Props) {
         </div>
       ) : null}
 
-      <div className="home-status-row">
-        <dl className="kv">
-          <dt>内核</dt>
-          <dd className={`status status-${core?.status ?? "unknown"}`}>
-            {core?.status ?? "—"}
-          </dd>
-          <dt>系统代理</dt>
-          <dd>
-            {!proxyAvailable
-              ? "不支持"
-              : proxyLive
-                ? "已接管"
-                : running
-                  ? proxyRecorded
-                    ? "已不同步"
-                    : "未接管"
-                  : "—"}
-          </dd>
-          <dt>当前出站</dt>
-          <dd title={outboundLabel}>{outboundLabel}</dd>
-          <dt>订阅数</dt>
-          <dd>{status?.subscription_count ?? "—"}</dd>
-          <dt>入站</dt>
-          <dd>
-            {core?.inbound_host && core.inbound_port
-              ? `${core.inbound_host}:${core.inbound_port}`
-              : "—"}
-          </dd>
-          {running && connCount !== null && (
-            <>
-              <dt>连接</dt>
-              <dd>{connCount}</dd>
-            </>
-          )}
-          {core?.message && (
-            <>
-              <dt>消息</dt>
-              <dd>{core.message}</dd>
-            </>
-          )}
-        </dl>
+      <Card size="sm">
+        <CardContent className="flex items-stretch gap-4">
+          <dl className="grid min-w-0 flex-1 grid-cols-[5.5rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">内核</dt>
+            <dd className={`m-0 font-medium status status-${core?.status ?? "unknown"}`}>
+              {core?.status ?? "—"}
+            </dd>
+            <dt className="text-muted-foreground">系统代理</dt>
+            <dd className="m-0 font-medium">
+              {!proxyAvailable
+                ? "不支持"
+                : proxyLive
+                  ? "已接管"
+                  : running
+                    ? proxyRecorded
+                      ? "已不同步"
+                      : "未接管"
+                    : "—"}
+            </dd>
+            <dt className="text-muted-foreground">当前出站</dt>
+            <dd className="m-0 truncate font-medium" title={outboundLabel}>
+              {outboundLabel}
+            </dd>
+            <dt className="text-muted-foreground">订阅数</dt>
+            <dd className="m-0 font-medium">{status?.subscription_count ?? "—"}</dd>
+            <dt className="text-muted-foreground">入站</dt>
+            <dd className="m-0 font-medium">
+              {core?.inbound_host && core.inbound_port
+                ? `${core.inbound_host}:${core.inbound_port}`
+                : "—"}
+            </dd>
+            {running && connCount !== null && (
+              <>
+                <dt className="text-muted-foreground">连接</dt>
+                <dd className="m-0 font-medium">{connCount}</dd>
+              </>
+            )}
+            {core?.message && (
+              <>
+                <dt className="text-muted-foreground">消息</dt>
+                <dd className="m-0 font-medium">{core.message}</dd>
+              </>
+            )}
+          </dl>
 
-        {nodes.length > 0 ? (
-          <div className="mode-buttons" role="group" aria-label="模式">
-            {(
-              [
-                ["rule", "规则"],
-                ["global", "全局"],
-                ["direct", "直连"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={`mode-button${proxyMode === value ? " active" : ""}`}
-                disabled={modeBusy || busy}
-                onClick={() => void onSetMode(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+          {nodes.length > 0 ? (
+            <div
+              className="flex w-20 shrink-0 flex-col gap-1"
+              role="group"
+              aria-label="模式"
+            >
+              {(
+                [
+                  ["rule", "规则"],
+                  ["global", "全局"],
+                  ["direct", "直连"],
+                ] as const
+              ).map(([value, label]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  size="sm"
+                  variant={proxyMode === value ? "default" : "outline"}
+                  className="h-7"
+                  aria-pressed={proxyMode === value}
+                  disabled={modeBusy || busy}
+                  onClick={() => void onSetMode(value)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {nodes.length === 0 ? (
         <EmptyState
@@ -291,7 +305,11 @@ export function Home({ onBusyChange, onNavigate }: Props) {
         />
       ) : null}
 
-      <TrafficChart running={running} paused={modeBusy || busy} />
-    </section>
+      <Card size="sm">
+        <CardContent>
+          <TrafficChart running={running} paused={modeBusy || busy} />
+        </CardContent>
+      </Card>
+    </div>
   );
 }

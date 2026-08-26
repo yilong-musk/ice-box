@@ -12,6 +12,13 @@ import {
   parsePortInput,
   portsConflict,
 } from "../lib/generationGuard";
+import { ErrorAlert, OkAlert } from "../components/StatusAlert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { useThemePreference, type ThemePreference } from "../lib/theme";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -31,6 +38,7 @@ export function Settings() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const { preference, setPreference } = useThemePreference();
 
   useEffect(() => {
     let cancelled = false;
@@ -99,13 +107,41 @@ export function Settings() {
   }
 
   return (
-    <section className="panel">
-      {error && <p className="error">{error}</p>}
-      {saved && <p className="ok">已保存</p>}
-      <form className="settings-form" onSubmit={(e) => void onSave(e)}>
-        <label>
+    <Card size="sm" className="max-w-lg">
+      <CardContent className="space-y-4">
+      <div className="space-y-2">
+        <p className="text-sm font-medium">外观</p>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="外观">
+          {(
+            [
+              ["system", "跟随系统"],
+              ["light", "浅色"],
+              ["dark", "深色"],
+            ] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={preference === value ? "default" : "outline"}
+              aria-pressed={preference === value}
+              onClick={() => setPreference(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <p className="hint">
+          默认跟随系统深浅色。切换后立即生效，不必点保存。
+        </p>
+      </div>
+      <Separator />
+      {error && <ErrorAlert>{error}</ErrorAlert>}
+      {saved && <OkAlert>已保存</OkAlert>}
+      <form className="flex flex-col gap-3" onSubmit={(e) => void onSave(e)}>
+        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
           Mixed 监听
-          <input
+          <Input
             value={form.mixed_listen}
             onChange={(e) => {
               setFieldErrors((prev) => {
@@ -118,12 +154,12 @@ export function Settings() {
             disabled={busy || !loaded || form.allow_lan}
           />
           {fieldErrors.mixed_listen && (
-            <span className="error">{fieldErrors.mixed_listen}</span>
+            <span className="error text-xs">{fieldErrors.mixed_listen}</span>
           )}
-        </label>
-        <label>
+        </Label>
+        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
           Mixed 端口
-          <input
+          <Input
             type="number"
             min={1024}
             max={65535}
@@ -151,12 +187,12 @@ export function Settings() {
             disabled={busy || !loaded}
           />
           {fieldErrors.mixed_port && (
-            <span className="error">{fieldErrors.mixed_port}</span>
+            <span className="error text-xs">{fieldErrors.mixed_port}</span>
           )}
-        </label>
-        <label>
+        </Label>
+        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
           Clash API 监听
-          <input
+          <Input
             value={form.clash_api_listen}
             onChange={(e) => {
               setFieldErrors((prev) => {
@@ -169,12 +205,12 @@ export function Settings() {
             disabled={busy || !loaded}
           />
           {fieldErrors.clash_api_listen && (
-            <span className="error">{fieldErrors.clash_api_listen}</span>
+            <span className="error text-xs">{fieldErrors.clash_api_listen}</span>
           )}
-        </label>
-        <label>
+        </Label>
+        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
           Clash API 端口
-          <input
+          <Input
             type="number"
             min={1024}
             max={65535}
@@ -202,10 +238,10 @@ export function Settings() {
             disabled={busy || !loaded}
           />
           {fieldErrors.clash_api_port && (
-            <span className="error">{fieldErrors.clash_api_port}</span>
+            <span className="error text-xs">{fieldErrors.clash_api_port}</span>
           )}
-        </label>
-        <label className="toggle">
+        </Label>
+        <label className="inline-flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={form.allow_lan}
@@ -227,12 +263,14 @@ export function Settings() {
             连接；Clash API 仍仅限本机
           </p>
         )}
-        <div className="actions">
-          <button type="submit" disabled={busy || !loaded}>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm" disabled={busy || !loaded}>
             保存
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
+            variant="outline"
             disabled={busy || !loaded}
             onClick={() =>
               void api
@@ -241,9 +279,10 @@ export function Settings() {
             }
           >
             打开数据目录
-          </button>
+          </Button>
         </div>
       </form>
-    </section>
+      </CardContent>
+    </Card>
   );
 }

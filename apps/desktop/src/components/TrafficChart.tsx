@@ -101,42 +101,65 @@ export function TrafficChart({ running, paused = false }: Props) {
 
   if (!running) {
     return (
-      <div className="traffic-panel">
-        <h3 className="traffic-title">流量</h3>
-        <p className="muted">启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。</p>
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          流量
+        </h3>
+        <p className="muted text-sm">
+          启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="traffic-panel">
-      <div className="traffic-head">
-        <h3 className="traffic-title">流量</h3>
-        <div className="traffic-legend">
-          <span className="legend-down">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          流量
+        </h3>
+        <div className="flex gap-3 font-mono text-xs">
+          <span className="text-ok">
             ↓ {latest ? formatRate(latest.down) : "—"}
           </span>
-          <span className="legend-up">
+          <span className="text-primary">
             ↑ {latest ? formatRate(latest.up) : "—"}
           </span>
         </div>
       </div>
-      {error && <p className="error traffic-error">采样中断：{error}</p>}
+      {error && <p className="error text-sm">采样中断：{error}</p>}
       <svg
-        className="traffic-chart"
+        className="block h-16 w-full rounded-lg bg-muted/40"
         viewBox="0 0 320 72"
         preserveAspectRatio="none"
         aria-label="上下行流量曲线"
       >
-        <line x1="0" y1="72" x2="320" y2="72" className="traffic-axis" />
+        <line
+          x1="0"
+          y1="72"
+          x2="320"
+          y2="72"
+          className="stroke-border"
+          strokeWidth="1"
+        />
         {downPath && (
-          <path d={downPath} className="traffic-line traffic-line-down" fill="none" />
+          <path
+            d={downPath}
+            className="fill-none stroke-ok"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
+          />
         )}
         {upPath && (
-          <path d={upPath} className="traffic-line traffic-line-up" fill="none" />
+          <path
+            d={upPath}
+            className="fill-none stroke-primary"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
+          />
         )}
       </svg>
-      <p className="muted traffic-hint">
+      <p className="muted text-xs">
         峰值刻度 {formatRate(maxVal)} · 每秒采样（Clash API /traffic）
       </p>
     </div>

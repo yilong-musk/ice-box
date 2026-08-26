@@ -66,7 +66,7 @@ describe("TrafficChart", () => {
       await Promise.resolve();
     });
     expect(view.getByText(/采样中断：clash api down/i)).toBeInTheDocument();
-    expect(container.querySelector(".traffic-error")).not.toBeNull();
+    expect(container.querySelector(".error")).not.toBeNull();
 
     vi.useRealTimers();
   });

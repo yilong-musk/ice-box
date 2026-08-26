@@ -1,4 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType } from "react";
+import {
+  House,
+  ListFilter,
+  Rss,
+  ScrollText,
+  Settings as SettingsIcon,
+  Waypoints,
+} from "lucide-react";
 import { api, type StatusResponse } from "./api/tauri";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
@@ -6,88 +14,28 @@ import { Subscriptions } from "./pages/Subscriptions";
 import { Rules } from "./pages/Rules";
 import { Logs } from "./pages/Logs";
 import { Settings } from "./pages/Settings";
-import "./App.css";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ErrorAlert } from "@/components/StatusAlert";
+import { cn } from "@/lib/utils";
+import { useThemePreference } from "./lib/theme";
 
 type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
 
-const NAV_ITEMS: { id: Tab; label: string }[] = [
-  { id: "home", label: "主页" },
-  { id: "nodes", label: "节点" },
-  { id: "rules", label: "规则" },
-  { id: "subs", label: "订阅" },
-  { id: "logs", label: "日志" },
-  { id: "settings", label: "设置" },
+const NAV_ITEMS: { id: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
+  { id: "home", label: "主页", icon: House },
+  { id: "nodes", label: "节点", icon: Waypoints },
+  { id: "rules", label: "规则", icon: ListFilter },
+  { id: "subs", label: "订阅", icon: Rss },
+  { id: "logs", label: "日志", icon: ScrollText },
+  { id: "settings", label: "设置", icon: SettingsIcon },
 ];
-
-/** SVG refraction filter for Chromium (WebView2). WebKit ignores url() in backdrop-filter. */
-function LiquidGlassFilters() {
-  return (
-    <svg
-      className="liquid-glass-defs"
-      aria-hidden="true"
-      width="0"
-      height="0"
-      focusable="false"
-    >
-      <defs>
-        {/* Soft liquid warp — low-frequency noise displacement */}
-        <filter
-          id="liquid-refract"
-          x="-8%"
-          y="-8%"
-          width="116%"
-          height="116%"
-          colorInterpolationFilters="sRGB"
-        >
-          <feTurbulence
-            type="fractalNoise"
-            baseFrequency="0.012 0.018"
-            numOctaves="2"
-            seed="3"
-            result="noise"
-          />
-          <feGaussianBlur in="noise" stdDeviation="1.2" result="map" />
-          <feDisplacementMap
-            in="SourceGraphic"
-            in2="map"
-            scale="22"
-            xChannelSelector="R"
-            yChannelSelector="G"
-          />
-        </filter>
-        {/* Stronger lens warp for the power button hero */}
-        <filter
-          id="liquid-refract-strong"
-          x="-12%"
-          y="-12%"
-          width="124%"
-          height="124%"
-          colorInterpolationFilters="sRGB"
-        >
-          <feTurbulence
-            type="fractalNoise"
-            baseFrequency="0.01 0.014"
-            numOctaves="2"
-            seed="7"
-            result="noise"
-          />
-          <feGaussianBlur in="noise" stdDeviation="1.6" result="map" />
-          <feDisplacementMap
-            in="SourceGraphic"
-            in2="map"
-            scale="32"
-            xChannelSelector="R"
-            yChannelSelector="G"
-          />
-        </filter>
-      </defs>
-    </svg>
-  );
-}
 
 function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
+  useThemePreference();
 
   useEffect(() => {
     let cancelled = false;
@@ -107,41 +55,61 @@ function App() {
     };
   }, []);
 
+  const current = NAV_ITEMS.find((item) => item.id === tab);
+
   return (
-    <div className="app-root">
-      <LiquidGlassFilters />
-
-      <div className="app-atmosphere" aria-hidden="true" />
-
-      <div className="app">
-        <aside className="sidebar liquid-glass">
-          <div className="sidebar-brand">
-            <span className="brand-mark" aria-hidden="true" />
-            <h1>ice-box</h1>
+    <TooltipProvider>
+      <div className="flex h-svh overflow-hidden bg-background text-foreground">
+        <aside className="flex w-44 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+          <div className="flex items-center gap-2.5 px-4 py-4">
+            <span
+              className="size-6 shrink-0 rounded-md bg-sidebar-primary shadow-sm"
+              aria-hidden="true"
+            />
+            <h1 className="font-heading text-base font-semibold tracking-tight">ice-box</h1>
           </div>
-          <nav className="sidebar-nav" aria-label="主导航">
-            {NAV_ITEMS.map(({ id, label }) => (
-              <button
+          <Separator />
+          <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="主导航">
+            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+              <Button
                 key={id}
                 type="button"
-                className={tab === id ? "nav-item active" : "nav-item"}
+                variant="ghost"
+                className={cn(
+                  "h-8 w-full justify-start gap-2 px-2.5 text-sidebar-foreground/80",
+                  tab === id &&
+                    "bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent",
+                )}
                 aria-current={tab === id ? "page" : undefined}
                 onClick={() => setTab(id)}
               >
-                <span className="nav-item-label">{label}</span>
-              </button>
+                <Icon className="size-4" />
+                {label}
+              </Button>
             ))}
           </nav>
         </aside>
 
-        <div className="content">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="flex h-12 shrink-0 items-center border-b px-4">
+            <h2 className="text-sm font-medium">{current?.label}</h2>
+          </header>
+
           {globalStatus?.proxy_recovery_warning && (
-            <p className="global-banner error" role="alert">
-              {globalStatus.proxy_recovery_warning}
-            </p>
+            <div className="px-4 pt-3">
+              <ErrorAlert>
+                {globalStatus.proxy_recovery_warning}
+              </ErrorAlert>
+            </div>
           )}
 
-          <main className="content-main">
+          <main
+            className={
+              tab === "logs"
+                ? "content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
+                : "content-main min-h-0 flex-1 overflow-auto p-4"
+            }
+          >
             {tab === "home" && <Home onNavigate={setTab} />}
             {tab === "nodes" && <Nodes onNavigate={setTab} />}
             {tab === "subs" && <Subscriptions />}
@@ -151,7 +119,7 @@ function App() {
           </main>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 

@@ -147,14 +147,14 @@ describe("Home", () => {
     await waitFor(() => {
       expect(globalButton()).toBeInTheDocument();
     });
-    expect(globalButton().className).not.toContain("active");
+    expect(globalButton()).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(globalButton());
     await waitFor(() => {
       expect(setProxyMode).toHaveBeenCalledWith("global");
     });
     await waitFor(() => {
-      expect(globalButton().className).toContain("active");
+      expect(globalButton()).toHaveAttribute("aria-pressed", "true");
     });
 
     setProxyMode.mockRejectedValue("mode switch failed");
@@ -163,8 +163,8 @@ describe("Home", () => {
       expect(view.getByText("mode switch failed")).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(globalButton().className).toContain("active");
-      expect(directButton().className).not.toContain("active");
+      expect(globalButton()).toHaveAttribute("aria-pressed", "true");
+      expect(directButton()).toHaveAttribute("aria-pressed", "false");
     });
   });
 
@@ -238,7 +238,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("系统代理未接管或已不同步")).toBeInTheDocument();
+      expect(view.getByRole("alert")).toHaveTextContent(
+        "系统代理未接管或已不同步",
+      );
     });
   });
 
