@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Area, AreaChart, CartesianGrid } from "recharts";
 import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
 import { formatRate } from "../lib/traffic";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import { cn } from "@/lib/utils";
 
 const MAX_POINTS = 60;
 /** Consecutive sample failures before surfacing a stale/error hint. */
@@ -12,21 +20,21 @@ type Props = {
   running: boolean;
   /** Pause sampling (e.g. while mode switch reloads Clash API). */
   paused?: boolean;
+  className?: string;
 };
 
-function buildPath(values: number[], width: number, height: number, max: number): string {
-  if (values.length === 0) return "";
-  const step = values.length <= 1 ? 0 : width / (values.length - 1);
-  return values
-    .map((v, i) => {
-      const x = i * step;
-      const y = height - (max > 0 ? (v / max) * height : 0);
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-}
+const chartConfig = {
+  down: {
+    label: "下行",
+    color: "var(--ok)",
+  },
+  up: {
+    label: "上行",
+    color: "var(--primary)",
+  },
+} satisfies ChartConfig;
 
-export function TrafficChart({ running, paused = false }: Props) {
+export function TrafficChart({ running, paused = false, className }: Props) {
   const [points, setPoints] = useState<Point[]>([]);
   const [latest, setLatest] = useState<TrafficSample | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,25 +94,21 @@ export function TrafficChart({ running, paused = false }: Props) {
     };
   }, [running, paused]);
 
-  const { upPath, downPath, maxVal } = useMemo(() => {
-    const ups = points.map((p) => p.up);
-    const downs = points.map((p) => p.down);
-    const maxVal = Math.max(1, ...ups, ...downs);
-    const w = 320;
-    const h = 72;
+  const { chartData, maxVal } = useMemo(() => {
+    const maxVal = Math.max(1, ...points.map((p) => Math.max(p.up, p.down)));
     return {
-      upPath: buildPath(ups, w, h, maxVal),
-      downPath: buildPath(downs, w, h, maxVal),
+      chartData: points.map((p, index) => ({
+        second: index,
+        down: p.down,
+        up: p.up,
+      })),
       maxVal,
     };
   }, [points]);
 
   if (!running) {
     return (
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          流量
-        </h3>
+      <div className={cn("flex min-h-0 flex-1 flex-col justify-center", className)}>
         <p className="muted text-sm">
           启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。
         </p>
@@ -113,53 +117,52 @@ export function TrafficChart({ running, paused = false }: Props) {
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          流量
-        </h3>
-        <div className="flex gap-3 font-mono text-xs">
-          <span className="text-ok">
-            ↓ {latest ? formatRate(latest.down) : "—"}
-          </span>
-          <span className="text-primary">
-            ↑ {latest ? formatRate(latest.up) : "—"}
-          </span>
-        </div>
+    <div className={cn("flex min-h-0 flex-1 flex-col gap-2", className)}>
+      <div className="flex shrink-0 justify-end gap-3 font-mono text-xs">
+        <span className="text-ok">
+          ↓ {latest ? formatRate(latest.down) : "—"}
+        </span>
+        <span className="text-primary">
+          ↑ {latest ? formatRate(latest.up) : "—"}
+        </span>
       </div>
-      {error && <p className="error text-sm">采样中断：{error}</p>}
-      <svg
-        className="block h-16 w-full rounded-none bg-muted/40"
-        viewBox="0 0 320 72"
-        preserveAspectRatio="none"
+      {error && <p className="error shrink-0 text-sm">采样中断：{error}</p>}
+      <ChartContainer
+        config={chartConfig}
+        className="aspect-auto min-h-24 w-full flex-1"
         aria-label="上下行流量曲线"
       >
-        <line
-          x1="0"
-          y1="72"
-          x2="320"
-          y2="72"
-          className="stroke-border"
-          strokeWidth="1"
-        />
-        {downPath && (
-          <path
-            d={downPath}
-            className="fill-none stroke-ok"
-            strokeWidth="1.5"
-            vectorEffect="non-scaling-stroke"
+        <AreaChart
+          accessibilityLayer
+          data={chartData}
+          margin={{ top: 8, right: 8, left: 8, bottom: 0 }}
+        >
+          <CartesianGrid vertical={false} />
+          <ChartTooltip
+            cursor={false}
+            content={<ChartTooltipContent hideLabel indicator="line" />}
           />
-        )}
-        {upPath && (
-          <path
-            d={upPath}
-            className="fill-none stroke-primary"
-            strokeWidth="1.5"
-            vectorEffect="non-scaling-stroke"
+          <Area
+            dataKey="down"
+            type="linear"
+            fill="var(--color-down)"
+            fillOpacity={0.2}
+            stroke="var(--color-down)"
+            strokeWidth={1.5}
+            isAnimationActive={false}
           />
-        )}
-      </svg>
-      <p className="muted text-xs">
+          <Area
+            dataKey="up"
+            type="linear"
+            fill="var(--color-up)"
+            fillOpacity={0.2}
+            stroke="var(--color-up)"
+            strokeWidth={1.5}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ChartContainer>
+      <p className="muted shrink-0 text-xs">
         峰值刻度 {formatRate(maxVal)} · 每秒采样（Clash API /traffic）
       </p>
     </div>

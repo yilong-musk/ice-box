@@ -15,9 +15,9 @@ import { Rules } from "./pages/Rules";
 import { Logs } from "./pages/Logs";
 import { Settings } from "./pages/Settings";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorAlert } from "@/components/StatusAlert";
+import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { useThemePreference } from "./lib/theme";
 import logo from "./assets/logo.png";
@@ -60,66 +60,86 @@ function App() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-svh overflow-hidden bg-background text-foreground">
-        <aside className="flex w-44 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-          <div className="flex items-center gap-2.5 px-4 py-4">
-            <img
-              src={logo}
-              alt=""
-              className="size-7 shrink-0 object-contain"
-              aria-hidden="true"
-            />
-            <h1 className="font-heading text-sm font-medium tracking-tight">ice-box</h1>
-          </div>
-          <Separator />
-          <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="主导航">
-            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-              <Button
-                key={id}
-                type="button"
-                variant="ghost"
-                className={cn(
-                  "h-8 w-full justify-start gap-2 px-2.5 text-sidebar-foreground/80",
-                  tab === id &&
-                    "bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent",
-                )}
-                aria-current={tab === id ? "page" : undefined}
-                onClick={() => setTab(id)}
-              >
-                <Icon className="size-4" />
-                {label}
-              </Button>
-            ))}
-          </nav>
-        </aside>
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="flex h-12 shrink-0 items-center border-b px-4">
-            <h2 className="text-sm font-medium">{current?.label}</h2>
-          </header>
-
-          {globalStatus?.proxy_recovery_warning && (
-            <div className="px-4 pt-3">
-              <ErrorAlert>
-                {globalStatus.proxy_recovery_warning}
-              </ErrorAlert>
+      <div className="flex h-svh flex-col overflow-hidden bg-background text-foreground">
+        <div
+          className="flex h-12 shrink-0 border-b"
+          data-titlebar
+        >
+          <div
+            className="w-44 shrink-0 select-none border-r border-sidebar-border bg-sidebar"
+            data-tauri-drag-region
+            aria-hidden="true"
+          />
+          <header className="flex min-w-0 flex-1 items-center">
+            <div
+              className="flex h-full min-w-0 flex-1 select-none items-center px-4"
+              data-tauri-drag-region
+            >
+              <h2 className="text-sm font-medium">{current?.label}</h2>
             </div>
-          )}
+            <WindowControls />
+          </header>
+        </div>
 
-          <main
-            className={
-              tab === "logs"
-                ? "content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
-                : "content-main min-h-0 flex-1 overflow-auto p-4"
-            }
-          >
-            {tab === "home" && <Home onNavigate={setTab} />}
-            {tab === "nodes" && <Nodes onNavigate={setTab} />}
-            {tab === "subs" && <Subscriptions />}
-            {tab === "rules" && <Rules onNavigate={setTab} />}
-            {tab === "logs" && <Logs />}
-            {tab === "settings" && <Settings />}
-          </main>
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <aside className="flex w-44 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+            <nav className="flex min-h-0 flex-1 flex-col gap-1 p-2" aria-label="主导航">
+              {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+                <Button
+                  key={id}
+                  type="button"
+                  variant="ghost"
+                  className={cn(
+                    "h-8 w-full justify-start gap-2 px-2.5 text-sidebar-foreground/80",
+                    tab === id &&
+                      "bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent",
+                  )}
+                  aria-current={tab === id ? "page" : undefined}
+                  onClick={() => setTab(id)}
+                >
+                  <Icon className="size-4" />
+                  {label}
+                </Button>
+              ))}
+            </nav>
+            <div
+              className="flex h-12 shrink-0 select-none items-center justify-center gap-2.5 px-4"
+              data-tauri-drag-region
+            >
+              <img
+                src={logo}
+                alt=""
+                className="size-7 shrink-0 object-contain"
+                aria-hidden="true"
+              />
+              <h1 className="font-heading text-sm font-medium tracking-tight">ice-box</h1>
+            </div>
+          </aside>
+
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {globalStatus?.proxy_recovery_warning && (
+              <div className="px-4 pt-3">
+                <ErrorAlert>
+                  {globalStatus.proxy_recovery_warning}
+                </ErrorAlert>
+              </div>
+            )}
+
+            <main
+              className={
+                tab === "logs" || tab === "home"
+                  ? "content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
+                  : "content-main min-h-0 flex-1 overflow-auto p-4"
+              }
+            >
+              {tab === "home" && <Home onNavigate={setTab} />}
+              {tab === "nodes" && <Nodes onNavigate={setTab} />}
+              {tab === "subs" && <Subscriptions />}
+              {tab === "rules" && <Rules onNavigate={setTab} />}
+              {tab === "logs" && <Logs />}
+              {tab === "settings" && <Settings />}
+            </main>
+          </div>
         </div>
       </div>
     </TooltipProvider>

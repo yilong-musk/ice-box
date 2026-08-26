@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Power } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -12,9 +13,23 @@ import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { resolveSelectedTag } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
-import { ProxyPowerButton } from "../components/ProxyPowerButton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -22,6 +37,12 @@ type Props = {
 };
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
+
+const PROXY_MODES = [
+  ["rule", "规则"],
+  ["global", "全局"],
+  ["direct", "直连"],
+] as const;
 
 function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   const node = nodes.find((n) => n.tag === tag);
@@ -41,7 +62,6 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [proxyMode, setProxyMode] = useState<ProxyMode>("rule");
-  const [connCount, setConnCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
@@ -63,18 +83,6 @@ export function Home({ onBusyChange, onNavigate }: Props) {
       setProxyMode(settings.proxy_mode);
       setSelectedTag(resolveSelectedTag(settings.selected_tag, n));
       setError(null);
-
-      if (s.core.status === "running") {
-        try {
-          const stats = await api.getConnectionStats();
-          if (gen !== pollGenRef.current) return;
-          setConnCount(stats.connection_count);
-        } catch {
-          if (gen === pollGenRef.current) setConnCount(null);
-        }
-      } else {
-        setConnCount(null);
-      }
     } catch (e) {
       // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
       if (
@@ -181,133 +189,181 @@ export function Home({ onBusyChange, onNavigate }: Props) {
     }
   }
 
+  const inboundLabel =
+    core?.inbound_host && core.inbound_port
+      ? `${core.inbound_host}:${core.inbound_port}`
+      : "—";
+  const emptyTitle = running ? "仅直连模式运行中" : "还没有可用节点";
+  const emptyDescription = running
+    ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管系统代理。"
+    : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管系统代理，或先导入订阅。";
+  const infoRows: { label: string; value: string; valueClassName?: string }[] = [
+    {
+      label: "内核",
+      value: core?.status ?? "—",
+      valueClassName: `status status-${core?.status ?? "unknown"}`,
+    },
+    { label: "当前出站", value: outboundLabel },
+    {
+      label: "入站",
+      value: inboundLabel,
+      valueClassName: "font-mono tabular-nums",
+    },
+  ];
+  if (core?.message) {
+    infoRows.push({ label: "消息", value: core.message });
+  }
+
+  const powerTitle = proxyOn ? "停止代理服务" : "启动代理服务";
+  const powerSubtitle = busy
+    ? "处理中…"
+    : proxyLive
+      ? "系统代理已接管"
+      : proxyOn
+        ? "已记录，可恢复系统代理"
+        : "点击接管系统代理";
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="home-panel flex min-h-0 flex-1 flex-col gap-3">
       {proxyAvailable &&
         running &&
         proxyRecorded &&
         status?.system_proxy_applied === false && (
-          <WarnAlert>系统代理未接管或已不同步</WarnAlert>
+          <WarnAlert className="shrink-0">系统代理未接管或已不同步</WarnAlert>
         )}
-      {!proxyAvailable && running && (
-        <p className="muted text-sm">当前平台不支持系统代理接管</p>
-      )}
-      {error && <ErrorAlert>{error}</ErrorAlert>}
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
-      {proxyAvailable ? (
-        <div className="flex justify-center">
-          <ProxyPowerButton
-            proxyOn={proxyOn}
-            busy={busy}
-            disabled={!canToggleProxy}
-            ariaLabel={proxyOn ? "停止代理服务" : "启动代理服务"}
-            title={proxyOn ? "停止代理服务" : "启动代理服务"}
-            subtitle={
-              busy
-                ? "处理中…"
-                : proxyLive
-                  ? "系统代理已接管"
-                  : proxyOn
-                    ? "已记录，可恢复系统代理"
-                    : "点击接管系统代理"
-            }
-            onClick={onToggleProxy}
-          />
-        </div>
-      ) : null}
-
-      <Card size="sm">
-        <CardContent className="flex items-stretch gap-4">
-          <dl className="grid min-w-0 flex-1 grid-cols-[5.5rem_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">内核</dt>
-            <dd className={`m-0 font-medium status status-${core?.status ?? "unknown"}`}>
-              {core?.status ?? "—"}
-            </dd>
-            <dt className="text-muted-foreground">系统代理</dt>
-            <dd className="m-0 font-medium">
-              {!proxyAvailable
-                ? "不支持"
-                : proxyLive
-                  ? "已接管"
-                  : running
-                    ? proxyRecorded
-                      ? "已不同步"
-                      : "未接管"
-                    : "—"}
-            </dd>
-            <dt className="text-muted-foreground">当前出站</dt>
-            <dd className="m-0 truncate font-medium" title={outboundLabel}>
-              {outboundLabel}
-            </dd>
-            <dt className="text-muted-foreground">订阅数</dt>
-            <dd className="m-0 font-medium">{status?.subscription_count ?? "—"}</dd>
-            <dt className="text-muted-foreground">入站</dt>
-            <dd className="m-0 font-medium">
-              {core?.inbound_host && core.inbound_port
-                ? `${core.inbound_host}:${core.inbound_port}`
-                : "—"}
-            </dd>
-            {running && connCount !== null && (
-              <>
-                <dt className="text-muted-foreground">连接</dt>
-                <dd className="m-0 font-medium">{connCount}</dd>
-              </>
+      <div className="grid shrink-0 grid-cols-3 items-stretch gap-3">
+        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>代理状态</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-1 flex-col">
+            {proxyAvailable ? (
+              <Button
+                type="button"
+                size="lg"
+                variant={proxyOn ? "default" : "outline"}
+                className="h-auto w-full justify-start gap-2 py-2"
+                disabled={!canToggleProxy}
+                aria-pressed={proxyOn}
+                aria-label={powerTitle}
+                onClick={onToggleProxy}
+              >
+                <Power />
+                <span className="min-w-0 text-left">
+                  <span className="block text-sm font-medium">{powerTitle}</span>
+                  <span
+                    className={cn(
+                      "block text-xs font-normal",
+                      proxyOn
+                        ? "text-primary-foreground/80"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {powerSubtitle}
+                  </span>
+                </span>
+              </Button>
+            ) : (
+              <p className="muted text-sm">当前平台不支持系统代理接管</p>
             )}
-            {core?.message && (
-              <>
-                <dt className="text-muted-foreground">消息</dt>
-                <dd className="m-0 font-medium">{core.message}</dd>
-              </>
-            )}
-          </dl>
+          </CardContent>
+        </Card>
 
-          {nodes.length > 0 ? (
-            <div
-              className="flex w-20 shrink-0 flex-col gap-1"
-              role="group"
+        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>信息</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ItemGroup className="gap-0">
+              {infoRows.map((row, index) => (
+                <div key={row.label}>
+                  {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                  <Item size="xs" className="justify-between px-0">
+                    <ItemDescription>{row.label}</ItemDescription>
+                    <ItemTitle className={row.valueClassName} title={row.value}>
+                      {row.value}
+                    </ItemTitle>
+                  </Item>
+                </div>
+              ))}
+            </ItemGroup>
+          </CardContent>
+        </Card>
+
+        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>代理模式</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-1 flex-col">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              orientation="horizontal"
+              spacing={2}
+              value={proxyMode}
+              onValueChange={(value) => {
+                if (value === "rule" || value === "global" || value === "direct") {
+                  void onSetMode(value);
+                }
+              }}
+              disabled={modeBusy || busy}
+              className="w-full"
               aria-label="模式"
             >
-              {(
-                [
-                  ["rule", "规则"],
-                  ["global", "全局"],
-                  ["direct", "直连"],
-                ] as const
-              ).map(([value, label]) => (
-                <Button
-                  key={value}
-                  type="button"
-                  size="sm"
-                  variant={proxyMode === value ? "default" : "outline"}
-                  className="h-7"
-                  aria-pressed={proxyMode === value}
-                  disabled={modeBusy || busy}
-                  onClick={() => void onSetMode(value)}
-                >
+              {PROXY_MODES.map(([mode, label]) => (
+                <ToggleGroupItem key={mode} value={mode} className="flex-1">
                   {label}
-                </Button>
+                </ToggleGroupItem>
               ))}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+            </ToggleGroup>
+          </CardContent>
+        </Card>
+      </div>
 
-      {nodes.length === 0 ? (
-        <EmptyState
-          title={running ? "仅直连模式运行中" : "还没有可用节点"}
-          description={
-            running
-              ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管系统代理。"
-              : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管系统代理，或先导入订阅。"
-          }
-          actionLabel="前往订阅页导入"
-          onAction={() => onNavigate?.("subs")}
-        />
-      ) : null}
-
-      <Card size="sm">
-        <CardContent>
-          <TrafficChart running={running} paused={modeBusy || busy} />
+      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0">
+          <CardTitle>流量</CardTitle>
+          <CardDescription>最近 60 秒上下行</CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 flex-col">
+          {nodes.length === 0 && !running ? (
+            <EmptyState
+              framed={false}
+              className="my-auto"
+              title={emptyTitle}
+              description={emptyDescription}
+              actionLabel="前往订阅页导入"
+              onAction={() => onNavigate?.("subs")}
+            />
+          ) : (
+            <>
+              {nodes.length === 0 ? (
+                <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{emptyTitle}</p>
+                    <p className="text-xs text-muted-foreground">
+                      导入订阅后会自动切换到节点分流。
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onNavigate?.("subs")}
+                  >
+                    前往订阅页导入
+                  </Button>
+                </div>
+              ) : null}
+              <TrafficChart
+                className="min-h-0 flex-1"
+                running={running}
+                paused={modeBusy || busy}
+              />
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

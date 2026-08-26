@@ -99,7 +99,19 @@ describe("Home", () => {
       expect(view.getByText("当前出站")).toBeInTheDocument();
     });
     expect(view.getByText("Proxies → HK-1")).toBeInTheDocument();
-    expect(view.queryByRole("combobox")).toBeNull();
+    expect(view.getByText("流量")).toBeInTheDocument();
+    expect(view.getByText("代理状态")).toBeInTheDocument();
+    expect(view.getByText("信息")).toBeInTheDocument();
+    expect(view.getByText("代理模式")).toBeInTheDocument();
+    expect(view.queryByText("系统代理")).toBeNull();
+    expect(container.querySelector(".home-panel")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
+    );
+    expect(view.getByRole("radiogroup", { name: "模式" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "规则" })).toHaveAttribute("data-state", "on");
+    expect(view.getByRole("radio", { name: "全局" })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("radio", { name: "直连" })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: "测延迟" })).toBeNull();
   });
 
@@ -141,20 +153,20 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
 
-    const globalButton = () => view.getByRole("button", { name: "全局" });
-    const directButton = () => view.getByRole("button", { name: "直连" });
+    const globalButton = () => view.getByRole("radio", { name: "全局" });
+    const directButton = () => view.getByRole("radio", { name: "直连" });
 
     await waitFor(() => {
       expect(globalButton()).toBeInTheDocument();
     });
-    expect(globalButton()).toHaveAttribute("aria-pressed", "false");
+    expect(globalButton()).toHaveAttribute("data-state", "off");
 
     fireEvent.click(globalButton());
     await waitFor(() => {
       expect(setProxyMode).toHaveBeenCalledWith("global");
     });
     await waitFor(() => {
-      expect(globalButton()).toHaveAttribute("aria-pressed", "true");
+      expect(globalButton()).toHaveAttribute("data-state", "on");
     });
 
     setProxyMode.mockRejectedValue("mode switch failed");
@@ -163,8 +175,8 @@ describe("Home", () => {
       expect(view.getByText("mode switch failed")).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(globalButton()).toHaveAttribute("aria-pressed", "true");
-      expect(directButton()).toHaveAttribute("aria-pressed", "false");
+      expect(globalButton()).toHaveAttribute("data-state", "on");
+      expect(directButton()).toHaveAttribute("data-state", "off");
     });
   });
 
@@ -176,8 +188,8 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText("还没有可用节点")).toBeInTheDocument();
     });
-    expect(view.getByText("当前出站")).toBeInTheDocument();
-    expect(view.getByTitle("—")).toHaveTextContent("—");
+    expect(view.getByText("当前出站").parentElement).toHaveTextContent(/当前出站\s*—/);
+    expect(view.getByText("流量")).toBeInTheDocument();
     const power = view.getByRole("button", { name: "启动代理服务" });
     expect(power).not.toBeDisabled();
     expect(power).toHaveAttribute("aria-pressed", "false");
@@ -296,7 +308,8 @@ describe("Home", () => {
     const power = view.getByRole("button", { name: "停止代理服务" });
     expect(power).toHaveAttribute("aria-pressed", "true");
     expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
-    expect(view.getByText("已不同步")).toBeInTheDocument();
+    expect(view.getByRole("alert")).toHaveTextContent("系统代理未接管或已不同步");
+    expect(view.queryByText("系统代理")).toBeNull();
   });
 
   it("does not flash poll errors while power toggle start is pending", async () => {

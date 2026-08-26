@@ -107,6 +107,12 @@ describe("App", () => {
     );
 
     fireEvent.click(view.getByRole("button", { name: "主页" }));
+    expect(container.querySelector(".home-panel")).not.toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["content-fill", "overflow-hidden"]),
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "设置" }));
     expect(container.querySelector(".content-fill")).toBeNull();
     expect(container.querySelector("main")?.className.split(/\s+/)).toContain(
       "overflow-auto",
@@ -131,5 +137,43 @@ describe("App", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("places the app brand at the bottom of the sidebar", () => {
+    const { container } = render(<App />);
+    const aside = container.querySelector("aside");
+    expect(aside).not.toBeNull();
+    const nav = aside!.querySelector("nav");
+    const brand = aside!.querySelector("h1");
+    expect(nav).not.toBeNull();
+    expect(brand).toHaveTextContent("ice-box");
+    expect(brand!.parentElement?.className.split(/\s+/)).toContain("justify-center");
+    expect(nav!.compareDocumentPosition(brand!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(aside!.querySelector('[data-slot="separator"]')).toBeNull();
+  });
+
+  it("draws the titlebar divider as one shared edge", () => {
+    const { container } = render(<App />);
+    const titlebar = container.querySelector("[data-titlebar]");
+    expect(titlebar).not.toBeNull();
+    expect(titlebar!.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex", "h-12", "border-b"]),
+    );
+    expect(titlebar!.querySelector("h2")).toHaveTextContent("主页");
+    const aside = container.querySelector("aside");
+    expect(aside).not.toBeNull();
+    expect(titlebar!.compareDocumentPosition(aside!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("keeps overlay drag regions in the sidebar chrome and page header", () => {
+    const { container } = render(<App />);
+    const regions = container.querySelectorAll("[data-tauri-drag-region]");
+    expect(regions.length).toBe(3);
+    expect(regions[1]).toHaveTextContent("主页");
+    expect(regions[2]).toHaveTextContent("ice-box");
   });
 });

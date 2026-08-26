@@ -190,4 +190,13 @@ describe("Settings", () => {
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
   });
+
+  it("lets the settings card fill the content pane", () => {
+    const { container } = render(<Settings />);
+    const card = container.querySelector("[data-slot=card]");
+    expect(card).not.toBeNull();
+    const classes = card!.className.split(/\s+/);
+    expect(classes).toContain("w-full");
+    expect(classes).not.toContain("max-w-lg");
+  });
 });

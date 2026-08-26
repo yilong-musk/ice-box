@@ -2,6 +2,19 @@
   "build": {
     "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-singbox-resource.ps1 -Platform win && npm run build"
   },
+  "app": {
+    "windows": [
+      {
+        "title": "ice-box",
+        "width": 860,
+        "height": 620,
+        "minWidth": 720,
+        "minHeight": 500,
+        "decorations": false,
+        "shadow": true
+      }
+    ]
+  },
   "bundle": {
     "targets": ["nsis"],
     "icon": [

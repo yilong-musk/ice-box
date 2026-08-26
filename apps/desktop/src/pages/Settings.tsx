@@ -107,7 +107,7 @@ export function Settings() {
   }
 
   return (
-    <Card size="sm" className="max-w-lg">
+    <Card size="sm" className="w-full">
       <CardContent className="space-y-4">
       <div className="space-y-2">
         <p className="text-sm font-medium">外观</p>
