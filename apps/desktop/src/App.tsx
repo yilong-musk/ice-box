@@ -69,7 +69,7 @@ function App() {
               className="size-7 shrink-0 object-contain"
               aria-hidden="true"
             />
-            <h1 className="font-heading text-base font-semibold tracking-tight">ice-box</h1>
+            <h1 className="font-heading text-sm font-medium tracking-tight">ice-box</h1>
           </div>
           <Separator />
           <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="主导航">

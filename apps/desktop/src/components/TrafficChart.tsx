@@ -129,7 +129,7 @@ export function TrafficChart({ running, paused = false }: Props) {
       </div>
       {error && <p className="error text-sm">采样中断：{error}</p>}
       <svg
-        className="block h-16 w-full rounded-2xl bg-muted/40"
+        className="block h-16 w-full rounded-none bg-muted/40"
         viewBox="0 0 320 72"
         preserveAspectRatio="none"
         aria-label="上下行流量曲线"
