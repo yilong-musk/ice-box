@@ -26,8 +26,8 @@ export function ProxyPowerButton({
     <button
       type="button"
       className={cn(
-        "flex w-full max-w-md items-center gap-4 rounded-xl border px-4 py-3.5 text-left transition-colors",
-        "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+        "flex w-full max-w-md items-center gap-4 rounded-2xl border px-4 py-3.5 text-left transition-colors",
+        "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:outline-none",
         "disabled:pointer-events-none disabled:opacity-50",
         proxyOn
           ? "border-primary/30 bg-primary text-primary-foreground"

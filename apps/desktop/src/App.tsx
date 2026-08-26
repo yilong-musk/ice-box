@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorAlert } from "@/components/StatusAlert";
 import { cn } from "@/lib/utils";
 import { useThemePreference } from "./lib/theme";
+import logo from "./assets/logo.png";
 
 type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
 
@@ -62,8 +63,10 @@ function App() {
       <div className="flex h-svh overflow-hidden bg-background text-foreground">
         <aside className="flex w-44 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
           <div className="flex items-center gap-2.5 px-4 py-4">
-            <span
-              className="size-6 shrink-0 rounded-md bg-sidebar-primary shadow-sm"
+            <img
+              src={logo}
+              alt=""
+              className="size-7 shrink-0 object-contain"
               aria-hidden="true"
             />
             <h1 className="font-heading text-base font-semibold tracking-tight">ice-box</h1>
