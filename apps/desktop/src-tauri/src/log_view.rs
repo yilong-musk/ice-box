@@ -180,10 +180,8 @@ fn parse_connection_route(text: &str) -> Option<(&str, &str)> {
     if target.is_empty() {
         return None;
     }
-    let outbound = match head.rfind("outbound/") {
-        Some(pos) => &head[pos + "outbound/".len()..],
-        None => return None,
-    };
+    let pos = head.rfind("outbound/")?;
+    let outbound = &head[pos + "outbound/".len()..];
     let node = if let Some(open) = outbound.find('[') {
         let inner = &outbound[open + 1..];
         inner.strip_suffix(']').unwrap_or(inner).trim()
