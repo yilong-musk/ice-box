@@ -1,5 +1,5 @@
-import { render, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
 
@@ -46,6 +46,10 @@ describe("Subscriptions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listSubscriptions.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders import form", async () => {
@@ -124,7 +128,7 @@ describe("Subscriptions", () => {
   });
 
   it("shows an apply warning from a remove response", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.stubGlobal("confirm", vi.fn(() => true));
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({
       ok: true,
@@ -140,9 +144,10 @@ describe("Subscriptions", () => {
       expect(view.getByText("only-one")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "删除" }).click();
+    fireEvent.click(view.getByRole("button", { name: "删除" }));
 
     await waitFor(() => {
+      expect(removeSubscription).toHaveBeenCalled();
       expect(view.getByText(/系统代理未能恢复/)).toBeInTheDocument();
     });
   });

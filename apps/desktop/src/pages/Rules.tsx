@@ -42,6 +42,7 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -268,57 +269,27 @@ export function Rules({ onNavigate }: Props) {
         className="grid shrink-0 grid-cols-4 items-stretch gap-3"
         aria-label="规则统计"
       >
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>规则</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="font-heading text-sm font-medium tabular-nums">
-              {overview.total}
-            </p>
-          </CardContent>
-        </Card>
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>已禁用</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              type="button"
-              size="sm"
-              className="w-full"
-              variant={filters.status === "disabled" ? "secondary" : "outline"}
-              aria-pressed={filters.status === "disabled"}
-              onClick={() =>
-                changeFilters({
-                  status: filters.status === "disabled" ? "all" : "disabled",
-                })
-              }
-            >
-              已禁用 {overview.disabled}
-            </Button>
-          </CardContent>
-        </Card>
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>自定义</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="font-heading text-sm font-medium tabular-nums">
-              {overview.custom}
-            </p>
-          </CardContent>
-        </Card>
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>规则集</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="font-heading text-sm font-medium tabular-nums">
-              {overview.rule_sets}
-            </p>
-          </CardContent>
-        </Card>
+        {(
+          [
+            { label: "规则", value: overview.total },
+            { label: "已禁用", value: overview.disabled },
+            { label: "自定义", value: overview.custom },
+            { label: "规则集", value: overview.rule_sets },
+          ] as const
+        ).map((stat) => (
+          <Card
+            key={stat.label}
+            size="sm"
+            className="min-w-0 gap-0 py-2 data-[size=sm]:[--card-spacing:--spacing(2)]"
+          >
+            <CardContent className="flex items-baseline justify-between gap-2">
+              <span className="text-muted-foreground">{stat.label}</span>
+              <span className="font-heading text-sm font-medium tabular-nums">
+                {stat.value}
+              </span>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -389,29 +360,46 @@ export function Rules({ onNavigate }: Props) {
             </NativeSelect>
           </div>
 
-          {overview.types.length > 0 ? (
-            <ToggleGroup
-              type="single"
+          <div
+            className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
+            aria-label="规则筛选"
+          >
+            {overview.types.length > 0 ? (
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                spacing={2}
+                value={filters.type || "all"}
+                onValueChange={(value) => {
+                  changeFilters({
+                    type: !value || value === "all" ? "" : value,
+                  });
+                }}
+                className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
+                aria-label="规则类型筛选"
+              >
+                <ToggleGroupItem value="all">全部</ToggleGroupItem>
+                {overview.types.map((t) => (
+                  <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
+                    {ruleTypeLabel(t.rule_type)} {t.count}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            ) : null}
+            <Toggle
               variant="outline"
               size="sm"
-              spacing={2}
-              value={filters.type || "all"}
-              onValueChange={(value) => {
+              pressed={filters.status === "disabled"}
+              onPressedChange={(pressed) =>
                 changeFilters({
-                  type: !value || value === "all" ? "" : value,
-                });
-              }}
-              className="h-auto w-full min-w-0 shrink-0 flex-wrap items-start justify-start"
-              aria-label="规则类型筛选"
+                  status: pressed ? "disabled" : "all",
+                })
+              }
             >
-              <ToggleGroupItem value="all">全部</ToggleGroupItem>
-              {overview.types.map((t) => (
-                <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
-                  {ruleTypeLabel(t.rule_type)} {t.count}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          ) : null}
+              已禁用 {overview.disabled}
+            </Toggle>
+          </div>
 
           {showCustomForm ? (
             <Card size="sm" className="shrink-0 overflow-visible">

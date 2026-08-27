@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
 
 function ensureLocalStorage() {
@@ -54,6 +54,8 @@ if (typeof window.ResizeObserver === "undefined") {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";

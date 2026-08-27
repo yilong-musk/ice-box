@@ -10,15 +10,16 @@ import {
 } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 
-const MAX_POINTS = 60;
-/** Consecutive sample failures before surfacing a stale/error hint. */
+/** Visible window; matches the backend ring buffer (`TRAFFIC_WINDOW_MS`). */
+const WINDOW_SECONDS = 60;
+/** Consecutive snapshot failures before surfacing a stale/error hint. */
 const FAILURE_THRESHOLD = 3;
 
 type Point = TrafficSample & { t: number };
 
 type Props = {
   running: boolean;
-  /** Pause sampling (e.g. while mode switch reloads Clash API). */
+  /** Pause snapshot polling (e.g. while mode switch reloads Clash API). */
   paused?: boolean;
   className?: string;
 };
@@ -51,7 +52,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       return;
     }
 
-    // Drop any abandoned in-flight sample so unpause can resume.
+    // Drop any abandoned in-flight snapshot so unpause can resume.
     if (paused) {
       inFlightRef.current = false;
       return;
@@ -63,15 +64,12 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
       try {
-        const sample = await api.getTrafficSample();
+        const snap = await api.getTrafficSnapshot();
         if (cancelled) return;
         failCountRef.current = 0;
         setError(null);
-        setLatest(sample);
-        setPoints((prev) => {
-          const next = [...prev, { ...sample, t: Date.now() }];
-          return next.length > MAX_POINTS ? next.slice(-MAX_POINTS) : next;
-        });
+        setLatest(snap.latest);
+        setPoints(snap.points);
       } catch (e) {
         if (cancelled) return;
         // Brief Clash API drops are skipped; only surface after sustained failure.
@@ -110,7 +108,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     return (
       <div className={cn("flex min-h-0 flex-1 flex-col justify-center", className)}>
         <p className="muted text-sm">
-          启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。
+          启动代理服务后显示实时上下行曲线（最近 {WINDOW_SECONDS} 秒）。
         </p>
       </div>
     );
@@ -163,7 +161,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         </AreaChart>
       </ChartContainer>
       <p className="muted shrink-0 text-xs">
-        峰值刻度 {formatRate(maxVal)} · 每秒采样（Clash API /traffic）
+        峰值刻度 {formatRate(maxVal)} · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
       </p>
     </div>
   );

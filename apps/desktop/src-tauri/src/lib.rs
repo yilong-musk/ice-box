@@ -10,7 +10,7 @@ mod tray;
 
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
-use ice_core::{CoreController, CoreHandle};
+use ice_core::{CoreController, CoreHandle, TrafficMonitor};
 use ice_proxy_sys::{create_system_proxy, recover_if_applied, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
@@ -73,6 +73,8 @@ pub struct AppState {
     pub shutdown_requested: Arc<AtomicBool>,
     /// Held for app lifetime; releasing the file unlocks the data directory.
     _instance_lock: std::fs::File,
+    /// Persistent Clash `/traffic` stream; survives home-page unmounts.
+    pub traffic: TrafficMonitor,
 }
 
 fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
@@ -152,6 +154,7 @@ pub fn run() {
                 system_proxy_available,
                 shutdown_requested,
                 _instance_lock: instance_lock,
+                traffic: TrafficMonitor::new(),
             });
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             tray::setup_tray(app.handle())?;
@@ -211,7 +214,7 @@ pub fn run() {
             commands::add_custom_rule,
             commands::remove_custom_rule,
             commands::get_connection_stats,
-            commands::get_traffic_sample,
+            commands::get_traffic_snapshot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

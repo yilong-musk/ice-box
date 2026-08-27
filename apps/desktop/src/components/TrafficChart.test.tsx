@@ -1,20 +1,43 @@
 import { act, render, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TrafficChart } from "../components/TrafficChart";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TrafficChart } from "./TrafficChart";
 
-const getTrafficSample = vi.fn();
+const getTrafficSnapshot = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
-    getTrafficSample: (...args: unknown[]) => getTrafficSample(...args),
+    getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
 
+function snap(
+  points: { up: number; down: number; t: number }[],
+  latest?: { up: number; down: number } | null,
+) {
+  return {
+    points,
+    latest:
+      latest === undefined ? (points[points.length - 1] ?? null) : latest,
+  };
+}
+
+async function flushMicrotasks() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 describe("TrafficChart", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getTrafficSample.mockResolvedValue({ up: 100, down: 200 });
+    getTrafficSnapshot.mockResolvedValue(
+      snap([{ up: 100, down: 200, t: 1_000 }]),
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows hint when core is not running", () => {
@@ -23,107 +46,120 @@ describe("TrafficChart", () => {
     expect(view.getByText(/启动代理服务后显示/)).toBeInTheDocument();
   });
 
-  it("samples traffic when running", async () => {
+  it("hydrates from backend history instead of starting empty", async () => {
+    getTrafficSnapshot.mockResolvedValue(
+      snap([
+        { up: 10, down: 20, t: 1_000 },
+        { up: 30, down: 40, t: 2_000 },
+        { up: 50, down: 80, t: 3_000 },
+      ]),
+    );
     const { container } = render(<TrafficChart running={true} />);
     const view = within(container);
     await waitFor(() => {
-      expect(getTrafficSample).toHaveBeenCalled();
+      expect(getTrafficSnapshot).toHaveBeenCalled();
     });
-    expect(view.getByText(/峰值刻度/)).toBeInTheDocument();
+    expect(view.getByText(/峰值刻度 80 B\/s/)).toBeInTheDocument();
+    expect(view.getByText(/↓ 80 B\/s/)).toBeInTheDocument();
+    expect(view.getByText(/后台持续采样/)).toBeInTheDocument();
   });
 
-  it("does not flash an error when a sample fails transiently", async () => {
-    getTrafficSample.mockRejectedValueOnce("clash api down");
-    getTrafficSample.mockResolvedValue({ up: 10, down: 20 });
+  it("does not flash an error when a snapshot fails transiently", async () => {
+    getTrafficSnapshot.mockRejectedValueOnce("clash api down");
+    getTrafficSnapshot.mockResolvedValue(snap([{ up: 10, down: 20, t: 1 }]));
     const { container } = render(<TrafficChart running={true} />);
     const view = within(container);
     await waitFor(() => {
-      expect(getTrafficSample).toHaveBeenCalled();
+      expect(getTrafficSnapshot).toHaveBeenCalled();
     });
     expect(view.queryByText(/clash api down/i)).toBeNull();
     expect(container.querySelector(".error")).toBeNull();
   });
 
-  it("shows error after consecutive sample failures", async () => {
+  it("shows error after consecutive snapshot failures", async () => {
     vi.useFakeTimers();
-    getTrafficSample.mockRejectedValue("clash api down");
-    const { container } = render(<TrafficChart running={true} />);
+    getTrafficSnapshot.mockRejectedValue("clash api down");
+    const { container, unmount } = render(<TrafficChart running={true} />);
     const view = within(container);
 
+    await flushMicrotasks();
+    expect(view.queryByText(/采样中断/)).toBeNull();
+
     await act(async () => {
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
     expect(view.queryByText(/采样中断/)).toBeNull();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-      await Promise.resolve();
-    });
-    expect(view.queryByText(/采样中断/)).toBeNull();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
     expect(view.getByText(/采样中断：clash api down/i)).toBeInTheDocument();
     expect(container.querySelector(".error")).not.toBeNull();
-
-    vi.useRealTimers();
+    unmount();
   });
 
-  it("clears error after a successful sample", async () => {
+  it("clears error after a successful snapshot", async () => {
     vi.useFakeTimers();
-    getTrafficSample.mockRejectedValue("clash api down");
-    const { container } = render(<TrafficChart running={true} />);
+    getTrafficSnapshot.mockRejectedValue("clash api down");
+    const { container, unmount } = render(<TrafficChart running={true} />);
     const view = within(container);
 
+    await flushMicrotasks();
     await act(async () => {
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(2000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
     expect(view.getByText(/采样中断/)).toBeInTheDocument();
 
-    getTrafficSample.mockResolvedValue({ up: 10, down: 20 });
+    getTrafficSnapshot.mockResolvedValue(snap([{ up: 10, down: 20, t: 1 }]));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
     expect(view.queryByText(/采样中断/)).toBeNull();
     expect(container.querySelector(".error")).toBeNull();
-
-    vi.useRealTimers();
+    unmount();
   });
 
-  it("skips sampling while paused", async () => {
+  it("skips polling while paused", async () => {
     render(<TrafficChart running={true} paused />);
     await new Promise((r) => setTimeout(r, 50));
-    expect(getTrafficSample).not.toHaveBeenCalled();
+    expect(getTrafficSnapshot).not.toHaveBeenCalled();
   });
 
-  it("resumes sampling after unpause even if a prior invoke hangs", async () => {
-    let resolveHang: ((v: { up: number; down: number }) => void) | undefined;
-    getTrafficSample.mockImplementationOnce(
+  it("resumes polling after unpause even if a prior invoke hangs", async () => {
+    let resolveHang:
+      | ((v: {
+          points: { up: number; down: number; t: number }[];
+          latest: { up: number; down: number } | null;
+        }) => void)
+      | undefined;
+    getTrafficSnapshot.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveHang = resolve;
         }),
     );
-    getTrafficSample.mockResolvedValue({ up: 5, down: 6 });
+    getTrafficSnapshot.mockResolvedValue(snap([{ up: 5, down: 6, t: 1 }]));
 
     const { rerender } = render(<TrafficChart running={true} paused={false} />);
     await waitFor(() => {
-      expect(getTrafficSample).toHaveBeenCalledTimes(1);
+      expect(getTrafficSnapshot).toHaveBeenCalledTimes(1);
     });
 
     rerender(<TrafficChart running={true} paused />);
     rerender(<TrafficChart running={true} paused={false} />);
 
     await waitFor(() => {
-      expect(getTrafficSample).toHaveBeenCalledTimes(2);
+      expect(getTrafficSnapshot).toHaveBeenCalledTimes(2);
     });
 
-    // Abandoned hang must not block further samples once settled.
-    resolveHang?.({ up: 1, down: 2 });
+    resolveHang?.(snap([{ up: 1, down: 2, t: 1 }]));
   });
 });

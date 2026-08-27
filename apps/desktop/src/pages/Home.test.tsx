@@ -6,7 +6,7 @@ const getStatus = vi.fn();
 const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getConnectionStats = vi.fn();
-const getTrafficSample = vi.fn();
+const getTrafficSnapshot = vi.fn();
 const setProxyMode = vi.fn();
 const start = vi.fn();
 const stopSystemProxy = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("../api/tauri", () => ({
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
     getConnectionStats: (...args: unknown[]) => getConnectionStats(...args),
-    getTrafficSample: (...args: unknown[]) => getTrafficSample(...args),
+    getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     start: (...args: unknown[]) => start(...args),
     stopSystemProxy: (...args: unknown[]) => stopSystemProxy(...args),
@@ -54,7 +54,7 @@ describe("Home", () => {
       proxy_mode: "rule",
     });
     getConnectionStats.mockResolvedValue({ connection_count: 0 });
-    getTrafficSample.mockResolvedValue({ up: 0, down: 0 });
+    getTrafficSnapshot.mockResolvedValue({ points: [], latest: null });
     start.mockResolvedValue(undefined);
     stopSystemProxy.mockResolvedValue(undefined);
   });
@@ -314,6 +314,7 @@ describe("Home", () => {
 
   it("does not flash poll errors while power toggle start is pending", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
     let resolveStart: (() => void) | undefined;
     start.mockImplementation(
       () =>
@@ -377,7 +378,8 @@ describe("Home", () => {
       expect(start).toHaveBeenCalled();
       expect(view.queryByText(/clash api not ready/i)).toBeNull();
     });
-
-    vi.useRealTimers();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -92,13 +92,18 @@ describe("Rules", () => {
     });
     const stats = view.getByLabelText("规则统计");
     expect(stats).toHaveTextContent(/规则\s*3/);
-    expect(view.getByRole("button", { name: "已禁用 1" })).toBeInTheDocument();
+    expect(stats).toHaveTextContent(/已禁用\s*1/);
     expect(stats).toHaveTextContent(/自定义\s*1/);
     expect(stats).toHaveTextContent(/规则集\s*2/);
+    expect(within(stats).queryByRole("button")).not.toBeInTheDocument();
     expect(view.getByRole("radio", { name: "域名后缀 2" })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: "全部" })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: "GEOIP 1" })).toBeInTheDocument();
+    const chips = view.getByLabelText("规则筛选");
     const typeFilters = view.getByLabelText("规则类型筛选");
+    const disabledFilter = view.getByRole("button", { name: "已禁用 1" });
+    expect(chips).toContainElement(typeFilters);
+    expect(chips).toContainElement(disabledFilter);
     expect(typeFilters.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-wrap", "shrink-0", "h-auto"]),
     );
@@ -119,6 +124,22 @@ describe("Rules", () => {
     expect(
       container.querySelector(".rules-panel")?.className.split(/\s+/),
     ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
+  });
+
+  it("filters disabled rules from the chip next to type filters", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: "已禁用 1" }).click();
+
+    await waitFor(() => {
+      const calls = listRules.mock.calls;
+      const call = calls[calls.length - 1]?.[0] as { disabled: string };
+      expect(call.disabled).toBe("disabled");
+    });
   });
 
   it("debounces keyword search and sends server-side filters", async () => {

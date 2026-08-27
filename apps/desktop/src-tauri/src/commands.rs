@@ -15,8 +15,8 @@ use ice_config::{
     AppSettings, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
 };
 use ice_core::{
-    connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, traffic_sample,
-    ConnectionStats, CoreState, CoreStatus, HealthEndpoints, TrafficSample, DELAY_TEST_URL,
+    connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, ConnectionStats,
+    CoreState, CoreStatus, HealthEndpoints, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied, ProxyEndpoints};
 use ice_subscription::{
@@ -67,6 +67,14 @@ fn clash_endpoints(settings: &AppSettings) -> HealthEndpoints {
         host: settings.clash_api_listen.clone(),
         port: settings.clash_api_port,
     }
+}
+
+fn attach_traffic(state: &AppState, settings: &AppSettings) {
+    state.traffic.set_endpoints(Some(clash_endpoints(settings)));
+}
+
+fn detach_traffic(state: &AppState) {
+    state.traffic.set_endpoints(None);
 }
 
 /// Join-error mapping for `spawn_blocking` (blocking work must not run on the
@@ -287,22 +295,24 @@ pub fn list_subscriptions(state: State<'_, AppState>) -> Result<serde_json::Valu
 pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
-    let binary = binary_for(app)?;
-    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-    if core.state().status == CoreStatus::Running {
-        return Ok(());
+    {
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        if core.state().status != CoreStatus::Running {
+            // Do not hold `proxy` across spawn + healthcheck; start never applies OS proxy.
+            let binary = binary_for(app)?;
+            let _ = orchestrate_start(
+                &state.paths,
+                &settings,
+                &mut **core,
+                binary,
+                resource_dir(app).as_deref(),
+            )?;
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = None;
+            }
+        }
     }
-    // Do not hold `proxy` across spawn + healthcheck; start never applies OS proxy.
-    let _ = orchestrate_start(
-        &state.paths,
-        &settings,
-        &mut **core,
-        binary,
-        resource_dir(app).as_deref(),
-    )?;
-    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = None;
-    }
+    attach_traffic(state, &settings);
     Ok(())
 }
 
@@ -336,6 +346,7 @@ fn start_system_proxy(app: &AppHandle, state: &AppState) -> Result<(), AppError>
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
     }
+    attach_traffic(state, &settings);
     Ok(())
 }
 
@@ -522,7 +533,16 @@ fn apply_after_change(
         proxy.as_ref(),
         binary,
         resource_dir(app).as_deref(),
-    )
+    )?;
+    let running = core.state().status == CoreStatus::Running;
+    drop(proxy);
+    drop(core);
+    if running {
+        attach_traffic(state, settings);
+    } else {
+        detach_traffic(state);
+    }
+    Ok(())
 }
 
 fn apply_after_subscription_change(
@@ -1427,14 +1447,15 @@ pub async fn get_connection_stats(state: State<'_, AppState>) -> Result<Connecti
 }
 
 #[tauri::command]
-pub async fn get_traffic_sample(state: State<'_, AppState>) -> Result<TrafficSample, AppError> {
-    let settings = current_settings(&state.paths)?;
-    require_running_core(&state)?;
-    let endpoints = clash_endpoints(&settings);
-    tauri::async_runtime::spawn_blocking(move || traffic_sample(&endpoints))
-        .await
-        .map_err(blocking_join_err("get_traffic_sample"))?
-        .map_err(AppError::from)
+pub async fn get_traffic_snapshot(app: AppHandle) -> Result<TrafficSnapshot, AppError> {
+    run_blocking("get_traffic_snapshot", move || {
+        let state = app.state::<AppState>();
+        require_running_core(&state)?;
+        let settings = current_settings(&state.paths)?;
+        attach_traffic(&state, &settings);
+        Ok(state.traffic.snapshot())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1502,6 +1523,7 @@ mod tests {
             system_proxy_available: false,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         }
     }
 
@@ -1554,6 +1576,7 @@ mod tests {
             system_proxy_available: false,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         }
     }
 

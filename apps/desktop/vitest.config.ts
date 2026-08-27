@@ -16,6 +16,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // Parallel jsdom + Recharts workers starve waitFor timers on WSL.
+    fileParallelism: false,
   },
 });
 

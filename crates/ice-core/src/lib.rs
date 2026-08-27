@@ -6,6 +6,7 @@ mod error;
 mod health;
 mod process;
 mod reload;
+mod traffic;
 
 pub use binary::{
     binary_in_target_root, current_target_dir, resolve_singbox_binary, BUNDLED_SINGBOX_VERSION,
@@ -27,6 +28,9 @@ pub use process::{
 };
 pub use reload::{
     ConfigReloader, MockReloadMode, MockReloader, SignalReloader, WINDOWS_PORT_RELEASE_WAIT,
+};
+pub use traffic::{
+    TimedTrafficSample, TrafficMonitor, TrafficSnapshot, TRAFFIC_HISTORY_MAX, TRAFFIC_WINDOW_MS,
 };
 
 // CoreHandle is defined below with CoreController.

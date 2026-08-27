@@ -20,7 +20,7 @@ The implementation spec lives in [docs/architecture.md](docs/architecture.md) (p
 - **Modes**: one-click switch between Rule / Global / Direct from the home page, switched **live via the Clash API** (`PATCH /configs`) on macOS **and** Windows — no config rebuild, no reload, no core restart, no connection drop
 - **Nodes**: switch outbound from the home page, Clash API latency test, active connection count
 - **Rules**: query / search / filter by type / pagination (server-side filtering, tens of thousands of rules never cross IPC as a full table), disable / enable (fingerprint persisted), custom rules
-- **Traffic**: real-time upload/download chart on the home page (Clash API `/traffic`, last 60 seconds)
+- **Traffic**: real-time upload/download chart on the home page (Clash API `/traffic` persistent stream + 60s ring buffer)
 
 ## Repository layout
 
