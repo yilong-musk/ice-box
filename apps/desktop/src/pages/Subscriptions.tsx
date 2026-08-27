@@ -228,7 +228,6 @@ export function Subscriptions() {
                     <Item
                       size="sm"
                       variant={s.active ? "muted" : "default"}
-                      className="px-0"
                     >
                       <ItemContent className="min-w-0">
                         <ItemTitle title={s.name}>

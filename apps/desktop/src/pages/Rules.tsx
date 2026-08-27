@@ -348,8 +348,8 @@ export function Rules({ onNavigate }: Props) {
             </Button>
           </CardAction>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
-          <div className="flex flex-wrap items-center gap-2">
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Input
               type="search"
               className="min-w-48 flex-1"
@@ -401,7 +401,7 @@ export function Rules({ onNavigate }: Props) {
                   type: !value || value === "all" ? "" : value,
                 });
               }}
-              className="max-h-16 w-full flex-wrap justify-start overflow-auto"
+              className="h-auto w-full min-w-0 shrink-0 flex-wrap items-start justify-start"
               aria-label="规则类型筛选"
             >
               <ToggleGroupItem value="all">全部</ToggleGroupItem>
@@ -414,7 +414,7 @@ export function Rules({ onNavigate }: Props) {
           ) : null}
 
           {showCustomForm ? (
-            <Card size="sm">
+            <Card size="sm" className="shrink-0 overflow-visible">
               <CardHeader>
                 <CardTitle>自定义规则</CardTitle>
                 <CardDescription>
@@ -423,7 +423,7 @@ export function Rules({ onNavigate }: Props) {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
-                <FieldGroup className="grid grid-cols-1 gap-2.5 min-[560px]:grid-cols-3">
+                <FieldGroup className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:*:min-w-0">
                   <Field>
                     <FieldLabel htmlFor="rule-matcher-type">匹配类型</FieldLabel>
                     <NativeSelect
@@ -505,7 +505,7 @@ export function Rules({ onNavigate }: Props) {
                 </FieldGroup>
                 {customError ? <FieldError>{customError}</FieldError> : null}
                 {previewRule ? (
-                  <FieldDescription>
+                  <FieldDescription className="break-all">
                     预览：<code>{JSON.stringify(previewRule)}</code>
                   </FieldDescription>
                 ) : null}
@@ -533,7 +533,10 @@ export function Rules({ onNavigate }: Props) {
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
-            <ItemGroup aria-label="规则列表" className="gap-0">
+            <ItemGroup
+              aria-label="规则列表"
+              className="min-h-0 flex-1 gap-0 overflow-auto"
+            >
               {rows.map((row, index) => {
                 const summary = ruleMatchSummary(row);
                 const outboundLabel = ruleOutbound(row) || "—";
@@ -597,7 +600,7 @@ export function Rules({ onNavigate }: Props) {
           )}
         </CardContent>
         {showList ? (
-          <CardFooter className="justify-center gap-3">
+          <CardFooter className="shrink-0 justify-center gap-3">
             <Button
               type="button"
               size="sm"

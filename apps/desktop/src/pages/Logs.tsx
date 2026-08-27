@@ -90,7 +90,7 @@ export function Logs() {
         <CardContent className="flex min-h-0 flex-1 flex-col">
           <pre
             ref={boxRef}
-            className="log-view min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap break-all"
+            className="log-view min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
             onScroll={handleScroll}
             aria-live="polite"
           >

@@ -20,7 +20,6 @@ import {
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
   Item,
@@ -31,25 +30,21 @@ import {
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
-import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
-  delaySortKey,
+  delayTestTagsForGroup,
+  delayTestTagsForList,
+  delayResultTone,
   formatDelay,
+  isGroupType,
   resolveSelectedTag,
   type DelayCell,
 } from "../lib/nodes";
 
-const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
-
 type Props = {
   onNavigate?: (tab: "subs") => void;
 };
-
-function isGroupType(outboundType: string): boolean {
-  return GROUP_TYPES.includes(outboundType);
-}
 
 /** HTML id-safe token derived from a possibly spaced group tag. */
 function groupMembersDomId(tag: string): string {
@@ -64,8 +59,17 @@ function nodeTypeLabel(n: NodeInfo): string {
 
 function delayBadge(delay: DelayCell) {
   if (typeof delay === "number") {
+    const tone = delayResultTone(delay);
     return (
-      <Badge variant="outline" className="font-mono tabular-nums">
+      <Badge
+        variant="outline"
+        className={cn(
+          "font-mono tabular-nums",
+          tone === "ok" && "text-ok",
+          tone === "warn" && "text-warn",
+          tone === "bad" && "text-destructive",
+        )}
+      >
         {formatDelay(delay)}
       </Badge>
     );
@@ -86,7 +90,6 @@ export function Nodes({ onNavigate }: Props) {
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [running, setRunning] = useState(false);
   const [delays, setDelays] = useState<Record<string, DelayCell>>({});
-  const [sortByDelay, setSortByDelay] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(),
   );
@@ -95,6 +98,9 @@ export function Nodes({ onNavigate }: Props) {
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const cancelRef = useRef(false);
   const mountedRef = useRef(true);
+  const delayRunRef = useRef(0);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -128,12 +134,6 @@ export function Nodes({ onNavigate }: Props) {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  const displayNodes = sortByDelay
-    ? [...nodes].sort(
-        (a, b) => delaySortKey(delays[a.tag]) - delaySortKey(delays[b.tag]),
-      )
-    : nodes;
-
   function setGroupOpen(tag: string, open: boolean) {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
@@ -143,59 +143,104 @@ export function Nodes({ onNavigate }: Props) {
     });
   }
 
-  async function testOne(tag: string) {
+  function writeDelay(tag: string, value: DelayCell) {
+    const list = nodesRef.current;
+    setDelays((prev) => {
+      const next = { ...prev, [tag]: value };
+      for (const n of list) {
+        if (isGroupType(n.outbound_type) && n.group_now === tag) {
+          next[n.tag] = value;
+        }
+      }
+      return next;
+    });
+  }
+
+  function clearTestingDelays() {
+    setDelays((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const [tag, value] of Object.entries(next)) {
+        if (value === "testing") {
+          next[tag] = null;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  async function testTags(tags: string[]) {
+    if (tags.length === 0) return;
+    const run = ++delayRunRef.current;
     nextGeneration();
+    cancelRef.current = false;
     setBusy(true);
     setError(null);
-    setDelays((prev) => ({ ...prev, [tag]: "testing" }));
-    try {
-      const r = await api.testNodeDelay(tag);
-      if (mountedRef.current) {
-        setDelays((prev) => ({ ...prev, [tag]: r.delay_ms }));
+    const multi = tags.length > 1;
+    const isCurrent = () =>
+      run === delayRunRef.current &&
+      !cancelRef.current &&
+      mountedRef.current;
+
+    for (let i = 0; i < tags.length; i++) {
+      if (!isCurrent()) break;
+      const tag = tags[i];
+      if (multi) setBatchProgress(`${i + 1} / ${tags.length}`);
+      writeDelay(tag, "testing");
+      try {
+        const r = await api.testNodeDelay(tag);
+        if (!isCurrent()) break;
+        writeDelay(tag, r.delay_ms);
+      } catch (e) {
+        if (!isCurrent()) break;
+        writeDelay(tag, "error");
+        if (!multi) {
+          setError(formatInvokeError(e));
+          break;
+        }
       }
-    } catch (e) {
-      if (mountedRef.current) {
-        setDelays((prev) => ({ ...prev, [tag]: "error" }));
-        setError(formatInvokeError(e));
-      }
-    } finally {
-      if (mountedRef.current) setBusy(false);
     }
+
+    if (!mountedRef.current || run !== delayRunRef.current) return;
+    if (multi) setBatchProgress(null);
+    setBusy(false);
+  }
+
+  async function testOne(tag: string) {
+    await testTags([tag]);
+  }
+
+  async function testGroup(n: NodeInfo) {
+    const expanded = expandedGroups.has(n.tag);
+    const tags = delayTestTagsForGroup({
+      expanded,
+      groupNow: n.group_now,
+      groupAll: n.group_all,
+    });
+    if (tags.length === 0) {
+      setError("当前策略组没有可测的出口");
+      return;
+    }
+    await testTags(tags);
   }
 
   async function onBatchTest() {
     if (!running || nodes.length === 0) return;
-    cancelRef.current = false;
-    setBusy(true);
-    setError(null);
-    setSortByDelay(false);
-
-    const tags = nodes.map((n) => n.tag);
-    for (let i = 0; i < tags.length; i++) {
-      if (cancelRef.current || !mountedRef.current) break;
-      const tag = tags[i];
-      setBatchProgress(`${i + 1} / ${tags.length}`);
-      setDelays((prev) => ({ ...prev, [tag]: "testing" }));
-      try {
-        const r = await api.testNodeDelay(tag);
-        if (cancelRef.current || !mountedRef.current) break;
-        setDelays((prev) => ({ ...prev, [tag]: r.delay_ms }));
-      } catch {
-        if (cancelRef.current || !mountedRef.current) break;
-        setDelays((prev) => ({ ...prev, [tag]: "error" }));
-      }
+    const tags = delayTestTagsForList(nodes, expandedGroups);
+    if (tags.length === 0) {
+      setError("当前没有可测的出口");
+      return;
     }
-
-    if (!mountedRef.current) return;
-    setBatchProgress(null);
-    setBusy(false);
-    if (!cancelRef.current) {
-      setSortByDelay(true);
-    }
+    await testTags(tags);
   }
 
   function onCancelBatch() {
     cancelRef.current = true;
+    delayRunRef.current += 1;
+    clearTestingDelays();
+    setBatchProgress(null);
+    setBusy(false);
   }
 
   async function onSelect(tag: string) {
@@ -245,65 +290,102 @@ export function Nodes({ onNavigate }: Props) {
     const expanded = expandable && expandedGroups.has(n.tag);
     const membersId = groupMembersDomId(n.tag);
 
+    const titleAndMeta = (
+      <ItemContent className="min-w-0">
+        <ItemTitle
+          className={expandable ? "w-full max-w-full" : undefined}
+          title={n.tag}
+        >
+          {expandable ? (
+            <span className="inline-flex min-w-0 max-w-full items-center gap-2">
+              <ChevronRight
+                className={cn(
+                  "size-4 shrink-0 transition-transform",
+                  expanded && "rotate-90",
+                )}
+              />
+              <span className="truncate">{n.tag}</span>
+            </span>
+          ) : (
+            <span className="truncate">{n.tag}</span>
+          )}
+          {isSelected ? <Badge>选用中</Badge> : null}
+        </ItemTitle>
+        <ItemDescription>{nodeTypeLabel(n)}</ItemDescription>
+      </ItemContent>
+    );
+
+    const delayActions = (
+      <>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!running || busy}
+          title={
+            expandable
+              ? expanded
+                ? "测全部成员延迟"
+                : "测当前出口延迟"
+              : undefined
+          }
+          onClick={() =>
+            void (isGroupType(n.outbound_type) ? testGroup(n) : testOne(n.tag))
+          }
+        >
+          测速
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={busy || isSelected}
+          onClick={() => void onSelect(n.tag)}
+        >
+          选用
+        </Button>
+      </>
+    );
+
     return (
       <Item
         size="sm"
         variant={isSelected ? "muted" : "default"}
-        className="px-0"
+        className={cn("px-0", expandable && "cursor-pointer")}
       >
-        <ItemContent className="min-w-0">
-          {expandable ? (
-            <ItemTitle className="max-w-full">
-              <CollapsibleTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-auto min-w-0 max-w-full justify-start px-0"
-                  aria-label={n.tag}
-                  aria-controls={membersId}
-                  title={expanded ? "收起成员" : "展开成员"}
-                >
-                  <ChevronRight
-                    className={cn(
-                      "transition-transform",
-                      expanded && "rotate-90",
-                    )}
-                  />
-                  <span className="truncate">{n.tag}</span>
-                </Button>
-              </CollapsibleTrigger>
-              {isSelected ? <Badge>选用中</Badge> : null}
-            </ItemTitle>
-          ) : (
-            <ItemTitle title={n.tag}>
-              <span className="truncate">{n.tag}</span>
-              {isSelected ? <Badge>选用中</Badge> : null}
-            </ItemTitle>
-          )}
-          <ItemDescription>{nodeTypeLabel(n)}</ItemDescription>
-        </ItemContent>
-        <ItemActions className="flex-wrap">
-          {groupExitBadge(n)}
-          {delayBadge(delays[n.tag] ?? null)}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!running || busy}
-            onClick={() => void testOne(n.tag)}
-          >
-            测速
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy || isSelected}
-            onClick={() => void onSelect(n.tag)}
-          >
-            选用
-          </Button>
-        </ItemActions>
+        {expandable ? (
+          <>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={n.tag}
+              aria-expanded={expanded}
+              aria-controls={membersId}
+              title={expanded ? "收起成员" : "展开成员"}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
+              onClick={() => setGroupOpen(n.tag, !expanded)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setGroupOpen(n.tag, !expanded);
+                }
+              }}
+            >
+              {titleAndMeta}
+              {groupExitBadge(n)}
+              {delayBadge(delays[n.tag] ?? null)}
+            </div>
+            <ItemActions className="flex-wrap">{delayActions}</ItemActions>
+          </>
+        ) : (
+          <>
+            {titleAndMeta}
+            <ItemActions className="flex-wrap">
+              {groupExitBadge(n)}
+              {delayBadge(delays[n.tag] ?? null)}
+              {delayActions}
+            </ItemActions>
+          </>
+        )}
       </Item>
     );
   }
@@ -407,16 +489,6 @@ export function Nodes({ onNavigate }: Props) {
                 取消
               </Button>
             ) : null}
-            <Toggle
-              size="sm"
-              variant="outline"
-              pressed={sortByDelay}
-              onPressedChange={setSortByDelay}
-              disabled={busy || nodes.length === 0}
-              aria-label="按延迟排序"
-            >
-              按延迟排序
-            </Toggle>
           </CardAction>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto">
@@ -431,7 +503,7 @@ export function Nodes({ onNavigate }: Props) {
             />
           ) : (
             <ItemGroup aria-label="节点列表" className="gap-0">
-              {displayNodes.map((n, index) => {
+              {nodes.map((n, index) => {
                 const members = n.group_all ?? [];
                 const expandable =
                   isGroupType(n.outbound_type) && members.length > 0;

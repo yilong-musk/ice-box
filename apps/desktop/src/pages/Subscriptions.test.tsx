@@ -156,6 +156,11 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByRole("button", { name: "应用配置" })).toBeInTheDocument();
     });
+    const row = view.getByText("sub-a").closest("[data-slot='item']");
+    expect(row?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["px-3", "py-2.5"]),
+    );
+    expect(row?.className.split(/\s+/)).not.toContain("px-0");
 
     view.getByRole("button", { name: "应用配置" }).click();
     await waitFor(() => {

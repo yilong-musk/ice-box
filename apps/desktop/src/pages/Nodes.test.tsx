@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Nodes } from "./Nodes";
 
@@ -6,6 +7,7 @@ const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getStatus = vi.fn();
 const setGroupSelection = vi.fn();
+const testNodeDelay = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -14,7 +16,7 @@ vi.mock("../api/tauri", () => ({
     getStatus: (...args: unknown[]) => getStatus(...args),
     setSelectedNode: vi.fn(),
     setGroupSelection: (...args: unknown[]) => setGroupSelection(...args),
-    testNodeDelay: vi.fn(),
+    testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -57,6 +59,10 @@ describe("Nodes", () => {
       system_proxy_available: true,
     });
     setGroupSelection.mockResolvedValue(undefined);
+    testNodeDelay.mockImplementation(async (tag: string) => ({
+      tag,
+      delay_ms: 42,
+    }));
   });
 
   it("renders node list from backend", async () => {
@@ -71,10 +77,7 @@ describe("Nodes", () => {
     expect(view.getByRole("list", { name: "节点列表" })).toBeInTheDocument();
     expect(view.getByText("节点")).toBeInTheDocument();
     expect(view.getByRole("button", { name: "批量测延迟" })).toBeInTheDocument();
-    expect(view.getByRole("button", { name: "按延迟排序" })).toHaveAttribute(
-      "data-state",
-      "off",
-    );
+    expect(view.queryByRole("button", { name: "按延迟排序" })).toBeNull();
     expect(container.querySelector(".nodes-panel")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
     );
@@ -115,6 +118,34 @@ describe("Nodes", () => {
     fireEvent.click(toggle);
     expect(await view.findByLabelText(`${groupName} 成员`)).toBeInTheDocument();
   }
+
+  it("toggles a strategy group from the row except 测速 and 选用", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    const toggle = await view.findByRole("button", {
+      name: "选择组",
+      expanded: false,
+    });
+    const row = toggle.closest("[data-slot='item']");
+    expect(row).not.toBeNull();
+    const rowView = within(row as HTMLElement);
+
+    fireEvent.click(view.getByText("策略组 · selector"));
+    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+
+    fireEvent.click(view.getByText("策略组 · selector"));
+    expect(view.queryByLabelText("选择组 成员")).not.toBeInTheDocument();
+
+    fireEvent.click(rowView.getByText("→ node-a"));
+    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+
+    fireEvent.click(rowView.getByRole("button", { name: "测速" }));
+    expect(view.getByLabelText("选择组 成员")).toBeInTheDocument();
+
+    fireEvent.click(rowView.getByRole("button", { name: "选用" }));
+    expect(view.getByLabelText("选择组 成员")).toBeInTheDocument();
+  });
 
   it("expands selector group and switches exit by clicking a member", async () => {
     const { container } = render(<Nodes />);
@@ -174,5 +205,179 @@ describe("Nodes", () => {
     const panel = view.getByLabelText("My Group 成员").closest("[id]");
     expect(panel?.id).toBe("group-members-My_20Group");
     expect(panel?.id.includes(" ")).toBe(false);
+  });
+
+  async function clickGroupDelayTest(
+    view: ReturnType<typeof within>,
+    groupName: string,
+    expanded: boolean,
+  ) {
+    const toggle = await view.findByRole("button", {
+      name: groupName,
+      expanded,
+    });
+    const row = toggle.closest("[data-slot='item']");
+    expect(row).not.toBeNull();
+    fireEvent.click(
+      within(row as HTMLElement).getByRole("button", { name: "测速" }),
+    );
+  }
+
+  it("tests only the selected exit when a strategy group is collapsed", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await clickGroupDelayTest(view, "选择组", false);
+
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledWith("node-a");
+    });
+    expect(testNodeDelay).toHaveBeenCalledTimes(1);
+    expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
+    expect(testNodeDelay).not.toHaveBeenCalledWith("node-b");
+    const toggle = view.getByRole("button", { name: "选择组" });
+    const row = toggle.closest("[data-slot='item']");
+    await waitFor(() => {
+      expect(within(row as HTMLElement).getByText("42 ms")).toHaveClass(
+        "text-ok",
+      );
+    });
+  });
+
+  it("tests every member when a strategy group is expanded", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await expandGroup(view, "选择组");
+    await clickGroupDelayTest(view, "选择组", true);
+
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledWith("node-a");
+      expect(testNodeDelay).toHaveBeenCalledWith("node-b");
+    });
+    expect(testNodeDelay).toHaveBeenCalledTimes(2);
+    expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
+  });
+
+  it("shows an error when a collapsed group has no exit to test", async () => {
+    listNodes.mockResolvedValue([
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: null,
+        group_all: ["node-a", "node-b"],
+      },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await clickGroupDelayTest(view, "选择组", false);
+
+    expect(
+      await view.findByText("当前策略组没有可测的出口"),
+    ).toBeInTheDocument();
+    expect(testNodeDelay).not.toHaveBeenCalled();
+  });
+
+  it("shows an error when batch delay test has no leaf exits", async () => {
+    listNodes.mockResolvedValue([
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: null,
+        group_all: ["node-a"],
+      },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    fireEvent.click(await view.findByRole("button", { name: "批量测延迟" }));
+
+    expect(await view.findByText("当前没有可测的出口")).toBeInTheDocument();
+    expect(testNodeDelay).not.toHaveBeenCalled();
+  });
+
+  it("expands a strategy group from the keyboard", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const toggle = await view.findByRole("button", {
+      name: "选择组",
+      expanded: false,
+    });
+    toggle.focus();
+    await user.keyboard("{Enter}");
+    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+  });
+
+  it("clears an in-flight delay cell when cancelled", async () => {
+    let settle = (_value: { tag: string; delay_ms: number }) => {};
+    testNodeDelay.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await expandGroup(view, "选择组");
+    await clickGroupDelayTest(view, "选择组", true);
+
+    try {
+      await waitFor(() => {
+        expect(view.getAllByText("…").length).toBeGreaterThan(0);
+      });
+      fireEvent.click(view.getByRole("button", { name: "取消" }));
+      await waitFor(() => {
+        expect(view.queryAllByText("…")).toHaveLength(0);
+      });
+    } finally {
+      settle({ tag: "node-a", delay_ms: 1 });
+    }
+  });
+
+  it("keeps original node order after batch delay test", async () => {
+    testNodeDelay.mockImplementation(async (tag: string) => ({
+      tag,
+      delay_ms: tag === "node-b" ? 10 : 800,
+    }));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    fireEvent.click(await view.findByRole("button", { name: "批量测延迟" }));
+
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledTimes(2);
+    });
+    expect(testNodeDelay).toHaveBeenCalledWith("node-a");
+    expect(testNodeDelay).toHaveBeenCalledWith("node-b");
+    expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
+    expect(testNodeDelay).not.toHaveBeenCalledWith("自动组");
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "批量测延迟" })).toBeEnabled();
+    });
+
+    const titles = [
+      ...container.querySelectorAll(
+        '[aria-label="节点列表"] [data-slot="item-title"]',
+      ),
+    ].map((el) =>
+      (el.textContent ?? "").replace(/选用中/g, "").replace(/\s+/g, " ").trim(),
+    );
+    expect(titles).toEqual(["node-a", "node-b", "选择组", "自动组"]);
+
+    const selectorRow = view
+      .getByRole("button", { name: "选择组" })
+      .closest("[data-slot='item']");
+    expect(within(selectorRow as HTMLElement).getByText("800 ms")).toHaveClass(
+      "text-warn",
+    );
+    const autoRow = view
+      .getByRole("button", { name: "自动组" })
+      .closest("[data-slot='item']");
+    expect(within(autoRow as HTMLElement).getByText("10 ms")).toHaveClass(
+      "text-ok",
+    );
   });
 });

@@ -96,9 +96,26 @@ describe("Rules", () => {
     expect(stats).toHaveTextContent(/自定义\s*1/);
     expect(stats).toHaveTextContent(/规则集\s*2/);
     expect(view.getByRole("radio", { name: "域名后缀 2" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "全部" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "GEOIP 1" })).toBeInTheDocument();
+    const typeFilters = view.getByLabelText("规则类型筛选");
+    expect(typeFilters.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-wrap", "shrink-0", "h-auto"]),
+    );
+    expect(typeFilters.className.split(/\s+/)).not.toContain("max-h-16");
     expect(view.getByText("example.com")).toBeInTheDocument();
     expect(container.querySelector(".node-table")).toBeNull();
     expect(view.getByRole("list", { name: "规则列表" })).toBeInTheDocument();
+    const ruleList = view.getByRole("list", { name: "规则列表" });
+    expect(ruleList.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["min-h-0", "flex-1", "overflow-auto"]),
+    );
+    expect(ruleList.parentElement?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-hidden"]),
+    );
+    expect(ruleList.parentElement?.className.split(/\s+/)).not.toContain(
+      "overflow-auto",
+    );
     expect(
       container.querySelector(".rules-panel")?.className.split(/\s+/),
     ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
@@ -175,6 +192,13 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    const formCard = view.getByText("匹配类型").closest("[data-slot='card']");
+    expect(formCard?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["shrink-0", "overflow-visible"]),
+    );
+    expect(view.getByLabelText("匹配值")).toBeInTheDocument();
+    expect(view.getByLabelText("出口")).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "添加" })).toBeInTheDocument();
     fireEvent.change(view.getByLabelText("匹配值"), {
       target: { value: "x.io, y.io" },
     });

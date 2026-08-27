@@ -41,8 +41,14 @@ describe("Logs", () => {
     expect(view.queryByRole("combobox")).toBeNull();
     const logView = container.querySelector(".log-view");
     expect(logView?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["min-h-0", "flex-1", "overflow-auto"]),
+      expect.arrayContaining([
+        "min-h-0",
+        "flex-1",
+        "overflow-auto",
+        "text-foreground",
+      ]),
     );
+    expect(logView?.className.split(/\s+/)).not.toContain("text-muted-foreground");
   });
 
   it("polls automatically", async () => {
