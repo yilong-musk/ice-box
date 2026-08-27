@@ -155,16 +155,14 @@ fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), Ap
     Ok(())
 }
 
-/// Display-only simplification for core lines: drop the `+HHMM` zone token, drop the
+/// Display-only simplification for core lines: drop the `±HHMM` zone token, drop the
 /// per-connection `[<id> <ms>]` prefix, and rewrite
 /// `outbound/<type>[<tag>]: outbound connection to <host>` as
 /// `outbound/<type>[<tag>] → <host>`.
 fn simplify_core_line(text: &str) -> String {
     let mut toks: Vec<&str> = text.split_whitespace().collect();
 
-    if toks.first().is_some_and(|t| {
-        t.len() == 5 && t.starts_with('+') && t[1..].chars().all(|c| c.is_ascii_digit())
-    }) {
+    if toks.first().is_some_and(|t| is_zone_token(t)) {
         toks.remove(0);
     }
 
@@ -197,10 +195,69 @@ fn simplify_core_line(text: &str) -> String {
     joined
 }
 
+fn format_short_ts(ts: DateTime<FixedOffset>) -> String {
+    ts.format("%m-%d %H:%M:%S").to_string()
+}
+
+fn skip_first_ws_token(text: &str) -> &str {
+    match text.trim_start().split_once(char::is_whitespace) {
+        Some((_, tail)) => tail.trim_start(),
+        None => text.trim_start(),
+    }
+}
+
+fn is_zone_token(tok: &str) -> bool {
+    tok.len() == 5
+        && (tok.starts_with('+') || tok.starts_with('-'))
+        && tok[1..].chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_ymd_token(tok: &str) -> bool {
+    tok.len() == 10 && tok.as_bytes().get(4) == Some(&b'-') && tok.as_bytes().get(7) == Some(&b'-')
+}
+
+fn is_hms_token(tok: &str) -> bool {
+    tok.len() == 8 && tok.as_bytes().get(2) == Some(&b':') && tok.as_bytes().get(5) == Some(&b':')
+}
+
+/// Drop original timestamp tokens (RFC3339, `YYYY-MM-DD HH:MM:SS`, optional `±HHMM`).
+fn strip_leading_timestamp(text: &str) -> &str {
+    let mut rest = text.trim_start();
+    if rest.split_whitespace().next().is_some_and(is_zone_token) {
+        rest = skip_first_ws_token(rest);
+    }
+    if rest.split_whitespace().next().is_some_and(is_ymd_token) {
+        rest = skip_first_ws_token(rest);
+    }
+    if rest.split_whitespace().next().is_some_and(is_hms_token) {
+        rest = skip_first_ws_token(rest);
+    } else if rest
+        .split_whitespace()
+        .next()
+        .is_some_and(|t| t.contains('T'))
+    {
+        rest = skip_first_ws_token(rest);
+    }
+    rest
+}
+
+/// Compact display line: `MM-DD HH:MM:SS LEVEL message` (no `[app]`/`[core]` tag).
+fn format_display_line(ts: DateTime<FixedOffset>, source: Source, raw: &str) -> String {
+    let rendered = match source {
+        Source::Core => simplify_core_line(raw),
+        Source::App => raw.to_string(),
+    };
+    format!(
+        "{} {}",
+        format_short_ts(ts),
+        strip_leading_timestamp(&rendered)
+    )
+}
+
 /// Read the merged, filtered log view: app + core tails, sorted by time, capped at `n`.
 ///
-/// The returned lines are the original file lines prefixed with their source tag; the
-/// filter never touches the log files themselves.
+/// Display lines use a compact timestamp and omit source tags; the filter never
+/// touches the log files themselves.
 pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<String>, AppError> {
     let n = n.min(VIEW_MAX);
     let mut lines: Vec<LogLine> = Vec::new();
@@ -210,17 +267,7 @@ pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<St
     lines.truncate(n);
     Ok(lines
         .into_iter()
-        .map(|l| {
-            let tag = match l.source {
-                Source::App => "app",
-                Source::Core => "core",
-            };
-            let text = match l.source {
-                Source::Core => simplify_core_line(&l.text),
-                Source::App => l.text,
-            };
-            format!("[{tag}] {text}")
-        })
+        .map(|l| format_display_line(l.ts, l.source, &l.text))
         .collect())
 }
 
@@ -343,6 +390,23 @@ mod tests {
     }
 
     #[test]
+    fn formats_compact_display_lines() {
+        let app = "2026-08-23T13:47:01.123456Z  INFO ice_core: sing-box ready on 127.0.0.1:17890";
+        let (ts, _) = parse_app_line(app).expect("parse");
+        assert_eq!(
+            format_display_line(ts, Source::App, app),
+            "08-23 13:47:01 INFO ice_core: sing-box ready on 127.0.0.1:17890"
+        );
+
+        let core = "+0800 2026-08-23 15:06:15 INFO [591640413 0ms] outbound/trojan[美国 1]: outbound connection to example.com:443";
+        let (ts, _) = parse_core_line(core).expect("parse");
+        assert_eq!(
+            format_display_line(ts, Source::Core, core),
+            "08-23 15:06:15 INFO outbound/trojan[美国 1] → example.com:443"
+        );
+    }
+
+    #[test]
     fn merges_sorted_filtered_view() {
         let dir = temp_dir("merge");
         fs::create_dir_all(&dir).unwrap();
@@ -375,14 +439,27 @@ mod tests {
             5,
             "debug hidden, outbound routing kept: {view:?}"
         );
-        assert!(view[0].starts_with("[core] "), "earliest first: {view:?}");
-        assert!(view[0].contains("sing-box started"));
+        assert!(
+            view.iter()
+                .all(|l| !l.contains("[app]") && !l.contains("[core]")),
+            "source tags stripped: {view:?}"
+        );
+        assert_eq!(view[0], "08-23 13:47:01 INFO sing-box started (0.00s)");
         assert!(!view[0].contains("+0000"), "zone token stripped: {view:?}");
-        assert!(view[1].starts_with("[app] "));
-        assert!(view[1].contains("sing-box ready"));
+        assert_eq!(
+            view[1],
+            "08-23 13:47:02 INFO ice_core: sing-box ready on 127.0.0.1:17890"
+        );
+        assert!(
+            !view[1].contains('T') && !view[1].contains('Z'),
+            "rfc3339 compacted: {view:?}"
+        );
         assert!(view[2].contains("proxy apply slow"));
-        assert!(view[3].starts_with("[core] "));
-        assert!(view[3].contains("→ example.com:443"));
+        assert!(view[2].starts_with("08-23 13:47:03 "));
+        assert_eq!(
+            view[3],
+            "08-23 13:47:06 INFO outbound/trojan[香港 IEPL 专线 1] → example.com:443"
+        );
         assert!(!view[3].contains('\u{1b}'), "ansi stripped from view");
         assert!(
             !view[3].contains("591640413"),
@@ -390,6 +467,7 @@ mod tests {
         );
         assert!(!view[3].contains("0ms]"), "delay prefix stripped: {view:?}");
         assert!(view[4].contains("connection refused"));
+        assert!(view[4].starts_with("08-23 13:47:07 "));
         let _ = fs::remove_dir_all(&dir);
     }
 

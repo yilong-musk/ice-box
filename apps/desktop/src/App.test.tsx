@@ -112,10 +112,28 @@ describe("App", () => {
       expect.arrayContaining(["content-fill", "overflow-hidden"]),
     );
 
+    fireEvent.click(view.getByRole("button", { name: "节点" }));
+    expect(container.querySelector(".nodes-panel")).not.toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["content-fill", "overflow-hidden"]),
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "规则" }));
+    expect(container.querySelector(".rules-panel")).not.toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["content-fill", "overflow-hidden"]),
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "订阅" }));
+    expect(container.querySelector(".subs-panel")).not.toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["content-fill", "overflow-hidden"]),
+    );
+
     fireEvent.click(view.getByRole("button", { name: "设置" }));
-    expect(container.querySelector(".content-fill")).toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toContain(
-      "overflow-auto",
+    expect(container.querySelector(".settings-panel")).not.toBeNull();
+    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["content-fill", "overflow-hidden"]),
     );
   });
 
@@ -125,17 +143,17 @@ describe("App", () => {
     fireEvent.click(view.getByRole("button", { name: "设置" }));
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "跟随系统" })).toBeInTheDocument();
+      expect(view.getByRole("radio", { name: "跟随系统" })).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "深色" }));
+    fireEvent.click(view.getByRole("radio", { name: "深色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    fireEvent.click(view.getByRole("button", { name: "浅色" }));
+    fireEvent.click(view.getByRole("radio", { name: "浅色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(false);
-    fireEvent.click(view.getByRole("button", { name: "跟随系统" }));
-    expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    fireEvent.click(view.getByRole("radio", { name: "跟随系统" }));
+    expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+      "data-state",
+      "on",
     );
   });
 

@@ -90,12 +90,18 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    expect(view.getByText("3", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("已禁用 1")).toBeInTheDocument();
-    expect(view.getByText("1", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("2", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("域名后缀 2")).toBeInTheDocument();
+    const stats = view.getByLabelText("规则统计");
+    expect(stats).toHaveTextContent(/规则\s*3/);
+    expect(view.getByRole("button", { name: "已禁用 1" })).toBeInTheDocument();
+    expect(stats).toHaveTextContent(/自定义\s*1/);
+    expect(stats).toHaveTextContent(/规则集\s*2/);
+    expect(view.getByRole("radio", { name: "域名后缀 2" })).toBeInTheDocument();
     expect(view.getByText("example.com")).toBeInTheDocument();
+    expect(container.querySelector(".node-table")).toBeNull();
+    expect(view.getByRole("list", { name: "规则列表" })).toBeInTheDocument();
+    expect(
+      container.querySelector(".rules-panel")?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
   });
 
   it("debounces keyword search and sends server-side filters", async () => {
@@ -126,7 +132,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("youtube.com").closest("li") as HTMLElement;
+    const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
     within(row).getByRole("button", { name: "禁用" }).click();
 
     await waitFor(() => {
@@ -152,7 +158,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("youtube.com").closest("li") as HTMLElement;
+    const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
     within(row).getByRole("button", { name: "禁用" }).click();
 
     await waitFor(() => {
@@ -222,8 +228,8 @@ describe("Rules", () => {
     fireEvent.change(view.getByLabelText("匹配类型"), {
       target: { value: "ip_is_private" },
     });
-    const checkbox = view.getByLabelText("私网 IP") as HTMLInputElement;
-    expect(checkbox.type).toBe("checkbox");
+    const checkbox = view.getByRole("checkbox", { name: "私网 IP" });
+    expect(checkbox).toBeInTheDocument();
 
     view.getByRole("button", { name: "添加" }).click();
     await waitFor(() => {
@@ -266,7 +272,7 @@ describe("Rules", () => {
       expect(view.getByText("example.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("example.com").closest("li") as HTMLElement;
+    const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
     within(row).getByRole("button", { name: "删除" }).click();
 
     await waitFor(() => {

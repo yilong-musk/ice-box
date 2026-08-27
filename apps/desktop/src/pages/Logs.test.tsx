@@ -14,8 +14,8 @@ vi.mock("../api/tauri", () => ({
 const POLL_MS = 2000;
 
 const baseTail = [
-  "[app] 2026-08-23T13:47:02.000000Z  INFO ice_core: sing-box ready",
-  "[core] +0800 2026-08-23 13:47:06 ERROR outbound: dial tcp: connection refused",
+  "08-23 13:47:02 INFO ice_core: sing-box ready",
+  "08-23 13:47:06 ERROR outbound: dial tcp: connection refused",
 ];
 
 describe("Logs", () => {
@@ -98,7 +98,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "[core] outbound/trojan[香港 1]: outbound connection to example.com:443",
+      "08-23 13:47:08 INFO outbound/trojan[香港 1] → example.com:443",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -136,7 +136,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "[core] another connection line",
+      "08-23 13:47:09 INFO another connection line",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);

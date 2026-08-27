@@ -125,13 +125,7 @@ function App() {
               </div>
             )}
 
-            <main
-              className={
-                tab === "logs" || tab === "home"
-                  ? "content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
-                  : "content-main min-h-0 flex-1 overflow-auto p-4"
-              }
-            >
+            <main className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4">
               {tab === "home" && <Home onNavigate={setTab} />}
               {tab === "nodes" && <Nodes onNavigate={setTab} />}
               {tab === "subs" && <Subscriptions />}

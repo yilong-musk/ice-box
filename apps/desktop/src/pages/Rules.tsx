@@ -9,10 +9,41 @@ import {
 } from "../api/tauri";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   buildCustomRule,
@@ -225,286 +256,348 @@ export function Rules({ onNavigate }: Props) {
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      {error && <ErrorAlert>{error}</ErrorAlert>}
+    <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3">
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {applyWarning && (
-        <WarnAlert role="alert">
+        <WarnAlert className="shrink-0" role="alert">
           已保存，但应用失败：{applyWarning}
         </WarnAlert>
       )}
 
-      <div className="rule-stats" aria-label="规则统计">
-        <span className="rule-stat">
-          规则 <strong>{overview.total}</strong>
-        </span>
-        <Button
-          type="button"
-          size="xs"
-          variant={filters.status === "disabled" ? "secondary" : "outline"}
-          onClick={() =>
-            changeFilters({
-              status: filters.status === "disabled" ? "all" : "disabled",
-            })
-          }
-        >
-          已禁用 {overview.disabled}
-        </Button>
-        <span className="rule-stat">
-          自定义 <strong>{overview.custom}</strong>
-        </span>
-        <span className="rule-stat">
-          规则集 <strong>{overview.rule_sets}</strong>
-        </span>
-      </div>
-
-      {overview.types.length > 0 && (
-        <div className="rule-type-chips" aria-label="规则类型筛选">
-          <Button
-            type="button"
-            size="xs"
-            variant={filters.type === "" ? "secondary" : "outline"}
-            onClick={() => changeFilters({ type: "" })}
-          >
-            全部
-          </Button>
-          {overview.types.map((t) => (
-            <Button
-              key={t.rule_type}
-              type="button"
-              size="xs"
-              variant={filters.type === t.rule_type ? "secondary" : "outline"}
-              onClick={() =>
-                changeFilters({ type: filters.type === t.rule_type ? "" : t.rule_type })
-              }
-            >
-              {ruleTypeLabel(t.rule_type)} {t.count}
-            </Button>
-          ))}
-        </div>
-      )}
-
-      <div className="rule-toolbar">
-        <Input
-          type="search"
-          className="min-w-48 flex-1"
-          placeholder="搜索域名 / 出口 / 规则集…"
-          aria-label="搜索规则"
-          value={filters.keyword}
-          onChange={(e) => changeFilters({ keyword: e.target.value })}
-        />
-        <NativeSelect
-          aria-label="禁用状态筛选"
-          className="w-auto"
-          value={filters.status}
-          onChange={(e) =>
-            changeFilters({ status: e.target.value as StatusFilter })
-          }
-        >
-          <option value="all">全部状态</option>
-          <option value="enabled">仅启用</option>
-          <option value="disabled">仅禁用</option>
-        </NativeSelect>
-        <NativeSelect
-          aria-label="每页条数"
-          className="w-auto"
-          value={limit}
-          onChange={(e) => {
-            setLimit(Number(e.target.value));
-            setOffset(0);
-          }}
-        >
-          {PAGE_SIZES.map((n) => (
-            <option key={n} value={n}>
-              每页 {n}
-            </option>
-          ))}
-        </NativeSelect>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => void load()}
-          disabled={busy}
-        >
-          刷新
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            setShowCustomForm((v) => !v);
-            setCustomError(null);
-          }}
-        >
-          {showCustomForm ? "收起" : "+ 自定义规则"}
-        </Button>
-      </div>
-
-      {showCustomForm && (
-        <div className="rule-custom-form">
-          <div className="rule-custom-fields">
-            <label>
-              匹配类型
-              <NativeSelect
-                aria-label="匹配类型"
-                value={matcherKey}
-                onChange={(e) => {
-                  setMatcherKey(e.target.value);
-                  setMatcherValue("");
-                  setCustomError(null);
-                }}
-              >
-                {RULE_MATCHER_DEFS.map((d) => (
-                  <option key={d.key} value={d.key}>
-                    {d.label}
-                  </option>
-                ))}
-              </NativeSelect>
-            </label>
-            {previewDef?.kind === "boolean" ? (
-              <label>
-                {previewDef.label}
-                <span className="rule-custom-bool">
-                  <input
-                    type="checkbox"
-                    aria-label={previewDef.label}
-                    checked={matcherBool}
-                    onChange={(e) => setMatcherBool(e.target.checked)}
-                  />
-                  匹配{previewDef.label}
-                </span>
-              </label>
-            ) : (
-              <label>
-                匹配值
-                <Input
-                  type="text"
-                  aria-label="匹配值"
-                  placeholder={previewDef?.placeholder}
-                  value={matcherValue}
-                  onChange={(e) => {
-                    setMatcherValue(e.target.value);
-                    setCustomError(null);
-                  }}
-                />
-              </label>
-            )}
-            <label>
-              出口
-              <NativeSelect
-                aria-label="出口"
-                value={outbound}
-                onChange={(e) => setOutbound(e.target.value)}
-              >
-                <option value="direct">direct（直连）</option>
-                <option value="block">block（拦截）</option>
-                {nodeOptions.map((n) => (
-                  <option key={n.tag} value={n.tag}>
-                    {n.tag}
-                    {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
-                      ? "（策略组）"
-                      : ""}
-                  </option>
-                ))}
-              </NativeSelect>
-            </label>
-          </div>
-          {customError && <p className="error">{customError}</p>}
-          {previewRule && (
-            <p className="text-xs">
-              <span className="muted">预览：</span>
-              <code>{JSON.stringify(previewRule)}</code>
+      <div
+        className="grid shrink-0 grid-cols-4 items-stretch gap-3"
+        aria-label="规则统计"
+      >
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>规则</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="font-heading text-sm font-medium tabular-nums">
+              {overview.total}
             </p>
-          )}
-          <div className="flex gap-2">
+          </CardContent>
+        </Card>
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>已禁用</CardTitle>
+          </CardHeader>
+          <CardContent>
             <Button
               type="button"
               size="sm"
-              disabled={busy || !previewRule}
-              onClick={() => void onAddCustomRule()}
+              className="w-full"
+              variant={filters.status === "disabled" ? "secondary" : "outline"}
+              aria-pressed={filters.status === "disabled"}
+              onClick={() =>
+                changeFilters({
+                  status: filters.status === "disabled" ? "all" : "disabled",
+                })
+              }
             >
-              添加
+              已禁用 {overview.disabled}
             </Button>
+          </CardContent>
+        </Card>
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>自定义</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="font-heading text-sm font-medium tabular-nums">
+              {overview.custom}
+            </p>
+          </CardContent>
+        </Card>
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>规则集</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="font-heading text-sm font-medium tabular-nums">
+              {overview.rule_sets}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0">
+          <CardTitle>规则</CardTitle>
+          <CardDescription>查询、禁用或添加自定义规则</CardDescription>
+          <CardAction className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void load()}
+              disabled={busy}
+            >
+              刷新
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setShowCustomForm((v) => !v);
+                setCustomError(null);
+              }}
+            >
+              {showCustomForm ? "收起" : "+ 自定义规则"}
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="search"
+              className="min-w-48 flex-1"
+              placeholder="搜索域名 / 出口 / 规则集…"
+              aria-label="搜索规则"
+              value={filters.keyword}
+              onChange={(e) => changeFilters({ keyword: e.target.value })}
+            />
+            <NativeSelect
+              aria-label="禁用状态筛选"
+              className="w-auto"
+              size="sm"
+              value={filters.status}
+              onChange={(e) =>
+                changeFilters({ status: e.target.value as StatusFilter })
+              }
+            >
+              <NativeSelectOption value="all">全部状态</NativeSelectOption>
+              <NativeSelectOption value="enabled">仅启用</NativeSelectOption>
+              <NativeSelectOption value="disabled">仅禁用</NativeSelectOption>
+            </NativeSelect>
+            <NativeSelect
+              aria-label="每页条数"
+              className="w-auto"
+              size="sm"
+              value={limit}
+              onChange={(e) => {
+                setLimit(Number(e.target.value));
+                setOffset(0);
+              }}
+            >
+              {PAGE_SIZES.map((n) => (
+                <NativeSelectOption key={n} value={n}>
+                  每页 {n}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </div>
-          <p className="hint">
-            自定义规则优先于订阅规则生效，出口需为 direct / block 或现有节点 / 策略组标签。
-          </p>
-        </div>
-      )}
 
-      {!showList ? (
-        <EmptyState
-          title="暂无规则"
-          description="当前没有订阅规则，也没有自定义规则。导入含规则的订阅后可在此查询、禁用规则或添加自定义规则。"
-          actionLabel="前往订阅页导入"
-          onAction={() => onNavigate?.("subs")}
-        />
-      ) : (
-        <Card size="sm">
-          <CardContent className="space-y-3">
-          <ul className="node-table rule-table" aria-label="规则列表">
-            <li className="node-table-head rule-table-head">
-              <span>#</span>
-              <span>类型</span>
-              <span>匹配</span>
-              <span>出口</span>
-              <span>操作</span>
-            </li>
-            {rows.map((row) => {
-              const summary = ruleMatchSummary(row);
-              return (
-                <li
-                  key={row.fingerprint}
-                  className={row.disabled ? "node-table-row rule-disabled" : "node-table-row"}
-                >
-                  <span className="rule-index muted">
-                    {row.custom ? (
-                      <span className="rule-custom-badge">自定义</span>
-                    ) : (
-                      `#${(row.index ?? 0) + 1}`
-                    )}
-                  </span>
-                  <span className="rule-type">
-                    {ruleTypeLabel(row.rule_type)}
-                  </span>
-                  <span
-                    className="rule-match"
-                    title={`${summary}\n${JSON.stringify(row.rule)}`}
-                  >
-                    {summary || JSON.stringify(row.rule)}
-                  </span>
-                  <span className="rule-outbound" title={ruleOutbound(row)}>
-                    {ruleOutbound(row) || "—"}
-                  </span>
-                  <span className="node-row-actions">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => void onToggleDisabled(row)}
+          {overview.types.length > 0 ? (
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={2}
+              value={filters.type || "all"}
+              onValueChange={(value) => {
+                changeFilters({
+                  type: !value || value === "all" ? "" : value,
+                });
+              }}
+              className="max-h-16 w-full flex-wrap justify-start overflow-auto"
+              aria-label="规则类型筛选"
+            >
+              <ToggleGroupItem value="all">全部</ToggleGroupItem>
+              {overview.types.map((t) => (
+                <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
+                  {ruleTypeLabel(t.rule_type)} {t.count}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          ) : null}
+
+          {showCustomForm ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>自定义规则</CardTitle>
+                <CardDescription>
+                  自定义规则优先于订阅规则生效，出口需为 direct / block
+                  或现有节点 / 策略组标签。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <FieldGroup className="grid grid-cols-1 gap-2.5 min-[560px]:grid-cols-3">
+                  <Field>
+                    <FieldLabel htmlFor="rule-matcher-type">匹配类型</FieldLabel>
+                    <NativeSelect
+                      id="rule-matcher-type"
+                      aria-label="匹配类型"
+                      value={matcherKey}
+                      onChange={(e) => {
+                        setMatcherKey(e.target.value);
+                        setMatcherValue("");
+                        setCustomError(null);
+                      }}
                     >
-                      {row.disabled ? "启用" : "禁用"}
-                    </Button>
-                    {row.custom && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="destructive"
-                        disabled={busy}
-                        onClick={() => void onRemoveCustom(row)}
-                      >
-                        删除
-                      </Button>
-                    )}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+                      {RULE_MATCHER_DEFS.map((d) => (
+                        <NativeSelectOption key={d.key} value={d.key}>
+                          {d.label}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                  {previewDef?.kind === "boolean" ? (
+                    <Field>
+                      <FieldLabel htmlFor="rule-matcher-bool">
+                        {previewDef.label}
+                      </FieldLabel>
+                      <Field orientation="horizontal">
+                        <Checkbox
+                          id="rule-matcher-bool"
+                          checked={matcherBool}
+                          onCheckedChange={(checked) =>
+                            setMatcherBool(checked === true)
+                          }
+                          aria-label={previewDef.label}
+                        />
+                        <FieldDescription>
+                          匹配{previewDef.label}
+                        </FieldDescription>
+                      </Field>
+                    </Field>
+                  ) : (
+                    <Field>
+                      <FieldLabel htmlFor="rule-match-value">匹配值</FieldLabel>
+                      <Input
+                        id="rule-match-value"
+                        type="text"
+                        aria-label="匹配值"
+                        placeholder={previewDef?.placeholder}
+                        value={matcherValue}
+                        onChange={(e) => {
+                          setMatcherValue(e.target.value);
+                          setCustomError(null);
+                        }}
+                      />
+                    </Field>
+                  )}
+                  <Field>
+                    <FieldLabel htmlFor="rule-outbound">出口</FieldLabel>
+                    <NativeSelect
+                      id="rule-outbound"
+                      aria-label="出口"
+                      value={outbound}
+                      onChange={(e) => setOutbound(e.target.value)}
+                    >
+                      <NativeSelectOption value="direct">
+                        direct（直连）
+                      </NativeSelectOption>
+                      <NativeSelectOption value="block">
+                        block（拦截）
+                      </NativeSelectOption>
+                      {nodeOptions.map((n) => (
+                        <NativeSelectOption key={n.tag} value={n.tag}>
+                          {n.tag}
+                          {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
+                            ? "（策略组）"
+                            : ""}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                </FieldGroup>
+                {customError ? <FieldError>{customError}</FieldError> : null}
+                {previewRule ? (
+                  <FieldDescription>
+                    预览：<code>{JSON.stringify(previewRule)}</code>
+                  </FieldDescription>
+                ) : null}
+                <div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy || !previewRule}
+                    onClick={() => void onAddCustomRule()}
+                  >
+                    添加
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
-          <div className="rule-pager">
+          {!showList ? (
+            <EmptyState
+              framed={false}
+              className="my-auto"
+              title="暂无规则"
+              description="当前没有订阅规则，也没有自定义规则。导入含规则的订阅后可在此查询、禁用规则或添加自定义规则。"
+              actionLabel="前往订阅页导入"
+              onAction={() => onNavigate?.("subs")}
+            />
+          ) : (
+            <ItemGroup aria-label="规则列表" className="gap-0">
+              {rows.map((row, index) => {
+                const summary = ruleMatchSummary(row);
+                const outboundLabel = ruleOutbound(row) || "—";
+                return (
+                  <div key={row.fingerprint}>
+                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                    <Item
+                      size="sm"
+                      variant={row.disabled ? "muted" : "default"}
+                      className={cn("px-0", row.disabled && "opacity-55")}
+                    >
+                      <ItemContent className="min-w-0">
+                        <ItemTitle
+                          title={`${summary}\n${JSON.stringify(row.rule)}`}
+                        >
+                          <span className="truncate">
+                            {summary || JSON.stringify(row.rule)}
+                          </span>
+                          {row.custom ? (
+                            <Badge>自定义</Badge>
+                          ) : (
+                            <Badge variant="outline" className="font-mono">
+                              #{(row.index ?? 0) + 1}
+                            </Badge>
+                          )}
+                        </ItemTitle>
+                        <ItemDescription>
+                          {ruleTypeLabel(row.rule_type)}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="flex-wrap">
+                        <Badge variant="outline" title={outboundLabel}>
+                          {outboundLabel}
+                        </Badge>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => void onToggleDisabled(row)}
+                        >
+                          {row.disabled ? "启用" : "禁用"}
+                        </Button>
+                        {row.custom ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() => void onRemoveCustom(row)}
+                          >
+                            删除
+                          </Button>
+                        ) : null}
+                      </ItemActions>
+                    </Item>
+                  </div>
+                );
+              })}
+            </ItemGroup>
+          )}
+        </CardContent>
+        {showList ? (
+          <CardFooter className="justify-center gap-3">
             <Button
               type="button"
               size="sm"
@@ -514,7 +607,7 @@ export function Rules({ onNavigate }: Props) {
             >
               上一页
             </Button>
-            <span className="muted text-sm">
+            <span className="text-sm text-muted-foreground">
               第 {page} / {pages} 页 · 共 {total} 条
             </span>
             <Button
@@ -526,10 +619,9 @@ export function Rules({ onNavigate }: Props) {
             >
               下一页
             </Button>
-          </div>
-          </CardContent>
-        </Card>
-      )}
+          </CardFooter>
+        ) : null}
+      </Card>
     </div>
   );
 }

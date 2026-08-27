@@ -234,7 +234,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       <div className="grid shrink-0 grid-cols-3 items-stretch gap-3">
-        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>代理状态</CardTitle>
           </CardHeader>
@@ -271,7 +271,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
           </CardContent>
         </Card>
 
-        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>信息</CardTitle>
           </CardHeader>
@@ -292,7 +292,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
           </CardContent>
         </Card>
 
-        <Card size="sm" className="min-w-0 [--card-spacing:--spacing(2)]">
+        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>代理模式</CardTitle>
           </CardHeader>

@@ -14,10 +14,23 @@ import {
 } from "../lib/generationGuard";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useThemePreference, type ThemePreference } from "../lib/theme";
 
 const defaults: AppSettings = {
@@ -30,6 +43,12 @@ const defaults: AppSettings = {
   allow_lan: false,
   proxy_mode: "rule",
 };
+
+const APPEARANCE_OPTIONS = [
+  ["system", "跟随系统"],
+  ["light", "浅色"],
+  ["dark", "深色"],
+] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>;
 
 export function Settings() {
   const [form, setForm] = useState<AppSettings>(defaults);
@@ -59,6 +78,14 @@ export function Settings() {
       cancelled = true;
     };
   }, []);
+
+  function clearFieldError(key: string) {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   function validateForm(next: AppSettings): Record<string, string> {
     const errs: Record<string, string> = {};
@@ -107,182 +134,204 @@ export function Settings() {
   }
 
   return (
-    <Card size="sm" className="w-full">
-      <CardContent className="space-y-4">
-      <div className="space-y-2">
-        <p className="text-sm font-medium">外观</p>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="外观">
-          {(
-            [
-              ["system", "跟随系统"],
-              ["light", "浅色"],
-              ["dark", "深色"],
-            ] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>
-          ).map(([value, label]) => (
-            <Button
-              key={value}
-              type="button"
-              size="sm"
-              variant={preference === value ? "default" : "outline"}
-              aria-pressed={preference === value}
-              onClick={() => setPreference(value)}
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
-        <p className="hint">
-          默认跟随系统深浅色。切换后立即生效，不必点保存。
-        </p>
-      </div>
-      <Separator />
-      {error && <ErrorAlert>{error}</ErrorAlert>}
-      {saved && <OkAlert>已保存</OkAlert>}
-      <form className="flex flex-col gap-3" onSubmit={(e) => void onSave(e)}>
-        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
-          Mixed 监听
-          <Input
-            value={form.mixed_listen}
-            onChange={(e) => {
-              setFieldErrors((prev) => {
-                const next = { ...prev };
-                delete next.mixed_listen;
-                return next;
-              });
-              setForm({ ...form, mixed_listen: e.target.value });
-            }}
-            disabled={busy || !loaded || form.allow_lan}
-          />
-          {fieldErrors.mixed_listen && (
-            <span className="error text-xs">{fieldErrors.mixed_listen}</span>
-          )}
-        </Label>
-        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
-          Mixed 端口
-          <Input
-            type="number"
-            min={1024}
-            max={65535}
-            value={Number.isFinite(form.mixed_port) ? form.mixed_port : ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              setFieldErrors((prev) => {
-                const next = { ...prev };
-                delete next.mixed_port;
-                return next;
-              });
-              if (raw.trim() === "") {
-                setFieldErrors((prev) => ({
-                  ...prev,
-                  mixed_port: formatPortValidationError("Mixed 端口"),
-                }));
-                setForm({ ...form, mixed_port: Number.NaN });
-                return;
-              }
-              const n = Number(raw);
-              if (Number.isFinite(n)) {
-                setForm({ ...form, mixed_port: n });
-              }
-            }}
-            disabled={busy || !loaded}
-          />
-          {fieldErrors.mixed_port && (
-            <span className="error text-xs">{fieldErrors.mixed_port}</span>
-          )}
-        </Label>
-        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
-          Clash API 监听
-          <Input
-            value={form.clash_api_listen}
-            onChange={(e) => {
-              setFieldErrors((prev) => {
-                const next = { ...prev };
-                delete next.clash_api_listen;
-                return next;
-              });
-              setForm({ ...form, clash_api_listen: e.target.value });
-            }}
-            disabled={busy || !loaded}
-          />
-          {fieldErrors.clash_api_listen && (
-            <span className="error text-xs">{fieldErrors.clash_api_listen}</span>
-          )}
-        </Label>
-        <Label className="flex flex-col items-stretch gap-1.5 font-normal">
-          Clash API 端口
-          <Input
-            type="number"
-            min={1024}
-            max={65535}
-            value={Number.isFinite(form.clash_api_port) ? form.clash_api_port : ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              setFieldErrors((prev) => {
-                const next = { ...prev };
-                delete next.clash_api_port;
-                return next;
-              });
-              if (raw.trim() === "") {
-                setFieldErrors((prev) => ({
-                  ...prev,
-                  clash_api_port: formatPortValidationError("Clash API 端口"),
-                }));
-                setForm({ ...form, clash_api_port: Number.NaN });
-                return;
-              }
-              const n = Number(raw);
-              if (Number.isFinite(n)) {
-                setForm({ ...form, clash_api_port: n });
-              }
-            }}
-            disabled={busy || !loaded}
-          />
-          {fieldErrors.clash_api_port && (
-            <span className="error text-xs">{fieldErrors.clash_api_port}</span>
-          )}
-        </Label>
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={form.allow_lan}
-            onChange={(e) => {
-              setFieldErrors((prev) => {
-                const next = { ...prev };
-                delete next.mixed_listen;
-                return next;
-              });
-              setForm({ ...form, allow_lan: e.target.checked });
-            }}
-            disabled={busy || !loaded}
-          />
-          允许局域网共享（Allow LAN）
-        </label>
-        {form.allow_lan && (
-          <p className="hint">
-            局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP
-            连接；Clash API 仍仅限本机
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" size="sm" disabled={busy || !loaded}>
-            保存
-          </Button>
-          <Button
-            type="button"
-            size="sm"
+    <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3">
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      {saved && <OkAlert className="shrink-0">已保存</OkAlert>}
+
+      <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+        <CardHeader>
+          <CardTitle>外观</CardTitle>
+          <CardDescription>
+            默认跟随系统深浅色。切换后立即生效，不必点保存。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ToggleGroup
+            type="single"
             variant="outline"
-            disabled={busy || !loaded}
-            onClick={() =>
-              void api
-                .revealDataDir()
-                .catch((err) => setError(formatInvokeError(err)))
-            }
+            size="sm"
+            spacing={2}
+            value={preference}
+            onValueChange={(value) => {
+              if (value === "system" || value === "light" || value === "dark") {
+                setPreference(value);
+              }
+            }}
+            className="w-full"
+            aria-label="外观"
           >
-            打开数据目录
-          </Button>
-        </div>
-      </form>
-      </CardContent>
-    </Card>
+            {APPEARANCE_OPTIONS.map(([value, label]) => (
+              <ToggleGroupItem key={value} value={value} className="flex-1">
+                {label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </CardContent>
+      </Card>
+
+      <Card
+        size="sm"
+        className="flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+      >
+        <CardHeader className="shrink-0">
+          <CardTitle>入站</CardTitle>
+          <CardDescription>Mixed 与 Clash API 监听地址</CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => void onSave(e)}
+          >
+            <FieldGroup className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-2">
+              <Field data-invalid={!!fieldErrors.mixed_listen || undefined}>
+                <FieldLabel htmlFor="settings-mixed-listen">
+                  Mixed 监听
+                </FieldLabel>
+                <Input
+                  id="settings-mixed-listen"
+                  value={form.mixed_listen}
+                  aria-invalid={!!fieldErrors.mixed_listen || undefined}
+                  onChange={(e) => {
+                    clearFieldError("mixed_listen");
+                    setForm({ ...form, mixed_listen: e.target.value });
+                  }}
+                  disabled={busy || !loaded || form.allow_lan}
+                />
+                {fieldErrors.mixed_listen ? (
+                  <FieldError>{fieldErrors.mixed_listen}</FieldError>
+                ) : null}
+              </Field>
+              <Field data-invalid={!!fieldErrors.mixed_port || undefined}>
+                <FieldLabel htmlFor="settings-mixed-port">Mixed 端口</FieldLabel>
+                <Input
+                  id="settings-mixed-port"
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={Number.isFinite(form.mixed_port) ? form.mixed_port : ""}
+                  aria-invalid={!!fieldErrors.mixed_port || undefined}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    clearFieldError("mixed_port");
+                    if (raw.trim() === "") {
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        mixed_port: formatPortValidationError("Mixed 端口"),
+                      }));
+                      setForm({ ...form, mixed_port: Number.NaN });
+                      return;
+                    }
+                    const n = Number(raw);
+                    if (Number.isFinite(n)) {
+                      setForm({ ...form, mixed_port: n });
+                    }
+                  }}
+                  disabled={busy || !loaded}
+                />
+                {fieldErrors.mixed_port ? (
+                  <FieldError>{fieldErrors.mixed_port}</FieldError>
+                ) : null}
+              </Field>
+              <Field data-invalid={!!fieldErrors.clash_api_listen || undefined}>
+                <FieldLabel htmlFor="settings-clash-listen">
+                  Clash API 监听
+                </FieldLabel>
+                <Input
+                  id="settings-clash-listen"
+                  value={form.clash_api_listen}
+                  aria-invalid={!!fieldErrors.clash_api_listen || undefined}
+                  onChange={(e) => {
+                    clearFieldError("clash_api_listen");
+                    setForm({ ...form, clash_api_listen: e.target.value });
+                  }}
+                  disabled={busy || !loaded}
+                />
+                {fieldErrors.clash_api_listen ? (
+                  <FieldError>{fieldErrors.clash_api_listen}</FieldError>
+                ) : null}
+              </Field>
+              <Field data-invalid={!!fieldErrors.clash_api_port || undefined}>
+                <FieldLabel htmlFor="settings-clash-port">
+                  Clash API 端口
+                </FieldLabel>
+                <Input
+                  id="settings-clash-port"
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={
+                    Number.isFinite(form.clash_api_port)
+                      ? form.clash_api_port
+                      : ""
+                  }
+                  aria-invalid={!!fieldErrors.clash_api_port || undefined}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    clearFieldError("clash_api_port");
+                    if (raw.trim() === "") {
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        clash_api_port:
+                          formatPortValidationError("Clash API 端口"),
+                      }));
+                      setForm({ ...form, clash_api_port: Number.NaN });
+                      return;
+                    }
+                    const n = Number(raw);
+                    if (Number.isFinite(n)) {
+                      setForm({ ...form, clash_api_port: n });
+                    }
+                  }}
+                  disabled={busy || !loaded}
+                />
+                {fieldErrors.clash_api_port ? (
+                  <FieldError>{fieldErrors.clash_api_port}</FieldError>
+                ) : null}
+              </Field>
+            </FieldGroup>
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-allow-lan"
+                size="sm"
+                checked={form.allow_lan}
+                disabled={busy || !loaded}
+                aria-label="允许局域网共享（Allow LAN）"
+                onCheckedChange={(checked) => {
+                  clearFieldError("mixed_listen");
+                  setForm({ ...form, allow_lan: checked === true });
+                }}
+              />
+              <FieldLabel htmlFor="settings-allow-lan">
+                允许局域网共享（Allow LAN）
+              </FieldLabel>
+            </Field>
+            {form.allow_lan ? (
+              <FieldDescription>
+                局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP
+                连接；Clash API 仍仅限本机
+              </FieldDescription>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" size="sm" disabled={busy || !loaded}>
+                保存
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || !loaded}
+                onClick={() =>
+                  void api
+                    .revealDataDir()
+                    .catch((err) => setError(formatInvokeError(err)))
+                }
+              >
+                打开数据目录
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

@@ -67,6 +67,31 @@ describe("Nodes", () => {
       expect(view.getAllByText("node-a").length).toBeGreaterThan(0);
       expect(view.getAllByText("node-b").length).toBeGreaterThan(0);
     });
+    expect(container.querySelector(".node-table")).toBeNull();
+    expect(view.getByRole("list", { name: "节点列表" })).toBeInTheDocument();
+    expect(view.getByText("节点")).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "批量测延迟" })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "按延迟排序" })).toHaveAttribute(
+      "data-state",
+      "off",
+    );
+    expect(container.querySelector(".nodes-panel")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
+    );
+  });
+
+  it("shows empty-state guide when no nodes", async () => {
+    listNodes.mockResolvedValue([]);
+    const onNavigate = vi.fn();
+    const { container } = render(<Nodes onNavigate={onNavigate} />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText("暂无节点")).toBeInTheDocument();
+    });
+    expect(view.queryByRole("list", { name: "节点列表" })).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
+    expect(onNavigate).toHaveBeenCalledWith("subs");
   });
 
   it("shows live exit for strategy groups", async () => {

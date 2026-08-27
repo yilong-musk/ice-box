@@ -44,6 +44,14 @@ function ensureLocalStorage() {
 
 ensureLocalStorage();
 
+if (typeof window.ResizeObserver === "undefined") {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as typeof ResizeObserver;
+}
+
 afterEach(() => {
   cleanup();
   window.localStorage.removeItem(THEME_STORAGE_KEY);

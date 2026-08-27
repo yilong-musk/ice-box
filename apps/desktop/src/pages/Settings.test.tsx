@@ -162,37 +162,40 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
+      expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+        "data-state",
+        "on",
       );
     });
 
-    fireEvent.click(view.getByRole("button", { name: "浅色" }));
-    expect(view.getByRole("button", { name: "浅色" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    fireEvent.click(view.getByRole("radio", { name: "浅色" }));
+    expect(view.getByRole("radio", { name: "浅色" })).toHaveAttribute(
+      "data-state",
+      "on",
     );
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(view.getByRole("button", { name: "深色" }));
+    fireEvent.click(view.getByRole("radio", { name: "深色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(view.getByRole("button", { name: "跟随系统" }));
-    expect(view.getByRole("button", { name: "跟随系统" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    fireEvent.click(view.getByRole("radio", { name: "跟随系统" }));
+    expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+      "data-state",
+      "on",
     );
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
-  it("lets the settings card fill the content pane", () => {
+  it("lets the settings panel fill the content pane", () => {
     const { container } = render(<Settings />);
+    expect(
+      container.querySelector(".settings-panel")?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
     const card = container.querySelector("[data-slot=card]");
     expect(card).not.toBeNull();
     const classes = card!.className.split(/\s+/);

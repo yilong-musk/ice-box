@@ -3,7 +3,14 @@ import { api, formatInvokeError } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { ErrorAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
@@ -60,27 +67,37 @@ export function Logs() {
   }, []);
 
   return (
-    <Card size="sm" className="logs-panel min-h-0 flex-1 overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <span className="hint min-w-0 flex-1">
+    <div className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3">
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0">
+          <CardTitle>日志</CardTitle>
+          <CardDescription>
             自动刷新，显示警告 / 错误、关键事件与每连接出站节点；完整日志见数据目录
             logs/ 下的 ice-box.log 与 sing-box.log
-          </span>
-          <Button type="button" size="sm" variant="outline" onClick={() => void refresh()}>
-            刷新
-          </Button>
-        </div>
-        {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
-        <pre
-          ref={boxRef}
-          className="log-view min-h-0 flex-1 overflow-auto"
-          onScroll={handleScroll}
-          aria-live="polite"
-        >
-          {lines.length === 0 ? "（空）" : lines.join("\n")}
-        </pre>
-      </CardContent>
-    </Card>
+          </CardDescription>
+          <CardAction>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void refresh()}
+            >
+              刷新
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 flex-col">
+          <pre
+            ref={boxRef}
+            className="log-view min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap break-all"
+            onScroll={handleScroll}
+            aria-live="polite"
+          >
+            {lines.length === 0 ? "（空）" : lines.join("\n")}
+          </pre>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

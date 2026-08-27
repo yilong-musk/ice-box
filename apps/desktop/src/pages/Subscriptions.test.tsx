@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
@@ -50,16 +50,20 @@ describe("Subscriptions", () => {
 
   it("renders import form", async () => {
     const { container } = render(<Subscriptions />);
+    const view = within(container);
     await waitFor(() => {
       expect(
-        within(container).getByPlaceholderText("订阅 URL（https 优先）"),
+        view.getByPlaceholderText("订阅 URL（https 优先）"),
       ).toBeInTheDocument();
     });
+    expect(view.getByText("暂无订阅")).toBeInTheDocument();
     expect(
-      screen.queryByText(
-        "暂无订阅。打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。",
-      ),
+      view.getByText(/打开软件会自动启动内核；需要时在主页用大按钮接管系统代理/),
     ).toBeInTheDocument();
+    expect(container.querySelector(".sub-list")).toBeNull();
+    expect(container.querySelector(".subs-panel")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
+    );
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {
@@ -218,8 +222,8 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
-    const rowB = view.getByText("b").closest("li") as HTMLElement;
-    const toggle = within(rowB).getByRole("checkbox");
+    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
+    const toggle = within(rowB).getByRole("switch", { name: "激活" });
     expect(toggle).not.toBeChecked();
     toggle.click();
     await waitFor(() => {
