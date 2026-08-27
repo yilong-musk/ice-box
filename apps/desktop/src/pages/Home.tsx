@@ -98,6 +98,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   useEffect(() => {
     void refresh();
     const id = window.setInterval(() => {
+      if (pendingRef.current || modeBusyRef.current) return;
       pollGenRef.current += 1;
       void refresh(pollGenRef.current);
     }, 2000);

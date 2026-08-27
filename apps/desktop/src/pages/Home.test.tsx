@@ -338,10 +338,12 @@ describe("Home", () => {
     listNodes.mockRejectedValue("clash api not ready");
     getSettings.mockRejectedValue("clash api not ready");
 
+    const statusCalls = getStatus.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
 
+    expect(getStatus.mock.calls.length).toBe(statusCalls);
     expect(view.queryByText(/clash api not ready/i)).toBeNull();
     expect(container.querySelector(".error")).toBeNull();
 

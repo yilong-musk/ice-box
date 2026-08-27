@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { APP_VERSION } from "./lib/appVersion";
 
 const getStatus = vi.fn();
 
@@ -102,9 +103,9 @@ describe("App", () => {
     );
     expect(main!.contains(panel)).toBe(true);
     expect(panel!.contains(logView)).toBe(true);
-    expect(logView!.parentElement?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["min-h-0", "flex-1", "flex", "flex-col"]),
-    );
+    expect(logView!.parentElement).toBe(panel);
+    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
+    expect(panel!.querySelector("[data-slot='card']")).toBeNull();
 
     fireEvent.click(view.getByRole("button", { name: "主页" }));
     expect(container.querySelector(".home-panel")).not.toBeNull();
@@ -163,9 +164,14 @@ describe("App", () => {
     expect(aside).not.toBeNull();
     const nav = aside!.querySelector("nav");
     const brand = aside!.querySelector("h1");
+    const version = aside!.querySelector('[aria-label^="版本"]');
     expect(nav).not.toBeNull();
     expect(brand).toHaveTextContent("ice-box");
     expect(brand!.parentElement?.className.split(/\s+/)).toContain("justify-center");
+    expect(version).toHaveTextContent(APP_VERSION);
+    expect(brand!.compareDocumentPosition(version!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
     expect(nav!.compareDocumentPosition(brand!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
@@ -193,5 +199,6 @@ describe("App", () => {
     expect(regions.length).toBe(3);
     expect(regions[1]).toHaveTextContent("主页");
     expect(regions[2]).toHaveTextContent("ice-box");
+    expect(regions[2]).toHaveTextContent(APP_VERSION);
   });
 });

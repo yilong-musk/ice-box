@@ -220,6 +220,56 @@ impl<R: NetworkSetupRunner> MacosSystemProxy<R> {
         Ok(())
     }
 
+    fn backup_services(&self, services: &[String]) -> Result<ProxyBackup, ProxySysError> {
+        let mut entries = Vec::new();
+        let mut any_enabled = false;
+        let mut first_http: Option<String> = None;
+        let mut first_https: Option<String> = None;
+        let mut first_socks: Option<String> = None;
+
+        for name in services {
+            let web = self.get_proxy("-getwebproxy", name)?;
+            let secure_web = self.get_proxy("-getsecurewebproxy", name)?;
+            let socks = self.get_proxy("-getsocksfirewallproxy", name)?;
+            let bypass = self.get_bypass(name)?;
+
+            if web.enabled {
+                any_enabled = true;
+                if first_http.is_none() {
+                    first_http = Some(format!("{}:{}", web.server, web.port));
+                }
+            }
+            if secure_web.enabled {
+                any_enabled = true;
+                if first_https.is_none() {
+                    first_https = Some(format!("{}:{}", secure_web.server, secure_web.port));
+                }
+            }
+            if socks.enabled {
+                any_enabled = true;
+                if first_socks.is_none() {
+                    first_socks = Some(format!("{}:{}", socks.server, socks.port));
+                }
+            }
+
+            entries.push(ServiceBackup {
+                name: name.clone(),
+                web,
+                secure_web,
+                socks,
+                bypass,
+            });
+        }
+
+        Ok(ProxyBackup {
+            enabled: any_enabled,
+            http: first_http,
+            https: first_https,
+            socks: first_socks,
+            extra: json!({ "services": entries }),
+        })
+    }
+
     fn apply_one_service(
         &self,
         name: &str,
@@ -260,58 +310,14 @@ impl<R: NetworkSetupRunner> MacosSystemProxy<R> {
 impl<R: NetworkSetupRunner> SystemProxy for MacosSystemProxy<R> {
     fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
         let services = self.list_enabled_services()?;
-        let mut entries = Vec::new();
-        let mut any_enabled = false;
-        let mut first_http: Option<String> = None;
-        let mut first_https: Option<String> = None;
-        let mut first_socks: Option<String> = None;
-
-        for name in services {
-            let web = self.get_proxy("-getwebproxy", &name)?;
-            let secure_web = self.get_proxy("-getsecurewebproxy", &name)?;
-            let socks = self.get_proxy("-getsocksfirewallproxy", &name)?;
-            let bypass = self.get_bypass(&name)?;
-
-            if web.enabled {
-                any_enabled = true;
-                if first_http.is_none() {
-                    first_http = Some(format!("{}:{}", web.server, web.port));
-                }
-            }
-            if secure_web.enabled {
-                any_enabled = true;
-                if first_https.is_none() {
-                    first_https = Some(format!("{}:{}", secure_web.server, secure_web.port));
-                }
-            }
-            if socks.enabled {
-                any_enabled = true;
-                if first_socks.is_none() {
-                    first_socks = Some(format!("{}:{}", socks.server, socks.port));
-                }
-            }
-
-            entries.push(ServiceBackup {
-                name,
-                web,
-                secure_web,
-                socks,
-                bypass,
-            });
-        }
-
-        Ok(ProxyBackup {
-            enabled: any_enabled,
-            http: first_http,
-            https: first_https,
-            socks: first_socks,
-            extra: json!({ "services": entries }),
-        })
+        self.backup_services(&services)
     }
 
     fn apply(&self, endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
         let services = self.list_enabled_services()?;
-        let pre_backup = self.backup()?;
+        // Reuse the listed services so apply does not spawn a second
+        // `networksetup -listallnetworkservices` via `backup()`.
+        let pre_backup = self.backup_services(&services)?;
         let bypass = bypass_domains();
         let mut applied = Vec::new();
 
@@ -738,5 +744,13 @@ mod tests {
             && c.contains("localhost")
             && c.contains("127.0.0.1")
             && c.contains("::1")));
+        let list_calls = calls
+            .iter()
+            .filter(|c| *c == "-listallnetworkservices")
+            .count();
+        assert_eq!(
+            list_calls, 1,
+            "apply must not re-list services via backup(), calls: {calls:?}"
+        );
     }
 }

@@ -67,6 +67,8 @@ pub struct AppState {
     /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
     /// `start` command and on endpoints change (cache key).
     pub proxy_applied_cache: Mutex<Option<(ProxyEndpoints, Instant, bool)>>,
+    /// Platform backend capability; set once at process start (`Noop` is false).
+    pub system_proxy_available: bool,
     /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking ~5s.
     pub shutdown_requested: Arc<AtomicBool>,
     /// Held for app lifetime; releasing the file unlocks the data directory.
@@ -139,6 +141,7 @@ pub fn run() {
             let (core, proxy_recovery_warning) =
                 bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let proxy = create_system_proxy();
+            let system_proxy_available = proxy.is_available();
             app.manage(AppState {
                 paths,
                 core: Mutex::new(core),
@@ -146,6 +149,7 @@ pub fn run() {
                 orchestrate: Mutex::new(()),
                 proxy_recovery_warning: Mutex::new(proxy_recovery_warning),
                 proxy_applied_cache: Mutex::new(None),
+                system_proxy_available,
                 shutdown_requested,
                 _instance_lock: instance_lock,
             });

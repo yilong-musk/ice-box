@@ -3,9 +3,9 @@
 //! Display-only concern: merges the app log (ice-box.log, `tracing` format) and the
 //! core log (sing-box.log, sing-box format) into one time-ordered view, and keeps only
 //! lines with user value (WARN/ERROR/FATAL plus key lifecycle INFO and per-connection
-//! outbound routing INFO). Raw log files are never modified — full recording
-//! (info/debug/trace) is untouched for troubleshooting; the filter applies only at
-//! read/display time (architecture §16).
+//! outbound routing INFO). Connection lines render as `LEVEL TIME TARGET → NODE`.
+//! Raw log files are never modified — full recording (info/debug/trace) is untouched
+//! for troubleshooting; the filter applies only at read/display time (architecture §16).
 
 use std::path::Path;
 
@@ -50,7 +50,21 @@ enum Source {
 struct LogLine {
     ts: DateTime<FixedOffset>,
     source: Source,
+    level: Level,
     text: String,
+}
+
+impl Level {
+    fn as_str(self) -> &'static str {
+        match self {
+            Level::Trace => "TRACE",
+            Level::Debug => "DEBUG",
+            Level::Info => "INFO",
+            Level::Warn => "WARN",
+            Level::Error => "ERROR",
+            Level::Fatal => "FATAL",
+        }
+    }
 }
 
 fn parse_level(tok: &str) -> Option<Level> {
@@ -148,6 +162,7 @@ fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), Ap
             out.push(LogLine {
                 ts,
                 source,
+                level,
                 text: raw,
             });
         }
@@ -155,10 +170,34 @@ fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), Ap
     Ok(())
 }
 
-/// Display-only simplification for core lines: drop the `±HHMM` zone token, drop the
-/// per-connection `[<id> <ms>]` prefix, and rewrite
-/// `outbound/<type>[<tag>]: outbound connection to <host>` as
-/// `outbound/<type>[<tag>] → <host>`.
+const CONNECTION_MARK: &str = ": outbound connection to ";
+
+/// Parse sing-box `outbound/<type>[<tag>]: outbound connection to <host>:<port>`.
+fn parse_connection_route(text: &str) -> Option<(&str, &str)> {
+    let idx = text.find(CONNECTION_MARK)?;
+    let head = &text[..idx];
+    let target = text[idx + CONNECTION_MARK.len()..].trim();
+    if target.is_empty() {
+        return None;
+    }
+    let outbound = match head.rfind("outbound/") {
+        Some(pos) => &head[pos + "outbound/".len()..],
+        None => return None,
+    };
+    let node = if let Some(open) = outbound.find('[') {
+        let inner = &outbound[open + 1..];
+        inner.strip_suffix(']').unwrap_or(inner).trim()
+    } else {
+        outbound.trim()
+    };
+    if node.is_empty() {
+        return None;
+    }
+    Some((target, node))
+}
+
+/// Display-only simplification for non-connection core lines: drop the `±HHMM`
+/// zone token and the per-connection `[<id> <ms>]` prefix.
 fn simplify_core_line(text: &str) -> String {
     let mut toks: Vec<&str> = text.split_whitespace().collect();
 
@@ -183,16 +222,15 @@ fn simplify_core_line(text: &str) -> String {
         i += 1;
     }
 
-    let joined = toks.join(" ");
-    if let Some(idx) = joined.find(": outbound connection to ") {
-        let (head, dest) = joined.split_at(idx);
-        return format!(
-            "{} → {}",
-            head,
-            dest.trim_start_matches(": outbound connection to ")
-        );
+    toks.join(" ")
+}
+
+fn strip_leading_level(text: &str) -> &str {
+    let rest = text.trim_start();
+    match rest.split_once(char::is_whitespace) {
+        Some((tok, tail)) if parse_level(tok).is_some() => tail.trim_start(),
+        _ => rest,
     }
-    joined
 }
 
 fn format_short_ts(ts: DateTime<FixedOffset>) -> String {
@@ -239,17 +277,27 @@ fn strip_leading_timestamp(text: &str) -> &str {
     rest
 }
 
-/// Compact display line: `MM-DD HH:MM:SS LEVEL message` (no `[app]`/`[core]` tag).
-fn format_display_line(ts: DateTime<FixedOffset>, source: Source, raw: &str) -> String {
+/// Compact display line: `LEVEL MM-DD HH:MM:SS …` (no `[app]`/`[core]` tag).
+/// Connection lines are `LEVEL TIME TARGET → NODE`; everything else is `LEVEL TIME message`.
+fn format_display_line(
+    ts: DateTime<FixedOffset>,
+    source: Source,
+    level: Level,
+    raw: &str,
+) -> String {
+    let time = format_short_ts(ts);
+    let lvl = level.as_str();
+    if source == Source::Core {
+        if let Some((target, node)) = parse_connection_route(raw) {
+            return format!("{lvl} {time} {target} → {node}");
+        }
+    }
     let rendered = match source {
         Source::Core => simplify_core_line(raw),
         Source::App => raw.to_string(),
     };
-    format!(
-        "{} {}",
-        format_short_ts(ts),
-        strip_leading_timestamp(&rendered)
-    )
+    let msg = strip_leading_level(strip_leading_timestamp(&rendered));
+    format!("{lvl} {time} {msg}")
 }
 
 /// Read the merged, filtered log view: app + core tails, sorted by time, capped at `n`.
@@ -265,7 +313,7 @@ pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<St
     lines.truncate(n);
     Ok(lines
         .into_iter()
-        .map(|l| format_display_line(l.ts, l.source, &l.text))
+        .map(|l| format_display_line(l.ts, l.source, l.level, &l.text))
         .collect())
 }
 
@@ -368,13 +416,33 @@ mod tests {
     }
 
     #[test]
-    fn simplifies_core_lines_for_display() {
+    fn parses_connection_route_tag_and_bare_type() {
         assert_eq!(
-            simplify_core_line(
+            parse_connection_route(
                 "+0800 2026-08-23 15:06:15 INFO [591640413 0ms] outbound/trojan[🇺🇸 美国实验性 IEPL 专线 1]: outbound connection to beacons.gcp.gvt2.com:443"
             ),
-            "2026-08-23 15:06:15 INFO outbound/trojan[🇺🇸 美国实验性 IEPL 专线 1] → beacons.gcp.gvt2.com:443"
+            Some(("beacons.gcp.gvt2.com:443", "🇺🇸 美国实验性 IEPL 专线 1"))
         );
+        assert_eq!(
+            parse_connection_route(
+                "INFO outbound/selector[Proxies]: outbound connection to example.com:443"
+            ),
+            Some(("example.com:443", "Proxies"))
+        );
+        assert_eq!(
+            parse_connection_route(
+                "INFO [3591829452 0ms] outbound/direct: outbound connection to 1.1.1.1:443"
+            ),
+            Some(("1.1.1.1:443", "direct"))
+        );
+        assert_eq!(
+            parse_connection_route("INFO outbound/direct: dial tcp: connection refused"),
+            None
+        );
+    }
+
+    #[test]
+    fn simplifies_core_lines_for_display() {
         assert_eq!(
             simplify_core_line("+0000 2026-08-23 13:47:01 INFO sing-box started (0.00s)"),
             "2026-08-23 13:47:01 INFO sing-box started (0.00s)"
@@ -390,17 +458,17 @@ mod tests {
     #[test]
     fn formats_compact_display_lines() {
         let app = "2026-08-23T13:47:01.123456Z  INFO ice_core: sing-box ready on 127.0.0.1:17890";
-        let (ts, _) = parse_app_line(app).expect("parse");
+        let (ts, level) = parse_app_line(app).expect("parse");
         assert_eq!(
-            format_display_line(ts, Source::App, app),
-            "08-23 13:47:01 INFO ice_core: sing-box ready on 127.0.0.1:17890"
+            format_display_line(ts, Source::App, level, app),
+            "INFO 08-23 13:47:01 ice_core: sing-box ready on 127.0.0.1:17890"
         );
 
         let core = "+0800 2026-08-23 15:06:15 INFO [591640413 0ms] outbound/trojan[美国 1]: outbound connection to example.com:443";
-        let (ts, _) = parse_core_line(core).expect("parse");
+        let (ts, level) = parse_core_line(core).expect("parse");
         assert_eq!(
-            format_display_line(ts, Source::Core, core),
-            "08-23 15:06:15 INFO outbound/trojan[美国 1] → example.com:443"
+            format_display_line(ts, Source::Core, level, core),
+            "INFO 08-23 15:06:15 example.com:443 → 美国 1"
         );
     }
 
@@ -442,21 +510,21 @@ mod tests {
                 .all(|l| !l.contains("[app]") && !l.contains("[core]")),
             "source tags stripped: {view:?}"
         );
-        assert_eq!(view[0], "08-23 13:47:01 INFO sing-box started (0.00s)");
+        assert_eq!(view[0], "INFO 08-23 13:47:01 sing-box started (0.00s)");
         assert!(!view[0].contains("+0000"), "zone token stripped: {view:?}");
         assert_eq!(
             view[1],
-            "08-23 13:47:02 INFO ice_core: sing-box ready on 127.0.0.1:17890"
+            "INFO 08-23 13:47:02 ice_core: sing-box ready on 127.0.0.1:17890"
         );
         assert!(
             !view[1].contains('T') && !view[1].contains('Z'),
             "rfc3339 compacted: {view:?}"
         );
         assert!(view[2].contains("proxy apply slow"));
-        assert!(view[2].starts_with("08-23 13:47:03 "));
+        assert!(view[2].starts_with("WARN 08-23 13:47:03 "));
         assert_eq!(
             view[3],
-            "08-23 13:47:06 INFO outbound/trojan[香港 IEPL 专线 1] → example.com:443"
+            "INFO 08-23 13:47:06 example.com:443 → 香港 IEPL 专线 1"
         );
         assert!(!view[3].contains('\u{1b}'), "ansi stripped from view");
         assert!(
@@ -464,8 +532,13 @@ mod tests {
             "connection id stripped: {view:?}"
         );
         assert!(!view[3].contains("0ms]"), "delay prefix stripped: {view:?}");
+        assert!(
+            !view[3].contains("outbound/"),
+            "protocol type dropped: {view:?}"
+        );
+        assert!(view[3].contains(" → "), "target/node separator: {view:?}");
         assert!(view[4].contains("connection refused"));
-        assert!(view[4].starts_with("08-23 13:47:07 "));
+        assert!(view[4].starts_with("ERROR 08-23 13:47:07 "));
         let _ = fs::remove_dir_all(&dir);
     }
 

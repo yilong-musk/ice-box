@@ -19,6 +19,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
+import { APP_VERSION } from "./lib/appVersion";
 import { useThemePreference } from "./lib/theme";
 import logo from "./assets/logo.png";
 
@@ -103,16 +104,26 @@ function App() {
               ))}
             </nav>
             <div
-              className="flex h-12 shrink-0 select-none items-center justify-center gap-2.5 px-4"
+              className="flex shrink-0 select-none flex-col items-center justify-center gap-1 px-4 py-2.5"
               data-tauri-drag-region
             >
-              <img
-                src={logo}
-                alt=""
-                className="size-7 shrink-0 object-contain"
-                aria-hidden="true"
-              />
-              <h1 className="font-heading text-sm font-medium tracking-tight">ice-box</h1>
+              <div className="flex items-center justify-center gap-2.5">
+                <img
+                  src={logo}
+                  alt=""
+                  className="size-7 shrink-0 object-contain"
+                  aria-hidden="true"
+                />
+                <h1 className="font-heading text-sm font-medium tracking-tight">
+                  ice-box
+                </h1>
+              </div>
+              <p
+                className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums"
+                aria-label={`版本 ${APP_VERSION}`}
+              >
+                {APP_VERSION}
+              </p>
             </div>
           </aside>
 

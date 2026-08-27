@@ -154,6 +154,7 @@ mod tests {
         ));
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
+        let system_proxy_available = proxy.is_available();
         AppState {
             paths: paths.clone(),
             core: Mutex::new(Box::new(CoreController::with_deps(
@@ -167,6 +168,7 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
         }

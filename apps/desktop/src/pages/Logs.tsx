@@ -2,15 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, formatInvokeError } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { ErrorAlert } from "../components/StatusAlert";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
@@ -69,35 +60,14 @@ export function Logs() {
   return (
     <div className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0">
-          <CardTitle>日志</CardTitle>
-          <CardDescription>
-            自动刷新，显示警告 / 错误、关键事件与每连接出站节点；完整日志见数据目录
-            logs/ 下的 ice-box.log 与 sing-box.log
-          </CardDescription>
-          <CardAction>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void refresh()}
-            >
-              刷新
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col">
-          <pre
-            ref={boxRef}
-            className="log-view min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
-            onScroll={handleScroll}
-            aria-live="polite"
-          >
-            {lines.length === 0 ? "（空）" : lines.join("\n")}
-          </pre>
-        </CardContent>
-      </Card>
+      <pre
+        ref={boxRef}
+        className="log-view min-h-0 flex-1 overflow-auto bg-card p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+        onScroll={handleScroll}
+        aria-live="polite"
+      >
+        {lines.length === 0 ? "（空）" : lines.join("\n")}
+      </pre>
     </div>
   );
 }

@@ -14,8 +14,8 @@ vi.mock("../api/tauri", () => ({
 const POLL_MS = 2000;
 
 const baseTail = [
-  "08-23 13:47:02 INFO ice_core: sing-box ready",
-  "08-23 13:47:06 ERROR outbound: dial tcp: connection refused",
+  "INFO 08-23 13:47:02 ice_core: sing-box ready",
+  "ERROR 08-23 13:47:06 outbound: dial tcp: connection refused",
 ];
 
 describe("Logs", () => {
@@ -39,15 +39,23 @@ describe("Logs", () => {
     });
     expect(getLogView).toHaveBeenCalledWith(500);
     expect(view.queryByRole("combobox")).toBeNull();
+    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
+    expect(view.queryByText("日志")).toBeNull();
+    expect(container.querySelector("[data-slot='card']")).toBeNull();
     const logView = container.querySelector(".log-view");
+    expect(logView?.parentElement?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["logs-panel"]),
+    );
     expect(logView?.className.split(/\s+/)).toEqual(
       expect.arrayContaining([
         "min-h-0",
         "flex-1",
         "overflow-auto",
+        "bg-card",
         "text-foreground",
       ]),
     );
+    expect(logView?.className.split(/\s+/)).not.toContain("bg-muted/40");
     expect(logView?.className.split(/\s+/)).not.toContain("text-muted-foreground");
   });
 
@@ -104,7 +112,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "08-23 13:47:08 INFO outbound/trojan[香港 1] → example.com:443",
+      "INFO 08-23 13:47:08 example.com:443 → 香港 1",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -142,7 +150,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "08-23 13:47:09 INFO another connection line",
+      "INFO 08-23 13:47:09 another connection line",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
