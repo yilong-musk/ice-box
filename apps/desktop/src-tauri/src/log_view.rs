@@ -229,12 +229,10 @@ fn strip_leading_timestamp(text: &str) -> &str {
     if rest.split_whitespace().next().is_some_and(is_ymd_token) {
         rest = skip_first_ws_token(rest);
     }
-    if rest.split_whitespace().next().is_some_and(is_hms_token) {
-        rest = skip_first_ws_token(rest);
-    } else if rest
+    if rest
         .split_whitespace()
         .next()
-        .is_some_and(|t| t.contains('T'))
+        .is_some_and(|t| is_hms_token(t) || t.contains('T'))
     {
         rest = skip_first_ws_token(rest);
     }
