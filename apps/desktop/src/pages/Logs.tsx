@@ -7,7 +7,7 @@ const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
 
-export function Logs() {
+export function Logs({ active = true }: { active?: boolean }) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +16,7 @@ export function Logs() {
   const lastTextRef = useRef("");
 
   const refresh = useCallback(async () => {
-    if (document.visibilityState === "hidden") return;
+    if (!active || document.visibilityState === "hidden") return;
     const gen = nextGeneration();
     try {
       const tail = await api.getLogView(VIEW_LINES);
@@ -31,14 +31,15 @@ export function Logs() {
     } catch (e) {
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
-  }, [isStale, nextGeneration]);
+  }, [active, isStale, nextGeneration]);
 
   useEffect(() => {
+    if (!active) return;
     nextGeneration();
     void refresh();
     const id = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(id);
-  }, [nextGeneration, refresh]);
+  }, [active, nextGeneration, refresh]);
 
   useLayoutEffect(() => {
     const box = boxRef.current;

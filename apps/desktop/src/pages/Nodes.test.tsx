@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Nodes } from "./Nodes";
 
 const listNodes = vi.fn();
@@ -24,6 +25,7 @@ vi.mock("../api/tauri", () => ({
 describe("Nodes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNodesSnapshot();
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
@@ -81,6 +83,203 @@ describe("Nodes", () => {
     expect(container.querySelector(".nodes-panel")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
     );
+  });
+
+  it("renders a long node list without dropping later rows", async () => {
+    listNodes.mockResolvedValue(
+      Array.from({ length: 80 }, (_, i) => ({
+        tag: `node-${i}`,
+        outbound_type: "trojan",
+        group_now: null,
+        group_all: null,
+      })),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("list", { name: "节点列表" })).toBeInTheDocument();
+      expect(view.getByText("node-0")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(view.getByText("node-79")).toBeInTheDocument();
+    });
+    const titles = container.querySelectorAll(
+      '[aria-label="节点列表"] [data-slot="item-title"]',
+    );
+    expect(titles).toHaveLength(80);
+  });
+
+  it("does not flash the empty-state guide before nodes load", async () => {
+    let resolveNodes: (value: unknown[]) => void = () => {};
+    listNodes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveNodes = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    expect(view.queryByText("暂无节点")).toBeNull();
+    expect(view.getByText("加载节点列表…")).toBeInTheDocument();
+
+    resolveNodes([
+      {
+        tag: "node-a",
+        outbound_type: "socks",
+        group_now: null,
+        group_all: null,
+      },
+    ]);
+    await waitFor(() => {
+      expect(view.getByText("node-a")).toBeInTheDocument();
+    });
+    expect(view.queryByText("暂无节点")).toBeNull();
+    expect(view.queryByText("加载节点列表…")).toBeNull();
+  });
+
+  it("hydrates from the shared snapshot while the next fetch is in flight", () => {
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "cached-node",
+          outbound_type: "trojan",
+          group_now: null,
+          group_all: null,
+        },
+      ],
+      selectedTag: "cached-node",
+      running: true,
+    });
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    expect(view.getByText("cached-node")).toBeInTheDocument();
+    expect(view.queryByText("暂无节点")).toBeNull();
+    expect(view.queryByText("加载节点列表…")).toBeNull();
+  });
+
+  it("refreshes cached nodes immediately when the pane is activated", async () => {
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "cached-node",
+          outbound_type: "trojan",
+          group_now: null,
+          group_all: null,
+        },
+      ],
+      selectedTag: "cached-node",
+      running: true,
+    });
+    listNodes.mockResolvedValue([
+      {
+        tag: "fresh-node",
+        outbound_type: "trojan",
+        group_now: null,
+        group_all: null,
+      },
+    ]);
+    const { container, rerender } = render(<Nodes active={false} />);
+    const view = within(container);
+
+    expect(view.getByText("cached-node")).toBeInTheDocument();
+    expect(listNodes).not.toHaveBeenCalled();
+
+    rerender(<Nodes active />);
+    await waitFor(() => {
+      expect(view.getByText("fresh-node")).toBeInTheDocument();
+    });
+    expect(view.queryByText("cached-node")).toBeNull();
+  });
+
+  it("does not mount collapsed strategy-group members", () => {
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "选择组",
+          outbound_type: "selector",
+          group_now: "leaf-0",
+          group_all: Array.from({ length: 90 }, (_, i) => `leaf-${i}`),
+        },
+        {
+          tag: "leaf-0",
+          outbound_type: "trojan",
+          group_now: null,
+          group_all: null,
+        },
+      ],
+      selectedTag: "leaf-0",
+      running: true,
+    });
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    expect(
+      view.getByRole("button", { name: "选择组", expanded: false }),
+    ).toBeInTheDocument();
+    expect(view.queryByLabelText("选择组 成员")).not.toBeInTheDocument();
+    expect(view.queryByText("leaf-89")).toBeNull();
+  });
+
+  it("reveals a large strategy-group member list after expand", async () => {
+    const groupAll = Array.from({ length: 90 }, (_, i) => `leaf-${i}`);
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "选择组",
+          outbound_type: "selector",
+          group_now: "leaf-0",
+          group_all: groupAll,
+        },
+      ],
+      selectedTag: "选择组",
+      running: true,
+    });
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    await expandGroup(view, "选择组");
+    await waitFor(() => {
+      expect(
+        view.getByLabelText("将 leaf-89 设为 选择组 出口"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("opens a long list with one screen then fills the rest", async () => {
+    writeNodesSnapshot({
+      nodes: Array.from({ length: 80 }, (_, i) => ({
+        tag: `node-${i}`,
+        outbound_type: "trojan",
+        group_now: null,
+        group_all: null,
+      })),
+      selectedTag: "node-0",
+      running: true,
+    });
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    expect(view.getByText("node-0")).toBeInTheDocument();
+    const firstPaint = container.querySelectorAll(
+      '[aria-label="节点列表"] [data-slot="item-title"]',
+    );
+    expect(firstPaint.length).toBeGreaterThan(0);
+    expect(firstPaint.length).toBeLessThanOrEqual(8);
+    expect(view.queryByText("node-79")).toBeNull();
+
+    await waitFor(() => {
+      expect(view.getByText("node-79")).toBeInTheDocument();
+    });
+    expect(
+      container.querySelectorAll('[aria-label="节点列表"] [data-slot="item-title"]'),
+    ).toHaveLength(80);
   });
 
   it("shows empty-state guide when no nodes", async () => {

@@ -11,7 +11,7 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
-import { resolveSelectedTag } from "../lib/nodes";
+import { resolveSelectedTag, writeNodesSnapshot } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +34,8 @@ import { cn } from "@/lib/utils";
 type Props = {
   onBusyChange?: (busy: boolean) => void;
   onNavigate?: (tab: "subs") => void;
+  /** When false the page stays mounted but stops polling. */
+  active?: boolean;
 };
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
@@ -55,7 +57,7 @@ function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   return `${node.tag}（${node.outbound_type}）`;
 }
 
-export function Home({ onBusyChange, onNavigate }: Props) {
+export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -67,6 +69,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   const [modeBusy, setModeBusy] = useState(false);
   const modeBusyRef = useRef(false);
   const pendingRef = useRef(false);
+  const activeRef = useRef(active);
 
   const refresh = useCallback(async (pollGen?: number) => {
     const gen = pollGen ?? pollGenRef.current;
@@ -76,17 +79,24 @@ export function Home({ onBusyChange, onNavigate }: Props) {
         api.listNodes(),
         api.getSettings(),
       ]);
-      if (gen !== pollGenRef.current) return;
+      if (gen !== pollGenRef.current || !activeRef.current) return;
 
+      const selected = resolveSelectedTag(settings.selected_tag, n);
       setStatus(s);
       setNodes(n);
       setProxyMode(settings.proxy_mode);
-      setSelectedTag(resolveSelectedTag(settings.selected_tag, n));
+      setSelectedTag(selected);
+      writeNodesSnapshot({
+        nodes: n,
+        selectedTag: selected,
+        running: s.core.status === "running",
+      });
       setError(null);
     } catch (e) {
       // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
       if (
         gen === pollGenRef.current &&
+        activeRef.current &&
         !modeBusyRef.current &&
         !pendingRef.current
       ) {
@@ -96,14 +106,22 @@ export function Home({ onBusyChange, onNavigate }: Props) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    activeRef.current = active;
+    pollGenRef.current += 1;
+    if (!active) return;
+    const gen = pollGenRef.current;
+    void refresh(gen);
     const id = window.setInterval(() => {
       if (pendingRef.current || modeBusyRef.current) return;
       pollGenRef.current += 1;
       void refresh(pollGenRef.current);
     }, 2000);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+    return () => {
+      activeRef.current = false;
+      pollGenRef.current += 1;
+      window.clearInterval(id);
+    };
+  }, [active, refresh]);
 
   const core: CoreState | undefined = status?.core;
   const busy =
@@ -361,7 +379,7 @@ export function Home({ onBusyChange, onNavigate }: Props) {
               <TrafficChart
                 className="min-h-0 flex-1"
                 running={running}
-                paused={modeBusy || busy}
+                paused={modeBusy || busy || !active}
               />
             </>
           )}

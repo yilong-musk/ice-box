@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
@@ -128,7 +128,6 @@ describe("Subscriptions", () => {
   });
 
   it("shows an apply warning from a remove response", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({
       ok: true,
@@ -145,6 +144,15 @@ describe("Subscriptions", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "删除",
+      }),
+    );
 
     await waitFor(() => {
       expect(removeSubscription).toHaveBeenCalled();

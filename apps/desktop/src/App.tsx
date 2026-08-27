@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import {
   House,
   ListFilter,
@@ -25,6 +25,25 @@ import logo from "./assets/logo.png";
 
 type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
 
+function TabPane({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={
+        active ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"
+      }
+      aria-hidden={!active}
+    >
+      {children}
+    </div>
+  );
+}
+
 const NAV_ITEMS: { id: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "home", label: "主页", icon: House },
   { id: "nodes", label: "节点", icon: Waypoints },
@@ -36,8 +55,21 @@ const NAV_ITEMS: { id: Tab; label: string; icon: ComponentType<{ className?: str
 
 function App() {
   const [tab, setTab] = useState<Tab>("home");
+  const [visited, setVisited] = useState<ReadonlySet<Tab>>(
+    () => new Set<Tab>(["home"]),
+  );
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
   useThemePreference();
+
+  function selectTab(id: Tab) {
+    setTab(id);
+    setVisited((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -96,7 +128,7 @@ function App() {
                       "bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent",
                   )}
                   aria-current={tab === id ? "page" : undefined}
-                  onClick={() => setTab(id)}
+                  onClick={() => selectTab(id)}
                 >
                   <Icon className="size-4" />
                   {label}
@@ -137,12 +169,36 @@ function App() {
             )}
 
             <main className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4">
-              {tab === "home" && <Home onNavigate={setTab} />}
-              {tab === "nodes" && <Nodes onNavigate={setTab} />}
-              {tab === "subs" && <Subscriptions />}
-              {tab === "rules" && <Rules onNavigate={setTab} />}
-              {tab === "logs" && <Logs />}
-              {tab === "settings" && <Settings />}
+              {visited.has("home") && (
+                <TabPane active={tab === "home"}>
+                  <Home onNavigate={selectTab} active={tab === "home"} />
+                </TabPane>
+              )}
+              {visited.has("nodes") && (
+                <TabPane active={tab === "nodes"}>
+                  <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+                </TabPane>
+              )}
+              {visited.has("subs") && (
+                <TabPane active={tab === "subs"}>
+                  <Subscriptions />
+                </TabPane>
+              )}
+              {visited.has("rules") && (
+                <TabPane active={tab === "rules"}>
+                  <Rules onNavigate={selectTab} active={tab === "rules"} />
+                </TabPane>
+              )}
+              {visited.has("logs") && (
+                <TabPane active={tab === "logs"}>
+                  <Logs active={tab === "logs"} />
+                </TabPane>
+              )}
+              {visited.has("settings") && (
+                <TabPane active={tab === "settings"}>
+                  <Settings />
+                </TabPane>
+              )}
             </main>
           </div>
         </div>

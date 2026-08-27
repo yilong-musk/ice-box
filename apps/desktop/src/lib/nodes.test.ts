@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearNodesSnapshot,
   delayTestTagsForGroup,
   delayTestTagsForList,
   delayResultTone,
   formatDelay,
   isGroupType,
+  nodesEqual,
+  readNodesSnapshot,
   resolveSelectedTag,
+  writeNodesSnapshot,
 } from "./nodes";
 
 describe("formatDelay", () => {
@@ -126,5 +130,41 @@ describe("resolveSelectedTag", () => {
   it("falls back when settings tag is stale", () => {
     const nodes = [{ tag: "a" }];
     expect(resolveSelectedTag("gone", nodes)).toBe("a");
+  });
+});
+
+describe("nodes snapshot cache", () => {
+  it("stores and clears the last node list", () => {
+    clearNodesSnapshot();
+    expect(readNodesSnapshot()).toBeUndefined();
+    writeNodesSnapshot({
+      nodes: [{ tag: "a", outbound_type: "socks", group_now: null, group_all: null }],
+      selectedTag: "a",
+      running: true,
+    });
+    expect(readNodesSnapshot()?.selectedTag).toBe("a");
+    expect(readNodesSnapshot()?.running).toBe(true);
+    clearNodesSnapshot();
+    expect(readNodesSnapshot()).toBeUndefined();
+  });
+
+  it("compares node lists by tag, type, and group members", () => {
+    const a = [
+      { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+      {
+        tag: "组",
+        outbound_type: "selector",
+        group_now: "a",
+        group_all: ["a", "b"],
+      },
+    ];
+    expect(nodesEqual(a, a)).toBe(true);
+    expect(nodesEqual(a, structuredClone(a))).toBe(true);
+    expect(
+      nodesEqual(a, [
+        a[0],
+        { ...a[1], group_now: "b" },
+      ]),
+    ).toBe(false);
   });
 });

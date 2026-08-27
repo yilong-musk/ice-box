@@ -1145,9 +1145,22 @@ mod tests {
         };
 
         let dir = temp_root("real");
-        let example = repo.join("configs/examples/minimal-direct.json");
+        // Pick free ports so a locally running instance or other tests cannot
+        // occupy them and make this test fail.
+        let inbound_port = free_loopback_port();
+        let mut clash_api_port = free_loopback_port();
+        while clash_api_port == inbound_port {
+            clash_api_port = free_loopback_port();
+        }
+        let mut cfg: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo.join("configs/examples/minimal-direct.json")).unwrap(),
+        )
+        .unwrap();
+        cfg["inbounds"][0]["listen_port"] = serde_json::json!(inbound_port);
+        cfg["experimental"]["clash_api"]["external_controller"] =
+            serde_json::json!(format!("127.0.0.1:{clash_api_port}"));
         let config = dir.join("config.json");
-        fs::copy(&example, &config).expect("copy config");
+        fs::write(&config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
         fs::create_dir_all(dir.join("logs")).unwrap();
 
         let paths = CorePaths {
@@ -1156,9 +1169,9 @@ mod tests {
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
             inbound_host: "127.0.0.1".into(),
-            inbound_port: 17890,
+            inbound_port,
             clash_api_host: "127.0.0.1".into(),
-            clash_api_port: 19090,
+            clash_api_port,
             allow_lan: false,
         };
 

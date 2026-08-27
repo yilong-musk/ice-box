@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
 const getStatus = vi.fn();
@@ -29,6 +30,7 @@ vi.mock("../api/tauri", () => ({
 describe("Home", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNodesSnapshot();
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -113,6 +115,36 @@ describe("Home", () => {
     expect(view.getByRole("radio", { name: "直连" })).toHaveAttribute("data-state", "off");
     expect(view.getByRole("button", { name: "停止代理服务" })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: "测延迟" })).toBeNull();
+  });
+
+  it("ignores a poll response that finishes after the pane is deactivated", async () => {
+    let resolveNodes: (value: unknown[]) => void = () => {};
+    listNodes.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNodes = resolve;
+        }),
+    );
+    const { rerender } = render(<Home active />);
+
+    await waitFor(() => {
+      expect(listNodes).toHaveBeenCalled();
+    });
+    rerender(<Home active={false} />);
+
+    await act(async () => {
+      resolveNodes([
+        {
+          tag: "stale-node",
+          outbound_type: "trojan",
+          group_now: null,
+          group_all: null,
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(readNodesSnapshot()).toBeUndefined();
   });
 
   it("switches proxy mode and reverts when it fails", async () => {

@@ -126,6 +126,22 @@ describe("Rules", () => {
     ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
   });
 
+  it("reloads the active subscription when the pane is reactivated", async () => {
+    const { container, rerender } = render(<Rules active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    const initialLoads = getRuleOverview.mock.calls.length;
+
+    rerender(<Rules active={false} />);
+    rerender(<Rules active />);
+
+    await waitFor(() => {
+      expect(getRuleOverview.mock.calls.length).toBeGreaterThan(initialLoads);
+    });
+  });
+
   it("filters disabled rules from the chip next to type filters", async () => {
     const { container } = render(<Rules />);
     const view = within(container);
@@ -310,7 +326,6 @@ describe("Rules", () => {
   });
 
   it("removes a custom rule after confirmation", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
@@ -318,7 +333,16 @@ describe("Rules", () => {
     });
 
     const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
-    within(row).getByRole("button", { name: "删除" }).click();
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "删除",
+      }),
+    );
 
     await waitFor(() => {
       expect(removeCustomRule).toHaveBeenCalledWith("fp-custom");

@@ -12,6 +12,8 @@ import {
   extractUpdateResults,
   formatUpdateFailures,
 } from "../lib/subscriptions";
+import { clearNodesSnapshot } from "../lib/nodes";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +48,9 @@ export function Subscriptions() {
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
+    null,
+  );
 
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
@@ -64,6 +69,8 @@ export function Subscriptions() {
   }, [refresh]);
 
   async function run(action: () => Promise<unknown>, isUpdate = false) {
+    // Subscription changes can replace the node list while the Nodes tab stays mounted.
+    clearNodesSnapshot();
     nextGeneration();
     setBusy(true);
     if (isUpdate) setUpdating(true);
@@ -285,12 +292,7 @@ export function Subscriptions() {
                           size="sm"
                           variant="destructive"
                           disabled={busy}
-                          onClick={() => {
-                            if (!window.confirm(`删除订阅「${s.name}」？`)) {
-                              return;
-                            }
-                            void run(() => api.removeSubscription(s.id));
-                          }}
+                          onClick={() => setPendingDelete(s)}
                         >
                           删除
                         </Button>
@@ -303,6 +305,24 @@ export function Subscriptions() {
           )}
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除订阅"
+        description={
+          pendingDelete ? `确认删除订阅「${pendingDelete.name}」？` : undefined
+        }
+        confirmLabel="删除"
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          const sub = pendingDelete;
+          setPendingDelete(null);
+          void run(() => api.removeSubscription(sub.id));
+        }}
+      />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
   type RuleOverview,
   type RuleRow,
 } from "../api/tauri";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +70,8 @@ type Filters = {
 
 type Props = {
   onNavigate?: (tab: "subs") => void;
+  /** When false the page stays mounted but refreshes again on reactivation. */
+  active?: boolean;
 };
 
 const EMPTY_OVERVIEW: RuleOverview = {
@@ -79,7 +82,7 @@ const EMPTY_OVERVIEW: RuleOverview = {
   types: [],
 };
 
-export function Rules({ onNavigate }: Props) {
+export function Rules({ onNavigate, active = true }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
   const [rows, setRows] = useState<RuleRow[]>([]);
@@ -102,6 +105,7 @@ export function Rules({ onNavigate }: Props) {
   const [outbound, setOutbound] = useState("direct");
   const [nodeOptions, setNodeOptions] = useState<NodeInfo[]>([]);
   const [customError, setCustomError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<RuleRow | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -165,8 +169,9 @@ export function Rules({ onNavigate }: Props) {
   }, [debouncedKeyword, filters, offset, limit, isStale, nextGeneration]);
 
   useEffect(() => {
+    if (!active) return;
     void load();
-  }, [load]);
+  }, [active, load]);
 
   function changeFilters(next: Partial<Filters>) {
     setFilters((f) => ({ ...f, ...next }));
@@ -197,7 +202,6 @@ export function Rules({ onNavigate }: Props) {
   }
 
   async function onRemoveCustom(row: RuleRow) {
-    if (!window.confirm(`删除自定义规则：${ruleMatchSummary(row)}？`)) return;
     nextGeneration();
     setBusy(true);
     setApplyWarning(null);
@@ -574,7 +578,7 @@ export function Rules({ onNavigate }: Props) {
                             size="sm"
                             variant="destructive"
                             disabled={busy}
-                            onClick={() => void onRemoveCustom(row)}
+                            onClick={() => setPendingDelete(row)}
                           >
                             删除
                           </Button>
@@ -613,6 +617,26 @@ export function Rules({ onNavigate }: Props) {
           </CardFooter>
         ) : null}
       </Card>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除自定义规则"
+        description={
+          pendingDelete
+            ? `确认删除规则：${ruleMatchSummary(pendingDelete)}？`
+            : undefined
+        }
+        confirmLabel="删除"
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          const row = pendingDelete;
+          setPendingDelete(null);
+          void onRemoveCustom(row);
+        }}
+      />
     </div>
   );
 }

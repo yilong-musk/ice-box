@@ -703,6 +703,7 @@ Rule queries and management target the **currently active subscription** (single
 - Rule identity = **fingerprint** (canonical serialization of the rule JSON); disabled state persists by fingerprint, rules whose content is unchanged keep their state after subscription updates
 - Overrides are stored in `rules.json` (data dir root): `{ disabled: [fp], custom: [rule objects] }`; subscription raw bytes are never modified
 - At build time: disabled rules are dropped, custom rules are **prepended** (take precedence over subscription rules), then the usual GEOIP expansion and outbound reference validation (`config.invalid`)
+- Custom rules persist globally across subscription switches; a rule whose `outbound` / `rule_set` references do not exist in the **new** active subscription is **skipped at build time** (with a log warning) instead of failing the whole build, so switching subscriptions can never break Apply / Start — the rule stays persisted in `rules.json` and resumes as soon as its references exist again
 - The three write commands (`set_rule_disabled` / `add_custom_rule` / `remove_custom_rule`) **auto-Apply** after a successful change (hot reload if Running); failures surface via `apply_warning`
 
 ---

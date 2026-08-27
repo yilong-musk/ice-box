@@ -2,13 +2,15 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
+import { clearNodesSnapshot } from "./lib/nodes";
 
 const getStatus = vi.fn();
+const listNodes = vi.fn();
 
 vi.mock("./api/tauri", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
-    listNodes: vi.fn().mockResolvedValue([]),
+    listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: vi.fn().mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -32,6 +34,8 @@ vi.mock("./api/tauri", () => ({
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNodesSnapshot();
+    listNodes.mockResolvedValue([]);
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -200,5 +204,38 @@ describe("App", () => {
     expect(regions[1]).toHaveTextContent("主页");
     expect(regions[2]).toHaveTextContent("ice-box");
     expect(regions[2]).toHaveTextContent(APP_VERSION);
+  });
+
+  it("keeps the nodes list mounted when switching away and back", async () => {
+    listNodes.mockResolvedValue([
+      {
+        tag: "proxy-1",
+        outbound_type: "trojan",
+        group_now: null,
+        group_all: null,
+      },
+    ]);
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(listNodes).toHaveBeenCalled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "节点" }));
+    await waitFor(() => {
+      expect(view.getByText("proxy-1")).toBeInTheDocument();
+    });
+    expect(view.queryByText("暂无节点")).toBeNull();
+
+    fireEvent.click(view.getByRole("button", { name: "主页" }));
+    const panel = container.querySelector(".nodes-panel");
+    expect(panel).not.toBeNull();
+    expect(panel!.parentElement?.className.split(/\s+/)).toContain("hidden");
+
+    fireEvent.click(view.getByRole("button", { name: "节点" }));
+    expect(view.getByText("proxy-1")).toBeInTheDocument();
+    expect(view.queryByText("暂无节点")).toBeNull();
+    expect(panel!.parentElement?.className.split(/\s+/)).toContain("flex");
+    expect(panel!.parentElement?.className.split(/\s+/)).not.toContain("hidden");
   });
 });

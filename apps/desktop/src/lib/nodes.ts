@@ -1,4 +1,53 @@
+import type { NodeInfo } from "../api/tauri";
+
 export type DelayCell = number | "error" | "testing" | null;
+
+/** Last successful node list, shared across Home and Nodes tab mounts. */
+export type NodesSnapshot = {
+  nodes: NodeInfo[];
+  selectedTag: string;
+  running: boolean;
+};
+
+let nodesSnapshot: NodesSnapshot | undefined;
+
+export function readNodesSnapshot(): NodesSnapshot | undefined {
+  return nodesSnapshot;
+}
+
+export function writeNodesSnapshot(next: NodesSnapshot): void {
+  nodesSnapshot = next;
+}
+
+export function clearNodesSnapshot(): void {
+  nodesSnapshot = undefined;
+}
+
+export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.tag !== right.tag ||
+      left.outbound_type !== right.outbound_type ||
+      left.group_now !== right.group_now
+    ) {
+      return false;
+    }
+    const leftMembers = left.group_all;
+    const rightMembers = right.group_all;
+    if (leftMembers === rightMembers) continue;
+    if (!leftMembers || !rightMembers || leftMembers.length !== rightMembers.length) {
+      return false;
+    }
+    for (let j = 0; j < leftMembers.length; j++) {
+      if (leftMembers[j] !== rightMembers[j]) return false;
+    }
+  }
+  return true;
+}
 
 export const STRATEGY_GROUP_TYPES = [
   "selector",
