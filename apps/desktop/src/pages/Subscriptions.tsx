@@ -156,7 +156,7 @@ export function Subscriptions() {
                   required
                 />
               </Field>
-              <div className="flex flex-wrap items-end gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Field className="min-w-48 flex-1">
                   <FieldLabel htmlFor="sub-name">名称</FieldLabel>
                   <Input

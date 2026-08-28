@@ -68,6 +68,9 @@ describe("Subscriptions", () => {
     expect(container.querySelector(".subs-panel")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
     );
+    expect(
+      view.getByRole("button", { name: "导入" }).parentElement?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["items-center"]));
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {

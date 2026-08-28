@@ -313,7 +313,7 @@ pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<St
     let mut lines: Vec<LogLine> = Vec::new();
     collect(&mut lines, Source::App, app_log)?;
     collect(&mut lines, Source::Core, core_log)?;
-    lines.sort_by(|a, b| (a.ts, a.source, a.order).cmp(&(b.ts, b.source, b.order)));
+    lines.sort_by_key(|a| (a.ts, a.source, a.order));
     // Keep the newest lines after merging both sources. Truncating the ascending
     // list directly would retain stale entries and hide the latest connections.
     let drop_count = lines.len().saturating_sub(n);
