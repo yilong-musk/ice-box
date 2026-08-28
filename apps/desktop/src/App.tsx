@@ -156,7 +156,7 @@ function App() {
           <Sidebar
             collapsible="offcanvas"
             side="left"
-            style={{ top: "3rem", height: "calc(100svh - 3rem)" }}
+            className="top-12! h-[calc(100svh-3rem)]!"
           >
             <SidebarContent>
               <SidebarGroup>

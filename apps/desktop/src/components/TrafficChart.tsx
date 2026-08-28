@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Area, AreaChart, CartesianGrid, XAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
 import { formatRate } from "../lib/traffic";
 import {
@@ -97,8 +97,8 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     return {
       chartData: points.map((p) => ({
         date: new Date(p.t).toISOString(),
-        down: p.down,
-        up: p.up,
+        down: Math.max(0, p.down),
+        up: Math.max(0, p.up),
       })),
       maxVal,
     };
@@ -162,6 +162,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} />
+          <YAxis hide domain={[0, "auto"]} />
           <XAxis
             dataKey="date"
             tickLine={false}
@@ -195,14 +196,14 @@ export function TrafficChart({ running, paused = false, className }: Props) {
           />
           <Area
             dataKey="down"
-            type="natural"
+            type="monotone"
             fill="url(#fillTrafficDown)"
             stroke="var(--color-down)"
             isAnimationActive={false}
           />
           <Area
             dataKey="up"
-            type="natural"
+            type="monotone"
             fill="url(#fillTrafficUp)"
             stroke="var(--color-up)"
             isAnimationActive={false}
