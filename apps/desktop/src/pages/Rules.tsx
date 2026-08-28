@@ -16,7 +16,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -245,7 +244,6 @@ export function Rules({ onNavigate, active = true }: Props) {
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
           <CardTitle>规则</CardTitle>
-          <CardDescription>查询、禁用或添加自定义规则</CardDescription>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"

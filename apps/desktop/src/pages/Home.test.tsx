@@ -56,7 +56,7 @@ describe("Home", () => {
       proxy_mode: "rule",
     });
     getConnectionStats.mockResolvedValue({ connection_count: 0 });
-    getTrafficSnapshot.mockResolvedValue({ points: [], latest: null });
+    getTrafficSnapshot.mockResolvedValue({ points: [], latest: null, peak: null });
     start.mockResolvedValue(undefined);
     stopSystemProxy.mockResolvedValue(undefined);
   });

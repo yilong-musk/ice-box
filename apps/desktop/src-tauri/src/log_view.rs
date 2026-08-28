@@ -50,6 +50,8 @@ enum Source {
 struct LogLine {
     ts: DateTime<FixedOffset>,
     source: Source,
+    /// Position in the source tail; preserves actual file order for same-second lines.
+    order: usize,
     level: Level,
     text: String,
 }
@@ -152,7 +154,10 @@ fn display_worthy(source: Source, level: Level, text: &str) -> bool {
 }
 
 fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), AppError> {
-    for raw in read_log_tail_deep(path, SCAN_PER_SOURCE)? {
+    for (order, raw) in read_log_tail_deep(path, SCAN_PER_SOURCE)?
+        .into_iter()
+        .enumerate()
+    {
         let parsed = match source {
             Source::App => parse_app_line(&raw),
             Source::Core => parse_core_line(&raw),
@@ -162,6 +167,7 @@ fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), Ap
             out.push(LogLine {
                 ts,
                 source,
+                order,
                 level,
                 text: raw,
             });
@@ -307,8 +313,13 @@ pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<St
     let mut lines: Vec<LogLine> = Vec::new();
     collect(&mut lines, Source::App, app_log)?;
     collect(&mut lines, Source::Core, core_log)?;
-    lines.sort_by(|a, b| (a.ts, a.source, &a.text).cmp(&(b.ts, b.source, &b.text)));
-    lines.truncate(n);
+    lines.sort_by(|a, b| (a.ts, a.source, a.order).cmp(&(b.ts, b.source, b.order)));
+    // Keep the newest lines after merging both sources. Truncating the ascending
+    // list directly would retain stale entries and hide the latest connections.
+    let drop_count = lines.len().saturating_sub(n);
+    if drop_count > 0 {
+        lines.drain(..drop_count);
+    }
     Ok(lines
         .into_iter()
         .map(|l| format_display_line(l.ts, l.source, l.level, &l.text))
@@ -547,17 +558,48 @@ mod tests {
         let app = dir.join("ice-box.log");
         let core = dir.join("sing-box.log");
         let mut app_text = String::new();
-        for i in 0..100 {
+        for i in 0..6 {
             app_text.push_str(&format!(
                 "2026-08-23T13:47:{:02}.000000Z ERROR app error {i}\n",
-                i % 60
+                i
             ));
         }
         fs::write(&app, app_text).unwrap();
         fs::write(&core, "").unwrap();
 
         let view = read_log_view(&app, &core, 3).unwrap();
-        assert_eq!(view.len(), 3);
+        assert_eq!(
+            view,
+            vec![
+                "ERROR 08-23 13:47:03 app error 3",
+                "ERROR 08-23 13:47:04 app error 4",
+                "ERROR 08-23 13:47:05 app error 5",
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preserves_source_order_for_connections_with_same_second() {
+        let dir = temp_dir("same-second");
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("ice-box.log");
+        let core = dir.join("sing-box.log");
+        fs::write(&app, "").unwrap();
+        fs::write(
+            &core,
+            concat!(
+                "+0000 2026-08-23 13:47:06 INFO [1 0ms] outbound/direct: outbound connection to first.example:443\n",
+                "+0000 2026-08-23 13:47:06 INFO [2 0ms] outbound/direct: outbound connection to second.example:443\n",
+            ),
+        )
+        .unwrap();
+
+        let view = read_log_view(&app, &core, 1).unwrap();
+        assert_eq!(
+            view,
+            vec!["INFO 08-23 13:47:06 second.example:443 → direct"]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

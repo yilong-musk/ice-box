@@ -72,6 +72,25 @@ describe("Logs", () => {
     expect(getLogView.mock.calls.length).toBeGreaterThan(initial);
   });
 
+  it("replaces an old connection entry when the newest tail changes", async () => {
+    vi.useFakeTimers();
+    getLogView
+      .mockResolvedValueOnce(["INFO 08-23 13:47:06 as.xiaohongshu.com:443 → 节点 A"])
+      .mockResolvedValueOnce(["INFO 08-23 13:47:08 example.com:443 → 节点 B"]);
+    const { container } = render(<Logs />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container).toHaveTextContent("as.xiaohongshu.com:443");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(container).toHaveTextContent("example.com:443");
+    expect(container).not.toHaveTextContent("as.xiaohongshu.com:443");
+  });
+
   it("pauses polling when the tab is hidden", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");

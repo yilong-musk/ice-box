@@ -1,4 +1,5 @@
-//! Persistent Clash `/traffic` stream and a rolling 60-second history.
+//! Persistent Clash `/traffic` stream, a rolling 60-second history, and a
+//! cumulative peak for the current monitoring run.
 //!
 //! Opening a new `/traffic` connection per UI poll waits ~1s for the first tick
 //! and then races the 1s interval, so the chart effectively samples at ~0.5Hz
@@ -38,12 +39,15 @@ pub struct TimedTrafficSample {
 pub struct TrafficSnapshot {
     pub points: Vec<TimedTrafficSample>,
     pub latest: Option<TrafficSample>,
+    /// Highest observed rate in either direction during the current run.
+    pub peak: Option<TrafficSample>,
 }
 
 struct Inner {
     desired: Option<HealthEndpoints>,
     points: VecDeque<TimedTrafficSample>,
     latest: Option<TrafficSample>,
+    peak: Option<TrafficSample>,
 }
 
 struct Shared {
@@ -66,6 +70,7 @@ impl TrafficMonitor {
                     desired: None,
                     points: VecDeque::new(),
                     latest: None,
+                    peak: None,
                 }),
                 changed: Condvar::new(),
                 shutdown: AtomicBool::new(false),
@@ -75,8 +80,8 @@ impl TrafficMonitor {
     }
 
     /// Start (or retarget) the stream. Any change of target (including `Some` →
-    /// a different `Some`) drops history so the chart cannot mix two Clash APIs.
-    /// `None` stops collection.
+    /// a different `Some`) drops history and the cumulative peak so the chart
+    /// cannot mix two Clash APIs. `None` stops collection.
     pub fn set_endpoints(&self, endpoints: Option<HealthEndpoints>) {
         {
             let mut inner = lock_inner(&self.shared);
@@ -86,6 +91,7 @@ impl TrafficMonitor {
             inner.desired = endpoints.clone();
             inner.points.clear();
             inner.latest = None;
+            inner.peak = None;
         }
         if endpoints.is_some() {
             self.ensure_thread();
@@ -103,6 +109,7 @@ impl TrafficMonitor {
         TrafficSnapshot {
             points: inner.points.iter().copied().collect(),
             latest: inner.latest,
+            peak: inner.peak,
         }
     }
 
@@ -172,6 +179,13 @@ fn retain_window(points: &mut VecDeque<TimedTrafficSample>, now_ms: u64) {
 
 fn push_sample(inner: &mut Inner, sample: TrafficSample, now_ms: u64) {
     inner.latest = Some(sample);
+    inner.peak = Some(match inner.peak {
+        Some(peak) => TrafficSample {
+            up: peak.up.max(sample.up),
+            down: peak.down.max(sample.down),
+        },
+        None => sample,
+    });
     inner.points.push_back(TimedTrafficSample {
         up: sample.up,
         down: sample.down,
@@ -283,6 +297,28 @@ mod tests {
     }
 
     #[test]
+    fn peak_survives_rolling_window_trim() {
+        let mut inner = Inner {
+            desired: None,
+            points: VecDeque::new(),
+            latest: None,
+            peak: None,
+        };
+        let high = TrafficSample {
+            up: 2_000,
+            down: 1_000,
+        };
+        let low = TrafficSample { up: 20, down: 10 };
+
+        push_sample(&mut inner, high, 1_000);
+        push_sample(&mut inner, low, TRAFFIC_WINDOW_MS + 2_000);
+
+        assert_eq!(inner.points.len(), 1);
+        assert_eq!(inner.latest, Some(low));
+        assert_eq!(inner.peak, Some(high));
+    }
+
+    #[test]
     fn monitor_collects_stream_and_clears_on_stop() {
         let server = MockClashApi::start(200, "Rule");
         let monitor = TrafficMonitor::new();
@@ -301,12 +337,14 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         };
         assert!(snap.latest.is_some());
+        assert!(snap.peak.is_some());
         assert!(snap.points.windows(2).all(|w| w[1].t >= w[0].t));
 
         monitor.set_endpoints(None);
         let empty = monitor.snapshot();
         assert!(empty.points.is_empty());
         assert!(empty.latest.is_none());
+        assert!(empty.peak.is_none());
         assert!(!monitor.has_target());
     }
 
@@ -324,6 +362,10 @@ mod tests {
         monitor.set_endpoints(Some(a.clone()));
         monitor.seed_history_for_test(TrafficSample { up: 9, down: 8 });
         assert_eq!(monitor.snapshot().points.len(), 1);
+        assert_eq!(
+            monitor.snapshot().peak,
+            Some(TrafficSample { up: 9, down: 8 })
+        );
 
         monitor.set_endpoints(Some(a.clone()));
         assert_eq!(
@@ -336,6 +378,7 @@ mod tests {
         let snap = monitor.snapshot();
         assert!(snap.points.is_empty());
         assert!(snap.latest.is_none());
+        assert!(snap.peak.is_none());
         assert!(monitor.has_target());
     }
 }

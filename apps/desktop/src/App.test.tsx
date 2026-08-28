@@ -22,7 +22,9 @@ vi.mock("./api/tauri", () => ({
       proxy_mode: "rule",
     }),
     getConnectionStats: vi.fn().mockResolvedValue({ connection_count: 0 }),
-    getTrafficSnapshot: vi.fn().mockResolvedValue({ points: [], latest: null }),
+    getTrafficSnapshot: vi
+      .fn()
+      .mockResolvedValue({ points: [], latest: null, peak: null }),
     start: vi.fn(),
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),

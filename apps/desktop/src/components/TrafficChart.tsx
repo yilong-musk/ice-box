@@ -38,6 +38,7 @@ const chartConfig = {
 export function TrafficChart({ running, paused = false, className }: Props) {
   const [points, setPoints] = useState<Point[]>([]);
   const [latest, setLatest] = useState<TrafficSample | null>(null);
+  const [peak, setPeak] = useState<TrafficSample | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   const failCountRef = useRef(0);
@@ -46,6 +47,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     if (!running) {
       setPoints([]);
       setLatest(null);
+      setPeak(null);
       setError(null);
       failCountRef.current = 0;
       inFlightRef.current = false;
@@ -70,6 +72,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         setError(null);
         setLatest(snap.latest);
         setPoints(snap.points);
+        setPeak(snap.peak ?? null);
       } catch (e) {
         if (cancelled) return;
         // Brief Clash API drops are skipped; only surface after sustained failure.
@@ -93,7 +96,11 @@ export function TrafficChart({ running, paused = false, className }: Props) {
   }, [running, paused]);
 
   const { chartData, maxVal } = useMemo(() => {
-    const maxVal = Math.max(1, ...points.map((p) => Math.max(p.up, p.down)));
+    const maxVal = Math.max(
+      1,
+      peak?.up ?? 0,
+      peak?.down ?? 0,
+    );
     return {
       chartData: points.map((p) => ({
         date: new Date(p.t).toISOString(),
@@ -102,7 +109,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       })),
       maxVal,
     };
-  }, [points]);
+  }, [peak, points]);
 
   if (!running) {
     return (
@@ -162,7 +169,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} />
-          <YAxis hide domain={[0, "auto"]} />
+          <YAxis hide domain={[0, maxVal]} />
           <XAxis
             dataKey="date"
             tickLine={false}
@@ -211,7 +218,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         </AreaChart>
       </ChartContainer>
       <p className="muted shrink-0 text-xs">
-        峰值刻度 {formatRate(maxVal)} · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
+        峰值刻度 {formatRate(maxVal)} · 本次运行累计 · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
       </p>
     </div>
   );

@@ -85,6 +85,8 @@ export type TrafficPoint = TrafficSample & { t: number };
 export type TrafficSnapshot = {
   points: TrafficPoint[];
   latest: TrafficSample | null;
+  /** Highest observed rate during the current proxy run. */
+  peak: TrafficSample | null;
 };
 
 export type AppErrorPayload = {

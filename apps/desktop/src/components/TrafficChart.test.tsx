@@ -14,11 +14,25 @@ vi.mock("../api/tauri", () => ({
 function snap(
   points: { up: number; down: number; t: number }[],
   latest?: { up: number; down: number } | null,
+  peak?: { up: number; down: number } | null,
 ) {
   return {
     points,
     latest:
       latest === undefined ? (points[points.length - 1] ?? null) : latest,
+    peak:
+      peak === undefined
+        ? points.reduce<{ up: number; down: number } | null>(
+            (current, point) =>
+              current === null
+                ? point
+                : {
+                    up: Math.max(current.up, point.up),
+                    down: Math.max(current.down, point.down),
+                  },
+            null,
+          )
+        : peak,
   };
 }
 
@@ -62,6 +76,22 @@ describe("TrafficChart", () => {
     expect(view.getByText(/峰值刻度 80 B\/s/)).toBeInTheDocument();
     expect(view.getByText(/↓ 80 B\/s/)).toBeInTheDocument();
     expect(view.getByText(/后台持续采样/)).toBeInTheDocument();
+  });
+
+  it("uses the cumulative run peak when the visible window is lower", async () => {
+    getTrafficSnapshot.mockResolvedValue(
+      snap(
+        [{ up: 80 * 1024, down: 40 * 1024, t: 1_000 }],
+        { up: 80 * 1024, down: 40 * 1024 },
+        { up: 2 * 1024 * 1024, down: 512 * 1024 },
+      ),
+    );
+    const { container } = render(<TrafficChart running={true} />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(getTrafficSnapshot).toHaveBeenCalled();
+    });
+    expect(view.getByText(/峰值刻度 2\.00 MB\/s/)).toBeInTheDocument();
   });
 
   it("does not flash an error when a snapshot fails transiently", async () => {
