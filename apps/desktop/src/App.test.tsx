@@ -164,11 +164,11 @@ describe("App", () => {
 
   it("places the app brand at the bottom of the sidebar", () => {
     const { container } = render(<App />);
-    const aside = container.querySelector("aside");
-    expect(aside).not.toBeNull();
-    const nav = aside!.querySelector("nav");
-    const brand = aside!.querySelector("h1");
-    const version = aside!.querySelector('[aria-label^="版本"]');
+    const sidebar = container.querySelector('[data-slot="sidebar"]');
+    expect(sidebar).not.toBeNull();
+    const nav = sidebar!.querySelector('[data-slot="sidebar-menu"]');
+    const brand = sidebar!.querySelector("h1");
+    const version = sidebar!.querySelector('[aria-label^="版本"]');
     expect(nav).not.toBeNull();
     expect(brand).toHaveTextContent("ice-box");
     expect(brand!.parentElement?.className.split(/\s+/)).toContain("justify-center");
@@ -179,7 +179,7 @@ describe("App", () => {
     expect(nav!.compareDocumentPosition(brand!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(aside!.querySelector('[data-slot="separator"]')).toBeNull();
+    expect(sidebar!.querySelector('[data-slot="separator"]')).toBeNull();
   });
 
   it("draws the titlebar divider as one shared edge", () => {
@@ -190,9 +190,9 @@ describe("App", () => {
       expect.arrayContaining(["flex", "h-12", "border-b"]),
     );
     expect(titlebar!.querySelector("h2")).toHaveTextContent("主页");
-    const aside = container.querySelector("aside");
-    expect(aside).not.toBeNull();
-    expect(titlebar!.compareDocumentPosition(aside!)).toBe(
+    const sidebar = container.querySelector('[data-slot="sidebar"]');
+    expect(sidebar).not.toBeNull();
+    expect(titlebar!.compareDocumentPosition(sidebar!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });

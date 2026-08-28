@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Area, AreaChart, CartesianGrid } from "recharts";
+import { Area, AreaChart, CartesianGrid, XAxis } from "recharts";
 import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
 import { formatRate } from "../lib/traffic";
 import {
@@ -95,8 +95,8 @@ export function TrafficChart({ running, paused = false, className }: Props) {
   const { chartData, maxVal } = useMemo(() => {
     const maxVal = Math.max(1, ...points.map((p) => Math.max(p.up, p.down)));
     return {
-      chartData: points.map((p, index) => ({
-        second: index,
+      chartData: points.map((p) => ({
+        date: new Date(p.t).toISOString(),
         down: p.down,
         up: p.up,
       })),
@@ -133,29 +133,78 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         <AreaChart
           accessibilityLayer
           data={chartData}
-          margin={{ top: 8, right: 8, left: 8, bottom: 0 }}
+          margin={{ left: 12, right: 12 }}
         >
+          <defs>
+            <linearGradient id="fillTrafficDown" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="var(--color-down)"
+                stopOpacity={0.6}
+              />
+              <stop
+                offset="95%"
+                stopColor="var(--color-down)"
+                stopOpacity={0.1}
+              />
+            </linearGradient>
+            <linearGradient id="fillTrafficUp" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="var(--color-up)"
+                stopOpacity={0.45}
+              />
+              <stop
+                offset="95%"
+                stopColor="var(--color-up)"
+                stopOpacity={0.1}
+              />
+            </linearGradient>
+          </defs>
           <CartesianGrid vertical={false} />
+          <XAxis
+            dataKey="date"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            minTickGap={32}
+            tickFormatter={(value) => {
+              const date = new Date(value);
+              return date.toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              });
+            }}
+          />
           <ChartTooltip
             cursor={false}
-            content={<ChartTooltipContent hideLabel indicator="line" />}
+            content={
+              <ChartTooltipContent
+                labelFormatter={(value) => {
+                  const date = new Date(value);
+                  return date.toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  });
+                }}
+                indicator="dot"
+              />
+            }
           />
           <Area
             dataKey="down"
-            type="linear"
-            fill="var(--color-down)"
-            fillOpacity={0.2}
+            type="natural"
+            fill="url(#fillTrafficDown)"
             stroke="var(--color-down)"
-            strokeWidth={1.5}
             isAnimationActive={false}
           />
           <Area
             dataKey="up"
-            type="linear"
-            fill="var(--color-up)"
-            fillOpacity={0.2}
+            type="natural"
+            fill="url(#fillTrafficUp)"
             stroke="var(--color-up)"
-            strokeWidth={1.5}
             isAnimationActive={false}
           />
         </AreaChart>

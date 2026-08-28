@@ -52,6 +52,20 @@ if (typeof window.ResizeObserver === "undefined") {
   } as typeof ResizeObserver;
 }
 
+if (typeof window.matchMedia === "undefined") {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();

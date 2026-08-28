@@ -6,6 +6,14 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @theme inline {
     --font-heading: var(--font-sans);
     /* Flag-only fallback; @font-face is injected when color emoji exists but flags do not. */
