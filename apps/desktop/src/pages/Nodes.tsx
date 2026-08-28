@@ -25,6 +25,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
@@ -684,7 +685,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
             ) : null}
           </CardAction>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto overscroll-contain">
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">加载节点列表…</p>
           ) : nodes.length === 0 ? (
@@ -697,30 +698,36 @@ export function Nodes({ onNavigate, active = true }: Props) {
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
-            <div role="list" aria-label="节点列表" className="flex w-full flex-col">
-              {visibleNodes.map((n) => {
-                const expanded =
-                  isGroupType(n.outbound_type) &&
-                  Boolean(n.group_all?.length) &&
-                  expandedGroups.has(n.tag);
-                return (
-                  <NodeRow
-                    key={n.tag}
-                    node={n}
-                    selected={n.tag === selectedTag}
-                    expanded={expanded}
-                    running={running}
-                    busy={busy}
-                    delay={delays[n.tag] ?? null}
-                    delays={expanded ? delays : EMPTY_DELAYS}
-                    onToggleGroup={setGroupOpen}
-                    onTest={onTest}
-                    onSelect={handleSelect}
-                    onGroupSelect={handleGroupSelect}
-                  />
-                );
-              })}
-            </div>
+            <ScrollArea
+              type="scroll"
+              scrollHideDelay={600}
+              className="min-h-0 flex-1 overflow-hidden"
+            >
+              <div role="list" aria-label="节点列表" className="flex w-full flex-col">
+                {visibleNodes.map((n) => {
+                  const expanded =
+                    isGroupType(n.outbound_type) &&
+                    Boolean(n.group_all?.length) &&
+                    expandedGroups.has(n.tag);
+                  return (
+                    <NodeRow
+                      key={n.tag}
+                      node={n}
+                      selected={n.tag === selectedTag}
+                      expanded={expanded}
+                      running={running}
+                      busy={busy}
+                      delay={delays[n.tag] ?? null}
+                      delays={expanded ? delays : EMPTY_DELAYS}
+                      onToggleGroup={setGroupOpen}
+                      onTest={onTest}
+                      onSelect={handleSelect}
+                      onGroupSelect={handleGroupSelect}
+                    />
+                  );
+                })}
+              </div>
+            </ScrollArea>
           )}
         </CardContent>
       </Card>

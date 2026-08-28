@@ -80,6 +80,14 @@ describe("Nodes", () => {
     expect(view.getByText("节点")).toBeInTheDocument();
     expect(view.getByRole("button", { name: "批量测延迟" })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: "按延迟排序" })).toBeNull();
+    const nodeList = view.getByRole("list", { name: "节点列表" });
+    const scrollArea = nodeList.closest('[data-slot="scroll-area"]');
+    expect(scrollArea?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["min-h-0", "flex-1", "overflow-hidden"]),
+    );
+    expect(
+      scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
+    ).toBeInTheDocument();
     expect(container.querySelector(".nodes-panel")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
     );
