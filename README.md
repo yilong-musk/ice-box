@@ -18,9 +18,9 @@ The implementation spec lives in [docs/architecture.md](docs/architecture.md) (p
 - Subscriptions: sing-box first, Clash compatible; **only one subscription is active at a time**, switching the active subscription switches the entire set of policy groups / rules / DNS
 - Runtime updates: hot reload first (**SIGHUP** in-process rebuild, PID unchanged), restart as fallback
 - **Modes**: one-click switch between Rule / Global / Direct from the home page, switched **live via the Clash API** (`PATCH /configs`) on macOS **and** Windows — no config rebuild, no reload, no core restart, no connection drop
-- **Nodes**: switch outbound from the home page, Clash API latency test, active connection count
+- **Nodes**: switch outbound and run Clash API latency tests
 - **Rules**: query / search / filter by type / pagination (server-side filtering, tens of thousands of rules never cross IPC as a full table), disable / enable (fingerprint persisted), custom rules
-- **Traffic**: real-time upload/download chart on the home page (Clash API `/traffic`, last 60 seconds)
+- **Traffic**: real-time upload/download chart on the home page (Clash API `/traffic` persistent stream + 60s ring buffer)
 
 ## Repository layout
 

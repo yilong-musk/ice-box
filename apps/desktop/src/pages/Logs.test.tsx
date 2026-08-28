@@ -14,8 +14,8 @@ vi.mock("../api/tauri", () => ({
 const POLL_MS = 2000;
 
 const baseTail = [
-  "[app] 2026-08-23T13:47:02.000000Z  INFO ice_core: sing-box ready",
-  "[core] +0800 2026-08-23 13:47:06 ERROR outbound: dial tcp: connection refused",
+  "INFO 08-23 13:47:02 ice_core: sing-box ready",
+  "ERROR 08-23 13:47:06 outbound: dial tcp: connection refused",
 ];
 
 describe("Logs", () => {
@@ -39,6 +39,24 @@ describe("Logs", () => {
     });
     expect(getLogView).toHaveBeenCalledWith(500);
     expect(view.queryByRole("combobox")).toBeNull();
+    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
+    expect(view.queryByText("日志")).toBeNull();
+    expect(container.querySelector("[data-slot='card']")).toBeNull();
+    const logView = container.querySelector(".log-view");
+    expect(logView?.parentElement?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["logs-panel"]),
+    );
+    expect(logView?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "min-h-0",
+        "flex-1",
+        "overflow-auto",
+        "bg-card",
+        "text-foreground",
+      ]),
+    );
+    expect(logView?.className.split(/\s+/)).not.toContain("bg-muted/40");
+    expect(logView?.className.split(/\s+/)).not.toContain("text-muted-foreground");
   });
 
   it("polls automatically", async () => {
@@ -52,6 +70,25 @@ describe("Logs", () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     expect(getLogView.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  it("replaces an old connection entry when the newest tail changes", async () => {
+    vi.useFakeTimers();
+    getLogView
+      .mockResolvedValueOnce(["INFO 08-23 13:47:06 as.xiaohongshu.com:443 → 节点 A"])
+      .mockResolvedValueOnce(["INFO 08-23 13:47:08 example.com:443 → 节点 B"]);
+    const { container } = render(<Logs />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container).toHaveTextContent("as.xiaohongshu.com:443");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(container).toHaveTextContent("example.com:443");
+    expect(container).not.toHaveTextContent("as.xiaohongshu.com:443");
   });
 
   it("pauses polling when the tab is hidden", async () => {
@@ -94,7 +131,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "[core] outbound/trojan[香港 1]: outbound connection to example.com:443",
+      "INFO 08-23 13:47:08 example.com:443 → 香港 1",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -132,7 +169,7 @@ describe("Logs", () => {
 
     getLogView.mockImplementation(async () => [
       ...baseTail,
-      "[core] another connection line",
+      "INFO 08-23 13:47:09 another connection line",
     ]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);

@@ -71,13 +71,18 @@ export type DelayTestResponse = {
   delay_ms: number;
 };
 
-export type ConnectionStats = {
-  connection_count: number;
-};
-
 export type TrafficSample = {
   up: number;
   down: number;
+};
+
+export type TrafficPoint = TrafficSample & { t: number };
+
+export type TrafficSnapshot = {
+  points: TrafficPoint[];
+  latest: TrafficSample | null;
+  /** Highest observed rate during the current proxy run. */
+  peak: TrafficSample | null;
 };
 
 export type AppErrorPayload = {
@@ -115,6 +120,8 @@ export type ListRulesRequest = {
   type?: string | null;
   /** "all" | "disabled" | "enabled" */
   disabled?: "all" | "disabled" | "enabled" | null;
+  /** true = custom rules only, false = subscription rules only. */
+  custom?: boolean | null;
   offset: number;
   limit: number;
 };
@@ -156,8 +163,7 @@ export const api = {
     invoke<void>("set_group_selection", { req: { group, member } }),
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
-  getConnectionStats: () => invoke<ConnectionStats>("get_connection_stats"),
-  getTrafficSample: () => invoke<TrafficSample>("get_traffic_sample"),
+  getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),
   start: () => invoke<void>("start"),
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),

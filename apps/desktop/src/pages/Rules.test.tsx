@@ -84,18 +84,101 @@ describe("Rules", () => {
     ]);
   });
 
-  it("renders stats, rows and filters", async () => {
+  it("renders rows, type chips and filters", async () => {
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    expect(view.getByText("3", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("已禁用 1")).toBeInTheDocument();
-    expect(view.getByText("1", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("2", { selector: ".rule-stat strong" })).toBeInTheDocument();
-    expect(view.getByText("域名后缀 2")).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "域名后缀 2" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "全部" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "GEOIP 1" })).toBeInTheDocument();
+    const chips = view.getByLabelText("规则筛选");
+    const typeFilters = view.getByLabelText("规则类型筛选");
+    const customFilter = view.getByRole("button", { name: "自定义 1" });
+    const disabledFilter = view.getByRole("button", { name: "已禁用 1" });
+    expect(chips).toContainElement(typeFilters);
+    expect(chips).toContainElement(customFilter);
+    expect(chips).toContainElement(disabledFilter);
+    expect(typeFilters.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-wrap", "shrink-0", "h-auto"]),
+    );
+    expect(typeFilters.className.split(/\s+/)).not.toContain("max-h-16");
     expect(view.getByText("example.com")).toBeInTheDocument();
+    const customRow = view
+      .getByText("example.com")
+      .closest("[data-slot=item]") as HTMLElement;
+    const customMarker = within(customRow).getByText("自定义");
+    expect(customMarker).toHaveClass("font-normal", "text-muted-foreground");
+    expect(customMarker).not.toHaveAttribute("data-slot", "badge");
+    expect(container.querySelector(".node-table")).toBeNull();
+    expect(view.getByRole("list", { name: "规则列表" })).toBeInTheDocument();
+    const ruleList = view.getByRole("list", { name: "规则列表" });
+    const scrollArea = ruleList.closest('[data-slot="scroll-area"]');
+    expect(scrollArea?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "min-h-0",
+        "flex-1",
+        "overflow-hidden",
+      ]),
+    );
+    expect(
+      scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
+    ).toBeInTheDocument();
+    expect(
+      view.getByText("youtube.com").closest("[data-slot=item]")?.className,
+    ).toEqual(expect.stringContaining("pr-3"));
+    expect(
+      container.querySelector(".rules-panel")?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
+  });
+
+  it("reloads the active subscription when the pane is reactivated", async () => {
+    const { container, rerender } = render(<Rules active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    const initialLoads = getRuleOverview.mock.calls.length;
+
+    rerender(<Rules active={false} />);
+    rerender(<Rules active />);
+
+    await waitFor(() => {
+      expect(getRuleOverview.mock.calls.length).toBeGreaterThan(initialLoads);
+    });
+  });
+
+  it("filters disabled rules from the chip next to type filters", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: "已禁用 1" }).click();
+
+    await waitFor(() => {
+      const calls = listRules.mock.calls;
+      const call = calls[calls.length - 1]?.[0] as { disabled: string };
+      expect(call.disabled).toBe("disabled");
+    });
+  });
+
+  it("filters custom rules from the quick filter toggle", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: "自定义 1" }).click();
+
+    await waitFor(() => {
+      const calls = listRules.mock.calls;
+      const call = calls[calls.length - 1]?.[0] as { custom: boolean | null };
+      expect(call.custom).toBe(true);
+    });
   });
 
   it("debounces keyword search and sends server-side filters", async () => {
@@ -126,7 +209,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("youtube.com").closest("li") as HTMLElement;
+    const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
     within(row).getByRole("button", { name: "禁用" }).click();
 
     await waitFor(() => {
@@ -152,7 +235,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("youtube.com").closest("li") as HTMLElement;
+    const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
     within(row).getByRole("button", { name: "禁用" }).click();
 
     await waitFor(() => {
@@ -169,17 +252,23 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
-    fireEvent.change(view.getByLabelText("匹配值"), {
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("匹配值")).toBeInTheDocument();
+    expect(screen.getByLabelText("出口")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("匹配值"), {
       target: { value: "x.io, y.io" },
     });
-    const outbound = view.getByLabelText("出口") as HTMLSelectElement;
+    const outbound = screen.getByLabelText("出口") as HTMLSelectElement;
     await waitFor(() => {
       expect(
         within(outbound).getByRole("option", { name: "n1" }),
       ).toBeInTheDocument();
     });
     fireEvent.change(outbound, { target: { value: "n1" } });
-    view.getByRole("button", { name: "添加" }).click();
+    screen.getByRole("button", { name: "添加" }).click();
 
     await waitFor(() => {
       expect(addCustomRule).toHaveBeenCalledWith({
@@ -188,7 +277,7 @@ describe("Rules", () => {
       });
     });
     await waitFor(() => {
-      expect(view.queryByLabelText("匹配值")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("匹配值")).not.toBeInTheDocument();
     });
   });
 
@@ -200,7 +289,7 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
-    const outbound = view.getByLabelText("出口") as HTMLSelectElement;
+    const outbound = screen.getByLabelText("出口") as HTMLSelectElement;
     await waitFor(() => {
       expect(
         within(outbound).getByRole("option", { name: "Proxies（策略组）" }),
@@ -219,13 +308,13 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
-    fireEvent.change(view.getByLabelText("匹配类型"), {
+    fireEvent.change(screen.getByLabelText("匹配类型"), {
       target: { value: "ip_is_private" },
     });
-    const checkbox = view.getByLabelText("私网 IP") as HTMLInputElement;
-    expect(checkbox.type).toBe("checkbox");
+    const checkbox = screen.getByRole("checkbox", { name: "私网 IP" });
+    expect(checkbox).toBeInTheDocument();
 
-    view.getByRole("button", { name: "添加" }).click();
+    screen.getByRole("button", { name: "添加" }).click();
     await waitFor(() => {
       expect(addCustomRule).toHaveBeenCalledWith({
         ip_is_private: true,
@@ -242,32 +331,75 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
-    const addButton = view.getByRole("button", {
+    const addButton = screen.getByRole("button", {
       name: "添加",
     }) as HTMLButtonElement;
     expect(addButton.disabled).toBe(true);
-    fireEvent.change(view.getByLabelText("匹配值"), {
+    fireEvent.change(screen.getByLabelText("匹配值"), {
       target: { value: "x.io" },
     });
     await waitFor(() => {
       expect(
-        (view.getByRole("button", { name: "添加" }) as HTMLButtonElement)
+        (screen.getByRole("button", { name: "添加" }) as HTMLButtonElement)
           .disabled,
       ).toBe(false);
     });
     expect(addCustomRule).not.toHaveBeenCalled();
   });
 
+  it("resets the form after a successful add", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.change(screen.getByLabelText("匹配值"), {
+      target: { value: "x.io" },
+    });
+    screen.getByRole("button", { name: "添加" }).click();
+    await waitFor(() => {
+      expect(addCustomRule).toHaveBeenCalledWith({
+        domain_suffix: ["x.io"],
+        outbound: "direct",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect((screen.getByLabelText("匹配值") as HTMLInputElement).value).toBe(
+      "",
+    );
+    expect(
+      (screen.getByRole("button", { name: "添加" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
   it("removes a custom rule after confirmation", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getByText("example.com")).toBeInTheDocument();
     });
 
-    const row = view.getByText("example.com").closest("li") as HTMLElement;
-    within(row).getByRole("button", { name: "删除" }).click();
+    const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "删除",
+      }),
+    );
 
     await waitFor(() => {
       expect(removeCustomRule).toHaveBeenCalledWith("fp-custom");
@@ -283,7 +415,20 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    expect(view.getByText(/第 1 \/ 3 页 · 共 120 条/)).toBeInTheDocument();
+    const pagerText = view.getByText(/第 1 \/ 3 页 · 共 120 条/);
+    const pager = pagerText.parentElement as HTMLElement;
+    expect(pagerText).toBeInTheDocument();
+
+    const viewport = container.querySelector(
+      '[data-slot="scroll-area-viewport"]',
+    ) as HTMLDivElement;
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 100, writable: true },
+    });
+    fireEvent.scroll(viewport);
+    expect(pager).toHaveClass("opacity-0");
 
     view.getByRole("button", { name: "下一页" }).click();
     await waitFor(() => {

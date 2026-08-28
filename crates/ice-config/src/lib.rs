@@ -365,13 +365,38 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             &input.profile.route.rule_sets,
             input.geoip_rule_set_dir.as_deref(),
         );
-        let custom_rules: Vec<Value> = input
+        let sub_set_tags: std::collections::HashSet<&str> = sub_sets
+            .iter()
+            .filter_map(|s| s.get("tag").and_then(|v| v.as_str()))
+            .collect();
+        // Custom rules persist globally (data-dir `rules.json`) and survive
+        // subscription switches, but their `outbound` / `rule_set` references may
+        // not exist in the *new* active subscription. Skip those rules instead of
+        // failing the whole build, so switching subscriptions can never break
+        // Apply / Start; the rule stays persisted and resumes as soon as its
+        // references exist again.
+        let (custom_rules, dropped_custom): (Vec<Value>, Vec<String>) = input
             .rule_overrides
             .custom
             .iter()
             .filter(|r| !input.rule_overrides.is_disabled(&rule_fingerprint(r)))
-            .cloned()
-            .collect();
+            .fold(
+                (Vec::new(), Vec::new()),
+                |(mut usable, mut dropped), rule| {
+                    if custom_rule_is_usable(rule, &tag_set, &sub_set_tags) {
+                        usable.push(rule.clone());
+                    } else {
+                        dropped.push(serde_json::to_string(rule).unwrap_or_default());
+                    }
+                    (usable, dropped)
+                },
+            );
+        if !dropped_custom.is_empty() {
+            tracing::warn!(
+                items = %dropped_custom.join(","),
+                "custom rules reference outbounds / rule-sets missing from the active subscription; skipped"
+            );
+        }
         // Custom rules are expanded the same way (they are persisted verbatim, so a
         // rule written before the add-time validation may still carry `geoip`), and
         // `geosite` is dropped in both paths.
@@ -596,6 +621,31 @@ fn validate_route_refs(
         }
     }
     Ok(())
+}
+
+/// True when a custom rule only references outbounds / rule-sets that exist in
+/// the current build; unknown references would otherwise fail route validation
+/// and block Apply / Start after a subscription switch.
+fn custom_rule_is_usable(
+    rule: &Value,
+    outbound_tags: &std::collections::HashSet<String>,
+    rule_set_tags: &std::collections::HashSet<&str>,
+) -> bool {
+    if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
+        if !outbound_tags.contains(out) {
+            return false;
+        }
+    }
+    if let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) {
+        for r in refs {
+            if let Some(t) = r.as_str() {
+                if !rule_set_tags.contains(t) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 pub fn validate_config(config: &Value) -> Result<(), ConfigError> {
@@ -1104,6 +1154,107 @@ mod build_tests {
         );
         assert!(!tags.iter().any(|t| t == "drop.com"));
         assert!(!tags.iter().any(|t| t == "off.com"));
+    }
+
+    #[test]
+    fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.route.rules = vec![json!({
+            "domain_suffix": ["keep.com"],
+            "outbound": "direct",
+        })];
+        let mut overrides = RuleOverrides::default();
+        overrides.custom.push(json!({
+            "domain_suffix": ["ghost.com"],
+            "outbound": "ghost-node",
+        }));
+        overrides.custom.push(json!({
+            "domain_suffix": ["ok.com"],
+            "outbound": "a",
+        }));
+
+        let cfg = build_runtime_config(&BuildInput {
+            template: LocalTemplate::default(),
+            profile,
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: overrides,
+        })
+        .unwrap();
+
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        let kept: Vec<String> = rules
+            .iter()
+            .filter(|r| r.get("domain_suffix").is_some())
+            .map(|r| r["domain_suffix"][0].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            kept,
+            ["ok.com", "keep.com"],
+            "custom rule referencing a missing outbound is skipped, not fatal"
+        );
+    }
+
+    #[test]
+    fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.route.rule_sets = vec![json!({ "tag": "geoip-cn", "type": "remote" })];
+        let mut overrides = RuleOverrides::default();
+        overrides.custom.push(json!({
+            "rule_set": ["geoip-cn"],
+            "outbound": "direct",
+        }));
+        overrides.custom.push(json!({
+            "rule_set": ["geoip-us"],
+            "outbound": "direct",
+        }));
+
+        let cfg = build_runtime_config(&BuildInput {
+            template: LocalTemplate::default(),
+            profile,
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: overrides,
+        })
+        .unwrap();
+
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        let kept: Vec<String> = rules
+            .iter()
+            .filter_map(|r| {
+                r.get("rule_set")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        assert_eq!(
+            kept,
+            ["geoip-cn"],
+            "custom rule referencing a missing rule-set is skipped, not fatal"
+        );
+    }
+
+    #[test]
+    fn subscription_rule_with_unknown_outbound_still_fails() {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.route.rules = vec![json!({
+            "domain_suffix": ["bad.com"],
+            "outbound": "ghost-node",
+        })];
+        let err = build_runtime_config(&BuildInput {
+            template: LocalTemplate::default(),
+            profile,
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+        })
+        .expect_err("subscription rule with unknown outbound must still fail");
+        assert!(matches!(err, ConfigError::RouteInvalid(_)));
     }
 
     #[test]

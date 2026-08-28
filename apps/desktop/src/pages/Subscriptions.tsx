@@ -5,7 +5,38 @@ import {
   type SubscriptionMeta,
 } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
-import { isInsecureSubscriptionUrl, extractApplyWarning, formatApplyWarning, extractUpdateResults, formatUpdateFailures } from "../lib/subscriptions";
+import {
+  isInsecureSubscriptionUrl,
+  extractApplyWarning,
+  formatApplyWarning,
+  extractUpdateResults,
+  formatUpdateFailures,
+} from "../lib/subscriptions";
+import { clearNodesSnapshot } from "../lib/nodes";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Switch } from "@/components/ui/switch";
 
 export function Subscriptions() {
   const { nextGeneration, isStale } = useGenerationGuard();
@@ -17,6 +48,9 @@ export function Subscriptions() {
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
+    null,
+  );
 
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
@@ -35,6 +69,8 @@ export function Subscriptions() {
   }, [refresh]);
 
   async function run(action: () => Promise<unknown>, isUpdate = false) {
+    // Subscription changes can replace the node list while the Nodes tab stays mounted.
+    clearNodesSnapshot();
     nextGeneration();
     setBusy(true);
     if (isUpdate) setUpdating(true);
@@ -64,128 +100,229 @@ export function Subscriptions() {
 
   const httpWarn = isInsecureSubscriptionUrl(url);
 
+  function subscriptionSummary(s: SubscriptionMeta): string {
+    const parts = [
+      s.format,
+      `${s.node_count} 节点`,
+      `${s.group_count ?? 0} 策略组`,
+      `${s.rule_count ?? 0} 规则`,
+    ];
+    if (s.has_dns) parts.push("DNS");
+    if (s.last_updated) {
+      parts.push(new Date(s.last_updated).toLocaleString());
+    }
+    return parts.join(" · ");
+  }
+
   return (
-    <section className="panel">
-      <h2>订阅</h2>
-      {error && <p className="error">{error}</p>}
-      {warning && <p className="warn">{warning}</p>}
+    <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3">
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
       {updateFailures && (
-        <p className="error">部分订阅更新失败：{updateFailures}</p>
+        <ErrorAlert className="shrink-0">
+          部分订阅更新失败：{updateFailures}
+        </ErrorAlert>
       )}
 
-      <form
-        className="import-row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const u = url.trim();
-          if (!u) return;
-          void run(async () => {
-            await api.addSubscription(u, name.trim() || undefined);
-            setUrl("");
-            setName("");
-          });
-        }}
-      >
-        <input
-          type="url"
-          placeholder="订阅 URL（https 优先）"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          disabled={busy}
-          required
-        />
-        <input
-          type="text"
-          placeholder="名称（可选）"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={busy}
-        />
-        <button type="submit" disabled={busy || !url.trim()}>
-          导入
-        </button>
-        <button
-          type="button"
-          disabled={busy || items.length === 0}
-          onClick={() => void run(() => api.updateAllSubscriptions(), true)}
-        >
-          {updating ? "更新中" : "全部更新"}
-        </button>
-        <button
-          type="button"
-          disabled={busy || items.length === 0}
-          onClick={() => void run(() => api.applySubscriptions())}
-        >
-          应用配置
-        </button>
-      </form>
-      {httpWarn && (
-        <p className="warn">当前为 http://，传输未加密，建议改用 https。</p>
-      )}
-
-      {items.length === 0 ? (
-        <p className="muted">暂无订阅。打开软件会自动启动内核；需要时在主页启动代理服务接管系统代理，也可导入订阅 URL。</p>
-      ) : (
-        <ul className="sub-list">
-          {items.map((s) => (
-            <li
-              key={s.id}
-              className={s.active ? "sub-item active" : "sub-item"}
-            >
-              <div className="sub-main">
-                <strong>{s.name}</strong>
-                <span className="muted">
-                  {s.format} · {s.node_count} 节点 ·{" "}
-                  {(s.group_count ?? 0)} 策略组 · {(s.rule_count ?? 0)} 规则
-                  {s.has_dns ? " · DNS" : ""}
-                  {s.last_updated
-                    ? ` · ${new Date(s.last_updated).toLocaleString()}`
-                    : ""}
-                </span>
-                {s.last_error && <span className="error">{s.last_error}</span>}
-                {(s.parse_warnings ?? []).length > 0 && (
-                  <span className="warn">
-                    {s.parse_warnings.join("；")}
-                  </span>
-                )}
-              </div>
-              <div className="sub-actions">
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={!!s.active}
+      <Card size="sm" className="shrink-0">
+        <CardHeader>
+          <CardTitle>导入</CardTitle>
+          <CardDescription>粘贴订阅 URL，可选填写名称</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const u = url.trim();
+              if (!u) return;
+              void run(async () => {
+                await api.addSubscription(u, name.trim() || undefined);
+                setUrl("");
+                setName("");
+              });
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="sub-url">订阅 URL</FieldLabel>
+                <Input
+                  id="sub-url"
+                  type="url"
+                  placeholder="订阅 URL（https 优先）"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={busy}
+                  required
+                />
+              </Field>
+              <div className="flex flex-wrap items-center gap-2">
+                <Field className="min-w-48 flex-1">
+                  <FieldLabel htmlFor="sub-name">名称</FieldLabel>
+                  <Input
+                    id="sub-name"
+                    type="text"
+                    placeholder="名称（可选）"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                     disabled={busy}
-                    onChange={(e) =>
-                      void run(() =>
-                        api.setSubscriptionActive(s.id, e.target.checked),
-                      )
-                    }
                   />
-                  激活
-                </label>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void run(() => api.updateSubscription(s.id), true)}
+                </Field>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={busy || !url.trim()}
                 >
-                  {updating ? "更新中" : "更新"}
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  disabled={busy}
-                  onClick={() => {
-                    if (!window.confirm(`删除订阅「${s.name}」？`)) return;
-                    void run(() => api.removeSubscription(s.id));
-                  }}
-                >
-                  删除
-                </button>
+                  导入
+                </Button>
               </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+            </FieldGroup>
+          </form>
+          {httpWarn ? (
+            <WarnAlert>
+              当前为 http://，传输未加密，建议改用 https。
+            </WarnAlert>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0">
+          <CardTitle>订阅</CardTitle>
+          <CardDescription>
+            {items.length === 0
+              ? "尚未导入订阅"
+              : `${items.length} 条`}
+          </CardDescription>
+          <CardAction className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || items.length === 0}
+              onClick={() =>
+                void run(() => api.updateAllSubscriptions(), true)
+              }
+            >
+              {updating ? "更新中" : "全部更新"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || items.length === 0}
+              onClick={() => void run(() => api.applySubscriptions())}
+            >
+              应用配置
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto">
+          {items.length === 0 ? (
+            <div className="my-auto flex flex-col items-start gap-1">
+              <CardTitle>暂无订阅</CardTitle>
+              <CardDescription>
+                打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。
+              </CardDescription>
+            </div>
+          ) : (
+            <ItemGroup aria-label="订阅列表" className="gap-0">
+              {items.map((s, index) => {
+                const warnings = s.parse_warnings ?? [];
+                return (
+                  <div key={s.id}>
+                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                    <Item
+                      size="sm"
+                      variant={s.active ? "muted" : "default"}
+                    >
+                      <ItemContent className="min-w-0">
+                        <ItemTitle title={s.name}>
+                          <span className="truncate">{s.name}</span>
+                          {s.active ? <Badge>已激活</Badge> : null}
+                        </ItemTitle>
+                        <ItemDescription>
+                          {subscriptionSummary(s)}
+                        </ItemDescription>
+                        {s.last_error ? (
+                          <ItemDescription className="text-destructive">
+                            {s.last_error}
+                          </ItemDescription>
+                        ) : null}
+                        {warnings.length > 0 ? (
+                          <ItemDescription className="text-warn">
+                            {warnings.join("；")}
+                          </ItemDescription>
+                        ) : null}
+                      </ItemContent>
+                      <ItemActions className="flex-wrap">
+                        <Field orientation="horizontal" className="w-auto gap-1.5">
+                          <Switch
+                            id={`sub-active-${s.id}`}
+                            size="sm"
+                            checked={!!s.active}
+                            disabled={busy}
+                            aria-label="激活"
+                            onCheckedChange={(checked) =>
+                              void run(() =>
+                                api.setSubscriptionActive(s.id, checked),
+                              )
+                            }
+                          />
+                          <FieldLabel
+                            htmlFor={`sub-active-${s.id}`}
+                            className="text-muted-foreground"
+                          >
+                            激活
+                          </FieldLabel>
+                        </Field>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void run(() => api.updateSubscription(s.id), true)
+                          }
+                        >
+                          {updating ? "更新中" : "更新"}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={busy}
+                          onClick={() => setPendingDelete(s)}
+                        >
+                          删除
+                        </Button>
+                      </ItemActions>
+                    </Item>
+                  </div>
+                );
+              })}
+            </ItemGroup>
+          )}
+        </CardContent>
+      </Card>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="删除订阅"
+        description={
+          pendingDelete ? `确认删除订阅「${pendingDelete.name}」？` : undefined
+        }
+        confirmLabel="删除"
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          const sub = pendingDelete;
+          setPendingDelete(null);
+          void run(() => api.removeSubscription(sub.id));
+        }}
+      />
+    </div>
   );
 }

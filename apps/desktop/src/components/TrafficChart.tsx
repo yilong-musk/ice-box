@@ -1,38 +1,61 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
 import { formatRate } from "../lib/traffic";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import { cn } from "@/lib/utils";
 
-const MAX_POINTS = 60;
+/** Visible window; matches the backend ring buffer (`TRAFFIC_WINDOW_MS`). */
+const WINDOW_SECONDS = 60;
+/** Consecutive snapshot failures before surfacing a stale/error hint. */
+const FAILURE_THRESHOLD = 3;
 
 type Point = TrafficSample & { t: number };
 
 type Props = {
   running: boolean;
+  /** Pause snapshot polling (e.g. while mode switch reloads Clash API). */
+  paused?: boolean;
+  className?: string;
 };
 
-function buildPath(values: number[], width: number, height: number, max: number): string {
-  if (values.length === 0) return "";
-  const step = values.length <= 1 ? 0 : width / (values.length - 1);
-  return values
-    .map((v, i) => {
-      const x = i * step;
-      const y = height - (max > 0 ? (v / max) * height : 0);
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-}
+const chartConfig = {
+  down: {
+    label: "下行",
+    color: "var(--ok)",
+  },
+  up: {
+    label: "上行",
+    color: "var(--primary)",
+  },
+} satisfies ChartConfig;
 
-export function TrafficChart({ running }: Props) {
+export function TrafficChart({ running, paused = false, className }: Props) {
   const [points, setPoints] = useState<Point[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [latest, setLatest] = useState<TrafficSample | null>(null);
+  const [peak, setPeak] = useState<TrafficSample | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     if (!running) {
       setPoints([]);
       setLatest(null);
+      setPeak(null);
       setError(null);
+      failCountRef.current = 0;
+      inFlightRef.current = false;
+      return;
+    }
+
+    // Drop any abandoned in-flight snapshot so unpause can resume.
+    if (paused) {
       inFlightRef.current = false;
       return;
     }
@@ -43,16 +66,20 @@ export function TrafficChart({ running }: Props) {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
       try {
-        const sample = await api.getTrafficSample();
+        const snap = await api.getTrafficSnapshot();
         if (cancelled) return;
-        setLatest(sample);
+        failCountRef.current = 0;
         setError(null);
-        setPoints((prev) => {
-          const next = [...prev, { ...sample, t: Date.now() }];
-          return next.length > MAX_POINTS ? next.slice(-MAX_POINTS) : next;
-        });
+        setLatest(snap.latest);
+        setPoints(snap.points);
+        setPeak(snap.peak ?? null);
       } catch (e) {
-        if (!cancelled) setError(formatInvokeError(e));
+        if (cancelled) return;
+        // Brief Clash API drops are skipped; only surface after sustained failure.
+        failCountRef.current += 1;
+        if (failCountRef.current >= FAILURE_THRESHOLD) {
+          setError(formatInvokeError(e));
+        }
       } finally {
         inFlightRef.current = false;
       }
@@ -63,61 +90,135 @@ export function TrafficChart({ running }: Props) {
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      // Allow the next effect run to sample even if this invoke never settles.
+      inFlightRef.current = false;
     };
-  }, [running]);
+  }, [running, paused]);
 
-  const { upPath, downPath, maxVal } = useMemo(() => {
-    const ups = points.map((p) => p.up);
-    const downs = points.map((p) => p.down);
-    const maxVal = Math.max(1, ...ups, ...downs);
-    const w = 320;
-    const h = 72;
+  const { chartData, maxVal } = useMemo(() => {
+    const maxVal = Math.max(
+      1,
+      peak?.up ?? 0,
+      peak?.down ?? 0,
+    );
     return {
-      upPath: buildPath(ups, w, h, maxVal),
-      downPath: buildPath(downs, w, h, maxVal),
+      chartData: points.map((p) => ({
+        date: new Date(p.t).toISOString(),
+        down: Math.max(0, p.down),
+        up: Math.max(0, p.up),
+      })),
       maxVal,
     };
-  }, [points]);
+  }, [peak, points]);
 
   if (!running) {
     return (
-      <div className="traffic-panel">
-        <h3 className="traffic-title">流量</h3>
-        <p className="muted">启动代理服务后显示实时上下行曲线（最近 {MAX_POINTS} 秒）。</p>
+      <div className={cn("flex min-h-0 flex-1 flex-col justify-center", className)}>
+        <p className="muted text-sm">
+          启动代理服务后显示实时上下行曲线（最近 {WINDOW_SECONDS} 秒）。
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="traffic-panel">
-      <div className="traffic-head">
-        <h3 className="traffic-title">流量</h3>
-        <div className="traffic-legend">
-          <span className="legend-down">
-            ↓ {latest ? formatRate(latest.down) : "—"}
-          </span>
-          <span className="legend-up">
-            ↑ {latest ? formatRate(latest.up) : "—"}
-          </span>
-        </div>
+    <div className={cn("flex min-h-0 flex-1 flex-col gap-2", className)}>
+      <div className="flex shrink-0 justify-end gap-3 font-mono text-xs">
+        <span className="text-ok">
+          ↓ {latest ? formatRate(latest.down) : "—"}
+        </span>
+        <span className="text-primary">
+          ↑ {latest ? formatRate(latest.up) : "—"}
+        </span>
       </div>
-      {error && <p className="error traffic-error">{error}</p>}
-      <svg
-        className="traffic-chart"
-        viewBox="0 0 320 72"
-        preserveAspectRatio="none"
+      {error && <p className="error shrink-0 text-sm">采样中断：{error}</p>}
+      <ChartContainer
+        config={chartConfig}
+        className="aspect-auto min-h-24 w-full flex-1"
         aria-label="上下行流量曲线"
       >
-        <line x1="0" y1="72" x2="320" y2="72" className="traffic-axis" />
-        {downPath && (
-          <path d={downPath} className="traffic-line traffic-line-down" fill="none" />
-        )}
-        {upPath && (
-          <path d={upPath} className="traffic-line traffic-line-up" fill="none" />
-        )}
-      </svg>
-      <p className="muted traffic-hint">
-        峰值刻度 {formatRate(maxVal)} · 每秒采样（Clash API /traffic）
+        <AreaChart
+          accessibilityLayer
+          data={chartData}
+          margin={{ left: 12, right: 12 }}
+        >
+          <defs>
+            <linearGradient id="fillTrafficDown" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="var(--color-down)"
+                stopOpacity={0.6}
+              />
+              <stop
+                offset="95%"
+                stopColor="var(--color-down)"
+                stopOpacity={0.1}
+              />
+            </linearGradient>
+            <linearGradient id="fillTrafficUp" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="var(--color-up)"
+                stopOpacity={0.45}
+              />
+              <stop
+                offset="95%"
+                stopColor="var(--color-up)"
+                stopOpacity={0.1}
+              />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} />
+          <YAxis hide domain={[0, maxVal]} />
+          <XAxis
+            dataKey="date"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            minTickGap={32}
+            tickFormatter={(value) => {
+              const date = new Date(value);
+              return date.toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              });
+            }}
+          />
+          <ChartTooltip
+            cursor={false}
+            content={
+              <ChartTooltipContent
+                labelFormatter={(value) => {
+                  const date = new Date(value);
+                  return date.toLocaleTimeString(undefined, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  });
+                }}
+                indicator="dot"
+              />
+            }
+          />
+          <Area
+            dataKey="down"
+            type="monotone"
+            fill="url(#fillTrafficDown)"
+            stroke="var(--color-down)"
+            isAnimationActive={false}
+          />
+          <Area
+            dataKey="up"
+            type="monotone"
+            fill="url(#fillTrafficUp)"
+            stroke="var(--color-up)"
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ChartContainer>
+      <p className="muted shrink-0 text-xs">
+        峰值刻度 {formatRate(maxVal)} · 本次运行累计 · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
       </p>
     </div>
   );

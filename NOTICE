@@ -30,6 +30,21 @@ When redistributing a binary build of ice-box that includes sing-box:
 3. Do not use the name "sing-box" or imply association with that project
    without prior consent, as required by the upstream additional clause.
 
+### Twemoji Country Flags (via country-flag-emoji-polyfill)
+
+The desktop app may bundle `TwemojiCountryFlags.woff2` (a flag-only subset of
+Twemoji) so Chromium-based engines that lack country-flag glyphs can still
+render them. The font is loaded locally; it is not fetched from a CDN.
+
+- Font artwork: [Twemoji](https://github.com/twitter/twemoji), licensed under
+  [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+- Loader package: [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill)
+  (MIT), Copyright (c) 2022 TalkJS
+
+Attribution required by CC BY 4.0: the flag artwork is from Twemoji; this
+product uses a subset of that artwork in the bundled color font.
+
 Other Rust and JavaScript dependencies retain their own licenses as declared
 by their upstream packages (typically MIT, Apache-2.0, or similar permissive
-licenses). Their full texts are available from the respective package sources.
+licenses; the bundled Twemoji subset is CC BY 4.0 as noted above). Their full
+texts are available from the respective package sources.

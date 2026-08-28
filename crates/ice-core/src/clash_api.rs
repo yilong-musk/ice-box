@@ -225,27 +225,6 @@ fn proxy_groups_filter(proxies: std::collections::HashMap<String, ProxyInfo>) ->
     groups
 }
 
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
-pub struct ConnectionStats {
-    pub connection_count: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct ConnectionsResponse {
-    #[serde(default)]
-    connections: Vec<serde_json::Value>,
-}
-
-/// Active connection count via `GET /connections`.
-pub fn connection_stats(endpoints: &HealthEndpoints) -> Result<ConnectionStats, CoreError> {
-    let body = clash_get(endpoints, "/connections")?;
-    let parsed: ConnectionsResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash connections parse: {e}")))?;
-    Ok(ConnectionStats {
-        connection_count: parsed.connections.len(),
-    })
-}
-
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrafficSample {
     pub up: u64,
@@ -258,12 +237,39 @@ struct TrafficDelta {
     down: u64,
 }
 
+/// Why a `/traffic` follow stopped without an I/O error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrafficStreamEnd {
+    /// `on_sample` returned false (shutdown or retarget).
+    Stopped,
+    /// Upstream closed the body without a read error.
+    Eof,
+}
+
 /// Read one per-second sample from chunked `GET /traffic` (closes after first tick).
 pub fn traffic_sample(endpoints: &HealthEndpoints) -> Result<TrafficSample, CoreError> {
+    let mut found = None;
+    traffic_foreach(endpoints, TRAFFIC_SAMPLE_TIMEOUT, |sample| {
+        found = Some(sample);
+        false
+    })?;
+    found.ok_or_else(|| CoreError::SpawnFailed("clash traffic stream ended without sample".into()))
+}
+
+/// Follow Clash `GET /traffic` and invoke `on_sample` for each JSON tick.
+///
+/// Return `false` from `on_sample` to disconnect as [`TrafficStreamEnd::Stopped`].
+/// A clean stream close is [`TrafficStreamEnd::Eof`]. Read timeouts and HTTP
+/// failures are errors so the caller can back off.
+pub(crate) fn traffic_foreach(
+    endpoints: &HealthEndpoints,
+    read_timeout: Duration,
+    mut on_sample: impl FnMut(TrafficSample) -> bool,
+) -> Result<TrafficStreamEnd, CoreError> {
     let url = format!("{}/traffic", base_url(endpoints)?);
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(CLASH_HTTP_TIMEOUT)
-        .timeout_read(TRAFFIC_SAMPLE_TIMEOUT)
+        .timeout_read(read_timeout)
         .build();
     let response = agent
         .get(&url)
@@ -283,15 +289,15 @@ pub fn traffic_sample(endpoints: &HealthEndpoints) -> Result<TrafficSample, Core
             continue;
         }
         if let Ok(delta) = serde_json::from_str::<TrafficDelta>(trimmed) {
-            return Ok(TrafficSample {
+            if !on_sample(TrafficSample {
                 up: delta.up,
                 down: delta.down,
-            });
+            }) {
+                return Ok(TrafficStreamEnd::Stopped);
+            }
         }
     }
-    Err(CoreError::SpawnFailed(
-        "clash traffic stream ended without sample".into(),
-    ))
+    Ok(TrafficStreamEnd::Eof)
 }
 
 fn percent_encode_path(s: &str) -> String {
@@ -417,6 +423,30 @@ impl MockClashApi {
                             }
                         }
                         let resp = match (method.as_str(), path.as_str()) {
+                            ("GET", "/traffic") if is_2xx => {
+                                reqs.lock().unwrap().push(RecordedRequest {
+                                    method,
+                                    path,
+                                    body: body_data,
+                                });
+                                let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
+                                if stream.write_all(header.as_bytes()).is_err() {
+                                    return;
+                                }
+                                for i in 0..40u64 {
+                                    let line = format!(
+                                        "{{\"up\":{},\"down\":{}}}\n",
+                                        100 + i,
+                                        200 + i
+                                    );
+                                    if stream.write_all(line.as_bytes()).is_err() {
+                                        break;
+                                    }
+                                    let _ = stream.flush();
+                                    std::thread::sleep(Duration::from_millis(25));
+                                }
+                                return;
+                            }
                             ("GET", "/configs") if is_2xx => {
                                 let current = mode.lock().unwrap().clone();
                                 let body = serde_json::json!({
@@ -508,6 +538,35 @@ mod tests {
         let v: TrafficDelta = serde_json::from_str(r#"{"up":1024,"down":4096}"#).unwrap();
         assert_eq!(v.up, 1024);
         assert_eq!(v.down, 4096);
+    }
+
+    #[test]
+    fn traffic_sample_reads_first_tick() {
+        let server = MockClashApi::start(200, "Rule");
+        let sample = traffic_sample(&server.endpoints()).expect("first tick");
+        assert_eq!(sample.up, 100);
+        assert_eq!(sample.down, 200);
+    }
+
+    #[test]
+    fn traffic_foreach_reports_stopped_when_callback_returns_false() {
+        let server = MockClashApi::start(200, "Rule");
+        let end = traffic_foreach(&server.endpoints(), TRAFFIC_SAMPLE_TIMEOUT, |_| false)
+            .expect("stopped");
+        assert_eq!(end, TrafficStreamEnd::Stopped);
+    }
+
+    #[test]
+    fn traffic_foreach_reports_eof_when_stream_ends() {
+        let server = MockClashApi::start(200, "Rule");
+        let mut ticks = 0usize;
+        let end = traffic_foreach(&server.endpoints(), TRAFFIC_SAMPLE_TIMEOUT, |_| {
+            ticks += 1;
+            true
+        })
+        .expect("eof");
+        assert!(ticks > 0, "expected at least one tick before close");
+        assert_eq!(end, TrafficStreamEnd::Eof);
     }
 
     #[test]

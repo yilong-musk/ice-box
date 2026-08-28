@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, formatInvokeError } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
+import { ErrorAlert } from "../components/StatusAlert";
 
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
 
-export function Logs() {
+export function Logs({ active = true }: { active?: boolean }) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -15,7 +16,7 @@ export function Logs() {
   const lastTextRef = useRef("");
 
   const refresh = useCallback(async () => {
-    if (document.visibilityState === "hidden") return;
+    if (!active || document.visibilityState === "hidden") return;
     const gen = nextGeneration();
     try {
       const tail = await api.getLogView(VIEW_LINES);
@@ -30,14 +31,15 @@ export function Logs() {
     } catch (e) {
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
-  }, [isStale, nextGeneration]);
+  }, [active, isStale, nextGeneration]);
 
   useEffect(() => {
+    if (!active) return;
     nextGeneration();
     void refresh();
     const id = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(id);
-  }, [nextGeneration, refresh]);
+  }, [active, nextGeneration, refresh]);
 
   useLayoutEffect(() => {
     const box = boxRef.current;
@@ -57,26 +59,16 @@ export function Logs() {
   }, []);
 
   return (
-    <section className="panel">
-      <h2>日志</h2>
-      <div className="actions">
-        <span className="hint">
-          自动刷新，显示警告 / 错误、关键事件与每连接出站节点；完整日志见数据目录
-          logs/ 下的 ice-box.log 与 sing-box.log
-        </span>
-        <button type="button" onClick={() => void refresh()}>
-          刷新
-        </button>
-      </div>
-      {error && <p className="error">{error}</p>}
+    <div className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3">
+      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       <pre
         ref={boxRef}
-        className="log-view"
+        className="log-view min-h-0 flex-1 overflow-auto bg-card p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
         onScroll={handleScroll}
         aria-live="polite"
       >
         {lines.length === 0 ? "（空）" : lines.join("\n")}
       </pre>
-    </section>
+    </div>
   );
 }

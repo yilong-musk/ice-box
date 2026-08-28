@@ -10,7 +10,7 @@ mod tray;
 
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
-use ice_core::{CoreController, CoreHandle};
+use ice_core::{CoreController, CoreHandle, TrafficMonitor};
 use ice_proxy_sys::{create_system_proxy, recover_if_applied, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
@@ -67,10 +67,14 @@ pub struct AppState {
     /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
     /// `start` command and on endpoints change (cache key).
     pub proxy_applied_cache: Mutex<Option<(ProxyEndpoints, Instant, bool)>>,
+    /// Platform backend capability; set once at process start (`Noop` is false).
+    pub system_proxy_available: bool,
     /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking ~5s.
     pub shutdown_requested: Arc<AtomicBool>,
     /// Held for app lifetime; releasing the file unlocks the data directory.
     _instance_lock: std::fs::File,
+    /// Persistent Clash `/traffic` stream; survives home-page unmounts.
+    pub traffic: TrafficMonitor,
 }
 
 fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
@@ -139,6 +143,7 @@ pub fn run() {
             let (core, proxy_recovery_warning) =
                 bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let proxy = create_system_proxy();
+            let system_proxy_available = proxy.is_available();
             app.manage(AppState {
                 paths,
                 core: Mutex::new(core),
@@ -146,8 +151,10 @@ pub fn run() {
                 orchestrate: Mutex::new(()),
                 proxy_recovery_warning: Mutex::new(proxy_recovery_warning),
                 proxy_applied_cache: Mutex::new(None),
+                system_proxy_available,
                 shutdown_requested,
                 _instance_lock: instance_lock,
+                traffic: TrafficMonitor::new(),
             });
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             tray::setup_tray(app.handle())?;
@@ -206,8 +213,7 @@ pub fn run() {
             commands::set_rule_disabled,
             commands::add_custom_rule,
             commands::remove_custom_rule,
-            commands::get_connection_stats,
-            commands::get_traffic_sample,
+            commands::get_traffic_snapshot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

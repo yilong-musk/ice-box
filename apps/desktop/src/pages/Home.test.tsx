@@ -1,28 +1,25 @@
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
 const getStatus = vi.fn();
 const listNodes = vi.fn();
 const getSettings = vi.fn();
-const getConnectionStats = vi.fn();
-const getTrafficSample = vi.fn();
-const setSelectedNode = vi.fn();
+const getTrafficSnapshot = vi.fn();
 const setProxyMode = vi.fn();
-const testNodeDelay = vi.fn();
+const start = vi.fn();
+const stopSystemProxy = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
-    getConnectionStats: (...args: unknown[]) => getConnectionStats(...args),
-    getTrafficSample: (...args: unknown[]) => getTrafficSample(...args),
-    setSelectedNode: (...args: unknown[]) => setSelectedNode(...args),
+    getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
-    testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
-    start: vi.fn(),
-    stopSystemProxy: vi.fn(),
+    start: (...args: unknown[]) => start(...args),
+    stopSystemProxy: (...args: unknown[]) => stopSystemProxy(...args),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -31,6 +28,7 @@ vi.mock("../api/tauri", () => ({
 describe("Home", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNodesSnapshot();
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -55,11 +53,12 @@ describe("Home", () => {
       allow_lan: false,
       proxy_mode: "rule",
     });
-    getConnectionStats.mockResolvedValue({ connection_count: 0 });
-    getTrafficSample.mockResolvedValue({ up: 0, down: 0 });
+    getTrafficSnapshot.mockResolvedValue({ points: [], latest: null, peak: null });
+    start.mockResolvedValue(undefined);
+    stopSystemProxy.mockResolvedValue(undefined);
   });
 
-  it("reverts node selection when setSelectedNode fails", async () => {
+  it("shows current outbound in the status list", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -74,46 +73,78 @@ describe("Home", () => {
       system_proxy_available: true,
     });
     listNodes.mockResolvedValue([
-      { tag: "node-a", outbound_type: "socks" },
-      { tag: "node-b", outbound_type: "vmess" },
+      {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "HK-1",
+        group_all: ["HK-1", "JP-1"],
+      },
     ]);
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
       clash_api_listen: "127.0.0.1",
       clash_api_port: 19090,
-      selected_tag: "node-a",
+      selected_tag: "Proxies",
       auto_set_system_proxy: true,
       allow_lan: false,
       proxy_mode: "rule",
     });
-    setSelectedNode.mockRejectedValue("switch failed");
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("combobox")).toBeInTheDocument();
+      expect(view.getByText("当前出站")).toBeInTheDocument();
     });
-
-    const nodeSelect = view.getByRole("combobox");
-    fireEvent.change(nodeSelect, {
-      target: { value: "node-b" },
-    });
-
-    await waitFor(() => {
-      expect(setSelectedNode).toHaveBeenCalledWith("node-b");
-    });
-
-    await waitFor(() => {
-      expect(view.getByText("switch failed")).toBeInTheDocument();
-    });
-    await waitFor(() => {
-      expect((nodeSelect as HTMLSelectElement).value).toBe("node-a");
-    });
+    expect(view.getByText("Proxies → HK-1")).toBeInTheDocument();
+    expect(view.getByText("流量")).toBeInTheDocument();
+    expect(view.getByText("代理状态")).toBeInTheDocument();
+    expect(view.getByText("信息")).toBeInTheDocument();
+    expect(view.getByText("代理模式")).toBeInTheDocument();
+    expect(view.queryByText("系统代理")).toBeNull();
+    expect(container.querySelector(".home-panel")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
+    );
+    expect(view.getByRole("radiogroup", { name: "模式" })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: "规则" })).toHaveAttribute("data-state", "on");
+    expect(view.getByRole("radio", { name: "全局" })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("radio", { name: "直连" })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeInTheDocument();
+    expect(view.queryByRole("button", { name: "测延迟" })).toBeNull();
   });
 
-  it("switches proxy mode and reverts the select when it fails", async () => {
+  it("ignores a poll response that finishes after the pane is deactivated", async () => {
+    let resolveNodes: (value: unknown[]) => void = () => {};
+    listNodes.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNodes = resolve;
+        }),
+    );
+    const { rerender } = render(<Home active />);
+
+    await waitFor(() => {
+      expect(listNodes).toHaveBeenCalled();
+    });
+    rerender(<Home active={false} />);
+
+    await act(async () => {
+      resolveNodes([
+        {
+          tag: "stale-node",
+          outbound_type: "trojan",
+          group_now: null,
+          group_all: null,
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(readNodesSnapshot()).toBeUndefined();
+  });
+
+  it("switches proxy mode and reverts when it fails", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -127,7 +158,9 @@ describe("Home", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
     });
-    listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
     let currentMode = "rule";
     getSettings.mockImplementation(() =>
       Promise.resolve({
@@ -149,21 +182,20 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
 
-    const globalButton = () => view.getByRole("button", { name: "全局" });
-    const directButton = () => view.getByRole("button", { name: "直连" });
+    const globalButton = () => view.getByRole("radio", { name: "全局" });
+    const directButton = () => view.getByRole("radio", { name: "直连" });
 
     await waitFor(() => {
       expect(globalButton()).toBeInTheDocument();
     });
-    expect(globalButton().className).toContain("mode-button");
-    expect(globalButton().className).not.toContain("active");
+    expect(globalButton()).toHaveAttribute("data-state", "off");
 
     fireEvent.click(globalButton());
     await waitFor(() => {
       expect(setProxyMode).toHaveBeenCalledWith("global");
     });
     await waitFor(() => {
-      expect(globalButton().className).toContain("active");
+      expect(globalButton()).toHaveAttribute("data-state", "on");
     });
 
     setProxyMode.mockRejectedValue("mode switch failed");
@@ -172,12 +204,12 @@ describe("Home", () => {
       expect(view.getByText("mode switch failed")).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(globalButton().className).toContain("active");
-      expect(directButton().className).not.toContain("active");
+      expect(globalButton()).toHaveAttribute("data-state", "on");
+      expect(directButton()).toHaveAttribute("data-state", "off");
     });
   });
 
-  it("shows empty-state guide and system-proxy buttons when no nodes", async () => {
+  it("shows empty-state guide and system-proxy toggle when no nodes", async () => {
     const onNavigate = vi.fn();
     const { container } = render(<Home onNavigate={onNavigate} />);
     const view = within(container);
@@ -185,59 +217,17 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText("还没有可用节点")).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
-    expect(view.getByRole("button", { name: "停止代理服务" })).toBeDisabled();
+    expect(view.getByText("当前出站").parentElement).toHaveTextContent(/当前出站\s*—/);
+    expect(view.getByText("流量")).toBeInTheDocument();
+    const power = view.getByRole("button", { name: "启动代理服务" });
+    expect(power).not.toBeDisabled();
+    expect(power).toHaveAttribute("aria-pressed", "false");
+    expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
     fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
     expect(onNavigate).toHaveBeenCalledWith("subs");
   });
 
-  it("shows delay result even while status polling continues", async () => {
-    getStatus.mockResolvedValue({
-      core: {
-        status: "running",
-        message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
-      },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: true,
-      system_proxy_recorded: true,
-      system_proxy_available: true,
-    });
-    listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
-    getSettings.mockResolvedValue({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: "node-a",
-      auto_set_system_proxy: true,
-      allow_lan: false,
-      proxy_mode: "rule",
-    });
-    testNodeDelay.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          window.setTimeout(() => resolve({ tag: "node-a", delay_ms: 42 }), 50);
-        }),
-    );
-
-    const { container } = render(<Home />);
-    const view = within(container);
-
-    await waitFor(() => {
-      expect(view.getByRole("button", { name: "测延迟" })).not.toBeDisabled();
-    });
-
-    fireEvent.click(view.getByRole("button", { name: "测延迟" }));
-
-    await waitFor(() => {
-      expect(view.getByText("42 ms")).toBeInTheDocument();
-    });
-  });
-
-  it("shows proxy-off hint when core running but system proxy not applied", async () => {
+  it("hides proxy-off hint when core running but proxy simply not started", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -251,16 +241,48 @@ describe("Home", () => {
       system_proxy_recorded: false,
       system_proxy_available: true,
     });
-    listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("系统代理未接管或已不同步")).toBeInTheDocument();
+      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
-    expect(view.getByRole("button", { name: "停止代理服务" })).toBeDisabled();
+    expect(view.queryByText("系统代理未接管或已不同步")).toBeNull();
+    const power = view.getByRole("button", { name: "启动代理服务" });
+    expect(power).not.toBeDisabled();
+    expect(power).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows desync hint when recorded but live check is false", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+    });
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("alert")).toHaveTextContent(
+        "系统代理未接管或已不同步",
+      );
+    });
   });
 
   it("hides system-proxy controls when backend is unavailable", async () => {
@@ -288,7 +310,7 @@ describe("Home", () => {
     expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
   });
 
-  it("keeps stop enabled when disk recorded but live check is false", async () => {
+  it("shows stop on the power toggle when disk recorded but live check is false", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -302,7 +324,9 @@ describe("Home", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
     });
-    listNodes.mockResolvedValue([{ tag: "node-a", outbound_type: "socks" }]);
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
 
     const { container } = render(<Home />);
     const view = within(container);
@@ -310,7 +334,81 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByRole("button", { name: "停止代理服务" })).not.toBeDisabled();
     });
-    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
-    expect(view.getByText("已不同步")).toBeInTheDocument();
+    const power = view.getByRole("button", { name: "停止代理服务" });
+    expect(power).toHaveAttribute("aria-pressed", "true");
+    expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
+    expect(view.getByRole("alert")).toHaveTextContent("系统代理未接管或已不同步");
+    expect(view.queryByText("系统代理")).toBeNull();
+  });
+
+  it("does not flash poll errors while power toggle start is pending", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+    let resolveStart: (() => void) | undefined;
+    start.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "启动代理服务" }));
+    await waitFor(() => {
+      expect(start).toHaveBeenCalled();
+    });
+
+    getStatus.mockRejectedValue("clash api not ready");
+    listNodes.mockRejectedValue("clash api not ready");
+    getSettings.mockRejectedValue("clash api not ready");
+
+    const statusCalls = getStatus.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(getStatus.mock.calls.length).toBe(statusCalls);
+    expect(view.queryByText(/clash api not ready/i)).toBeNull();
+    expect(container.querySelector(".error")).toBeNull();
+
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+    });
+    listNodes.mockResolvedValue([]);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+    });
+
+    resolveStart?.();
+    await waitFor(() => {
+      expect(start).toHaveBeenCalled();
+      expect(view.queryByText(/clash api not ready/i)).toBeNull();
+    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -184,7 +184,6 @@ pub fn orchestrate_start(
     app_paths: &AppPaths,
     settings: &AppSettings,
     core: &mut dyn CoreHandle,
-    _proxy: &dyn SystemProxy,
     binary: PathBuf,
     resource_dir: Option<&Path>,
 ) -> Result<Option<String>, AppError> {
@@ -491,9 +490,9 @@ mod tests {
         CoreController, ImmediateHealthProbe, MockClashApi, MockReloadMode, MockReloader,
         MockSpawner, SequenceHealthProbe,
     };
-    use ice_proxy_sys::{
-        create_system_proxy, NoopSystemProxy, ProxyBackup, ProxyBackupFile, ProxySysError,
-    };
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    use ice_proxy_sys::create_system_proxy;
+    use ice_proxy_sys::{NoopSystemProxy, ProxyBackup, ProxyBackupFile, ProxySysError};
     use ice_subscription::{
         write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
     };
@@ -654,7 +653,7 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect("direct-only");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("direct-only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
@@ -691,7 +690,7 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(proxy.apply_calls.get(), 0);
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
@@ -712,8 +711,7 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        let err =
-            orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect_err("hc");
+        let err = orchestrate_start(&paths, &settings, &mut core, bin, None).expect_err("hc");
         assert_eq!(err.code, "core.healthcheck_failed");
         assert_eq!(proxy.apply_calls.get(), 0);
         if paths.proxy_backup().exists() {
@@ -735,7 +733,7 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
             .expect_err("apply fail");
@@ -758,7 +756,7 @@ mod tests {
         let proxy = NoopSystemProxy;
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
             .expect_err("noop unavailable");
@@ -777,11 +775,10 @@ mod tests {
             "legacy auto_set flag defaults off; home button controls system proxy"
         );
         let mut core = mock_core_ok();
-        let proxy = create_system_proxy();
         let bin = marker_bin(&paths);
 
-        let warning = orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None)
-            .expect("start core only");
+        let warning =
+            orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start core only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(warning, None);
         assert!(!ice_proxy_sys::is_proxy_applied_on_disk(
@@ -810,7 +807,7 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         order.lock().unwrap().clear();
@@ -834,7 +831,7 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &start_proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
 
@@ -868,7 +865,7 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         let apply_before = proxy.apply_calls.get();
         let restore_before = proxy.restore_calls.get();
@@ -892,7 +889,7 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         let new_settings = AppSettings {
@@ -923,7 +920,7 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert!(
             ProxyBackupFile::load(&paths.proxy_backup())
@@ -950,7 +947,7 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         assert_eq!(proxy.apply_calls.get(), 0);
 
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
@@ -971,7 +968,7 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert_eq!(proxy.apply_calls.get(), 1);
 
@@ -1065,7 +1062,7 @@ mod tests {
         let mut core = mock_core_ok();
         let good = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &good, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &good).unwrap();
 
         let proxy = TrackProxy {
@@ -1100,15 +1097,7 @@ mod tests {
         let start_proxy = TrackProxy::default();
         let mut core = mock_core_ok();
         let bin = marker_bin(&paths);
-        orchestrate_start(
-            &paths,
-            &settings,
-            &mut core,
-            &start_proxy,
-            bin.clone(),
-            None,
-        )
-        .unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(start_proxy.apply_calls.get(), 1);
 
@@ -1148,7 +1137,7 @@ mod tests {
         let mut core = mock_core_reload_restart_fail();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin.clone(), None).unwrap();
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -1260,9 +1249,8 @@ mod tests {
     ) -> CoreController<MockSpawner, ImmediateHealthProbe> {
         let settings = AppSettings::default();
         let mut core = mock_core_with_reloader(reloader.clone());
-        let proxy = TrackProxy::default();
         let bin = marker_bin(paths);
-        orchestrate_start(paths, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_start(paths, &settings, &mut core, bin, None).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         core
     }

@@ -15,10 +15,10 @@ use ice_config::{
     AppSettings, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
 };
 use ice_core::{
-    connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, traffic_sample,
-    ConnectionStats, CoreState, CoreStatus, HealthEndpoints, TrafficSample, DELAY_TEST_URL,
+    proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
+    HealthEndpoints, TrafficSnapshot, DELAY_TEST_URL,
 };
-use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied};
+use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied, ProxyEndpoints};
 use ice_subscription::{
     list_profile_outbounds, load_index, redact_subscription_url_for_log,
     redact_subscription_url_for_ui, write_subscription_error, SubscriptionError,
@@ -69,11 +69,29 @@ fn clash_endpoints(settings: &AppSettings) -> HealthEndpoints {
     }
 }
 
+fn attach_traffic(state: &AppState, settings: &AppSettings) {
+    state.traffic.set_endpoints(Some(clash_endpoints(settings)));
+}
+
+fn detach_traffic(state: &AppState) {
+    state.traffic.set_endpoints(None);
+}
+
 /// Join-error mapping for `spawn_blocking` (blocking work must not run on the
 /// main thread — sync commands freeze the UI event loop).
 fn blocking_join_err<E: std::fmt::Display>(context: &str) -> impl FnOnce(E) -> AppError {
     let context = context.to_string();
     move |e| AppError::new(ErrorCode::ConfigInvalid, format!("{context}: {e}"))
+}
+
+/// Run blocking IPC work on Tokio's blocking pool so the UI event loop stays live.
+async fn run_blocking<T: Send + 'static>(
+    context: &'static str,
+    f: impl FnOnce() -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(blocking_join_err(context))?
 }
 
 #[derive(Serialize)]
@@ -95,19 +113,43 @@ pub struct StatusResponse {
 /// fresh enough for the "proxy syncing…" indicator.
 const PROXY_APPLIED_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
+fn proxy_applied_cache_fresh(
+    state: &AppState,
+    endpoints: &ProxyEndpoints,
+    now: std::time::Instant,
+) -> Option<bool> {
+    let cache = state.proxy_applied_cache.lock().ok()?;
+    let (cached_endpoints, at, value) = cache.as_ref()?;
+    if cached_endpoints == endpoints && now.duration_since(*at) < PROXY_APPLIED_CACHE_TTL {
+        Some(*value)
+    } else {
+        None
+    }
+}
+
 /// Live check of `is_proxy_live_applied`, memoized per endpoints for `PROXY_APPLIED_CACHE_TTL`.
 fn cached_system_proxy_applied(state: &AppState, settings: &AppSettings) -> Option<bool> {
     let endpoints = endpoints_from_settings(settings);
     let now = std::time::Instant::now();
-    let mut cache = state.proxy_applied_cache.lock().ok()?;
-    if let Some((cached_endpoints, at, value)) = cache.as_ref() {
-        if cached_endpoints == &endpoints && now.duration_since(*at) < PROXY_APPLIED_CACHE_TTL {
-            return Some(*value);
-        }
+    if let Some(value) = proxy_applied_cache_fresh(state, &endpoints, now) {
+        return Some(value);
     }
-    let proxy = state.proxy.lock().ok()?;
+    // Do not hold the cache lock across the live OS check, and do not wait on
+    // `proxy` while start/stop is applying or restoring (subprocess / registry).
+    let Ok(proxy) = state.proxy.try_lock() else {
+        // Apply/restore in flight and the memo is stale: do not serve an expired
+        // snapshot (Home would show the pre-toggle live state until TTL elapsed).
+        return None;
+    };
+    // Another poller may have filled the cache between the miss and this lock.
+    if let Some(value) = proxy_applied_cache_fresh(state, &endpoints, std::time::Instant::now()) {
+        return Some(value);
+    }
     let value = is_proxy_live_applied(proxy.as_ref(), &state.paths.proxy_backup(), &endpoints);
-    *cache = Some((endpoints, now, value));
+    drop(proxy);
+    if let Ok(mut cache) = state.proxy_applied_cache.lock() {
+        *cache = Some((endpoints, now, value));
+    }
     Some(value)
 }
 
@@ -167,10 +209,16 @@ fn require_known_node_tag(state: &AppState, tag: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, AppError> {
-    reconcile_unexpected_core_exit(state.inner());
-    let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
+    reconcile_unexpected_core_exit(state);
+    // Snapshot core state and drop the lock before disk / `networksetup` work so
+    // start/stop are not stuck behind a status poll.
+    let (core_state, running) = {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let core_state = core.state();
+        let running = core_state.status == CoreStatus::Running;
+        (core_state, running)
+    };
     let paths = SubscriptionPaths::from_app(&state.paths);
     let count = ice_subscription::load_index(&paths)
         .map(|i| i.items.len())
@@ -180,13 +228,7 @@ pub fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, AppError
         .lock()
         .ok()
         .and_then(|g| g.clone());
-    let proxy_available = state
-        .proxy
-        .lock()
-        .ok()
-        .map(|p| p.is_available())
-        .unwrap_or(false);
-    let running = core.state().status == CoreStatus::Running;
+    let proxy_available = state.system_proxy_available;
     let system_proxy_recorded = if running {
         Some(is_proxy_applied_on_disk(&state.paths.proxy_backup()))
     } else {
@@ -195,18 +237,27 @@ pub fn get_status(state: State<'_, AppState>) -> Result<StatusResponse, AppError
     let system_proxy_applied = if running && proxy_available {
         current_settings(&state.paths)
             .ok()
-            .and_then(|settings| cached_system_proxy_applied(state.inner(), &settings))
+            .and_then(|settings| cached_system_proxy_applied(state, &settings))
     } else {
         None
     };
     Ok(StatusResponse {
-        core: core.state(),
+        core: core_state,
         subscription_count: count,
         proxy_recovery_warning,
         system_proxy_applied,
         system_proxy_recorded,
         system_proxy_available: proxy_available,
     })
+}
+
+#[tauri::command]
+pub async fn get_status(app: AppHandle) -> Result<StatusResponse, AppError> {
+    run_blocking("get_status", move || {
+        let state = app.state::<AppState>();
+        collect_status(&state)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -244,61 +295,73 @@ pub fn list_subscriptions(state: State<'_, AppState>) -> Result<serde_json::Valu
 pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
-    let binary = binary_for(app)?;
-    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    if core.state().status == CoreStatus::Running {
-        return Ok(());
+    {
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        if core.state().status != CoreStatus::Running {
+            // Do not hold `proxy` across spawn + healthcheck; start never applies OS proxy.
+            let binary = binary_for(app)?;
+            let _ = orchestrate_start(
+                &state.paths,
+                &settings,
+                &mut **core,
+                binary,
+                resource_dir(app).as_deref(),
+            )?;
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = None;
+            }
+        }
     }
-    let _ = orchestrate_start(
-        &state.paths,
-        &settings,
-        &mut **core,
-        proxy.as_ref(),
-        binary,
-        resource_dir(app).as_deref(),
-    )?;
-    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = None;
-    }
+    attach_traffic(state, &settings);
     Ok(())
 }
 
-/// Home「启动代理服务」: ensure core is running, then take over the OS system proxy.
-#[tauri::command]
-pub fn start(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
-    let _orch = lock_orchestrate(&state)?;
+fn start_system_proxy(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
-    let binary = binary_for(&app)?;
-    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    if core.state().status != CoreStatus::Running {
-        let _ = orchestrate_start(
-            &state.paths,
-            &settings,
-            &mut **core,
-            proxy.as_ref(),
-            binary,
-            resource_dir(&app).as_deref(),
-        )?;
-        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = None;
+    {
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        if core.state().status != CoreStatus::Running {
+            let binary = binary_for(app)?;
+            let _ = orchestrate_start(
+                &state.paths,
+                &settings,
+                &mut **core,
+                binary,
+                resource_dir(app).as_deref(),
+            )?;
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = None;
+            }
         }
     }
-    orchestrate_enable_system_proxy(&state.paths, &settings, &**core, proxy.as_ref())?;
+    {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+        orchestrate_enable_system_proxy(&state.paths, &settings, &**core, proxy.as_ref())?;
+    }
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         *slot = None;
     }
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
     }
+    attach_traffic(state, &settings);
     Ok(())
 }
 
-/// Home「停止代理服务」: restore OS system proxy; keep the core running.
+/// Home「启动代理服务」: ensure core is running, then take over the OS system proxy.
 #[tauri::command]
-pub fn stop_system_proxy(state: State<'_, AppState>) -> Result<(), AppError> {
-    let _orch = lock_orchestrate(&state)?;
+pub async fn start(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("start", move || {
+        let state = app.state::<AppState>();
+        start_system_proxy(&app, &state)
+    })
+    .await
+}
+
+fn disable_system_proxy_inner(state: &AppState) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     orchestrate_disable_system_proxy(&state.paths, proxy.as_ref())?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
@@ -310,10 +373,24 @@ pub fn stop_system_proxy(state: State<'_, AppState>) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Home「停止代理服务」: restore OS system proxy; keep the core running.
+#[tauri::command]
+pub async fn stop_system_proxy(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("stop_system_proxy", move || {
+        let state = app.state::<AppState>();
+        disable_system_proxy_inner(&state)
+    })
+    .await
+}
+
 /// Full stop used by tray Quit / app exit (restore system proxy, then kill core).
 #[tauri::command]
-pub fn stop(state: State<'_, AppState>) -> Result<(), AppError> {
-    graceful_stop(state.inner())
+pub async fn stop(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("stop", move || {
+        let state = app.state::<AppState>();
+        graceful_stop(&state)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -322,11 +399,12 @@ pub struct LogViewRequest {
 }
 
 #[tauri::command]
-pub fn get_log_view(
-    state: State<'_, AppState>,
-    req: LogViewRequest,
-) -> Result<Vec<String>, AppError> {
-    crate::log_view::read_log_view(&state.paths.app_log(), &state.paths.core_log(), req.n)
+pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<String>, AppError> {
+    run_blocking("get_log_view", move || {
+        let state = app.state::<AppState>();
+        crate::log_view::read_log_view(&state.paths.app_log(), &state.paths.core_log(), req.n)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -355,8 +433,12 @@ pub fn reveal_data_dir(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 }
 
 #[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, AppError> {
-    current_settings(&state.paths)
+pub async fn get_settings(app: AppHandle) -> Result<AppSettings, AppError> {
+    run_blocking("get_settings", move || {
+        let state = app.state::<AppState>();
+        current_settings(&state.paths)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -389,18 +471,12 @@ fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {
     }
 }
 
-/// Switch routing mode. With the pinned sing-box 1.13.19 the runtime Clash `mode-list` is
-/// only `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored and
-/// the switch always takes the rebuild + reload/restart path (the PATCH attempt is a
-/// forward-compatible capability gate). Settings are always persisted so the next apply
-/// builds the new `default_mode`.
-#[tauri::command]
-pub fn set_proxy_mode(
-    app: AppHandle,
-    state: State<'_, AppState>,
+fn set_proxy_mode_inner(
+    app: &AppHandle,
+    state: &AppState,
     req: SetProxyModeRequest,
 ) -> Result<(), AppError> {
-    let _orch = lock_orchestrate(&state)?;
+    let _orch = lock_orchestrate(state)?;
     let mode = parse_proxy_mode(&req.mode)?;
     let previous = current_settings(&state.paths)?;
     if previous.proxy_mode == mode {
@@ -409,7 +485,7 @@ pub fn set_proxy_mode(
     let mut settings = previous.clone();
     settings.proxy_mode = mode;
     persist_settings(&state.paths.settings(), &settings)?;
-    let binary = binary_for(&app)?;
+    let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     orchestrate_set_proxy_mode(
@@ -419,8 +495,22 @@ pub fn set_proxy_mode(
         &mut **core,
         proxy.as_ref(),
         binary,
-        resource_dir(&app).as_deref(),
+        resource_dir(app).as_deref(),
     )
+}
+
+/// Switch routing mode. With the pinned sing-box 1.13.19 the runtime Clash `mode-list` is
+/// only `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored and
+/// the switch always takes the rebuild + reload/restart path (the PATCH attempt is a
+/// forward-compatible capability gate). Settings are always persisted so the next apply
+/// builds the new `default_mode`.
+#[tauri::command]
+pub async fn set_proxy_mode(app: AppHandle, req: SetProxyModeRequest) -> Result<(), AppError> {
+    run_blocking("set_proxy_mode", move || {
+        let state = app.state::<AppState>();
+        set_proxy_mode_inner(&app, &state, req)
+    })
+    .await
 }
 
 /// Apply after a settings / subscription mutation. `generate_config` falls back
@@ -443,7 +533,16 @@ fn apply_after_change(
         proxy.as_ref(),
         binary,
         resource_dir(app).as_deref(),
-    )
+    )?;
+    let running = core.state().status == CoreStatus::Running;
+    drop(proxy);
+    drop(core);
+    if running {
+        attach_traffic(state, settings);
+    } else {
+        detach_traffic(state);
+    }
+    Ok(())
 }
 
 fn apply_after_subscription_change(
@@ -745,6 +844,9 @@ pub struct ListRulesRequest {
     /// `"all"` (default) | `"disabled"` | `"enabled"`.
     #[serde(default)]
     pub disabled: Option<String>,
+    /// Restrict to custom rules (`Some(true)`) or subscription rules (`Some(false)`).
+    #[serde(default)]
+    pub custom: Option<bool>,
     #[serde(default)]
     pub offset: usize,
     #[serde(default = "default_rules_page_size")]
@@ -863,6 +965,9 @@ fn query_rules(state: &AppState, req: &ListRulesRequest) -> Result<ListRulesResp
 
     let mut filtered: Vec<RuleRow> = Vec::new();
     for rule in &overrides.custom {
+        if req.custom == Some(false) {
+            continue;
+        }
         let fp = rule_fingerprint(rule);
         let disabled = overrides.is_disabled(&fp);
         if !matches_filter(
@@ -885,6 +990,9 @@ fn query_rules(state: &AppState, req: &ListRulesRequest) -> Result<ListRulesResp
         });
     }
     for (idx, rule) in profile.route.rules.iter().enumerate() {
+        if req.custom == Some(true) {
+            continue;
+        }
         let fp = rule_fingerprint(rule);
         let disabled = overrides.is_disabled(&fp);
         if !matches_filter(
@@ -979,18 +1087,21 @@ fn persist_rule_disabled(state: &AppState, req: &SetRuleDisabledRequest) -> Resu
 /// Disable / re-enable a rule (subscription or custom). Persisted by fingerprint so the
 /// state survives subscription updates; Apply regenerates config (hot reload when running).
 #[tauri::command]
-pub fn set_rule_disabled(
+pub async fn set_rule_disabled(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: SetRuleDisabledRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    persist_rule_disabled(state.inner(), &req)?;
+    run_blocking("set_rule_disabled", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        persist_rule_disabled(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1065,18 +1176,21 @@ fn persist_add_custom_rule(
 
 /// Add a user-defined rule, prepended ahead of subscription rules at build time.
 #[tauri::command]
-pub fn add_custom_rule(
+pub async fn add_custom_rule(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: AddCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    let fp = persist_add_custom_rule(state.inner(), &req)?;
+    run_blocking("add_custom_rule", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        let fp = persist_add_custom_rule(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1104,18 +1218,21 @@ fn persist_remove_custom_rule(
 
 /// Remove a user-added rule (also clears its disabled mark).
 #[tauri::command]
-pub fn remove_custom_rule(
+pub async fn remove_custom_rule(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: RemoveCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    persist_remove_custom_rule(state.inner(), &req)?;
+    run_blocking("remove_custom_rule", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        persist_remove_custom_rule(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1337,25 +1454,15 @@ pub async fn test_node_delay(
 }
 
 #[tauri::command]
-pub async fn get_connection_stats(state: State<'_, AppState>) -> Result<ConnectionStats, AppError> {
-    let settings = current_settings(&state.paths)?;
-    require_running_core(&state)?;
-    let endpoints = clash_endpoints(&settings);
-    tauri::async_runtime::spawn_blocking(move || connection_stats(&endpoints))
-        .await
-        .map_err(blocking_join_err("get_connection_stats"))?
-        .map_err(AppError::from)
-}
-
-#[tauri::command]
-pub async fn get_traffic_sample(state: State<'_, AppState>) -> Result<TrafficSample, AppError> {
-    let settings = current_settings(&state.paths)?;
-    require_running_core(&state)?;
-    let endpoints = clash_endpoints(&settings);
-    tauri::async_runtime::spawn_blocking(move || traffic_sample(&endpoints))
-        .await
-        .map_err(blocking_join_err("get_traffic_sample"))?
-        .map_err(AppError::from)
+pub async fn get_traffic_snapshot(app: AppHandle) -> Result<TrafficSnapshot, AppError> {
+    run_blocking("get_traffic_snapshot", move || {
+        let state = app.state::<AppState>();
+        require_running_core(&state)?;
+        let settings = current_settings(&state.paths)?;
+        attach_traffic(&state, &settings);
+        Ok(state.traffic.snapshot())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1420,8 +1527,10 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available: false,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         }
     }
 
@@ -1471,8 +1580,10 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available: false,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         }
     }
 
@@ -1484,6 +1595,74 @@ mod tests {
         let err = parse_proxy_mode("nope").expect_err("unknown mode");
         assert_eq!(err.code, "config.invalid");
         assert!(err.message.contains("unknown proxy mode"));
+    }
+
+    #[test]
+    fn collect_status_snapshots_stopped_core() {
+        let state = temp_state_with_node("status");
+        let status = collect_status(&state).expect("status");
+        assert_eq!(status.core.status, ice_core::CoreStatus::Stopped);
+        assert_eq!(status.subscription_count, 1);
+        assert_eq!(status.system_proxy_recorded, None);
+        assert_eq!(status.system_proxy_applied, None);
+        assert!(!status.system_proxy_available);
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn collect_status_does_not_block_on_held_proxy_lock() {
+        let state = temp_state_with_node("proxy-held");
+        let _guard = state.proxy.lock().unwrap();
+        let started = std::time::Instant::now();
+        let status = collect_status(&state).expect("status");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "status poll must not wait on system-proxy apply/restore"
+        );
+        assert_eq!(status.core.status, ice_core::CoreStatus::Stopped);
+        assert!(
+            !status.system_proxy_available,
+            "Noop backend must not flip to available while proxy lock is held"
+        );
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn cached_system_proxy_applied_ignores_expired_memo_when_proxy_busy() {
+        let state = temp_state_with_node("stale-cache");
+        let settings = ice_config::AppSettings::default();
+        let endpoints = endpoints_from_settings(&settings);
+        {
+            let mut cache = state.proxy_applied_cache.lock().unwrap();
+            *cache = Some((
+                endpoints.clone(),
+                std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(10))
+                    .expect("monotonic clock"),
+                true,
+            ));
+        }
+        let _guard = state.proxy.lock().unwrap();
+        assert_eq!(
+            cached_system_proxy_applied(&state, &settings),
+            None,
+            "expired memo must not be served while apply/restore holds the proxy lock"
+        );
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn cached_system_proxy_applied_serves_fresh_memo_without_proxy_lock() {
+        let state = temp_state_with_node("fresh-cache");
+        let settings = ice_config::AppSettings::default();
+        let endpoints = endpoints_from_settings(&settings);
+        {
+            let mut cache = state.proxy_applied_cache.lock().unwrap();
+            *cache = Some((endpoints, std::time::Instant::now(), true));
+        }
+        let _guard = state.proxy.lock().unwrap();
+        assert_eq!(cached_system_proxy_applied(&state, &settings), Some(true));
+        let _ = fs::remove_dir_all(state.paths.root());
     }
 
     #[test]
@@ -1631,6 +1810,7 @@ mod tests {
                 keyword: None,
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 2,
             },
@@ -1647,6 +1827,7 @@ mod tests {
                 keyword: Some("geo".into()),
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1661,6 +1842,7 @@ mod tests {
                 keyword: None,
                 rule_type: Some("domain_suffix".into()),
                 disabled: None,
+                custom: None,
                 offset: 1,
                 limit: 50,
             },
@@ -1725,6 +1907,7 @@ mod tests {
                 keyword: None,
                 rule_type: None,
                 disabled: Some("disabled".into()),
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1768,6 +1951,7 @@ mod tests {
                 keyword: Some("example".into()),
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1776,6 +1960,36 @@ mod tests {
         assert_eq!(listed.total, 1);
         assert!(listed.items[0].custom);
         assert_eq!(listed.items[0].index, None);
+
+        let custom_only = query_rules(
+            &state,
+            &ListRulesRequest {
+                keyword: None,
+                rule_type: None,
+                disabled: None,
+                custom: Some(true),
+                offset: 0,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(custom_only.total, 1);
+        assert!(custom_only.items[0].custom);
+
+        let subscription_only = query_rules(
+            &state,
+            &ListRulesRequest {
+                keyword: None,
+                rule_type: None,
+                disabled: None,
+                custom: Some(false),
+                offset: 0,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(subscription_only.total, 4);
+        assert!(subscription_only.items.iter().all(|r| !r.custom));
 
         let overview = rule_overview(&state).unwrap();
         assert_eq!(overview.custom, 1);

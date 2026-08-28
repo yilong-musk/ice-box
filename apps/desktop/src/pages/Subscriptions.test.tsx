@@ -1,5 +1,5 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
 
@@ -48,18 +48,29 @@ describe("Subscriptions", () => {
     listSubscriptions.mockResolvedValue([]);
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders import form", async () => {
     const { container } = render(<Subscriptions />);
+    const view = within(container);
     await waitFor(() => {
       expect(
-        within(container).getByPlaceholderText("订阅 URL（https 优先）"),
+        view.getByPlaceholderText("订阅 URL（https 优先）"),
       ).toBeInTheDocument();
     });
+    expect(view.getByText("暂无订阅")).toBeInTheDocument();
     expect(
-      screen.queryByText(
-        "暂无订阅。打开软件会自动启动内核；需要时在主页启动代理服务接管系统代理，也可导入订阅 URL。",
-      ),
+      view.getByText(/打开软件会自动启动内核；需要时在主页用大按钮接管系统代理/),
     ).toBeInTheDocument();
+    expect(container.querySelector(".sub-list")).toBeNull();
+    expect(container.querySelector(".subs-panel")?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
+    );
+    expect(
+      view.getByRole("button", { name: "导入" }).parentElement?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["items-center"]));
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {
@@ -120,7 +131,6 @@ describe("Subscriptions", () => {
   });
 
   it("shows an apply warning from a remove response", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({
       ok: true,
@@ -136,9 +146,19 @@ describe("Subscriptions", () => {
       expect(view.getByText("only-one")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "删除" }).click();
+    fireEvent.click(view.getByRole("button", { name: "删除" }));
 
     await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "删除",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(removeSubscription).toHaveBeenCalled();
       expect(view.getByText(/系统代理未能恢复/)).toBeInTheDocument();
     });
   });
@@ -152,6 +172,11 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByRole("button", { name: "应用配置" })).toBeInTheDocument();
     });
+    const row = view.getByText("sub-a").closest("[data-slot='item']");
+    expect(row?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["px-3", "py-2.5"]),
+    );
+    expect(row?.className.split(/\s+/)).not.toContain("px-0");
 
     view.getByRole("button", { name: "应用配置" }).click();
     await waitFor(() => {
@@ -218,8 +243,8 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
-    const rowB = view.getByText("b").closest("li") as HTMLElement;
-    const toggle = within(rowB).getByRole("checkbox");
+    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
+    const toggle = within(rowB).getByRole("switch", { name: "激活" });
     expect(toggle).not.toBeChecked();
     toggle.click();
     await waitFor(() => {

@@ -27,6 +27,8 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
         return;
     }
 
+    state.traffic.set_endpoints(None);
+
     let needs_restore = state
         .core
         .lock()
@@ -164,8 +166,10 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         })
     }
 

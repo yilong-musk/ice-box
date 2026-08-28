@@ -3,6 +3,7 @@
 use crate::orchestrate::orchestrate_stop;
 use crate::AppState;
 use ice_config::{AppError, ErrorCode};
+use ice_core::CoreStatus;
 use tauri::{AppHandle, Manager, Runtime};
 
 fn lock_poisoned(context: &str) -> AppError {
@@ -10,6 +11,16 @@ fn lock_poisoned(context: &str) -> AppError {
         ErrorCode::ConfigInvalid,
         format!("internal lock poisoned: {context}"),
     )
+}
+
+fn core_is_live(status: CoreStatus) -> bool {
+    matches!(status, CoreStatus::Running | CoreStatus::Starting)
+}
+
+fn detach_traffic_if_core_not_live(state: &AppState, status: CoreStatus) {
+    if !core_is_live(status) {
+        state.traffic.set_endpoints(None);
+    }
 }
 
 /// Stop core + restore system proxy under the orchestrate lock (same serialization as `start`).
@@ -26,12 +37,18 @@ pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     match orchestrate_stop(&state.paths, &mut **core, proxy.as_ref()) {
         Ok(()) => {
+            drop(proxy);
+            drop(core);
+            state.traffic.set_endpoints(None);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                 *slot = None;
             }
             Ok(())
         }
         Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
+            drop(proxy);
+            drop(core);
+            state.traffic.set_endpoints(None);
             // Stay open: allow another quit attempt / UI retry.
             state
                 .shutdown_requested
@@ -42,6 +59,12 @@ pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
             Err(err)
         }
         Err(err) => {
+            drop(proxy);
+            let status = core.state().status;
+            drop(core);
+            // Stop did not finish; drop the collector if Clash API is gone so
+            // the supervisor cannot keep retrying a dead port.
+            detach_traffic_if_core_not_live(state, status);
             state
                 .shutdown_requested
                 .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -99,10 +122,12 @@ mod tests {
     use super::*;
     use ice_config::AppPaths;
     use ice_core::{
-        CoreController, CoreHandle, CoreStatus, ImmediateHealthProbe, MockReloader, MockSpawner,
+        CoreController, CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, HealthEndpoints,
+        ImmediateHealthProbe, MockReloader, MockSpawner, ReloadOutcome,
     };
     use ice_proxy_sys::{ProxyBackup, ProxyEndpoints, ProxySysError, SystemProxy};
     use std::cell::Cell;
+    use std::path::Path;
     use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -145,6 +170,24 @@ mod tests {
     }
 
     fn temp_state(label: &str, proxy: Box<dyn SystemProxy>) -> AppState {
+        temp_state_with_core(
+            label,
+            proxy,
+            Box::new(CoreController::with_deps(
+                MockSpawner::default(),
+                ImmediateHealthProbe,
+                Box::new(MockReloader::default()),
+                Duration::from_millis(20),
+                Duration::from_millis(20),
+            )) as Box<dyn CoreHandle>,
+        )
+    }
+
+    fn temp_state_with_core(
+        label: &str,
+        proxy: Box<dyn SystemProxy>,
+        core: Box<dyn CoreHandle>,
+    ) -> AppState {
         let dir = std::env::temp_dir().join(format!(
             "ice-box-shutdown-{label}-{}",
             SystemTime::now()
@@ -154,21 +197,55 @@ mod tests {
         ));
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
+        let system_proxy_available = proxy.is_available();
         AppState {
             paths: paths.clone(),
-            core: Mutex::new(Box::new(CoreController::with_deps(
-                MockSpawner::default(),
-                ImmediateHealthProbe,
-                Box::new(MockReloader::default()),
-                Duration::from_millis(20),
-                Duration::from_millis(20),
-            )) as Box<dyn CoreHandle>),
+            core: Mutex::new(core),
             proxy: Mutex::new(proxy),
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
+        }
+    }
+
+    struct FailStopCore {
+        status: CoreStatus,
+    }
+
+    impl CoreHandle for FailStopCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: Some("mock".into()),
+                inbound_host: None,
+                inbound_port: None,
+            }
+        }
+
+        fn start(&mut self, _: &CorePaths) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock"))
+        }
+
+        fn stop(&mut self, _: &Path) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock stop failed"))
+        }
+
+        fn reload(&mut self, _: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Err(CoreError::invalid_state("mock"))
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _: &Path) -> bool {
+            false
         }
     }
 
@@ -233,9 +310,60 @@ mod tests {
     #[test]
     fn graceful_stop_leaves_core_stopped() {
         let state = temp_state("stopped", Box::new(OkProxy));
+        state.traffic.set_endpoints(Some(HealthEndpoints {
+            host: "127.0.0.1".into(),
+            port: 9,
+        }));
         graceful_stop(&state).expect("stop");
         let core = state.core.lock().unwrap();
         assert_eq!(core.state().status, CoreStatus::Stopped);
+        assert!(!state.traffic.has_target());
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_generic_err_detaches_traffic_when_core_not_live() {
+        let state = temp_state_with_core(
+            "stop-fail-dead",
+            Box::new(OkProxy),
+            Box::new(FailStopCore {
+                status: CoreStatus::Error,
+            }),
+        );
+        state.traffic.set_endpoints(Some(HealthEndpoints {
+            host: "127.0.0.1".into(),
+            port: 9,
+        }));
+        assert!(state.traffic.has_target());
+
+        let err = graceful_stop(&state).expect_err("stop fail");
+        assert_eq!(err.code, "core.invalid_state");
+        assert!(!state.traffic.has_target());
+
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn graceful_stop_generic_err_keeps_traffic_when_core_still_live() {
+        let state = temp_state_with_core(
+            "stop-fail-live",
+            Box::new(OkProxy),
+            Box::new(FailStopCore {
+                status: CoreStatus::Running,
+            }),
+        );
+        state.traffic.set_endpoints(Some(HealthEndpoints {
+            host: "127.0.0.1".into(),
+            port: 9,
+        }));
+
+        let err = graceful_stop(&state).expect_err("stop fail");
+        assert_eq!(err.code, "core.invalid_state");
+        assert!(
+            state.traffic.has_target(),
+            "live core should keep the traffic collector"
+        );
 
         let _ = std::fs::remove_dir_all(state.paths.root());
     }

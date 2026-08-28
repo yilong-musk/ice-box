@@ -16,7 +16,7 @@ pub const HEALTHCHECK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Endpoints used after spawn. v1 probes **TCP connect** to clash API listen address
 /// (not HTTP yet; sufficient to know sing-box bound the controller port).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthEndpoints {
     pub host: String,
     pub port: u16,

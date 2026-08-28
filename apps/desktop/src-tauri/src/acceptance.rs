@@ -89,7 +89,7 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, &proxy, bin, None).expect("direct-only");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("direct-only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
@@ -194,8 +194,10 @@ mod tests {
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
             proxy_applied_cache: Mutex::new(None),
+            system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
+            traffic: ice_core::TrafficMonitor::new(),
         });
 
         let bg = state.clone();
@@ -320,7 +322,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert!(
             curl_via_mixed(MIXED_PORT),
@@ -342,7 +344,7 @@ mod live {
         let before = proxy.backup().expect("backup before");
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
         orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
             .expect("enable system proxy");
         orchestrate_stop(&paths, &mut core, proxy.as_ref()).expect("stop");
@@ -367,15 +369,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(
-            &paths,
-            &settings,
-            &mut core,
-            proxy.as_ref(),
-            bin.clone(),
-            None,
-        )
-        .expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
         // Simulate subscription refresh (same fixture, still valid nodes).
         seed_singbox_subscription(&paths);
         orchestrate_apply(
@@ -404,15 +398,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(
-            &paths,
-            &settings,
-            &mut core,
-            proxy.as_ref(),
-            bin.clone(),
-            None,
-        )
-        .expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
         orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
             .expect("enable system proxy");
         let new_settings = AppSettings {
@@ -459,7 +445,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
         std::thread::sleep(Duration::from_millis(300));
 
         let lines = read_log_tail(&paths.core_log(), 50).expect("tail");
@@ -509,7 +495,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert!(
             curl_via_mixed(MIXED_PORT),
@@ -565,7 +551,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, proxy.as_ref(), bin, None).expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
 
         let endpoints = HealthEndpoints {
@@ -669,15 +655,7 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(
-            &paths,
-            &settings,
-            &mut core,
-            proxy.as_ref(),
-            bin.clone(),
-            None,
-        )
-        .expect("start");
+        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         let endpoints = HealthEndpoints {
             host: "127.0.0.1".into(),

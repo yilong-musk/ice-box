@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { THEME_STORAGE_KEY } from "../lib/theme";
 import { Settings } from "./Settings";
 
 const getSettings = vi.fn();
@@ -17,6 +18,8 @@ vi.mock("../api/tauri", () => ({
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem(THEME_STORAGE_KEY);
+    document.documentElement.classList.remove("dark");
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -152,5 +155,81 @@ describe("Settings", () => {
     expect(saveButton).toBeDisabled();
     fireEvent.submit(saveButton.closest("form")!);
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("reloads settings when the panel becomes active again", async () => {
+    const initial = {
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      allow_lan: false,
+      proxy_mode: "rule" as const,
+    };
+    const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
+    getSettings.mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
+
+    const { container, rerender } = render(<Settings active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByDisplayValue("17890")).toBeInTheDocument();
+    });
+
+    rerender(<Settings active={false} />);
+    expect(view.getByRole("button", { name: "保存" })).toBeDisabled();
+    rerender(<Settings active />);
+
+    await waitFor(() => {
+      expect(view.getByDisplayValue("17900")).toBeInTheDocument();
+    });
+    expect(getSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("defaults appearance to follow the system and applies immediately", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+        "data-state",
+        "on",
+      );
+    });
+
+    fireEvent.click(view.getByRole("radio", { name: "浅色" }));
+    expect(view.getByRole("radio", { name: "浅色" })).toHaveAttribute(
+      "data-state",
+      "on",
+    );
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("radio", { name: "深色" }));
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("radio", { name: "跟随系统" }));
+    expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+      "data-state",
+      "on",
+    );
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("lets the settings panel fill the content pane", () => {
+    const { container } = render(<Settings />);
+    expect(
+      container.querySelector(".settings-panel")?.className.split(/\s+/),
+    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
+    const card = container.querySelector("[data-slot=card]");
+    expect(card).not.toBeNull();
+    const classes = card!.className.split(/\s+/);
+    expect(classes).toContain("w-full");
+    expect(classes).not.toContain("max-w-lg");
   });
 });
