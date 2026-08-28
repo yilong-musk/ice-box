@@ -50,7 +50,7 @@ const APPEARANCE_OPTIONS = [
   ["dark", "深色"],
 ] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>;
 
-export function Settings() {
+export function Settings({ active = true }: { active?: boolean }) {
   const [form, setForm] = useState<AppSettings>(defaults);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +60,8 @@ export function Settings() {
   const { preference, setPreference } = useThemePreference();
 
   useEffect(() => {
+    setLoaded(false);
+    if (!active) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -77,7 +79,7 @@ export function Settings() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [active]);
 
   function clearFieldError(key: string) {
     setFieldErrors((prev) => {

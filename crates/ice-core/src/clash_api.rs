@@ -225,27 +225,6 @@ fn proxy_groups_filter(proxies: std::collections::HashMap<String, ProxyInfo>) ->
     groups
 }
 
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
-pub struct ConnectionStats {
-    pub connection_count: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct ConnectionsResponse {
-    #[serde(default)]
-    connections: Vec<serde_json::Value>,
-}
-
-/// Active connection count via `GET /connections`.
-pub fn connection_stats(endpoints: &HealthEndpoints) -> Result<ConnectionStats, CoreError> {
-    let body = clash_get(endpoints, "/connections")?;
-    let parsed: ConnectionsResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash connections parse: {e}")))?;
-    Ok(ConnectionStats {
-        connection_count: parsed.connections.len(),
-    })
-}
-
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrafficSample {
     pub up: u64,

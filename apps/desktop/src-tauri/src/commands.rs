@@ -15,8 +15,8 @@ use ice_config::{
     AppSettings, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
 };
 use ice_core::{
-    connection_stats, proxy_delay, proxy_groups, select_group, select_outbound, ConnectionStats,
-    CoreState, CoreStatus, HealthEndpoints, TrafficSnapshot, DELAY_TEST_URL,
+    proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
+    HealthEndpoints, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied, ProxyEndpoints};
 use ice_subscription::{
@@ -1451,17 +1451,6 @@ pub async fn test_node_delay(
         tag: req.tag,
         delay_ms,
     })
-}
-
-#[tauri::command]
-pub async fn get_connection_stats(state: State<'_, AppState>) -> Result<ConnectionStats, AppError> {
-    let settings = current_settings(&state.paths)?;
-    require_running_core(&state)?;
-    let endpoints = clash_endpoints(&settings);
-    tauri::async_runtime::spawn_blocking(move || connection_stats(&endpoints))
-        .await
-        .map_err(blocking_join_err("get_connection_stats"))?
-        .map_err(AppError::from)
 }
 
 #[tauri::command]

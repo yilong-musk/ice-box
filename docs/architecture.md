@@ -729,8 +729,8 @@ v1 minimal UI set:
 - Import input (URL)
 - Read-only log tail
 - Settings: ports, whether to set the system proxy
-- Home: node switching, latency test, active connection count, last 60 seconds traffic chart (Clash API `/traffic` persistent stream + ring buffer; tab switches keep history)
-- Nodes page: batch latency test and sorting
+- Home: last 60 seconds traffic chart (Clash API `/traffic` persistent stream + ring buffer; tab switches keep history)
+- Nodes page: switch outbound and run batch latency tests
 
 ---
 

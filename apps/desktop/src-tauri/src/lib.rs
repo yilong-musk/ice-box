@@ -213,7 +213,6 @@ pub fn run() {
             commands::set_rule_disabled,
             commands::add_custom_rule,
             commands::remove_custom_rule,
-            commands::get_connection_stats,
             commands::get_traffic_snapshot,
         ])
         .build(tauri::generate_context!())

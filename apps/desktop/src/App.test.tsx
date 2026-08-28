@@ -21,7 +21,6 @@ vi.mock("./api/tauri", () => ({
       allow_lan: false,
       proxy_mode: "rule",
     }),
-    getConnectionStats: vi.fn().mockResolvedValue({ connection_count: 0 }),
     getTrafficSnapshot: vi
       .fn()
       .mockResolvedValue({ points: [], latest: null, peak: null }),

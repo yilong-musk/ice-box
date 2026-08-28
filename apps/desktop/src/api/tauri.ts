@@ -71,10 +71,6 @@ export type DelayTestResponse = {
   delay_ms: number;
 };
 
-export type ConnectionStats = {
-  connection_count: number;
-};
-
 export type TrafficSample = {
   up: number;
   down: number;
@@ -167,7 +163,6 @@ export const api = {
     invoke<void>("set_group_selection", { req: { group, member } }),
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
-  getConnectionStats: () => invoke<ConnectionStats>("get_connection_stats"),
   getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),
   start: () => invoke<void>("start"),
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),

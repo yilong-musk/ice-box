@@ -241,7 +241,7 @@ function App() {
               )}
               {visited.has("settings") && (
                 <TabPane active={tab === "settings"}>
-                  <Settings />
+                  <Settings active={tab === "settings"} />
                 </TabPane>
               )}
             </main>

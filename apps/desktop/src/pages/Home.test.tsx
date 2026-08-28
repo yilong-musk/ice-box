@@ -6,7 +6,6 @@ import { Home } from "./Home";
 const getStatus = vi.fn();
 const listNodes = vi.fn();
 const getSettings = vi.fn();
-const getConnectionStats = vi.fn();
 const getTrafficSnapshot = vi.fn();
 const setProxyMode = vi.fn();
 const start = vi.fn();
@@ -17,7 +16,6 @@ vi.mock("../api/tauri", () => ({
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
-    getConnectionStats: (...args: unknown[]) => getConnectionStats(...args),
     getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     start: (...args: unknown[]) => start(...args),
@@ -55,7 +53,6 @@ describe("Home", () => {
       allow_lan: false,
       proxy_mode: "rule",
     });
-    getConnectionStats.mockResolvedValue({ connection_count: 0 });
     getTrafficSnapshot.mockResolvedValue({ points: [], latest: null, peak: null });
     start.mockResolvedValue(undefined);
     stopSystemProxy.mockResolvedValue(undefined);

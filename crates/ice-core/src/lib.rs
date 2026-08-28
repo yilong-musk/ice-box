@@ -12,9 +12,8 @@ pub use binary::{
     binary_in_target_root, current_target_dir, resolve_singbox_binary, BUNDLED_SINGBOX_VERSION,
 };
 pub use clash_api::{
-    connection_stats, get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode,
-    traffic_sample, ConnectionStats, GroupState, MockClashApi, RecordedRequest, TrafficSample,
-    DELAY_TEST_URL, SELECTOR_TAG,
+    get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode, traffic_sample,
+    GroupState, MockClashApi, RecordedRequest, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
 };
 pub use error::CoreError;
 pub use health::{
