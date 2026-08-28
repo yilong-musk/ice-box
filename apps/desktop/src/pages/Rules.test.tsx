@@ -105,18 +105,29 @@ describe("Rules", () => {
     );
     expect(typeFilters.className.split(/\s+/)).not.toContain("max-h-16");
     expect(view.getByText("example.com")).toBeInTheDocument();
+    const customRow = view
+      .getByText("example.com")
+      .closest("[data-slot=item]") as HTMLElement;
+    const customMarker = within(customRow).getByText("自定义");
+    expect(customMarker).toHaveClass("font-normal", "text-muted-foreground");
+    expect(customMarker).not.toHaveAttribute("data-slot", "badge");
     expect(container.querySelector(".node-table")).toBeNull();
     expect(view.getByRole("list", { name: "规则列表" })).toBeInTheDocument();
     const ruleList = view.getByRole("list", { name: "规则列表" });
-    expect(ruleList.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["min-h-0", "flex-1", "overflow-auto"]),
+    const scrollArea = ruleList.closest('[data-slot="scroll-area"]');
+    expect(scrollArea?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "min-h-0",
+        "flex-1",
+        "overflow-hidden",
+      ]),
     );
-    expect(ruleList.parentElement?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["overflow-hidden"]),
-    );
-    expect(ruleList.parentElement?.className.split(/\s+/)).not.toContain(
-      "overflow-auto",
-    );
+    expect(
+      scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
+    ).toBeInTheDocument();
+    expect(
+      view.getByText("youtube.com").closest("[data-slot=item]")?.className,
+    ).toEqual(expect.stringContaining("pr-3"));
     expect(
       container.querySelector(".rules-panel")?.className.split(/\s+/),
     ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
@@ -404,7 +415,20 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    expect(view.getByText(/第 1 \/ 3 页 · 共 120 条/)).toBeInTheDocument();
+    const pagerText = view.getByText(/第 1 \/ 3 页 · 共 120 条/);
+    const pager = pagerText.parentElement as HTMLElement;
+    expect(pagerText).toBeInTheDocument();
+
+    const viewport = container.querySelector(
+      '[data-slot="scroll-area-viewport"]',
+    ) as HTMLDivElement;
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 100, writable: true },
+    });
+    fireEvent.scroll(viewport);
+    expect(pager).toHaveClass("opacity-0");
 
     view.getByRole("button", { name: "下一页" }).click();
     await waitFor(() => {

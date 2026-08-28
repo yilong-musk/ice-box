@@ -33,6 +33,7 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
@@ -366,74 +367,82 @@ export function Rules({ onNavigate, active = true }: Props) {
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
-            <ItemGroup
-              ref={listRef}
-              aria-label="规则列表"
-              className="min-h-0 flex-1 gap-0 overflow-auto pb-14"
-              onScroll={onListScroll}
+            <ScrollArea
+              type="scroll"
+              scrollHideDelay={600}
+              className="min-h-0 flex-1 overflow-hidden"
+              viewportRef={listRef}
+              onViewportScroll={onListScroll}
             >
-              {rows.map((row, index) => {
-                const summary = ruleMatchSummary(row);
-                const outboundLabel = ruleOutbound(row) || "—";
-                return (
-                  <div key={row.fingerprint}>
-                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                    <Item
-                      size="sm"
-                      variant={row.disabled ? "muted" : "default"}
-                      className={cn("px-0", row.disabled && "opacity-55")}
-                    >
-                      <ItemContent className="min-w-0">
-                        <ItemTitle
-                          title={`${summary}\n${JSON.stringify(row.rule)}`}
-                        >
-                          <span className="truncate">
-                            {summary || JSON.stringify(row.rule)}
-                          </span>
-                          {row.custom ? (
-                            <Badge>自定义</Badge>
-                          ) : (
-                            <Badge variant="outline" className="font-mono">
-                              #{(row.index ?? 0) + 1}
-                            </Badge>
-                          )}
-                        </ItemTitle>
-                        <ItemDescription>
-                          {ruleTypeLabel(row.rule_type)}
-                        </ItemDescription>
-                      </ItemContent>
-                      <ItemActions className="flex-wrap">
-                        <Badge variant="outline" title={outboundLabel}>
-                          {outboundLabel}
-                        </Badge>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => void onToggleDisabled(row)}
-                        >
-                          {row.disabled ? "启用" : "禁用"}
-                        </Button>
-                        {row.custom ? (
+              <ItemGroup aria-label="规则列表" className="gap-0 pb-14">
+                {rows.map((row, index) => {
+                  const summary = ruleMatchSummary(row);
+                  const outboundLabel = ruleOutbound(row) || "—";
+                  return (
+                    <div key={row.fingerprint}>
+                      {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                      <Item
+                        size="sm"
+                        variant={row.disabled ? "muted" : "default"}
+                        className={cn(
+                          "pl-0 pr-3",
+                          row.disabled && "opacity-55",
+                        )}
+                      >
+                        <ItemContent className="min-w-0">
+                          <ItemTitle
+                            title={`${summary}\n${JSON.stringify(row.rule)}`}
+                          >
+                            <span className="truncate">
+                              {summary || JSON.stringify(row.rule)}
+                            </span>
+                            {row.custom ? (
+                              <span className="shrink-0 text-xs font-normal text-muted-foreground">
+                                自定义
+                              </span>
+                            ) : (
+                              <Badge variant="outline" className="font-mono">
+                                #{(row.index ?? 0) + 1}
+                              </Badge>
+                            )}
+                          </ItemTitle>
+                          <ItemDescription>
+                            {ruleTypeLabel(row.rule_type)}
+                          </ItemDescription>
+                        </ItemContent>
+                        <ItemActions className="flex-wrap">
+                          <Badge variant="outline" title={outboundLabel}>
+                            {outboundLabel}
+                          </Badge>
                           <Button
                             type="button"
                             size="sm"
-                            variant="destructive"
+                            variant="outline"
                             disabled={busy}
-                            onClick={() => setPendingDelete(row)}
+                            onClick={() => void onToggleDisabled(row)}
                           >
-                            删除
+                            {row.disabled ? "启用" : "禁用"}
                           </Button>
-                        ) : null}
-                      </ItemActions>
-                    </Item>
-                  </div>
-                );
-              })}
-            </ItemGroup>
+                          {row.custom ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => setPendingDelete(row)}
+                            >
+                              删除
+                            </Button>
+                          ) : null}
+                        </ItemActions>
+                      </Item>
+                    </div>
+                  );
+                })}
+              </ItemGroup>
+            </ScrollArea>
           )}
-        {showList ? (
+          {showList ? (
             <div
               className={cn(
                 "absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 border-t border-border bg-background/95 px-3 py-2 backdrop-blur-sm transition-opacity duration-200",
