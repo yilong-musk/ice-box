@@ -844,6 +844,9 @@ pub struct ListRulesRequest {
     /// `"all"` (default) | `"disabled"` | `"enabled"`.
     #[serde(default)]
     pub disabled: Option<String>,
+    /// Restrict to custom rules (`Some(true)`) or subscription rules (`Some(false)`).
+    #[serde(default)]
+    pub custom: Option<bool>,
     #[serde(default)]
     pub offset: usize,
     #[serde(default = "default_rules_page_size")]
@@ -962,6 +965,9 @@ fn query_rules(state: &AppState, req: &ListRulesRequest) -> Result<ListRulesResp
 
     let mut filtered: Vec<RuleRow> = Vec::new();
     for rule in &overrides.custom {
+        if req.custom == Some(false) {
+            continue;
+        }
         let fp = rule_fingerprint(rule);
         let disabled = overrides.is_disabled(&fp);
         if !matches_filter(
@@ -984,6 +990,9 @@ fn query_rules(state: &AppState, req: &ListRulesRequest) -> Result<ListRulesResp
         });
     }
     for (idx, rule) in profile.route.rules.iter().enumerate() {
+        if req.custom == Some(true) {
+            continue;
+        }
         let fp = rule_fingerprint(rule);
         let disabled = overrides.is_disabled(&fp);
         if !matches_filter(
@@ -1803,6 +1812,7 @@ mod tests {
                 keyword: None,
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 2,
             },
@@ -1819,6 +1829,7 @@ mod tests {
                 keyword: Some("geo".into()),
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1833,6 +1844,7 @@ mod tests {
                 keyword: None,
                 rule_type: Some("domain_suffix".into()),
                 disabled: None,
+                custom: None,
                 offset: 1,
                 limit: 50,
             },
@@ -1897,6 +1909,7 @@ mod tests {
                 keyword: None,
                 rule_type: None,
                 disabled: Some("disabled".into()),
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1940,6 +1953,7 @@ mod tests {
                 keyword: Some("example".into()),
                 rule_type: None,
                 disabled: None,
+                custom: None,
                 offset: 0,
                 limit: 50,
             },
@@ -1948,6 +1962,36 @@ mod tests {
         assert_eq!(listed.total, 1);
         assert!(listed.items[0].custom);
         assert_eq!(listed.items[0].index, None);
+
+        let custom_only = query_rules(
+            &state,
+            &ListRulesRequest {
+                keyword: None,
+                rule_type: None,
+                disabled: None,
+                custom: Some(true),
+                offset: 0,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(custom_only.total, 1);
+        assert!(custom_only.items[0].custom);
+
+        let subscription_only = query_rules(
+            &state,
+            &ListRulesRequest {
+                keyword: None,
+                rule_type: None,
+                disabled: None,
+                custom: Some(false),
+                offset: 0,
+                limit: 50,
+            },
+        )
+        .unwrap();
+        assert_eq!(subscription_only.total, 4);
+        assert!(subscription_only.items.iter().all(|r| !r.custom));
 
         let overview = rule_overview(&state).unwrap();
         assert_eq!(overview.custom, 1);

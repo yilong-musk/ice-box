@@ -122,6 +122,8 @@ export type ListRulesRequest = {
   type?: string | null;
   /** "all" | "disabled" | "enabled" */
   disabled?: "all" | "disabled" | "enabled" | null;
+  /** true = custom rules only, false = subscription rules only. */
+  custom?: boolean | null;
   offset: number;
   limit: number;
 };

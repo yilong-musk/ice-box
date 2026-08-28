@@ -3,12 +3,12 @@ import {
   api,
   formatInvokeError,
   type ListRulesRequest,
-  type NodeInfo,
   type RuleOverview,
   type RuleRow,
 } from "../api/tauri";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
+import { RuleFormDialog } from "../components/RuleFormDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,18 +17,9 @@ import {
   CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Item,
@@ -48,17 +39,16 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
-  buildCustomRule,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
   ruleTypeLabel,
-  RULE_MATCHER_DEFS,
-  STRATEGY_GROUP_TYPES,
 } from "../lib/rules";
 
 const PAGE_SIZES = [50, 100, 200];
 const MAX_KEYWORD_DEBOUNCE_MS = 300;
+/** Distance from the list bottom within which the pager stays visible. */
+const PAGER_BOTTOM_THRESHOLD_PX = 32;
 
 type StatusFilter = "all" | "disabled" | "enabled";
 
@@ -66,6 +56,7 @@ type Filters = {
   keyword: string;
   type: string;
   status: StatusFilter;
+  custom: boolean;
 };
 
 type Props = {
@@ -93,19 +84,16 @@ export function Rules({ onNavigate, active = true }: Props) {
     keyword: "",
     type: "",
     status: "all",
+    custom: false,
   });
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [applyWarning, setApplyWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showCustomForm, setShowCustomForm] = useState(false);
-  const [matcherKey, setMatcherKey] = useState("domain_suffix");
-  const [matcherValue, setMatcherValue] = useState("");
-  const [matcherBool, setMatcherBool] = useState(true);
-  const [outbound, setOutbound] = useState("direct");
-  const [nodeOptions, setNodeOptions] = useState<NodeInfo[]>([]);
-  const [customError, setCustomError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RuleRow | null>(null);
+  const [nearBottom, setNearBottom] = useState(true);
+  const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -123,23 +111,6 @@ export function Rules({ onNavigate, active = true }: Props) {
     return () => window.clearTimeout(id);
   }, [filters.keyword]);
 
-  // Outbound options for the custom rule editor: current subscription's nodes/groups.
-  useEffect(() => {
-    if (!showCustomForm) return;
-    let cancelled = false;
-    api
-      .listNodes()
-      .then((nodes) => {
-        if (!cancelled) setNodeOptions(nodes);
-      })
-      .catch(() => {
-        if (!cancelled) setNodeOptions([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showCustomForm]);
-
   const load = useCallback(async () => {
     const gen = nextGeneration();
     try {
@@ -147,6 +118,7 @@ export function Rules({ onNavigate, active = true }: Props) {
         keyword: debouncedKeyword || null,
         type: filters.type || null,
         disabled: filters.status,
+        custom: filters.custom ? true : null,
         offset,
         limit,
       };
@@ -172,6 +144,24 @@ export function Rules({ onNavigate, active = true }: Props) {
     if (!active) return;
     void load();
   }, [active, load]);
+
+  // Recompute pager visibility whenever the list content changes.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || rows.length === 0) return;
+    setNearBottom(
+      el.scrollHeight - el.scrollTop - el.clientHeight <=
+        PAGER_BOTTOM_THRESHOLD_PX,
+    );
+  }, [rows, total, offset, limit]);
+
+  function onListScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    setNearBottom(
+      el.scrollHeight - el.scrollTop - el.clientHeight <=
+        PAGER_BOTTOM_THRESHOLD_PX,
+    );
+  }
 
   function changeFilters(next: Partial<Filters>) {
     setFilters((f) => ({ ...f, ...next }));
@@ -220,15 +210,10 @@ export function Rules({ onNavigate, active = true }: Props) {
     }
   }
 
-  async function onAddCustomRule() {
-    const def = RULE_MATCHER_DEFS.find((d) => d.key === matcherKey);
-    const value = def?.kind === "boolean" ? matcherBool : matcherValue;
-    const rule = buildCustomRule(matcherKey, value, outbound);
-    if (!rule) return;
+  async function onAddCustomRule(rule: Record<string, unknown>) {
     nextGeneration();
     setBusy(true);
     setApplyWarning(null);
-    setCustomError(null);
     try {
       const r = await api.addCustomRule(rule);
       if (mountedRef.current && r.apply_warning) {
@@ -236,25 +221,13 @@ export function Rules({ onNavigate, active = true }: Props) {
           `${r.apply_warning.code}: ${r.apply_warning.message}`,
         );
       }
-      if (mountedRef.current) {
-        setMatcherValue("");
-        setMatcherBool(true);
-        setShowCustomForm(false);
-      }
       await reloadAfterMutation();
     } catch (e) {
-      if (mountedRef.current) setCustomError(formatInvokeError(e));
+      if (mountedRef.current) throw new Error(formatInvokeError(e));
     } finally {
       if (mountedRef.current) setBusy(false);
     }
   }
-
-  const previewDef = RULE_MATCHER_DEFS.find((d) => d.key === matcherKey);
-  const previewRule = buildCustomRule(
-    matcherKey,
-    previewDef?.kind === "boolean" ? matcherBool : matcherValue,
-    outbound,
-  );
 
   const pages = pageCount(total, limit);
   const page = Math.floor(offset / limit) + 1;
@@ -268,33 +241,6 @@ export function Rules({ onNavigate, active = true }: Props) {
           已保存，但应用失败：{applyWarning}
         </WarnAlert>
       )}
-
-      <div
-        className="grid shrink-0 grid-cols-4 items-stretch gap-3"
-        aria-label="规则统计"
-      >
-        {(
-          [
-            { label: "规则", value: overview.total },
-            { label: "已禁用", value: overview.disabled },
-            { label: "自定义", value: overview.custom },
-            { label: "规则集", value: overview.rule_sets },
-          ] as const
-        ).map((stat) => (
-          <Card
-            key={stat.label}
-            size="sm"
-            className="min-w-0 gap-0 py-2 data-[size=sm]:[--card-spacing:--spacing(2)]"
-          >
-            <CardContent className="flex items-baseline justify-between gap-2">
-              <span className="text-muted-foreground">{stat.label}</span>
-              <span className="font-heading text-sm font-medium tabular-nums">
-                {stat.value}
-              </span>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
@@ -314,16 +260,13 @@ export function Rules({ onNavigate, active = true }: Props) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => {
-                setShowCustomForm((v) => !v);
-                setCustomError(null);
-              }}
+              onClick={() => setShowCustomForm(true)}
             >
-              {showCustomForm ? "收起" : "+ 自定义规则"}
+              + 自定义规则
             </Button>
           </CardAction>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Input
               type="search"
@@ -394,6 +337,16 @@ export function Rules({ onNavigate, active = true }: Props) {
             <Toggle
               variant="outline"
               size="sm"
+              pressed={filters.custom}
+              onPressedChange={(pressed) =>
+                changeFilters({ custom: pressed })
+              }
+            >
+              自定义 {overview.custom}
+            </Toggle>
+            <Toggle
+              variant="outline"
+              size="sm"
               pressed={filters.status === "disabled"}
               onPressedChange={(pressed) =>
                 changeFilters({
@@ -404,116 +357,6 @@ export function Rules({ onNavigate, active = true }: Props) {
               已禁用 {overview.disabled}
             </Toggle>
           </div>
-
-          {showCustomForm ? (
-            <Card size="sm" className="shrink-0 overflow-visible">
-              <CardHeader>
-                <CardTitle>自定义规则</CardTitle>
-                <CardDescription>
-                  自定义规则优先于订阅规则生效，出口需为 direct / block
-                  或现有节点 / 策略组标签。
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <FieldGroup className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:*:min-w-0">
-                  <Field>
-                    <FieldLabel htmlFor="rule-matcher-type">匹配类型</FieldLabel>
-                    <NativeSelect
-                      id="rule-matcher-type"
-                      aria-label="匹配类型"
-                      value={matcherKey}
-                      onChange={(e) => {
-                        setMatcherKey(e.target.value);
-                        setMatcherValue("");
-                        setCustomError(null);
-                      }}
-                    >
-                      {RULE_MATCHER_DEFS.map((d) => (
-                        <NativeSelectOption key={d.key} value={d.key}>
-                          {d.label}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </Field>
-                  {previewDef?.kind === "boolean" ? (
-                    <Field>
-                      <FieldLabel htmlFor="rule-matcher-bool">
-                        {previewDef.label}
-                      </FieldLabel>
-                      <Field orientation="horizontal">
-                        <Checkbox
-                          id="rule-matcher-bool"
-                          checked={matcherBool}
-                          onCheckedChange={(checked) =>
-                            setMatcherBool(checked === true)
-                          }
-                          aria-label={previewDef.label}
-                        />
-                        <FieldDescription>
-                          匹配{previewDef.label}
-                        </FieldDescription>
-                      </Field>
-                    </Field>
-                  ) : (
-                    <Field>
-                      <FieldLabel htmlFor="rule-match-value">匹配值</FieldLabel>
-                      <Input
-                        id="rule-match-value"
-                        type="text"
-                        aria-label="匹配值"
-                        placeholder={previewDef?.placeholder}
-                        value={matcherValue}
-                        onChange={(e) => {
-                          setMatcherValue(e.target.value);
-                          setCustomError(null);
-                        }}
-                      />
-                    </Field>
-                  )}
-                  <Field>
-                    <FieldLabel htmlFor="rule-outbound">出口</FieldLabel>
-                    <NativeSelect
-                      id="rule-outbound"
-                      aria-label="出口"
-                      value={outbound}
-                      onChange={(e) => setOutbound(e.target.value)}
-                    >
-                      <NativeSelectOption value="direct">
-                        direct（直连）
-                      </NativeSelectOption>
-                      <NativeSelectOption value="block">
-                        block（拦截）
-                      </NativeSelectOption>
-                      {nodeOptions.map((n) => (
-                        <NativeSelectOption key={n.tag} value={n.tag}>
-                          {n.tag}
-                          {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
-                            ? "（策略组）"
-                            : ""}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </Field>
-                </FieldGroup>
-                {customError ? <FieldError>{customError}</FieldError> : null}
-                {previewRule ? (
-                  <FieldDescription className="break-all">
-                    预览：<code>{JSON.stringify(previewRule)}</code>
-                  </FieldDescription>
-                ) : null}
-                <div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={busy || !previewRule}
-                    onClick={() => void onAddCustomRule()}
-                  >
-                    添加
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
 
           {!showList ? (
             <EmptyState
@@ -526,8 +369,10 @@ export function Rules({ onNavigate, active = true }: Props) {
             />
           ) : (
             <ItemGroup
+              ref={listRef}
               aria-label="规则列表"
-              className="min-h-0 flex-1 gap-0 overflow-auto"
+              className="min-h-0 flex-1 gap-0 overflow-auto pb-14"
+              onScroll={onListScroll}
             >
               {rows.map((row, index) => {
                 const summary = ruleMatchSummary(row);
@@ -590,33 +435,46 @@ export function Rules({ onNavigate, active = true }: Props) {
               })}
             </ItemGroup>
           )}
-        </CardContent>
         {showList ? (
-          <CardFooter className="shrink-0 justify-center gap-3">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || offset === 0}
-              onClick={() => setOffset((o) => Math.max(0, o - limit))}
+            <div
+              className={cn(
+                "absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 border-t border-border bg-background/95 px-3 py-2 backdrop-blur-sm transition-opacity duration-200",
+                nearBottom
+                  ? "opacity-100"
+                  : "pointer-events-none opacity-0",
+              )}
             >
-              上一页
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              第 {page} / {pages} 页 · 共 {total} 条
-            </span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || offset + limit >= total}
-              onClick={() => setOffset((o) => o + limit)}
-            >
-              下一页
-            </Button>
-          </CardFooter>
-        ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || offset === 0}
+                onClick={() => setOffset((o) => Math.max(0, o - limit))}
+              >
+                上一页
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                第 {page} / {pages} 页 · 共 {total} 条
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || offset + limit >= total}
+                onClick={() => setOffset((o) => o + limit)}
+              >
+                下一页
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
       </Card>
+      <RuleFormDialog
+        open={showCustomForm}
+        onOpenChange={setShowCustomForm}
+        busy={busy}
+        onAdd={(rule) => onAddCustomRule(rule)}
+      />
       <ConfirmDialog
         open={pendingDelete !== null}
         title="删除自定义规则"
