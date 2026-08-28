@@ -1087,18 +1087,21 @@ fn persist_rule_disabled(state: &AppState, req: &SetRuleDisabledRequest) -> Resu
 /// Disable / re-enable a rule (subscription or custom). Persisted by fingerprint so the
 /// state survives subscription updates; Apply regenerates config (hot reload when running).
 #[tauri::command]
-pub fn set_rule_disabled(
+pub async fn set_rule_disabled(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: SetRuleDisabledRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    persist_rule_disabled(state.inner(), &req)?;
+    run_blocking("set_rule_disabled", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        persist_rule_disabled(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1173,18 +1176,21 @@ fn persist_add_custom_rule(
 
 /// Add a user-defined rule, prepended ahead of subscription rules at build time.
 #[tauri::command]
-pub fn add_custom_rule(
+pub async fn add_custom_rule(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: AddCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    let fp = persist_add_custom_rule(state.inner(), &req)?;
+    run_blocking("add_custom_rule", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        let fp = persist_add_custom_rule(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1212,18 +1218,21 @@ fn persist_remove_custom_rule(
 
 /// Remove a user-added rule (also clears its disabled mark).
 #[tauri::command]
-pub fn remove_custom_rule(
+pub async fn remove_custom_rule(
     app: AppHandle,
-    state: State<'_, AppState>,
     req: RemoveCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(&state)?;
-    persist_remove_custom_rule(state.inner(), &req)?;
+    run_blocking("remove_custom_rule", move || {
+        let state = app.state::<AppState>();
+        let _orch = lock_orchestrate(&state)?;
+        persist_remove_custom_rule(state.inner(), &req)?;
 
-    let apply_warning = apply_after_rule_change(&app, &state)?;
-    let mut value = serde_json::json!({ "ok": true });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(&app, &state)?;
+        let mut value = serde_json::json!({ "ok": true });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
