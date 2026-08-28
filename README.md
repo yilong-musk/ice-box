@@ -144,3 +144,34 @@ open target/release/bundle/dmg/ice-box_*_aarch64.dmg   # or .app
 npm run build:win
 # artifacts: apps/desktop/src-tauri/target/release/bundle/nsis/
 ```
+
+## Release process
+
+Releases are versioned with `vX.Y.Z` tags; the tag push triggers
+`.github/workflows/release.yml` (gate + macOS arm64 dmg + Windows NSIS build +
+GitHub Release with assets and `NOTICE`).
+
+1. **Bump the version** — keeps `Cargo.toml`, `apps/desktop/package.json` and
+   `apps/desktop/src-tauri/tauri.conf.json` in sync and refreshes `Cargo.lock`:
+
+   ```bash
+   bash scripts/bump-version.sh 0.1.1
+   ```
+
+2. **Update `CHANGELOG.md`** — add a `## [0.1.1] - YYYY-MM-DD` section
+   (release notes are extracted from it automatically).
+
+3. **Gate** — `bash scripts/gate-local.sh` must pass; merge to `main` via PR and
+   let CI go green.
+
+4. **Tag and release** — the tag push publishes everything:
+
+   ```bash
+   git tag v0.1.1
+   git push origin v0.1.1
+   ```
+
+   Verify locally with `bash scripts/release-notes.sh v0.1.1` before tagging.
+
+Signed releases (macOS notarization, Windows code signing) are not configured
+yet; first-run Gatekeeper / SmartScreen warnings are expected.
