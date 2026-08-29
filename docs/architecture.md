@@ -5,7 +5,10 @@ This document is the **implementation spec** for v1. Code must follow it; if the
 Status: **macOS + Windows v1 implemented** (start/stop, system proxy on both platforms, Clash/sing-box
 subscription parsing, hot reload for rule/subscription changes, mode switching (rebuild + reload,
 SIGHUP on macOS / restart on Windows) on both platforms, nodes/traffic UI); Windows CI, NSIS installer
-and Windows acceptance in place.
+and Windows acceptance in place. **TUN capture in progress** (§24, per `docs/tun-mode-plan.md`:
+only T0 complete — shared feasibility locks and the host-free journaled recovery core in
+`crates/ice-tun-sys`; T1+ pending: no `TunSettings`, config generation, `CaptureController`,
+IPC, or platform backend integration yet).
 
 ---
 
@@ -27,7 +30,7 @@ and Windows acceptance in place.
 ### 1.2 Explicitly out of scope (v1)
 
 - Linux, iOS, Android
-- TUN / global transparent proxy / per-app proxying
+- ~~TUN / global transparent proxy / per-app proxying~~ → **TUN capture is in scope as a second ingress path (see §24, TUN slice)**; per-app proxying remains out of scope
 - Visual rule editor, drag-and-drop policy group orchestration
 - Full subscription ecosystem (provider-specific dashboards, traffic queries, expiry reminders, etc.)
 - Multi-user / remote control / exposing the clash API beyond the local machine
@@ -131,6 +134,7 @@ ice-box/
 ├── crates/
 │   ├── ice-core/
 │   ├── ice-proxy-sys/
+│   ├── ice-tun-sys/              # TUN ownership, platform permission, recovery journal (§24.4)
 │   ├── ice-config/
 │   ├── ice-subscription/
 │   └── ice-engine/               # config engine facade (§22)
@@ -145,6 +149,7 @@ Dependency direction (reverse dependencies forbidden):
 ice-box (src-tauri)
   ├── ice-core
   ├── ice-proxy-sys
+  ├── ice-tun-sys               # TUN journal + platform backend; never touches system proxy
   ├── ice-config
   └── ice-subscription
         └── ice-config          # shared types such as NormalizedOutbound only
@@ -155,6 +160,8 @@ ice-engine                      # facade over ice-config + ice-subscription (§2
 
 ice-core ──×── ice-subscription   # no direct dependency; orchestrated by the shell
 ice-proxy-sys ──×── ice-core
+ice-tun-sys ──×── ice-core        # no direct dependency; orchestrated by the shell
+ice-tun-sys ──×── ice-proxy-sys   # TUN state never reuses system-proxy backup data
 ```
 
 If shared DTOs keep growing, extract `ice-types`; for v1 they stay in `ice-config`.
@@ -176,6 +183,7 @@ Root path:
 ├── config.json                   # final config handed to sing-box
 ├── config.json.bak               # last successfully run config (for hot reload failure rollback)
 ├── proxy-backup.json             # system proxy backup + applied flag
+├── tun-state.json                # TUN mutation journal + ownership records (§24.4)
 ├── sing-box.pid                  # core subprocess pid (unparseable content = no process)
 ├── subscriptions/
 │   ├── index.json                # subscription metadata list
@@ -211,6 +219,8 @@ Root path:
   toggled from the home page (**启动代理服务** / **停止代理服务**). Missing `settings.json` uses
   this default and does not create the file.
 - `allow_lan`: LAN sharing switch (default `false`, read compatibly from older settings.json). When on, the Mixed inbound binds `0.0.0.0`, while the system proxy / healthcheck still use `127.0.0.1`; the Clash API stays local-only.
+- TUN capture settings are added by the TUN slice (§24.1); missing TUN fields load as disabled
+  (legacy `settings.json` files are unchanged).
 
 ### 6.2 `proxy-backup.json`
 
@@ -632,7 +642,8 @@ Interface: `backup` / `apply` / `restore`.
   `settings.json` for serde compatibility (default `false`) and is unused for apply/skip
 - Live gates mirror G4.3/G4.4 (`cargo test -p ice-proxy-sys g4_3 -- --ignored` on Windows);
   temp-hive unit tests run on Windows CI
-- No WinTUN / elevated UAC driver in v1
+- No WinTUN / elevated UAC driver in v1 **for the system-proxy path**; TUN capture (and its
+  WinTUN / UAC requirements) lives in §24 / the TUN slice
 
 ### 13.4 Relationship to "local-only mixed"
 
@@ -773,6 +784,17 @@ A successful healthcheck may log one info line: `sing-box ready on 127.0.0.1:178
 | `sub.parse_failed` | parse failed |
 | `sub.empty` | no nodes |
 
+TUN capture codes (TUN slice, §24):
+
+| code | Meaning |
+|------|---------|
+| `tun.not_supported` | platform cannot run TUN (`tun_available=false`) |
+| `tun.permission_required` | elevation / permission needed, never auto-retried |
+| `tun.apply_failed` | capture apply failed |
+| `tun.restore_failed` | capture restore failed |
+| `tun.healthcheck_failed` | adapter / route / DNS / control-path readiness disagreed |
+| `tun.recovery_required` | cleanup unverified; fail-closed until explicit recovery |
+
 UI shows `message`, developers rely on `code`. IPC failure body shape in §14 (`{ code, message }` locked).
 
 ---
@@ -823,7 +845,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 
 ## 21. Locked vs. to-be-documented during implementation
 
-**Locked (do not change silently):** platforms (macOS / Windows), Tauri+React, engine crates, subprocess, system proxy, subscription import/management, sing-box first + Clash compatible, hot reload first.
+**Locked (do not change silently):** platforms (macOS / Windows), Tauri+React, engine crates, subprocess, system proxy, subscription import/management, sing-box first + Clash compatible, hot reload first. TUN locks: §24 (capture model, exclusivity, journal contract, platform locks, bypass policy).
 
 **Details to write back into this document during implementation:**
 
@@ -832,6 +854,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 - Clash supported protocol checklist → **written in §11.4**: ss / vmess / trojan / socks / http
 - ~~final JSON of the minimal DNS config~~ → **written in §12.2**: `type: local` / `final: local`
 - ~~Windows port release wait on restart~~ → **written in §9.2**: 500 ms
+- TUN schema + platform locks → **written in §24.5**; exact JSON in the T0 design note
 
 ---
 
@@ -874,3 +897,196 @@ Rules:
 | Normalized node | `NormalizedOutbound`, already a sing-box outbound object |
 | Apply | rebuild the runtime config from subscription + template, reload if needed |
 | System proxy | the OS's HTTP(S)/SOCKS proxy settings, not TUN |
+| Capture backend | how applications enter sing-box: system proxy **or** TUN (§24), never both |
+| Diagnostic config | Mixed-only runtime config (automatic core start / stopped service) |
+| TUN journal | `tun-state.json`: mutation log + ownership records for capture recovery (§24.4) |
+| Capture backend | how applications enter sing-box: system proxy **or** TUN (§24), never both |
+| TUN journal | `tun-state.json`: mutation log + ownership records for capture recovery (§24.4) |
+
+---
+
+## 24. TUN capture (TUN slice)
+
+Status: **T0 complete per `docs/tun-mode-plan.md`** (shared/macOS feasibility locks plus the
+host-free journaled recovery core in `crates/ice-tun-sys`); **T1+ pending** — this section records the
+approved product model, state machine, data contract, and the T0 platform locks. The plan's
+§2 decision record (capture selection ≠ routing policy) is approved; T0's three open decisions
+are resolved as follows.
+
+### 24.1 Product model
+
+Traffic capture selection and routing policy are separate concerns:
+
+```text
+tun.enabled: true  -> proxy service uses tun
+tun.enabled: false -> proxy service uses system_proxy
+proxy_mode:  rule | global | direct
+```
+
+- The Home page keeps **one** generic proxy-service start/stop control; Settings owns the
+  `tun.enabled` switch. `tun.enabled` is the *desired* backend for the next service start; the
+  active backend is reported separately in status and owned by the runtime capture controller.
+- `system_proxy` and `tun` are mutually exclusive at the OS boundary. Switching `tun.enabled`
+  while the service is active is a serialized backend transition: old capture confirmed
+  disabled → new capture prepared/enabled → health checks → commit `settings.json`. On failure,
+  the old backend is restored; if rollback is uncertain, both backends stay disabled and
+  `tun_status=recovery_required` is surfaced (no fallback until cleanup is verified).
+- The runtime controller enforces exclusivity: `enable_tun` rejects while a system-proxy record
+  is active; `enable_system_proxy` rejects while TUN is `Preparing` / `Enabled` / `Stopping`.
+- Default `tun.enabled = false`; no settings migration ever enables TUN implicitly.
+- While TUN is active the runtime config contains both `mixed` and `tun` inbounds (Mixed stays
+  usable for diagnostics). Automatic core start always uses the **Diagnostic** (Mixed-only)
+  config: the TUN inbound exists in `config.json` only while a TUN capture transition is in
+  flight or active, so the app's automatic core start can never silently create an adapter or
+  install routes.
+
+### 24.2 Capture state machine
+
+Core `Running` is a prerequisite for capture but is not equivalent to capture `Enabled`.
+
+```text
+Capture: Disabled -> Preparing -> Enabled -> Stopping -> Disabled
+                         \-> PermissionRequired / Error / RecoveryRequired
+```
+
+- `RecoveryRequired` is fail-closed: both capture backends stay disabled and new TUN activation
+  is rejected until an explicit recovery attempt succeeds.
+- The active backend is owned by one runtime `CaptureController` in `AppState`; every start /
+  stop / apply / reload / quit / crash-recovery path reads that controller. No path infers the
+  active backend from `tun.enabled`, `settings.json`, or `proxy-backup.json`.
+- Transition ordering (bounded traffic interruption allowed; no zero-downtime promise):
+  - **Enable TUN:** lock → journal `preparing` → build/validate Tun config → core reload/restart
+    with the TUN inbound → verify Clash API + TUN health (`TunHealth` all-ok) → journal
+    `applied` → capture `enabled`.
+  - **Disable TUN:** journal `restoring` → release capture (native path: core restart to the
+    Diagnostic config; helper path: restore routes/DNS/adapter first) → verify no owned
+    resource remains → journal `clean` → capture `disabled`. Core may stay Running on the
+    Diagnostic config.
+  - **Reload (endpoint unchanged):** capture moves to `preparing`; a restart that removes
+    resources is treated as disable/re-apply, not a transparent reload.
+  - **Topology change** (address / MTU / stack / DNS-interception / route policy): explicit
+    disable → validate new Tun config → enable sequence. No in-place topology mutation.
+  - **Policy-only change** (rules / nodes / `ProxyMode`): normal core reload while TUN is
+    owned; capture returns to `enabled` only after the Clash API + TUN health checks pass.
+- Unexpected sing-box exit while TUN is active: the watchdog acquires the orchestration lock,
+  marks capture `stopping`, runs the controller's idempotent restore/verify sequence
+  immediately, and writes/validates the Diagnostic config so a later automatic start cannot
+  recreate TUN from a stale runtime file. If cleanup is uncertain: stop any remaining core,
+  keep both backends disabled, persist `RecoveryRequired`, retry on later watchdog ticks and
+  the next startup.
+- Quit always disables TUN before killing sing-box, with a bounded timeout and a visible
+  warning if cleanup cannot be confirmed.
+
+### 24.3 Status payload
+
+```text
+traffic_capture: inactive | system_proxy | tun        # derived only from the runtime controller
+configured_tun: boolean                                # committed settings desire
+tun_status: disabled | preparing | enabled | stopping | permission_required | error | recovery_required
+tun_interface: optional string
+tun_error: optional stable AppError payload
+capture_transition_id: optional opaque identifier
+tun_available: boolean
+tun_unavailable_reason: optional stable message
+```
+
+- `traffic_capture` is `inactive` (no backend claimed) when cleanup is uncertain, while
+  `tun_status=recovery_required` blocks fallback and shows the recovery action.
+- `configured_tun` is the committed desired setting; it is not set to `true` until an active
+  transition succeeds when the service is already running.
+- Raw route tables and privileged helper internals are never exposed to the frontend.
+
+### 24.4 TUN mutation journal (`tun-state.json`)
+
+```json
+{
+  "state": "preparing | applied | restoring | error | recovery_required | clean",
+  "transition_id": "...",
+  "interface_name": "...",
+  "interface_id": "...",
+  "addresses": [{"cidr": "...", "owned": true}],
+  "routes": [{"destination": "...", "gateway": "...", "metric": 0, "owned": true}],
+  "dns_before": {"platform_snapshot": "..."},
+  "dns_after": {"platform_snapshot": "..."},
+  "owner_token": "ice-box:<installation-id>",
+  "last_completed_step": "...",
+  "updated_at": "..."
+}
+```
+
+- Atomic writes; a mutation journal, not a final-state snapshot. `owned: true` is the only
+  authorization to remove a resource; an unverified resource is never deleted.
+- Written `preparing` + transition ID before the first OS mutation; updated after each
+  interface/address/route/DNS mutation with `last_completed_step`.
+- DNS restore is compare-before-restore: `dns_before` is restored only when the platform still
+  matches `dns_after`; an external DNS change is preserved and produces `recovery_required`,
+  never overwritten with stale data. Same ownership check applies to routes and adapter identity.
+- System-proxy recovery stays independent and keeps using `proxy-backup.json`; TUN state is
+  never derived from it.
+- Startup recovery (inside the orchestration lock, after orphan-core reclamation): verify the
+  owner token (foreign journal → nothing touched) → resume the idempotent restore from
+  `last_completed_step` → mark `clean` only after adapter/routes/DNS verification succeeds →
+  otherwise persist `recovery_required` and block new TUN activation. Recovery never enables
+  capture, even when `settings.json` has `tun.enabled=true`.
+
+### 24.5 Platform locks (T0)
+
+1. **Schema pin (locked by the exact-binary spike):** the bundled `1.13.19` accepts the TUN
+   inbound `address` field (listable prefixes, IPv4+IPv6); `inet4_address` / `inet6_address`
+   are **rejected** by this build (`legacy tun address fields ... removed in 1.12.0`). Legacy
+   inbound `sniff` / `sniff_timeout` fields are rejected; sniffing moves to a route rule
+   `{"action": "sniff"}` (string form). Accepted fields verified by the spike:
+   `interface_name` (macOS requires `utun<N>` with a numeric suffix), `mtu`, `auto_route`,
+   `strict_route`, `stack` (`gvisor` / `system` / `mixed`), `route_address`,
+   `route_exclude_address`, `route_address_set` / `route_exclude_address_set` (rule-set
+   references require the `.srs` files to exist at start), `loopback_address`,
+   `include_interface` / `exclude_interface`, `exclude_mptcp`, `udp_timeout`. The exact JSON
+   shape and defaults are recorded in the T0 design note (`docs/design-notes/tun-t0-spike.md`).
+2. **macOS permission model (locked by the live spike):** creating a utun interface, assigning
+   addresses, and adding routes are **privileged** on macOS (unprivileged start fails at
+   `Connect: operation not permitted`). sing-box must therefore run elevated; the locked
+   execution context is a small **signed privileged helper daemon** (launchd) that runs the
+   core as root (native sing-box owns the adapter/addresses/routes/DNS; `ice-tun-sys`
+   coordinates and verifies). A network-extension package was not required for the first
+   release.
+3. **DNS (locked, live-confirmed):** native sing-box on macOS does **not** modify system DNS
+   (`scutil --dns` unchanged at start/stop). DNS interception happens at the sing-box router
+   for tunneled traffic (UDP/TCP 53 → DNS module); LAN/private resolvers bypass the tunnel via
+   `route_exclude_address` (RFC1918/4193, link-local, loopback, multicast). No OS DNS
+   operation is performed; `dns_before`/`dns_after` stay absent on the macOS backend.
+4. **Dual-stack is mandatory (locked by the live spike):** an IPv4-only `address` list makes
+   sing-tun install **no IPv6 routes**, silently leaking all IPv6 traffic through the real
+   gateway. The locked tun carries a ULA IPv6 address (`fdfe:dcba:9876::1/126`) so IPv6 is
+   captured and follows the same rules; the ULA gateway sits inside the excluded `fc00::/7`.
+   The settings `ipv6_address` field is therefore required, not optional.
+5. **Ownership (locked):** one owner per resource. On macOS, sing-box owns the adapter,
+   addresses, routes, and any DNS state; `ice-tun-sys` records ownership in the journal and
+   verifies. No split ownership between sing-box and a helper for the same resource.
+6. **Control path (locked, live-confirmed):** loopback Clash API / Mixed are excluded from
+   capture by the OS route table plus `loopback_address`; sing-box's own dials are bound to
+   the real default interface via `auto_detect_interface` (no self-loop); ice-box's own
+   control traffic (subscription fetch, geoip refresh) is routed direct by a first-position
+   `process_name` route rule (native darwin process matching verified live in the standalone
+   binary). **Sniff ordering:** the sniff action never rewrites destinations at this pin;
+   the sniffed domain lands in `metadata.Domain`, so `{"action": "sniff"}` must precede every
+   domain-matching rule (subscription rules match only the sniffed domain for IP connections).
+   Bypass ordering for a `Tun` config (locked): `process_name` / `ip_is_private` / `ip_cidr`
+   safety rules → `action: sniff` → `clash_mode` rules → custom and subscription rules. The
+   `Diagnostic` config keeps the existing Mixed-only behavior unchanged.
+7. **Crash residue on macOS (locked, live-confirmed):** SIGTERM removes routes + interface
+   itself; `kill -9` leaves the interface removed by the kernel and the utun routes flushed
+   with it (verified: 0 routes referencing the interface 2 s after `kill -9`). The journal +
+   verification stay the recovery safety net and the contract for platforms that leave
+   residue (Windows T0 host spike pending).
+8. **Windows:** WinTUN driver discovery, UAC / helper behavior, and clean-machine install
+   checks are the T0 Windows host spike, to be run on a real Windows host before T1 completes
+   (recorded in the design note's open items).
+
+### 24.6 Reserved bypass policy (first release, fixed)
+
+Loopback, link-local, multicast, RFC1918, RFC4193, the Mixed and Clash API endpoints, the TUN
+CIDR, DNS resolver traffic, and ice-box/sing-box control traffic take the documented direct
+path. Other LAN destinations follow normal routing policy; `allow_lan` does not broaden the
+bypass list. IPv4 is mandatory; IPv6 capture is **mandatory as well** (dual-stack tun, §24.5
+point 4 — an IPv4-only tun silently leaks IPv6) and is exposed as a capability/limitation in
+status and docs, never labeled "all traffic".
