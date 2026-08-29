@@ -11,7 +11,10 @@ A release is a **`vX.Y.Z` tag pushed to `main`**. The tag push triggers
 arm64 `.dmg` and the Windows NSIS `.exe`, and publishes a GitHub Release with
 the artifacts and compliance notices.
 
-No signing is configured yet (see [Signing](#signing)).
+macOS releases are permanently unsigned (documented product decision): the
+privileged helper for TUN is installed through the system authorization
+dialog at first use (see `docs/tun-mode-plan.md` T5 / `docs/design-notes/ice-helper-design.md`).
+Gatekeeper warnings are expected for published artifacts.
 
 ## Version sources
 
@@ -129,12 +132,17 @@ recover within a minute or two.
 on GitHub-hosted runners (warning only). Fixed by `@v7`; do not downgrade.
 `actions/upload-artifact@v6` already runs on Node 24.
 
-## Signing
+## Distribution constraints
 
-Signed releases (macOS notarization with an Apple Developer ID, Windows code
-signing certificate) are **not configured yet**. First-run users see
-Gatekeeper ("right-click to open") or SmartScreen warnings, which is expected.
-Track signing as a separate milestone before any wider distribution.
+The macOS release is intentionally unsigned: Developer ID signing,
+notarization, and stapling are not part of the product. TUN elevation uses
+the system authorization dialog (`AuthorizationServices`, deprecated but
+functional) to install the privileged helper on first use; the manual
+equivalent is `scripts/install-helper-macos.sh`. G9.12 and G9.13 are the
+completed macOS TUN live gates; the clean-machine install/uninstall gate is
+intentionally waived. Published `.app`/`.dmg` artifacts are unsigned and may
+trigger Gatekeeper warnings; users must right-click → Open (or use
+`xattr -dr com.apple.quarantine`) on first launch.
 
 ## Future milestones
 

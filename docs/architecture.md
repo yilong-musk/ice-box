@@ -673,9 +673,10 @@ Conventions:
 | Command | Description |
 |---------|-------------|
 | `start_core` | §8.1 — app-launch path; core only |
-| `start` | §8.1b enable — ensure core Running, then apply OS system proxy |
-| `stop_system_proxy` | §8.1b disable — restore OS proxy; keep core Running |
-| `stop` | §8.2 — app quit: restore OS proxy if applied, then kill core |
+| `start` | §8.1b enable — ensure core Running, then start the configured capture backend (system proxy, or TUN when `tun.enabled`, plan §2) |
+| `stop_system_proxy` | §8.1b disable — disable whichever capture backend is active (restore OS proxy or release TUN); keep core Running |
+| `recover_tun` | plan §4.3 — on-demand TUN recovery retry (journal recovery driver; never enables capture); returns an optional warning when cleanup is still uncertain |
+| `stop` | §8.2 — app quit: disable TUN capture first, restore OS proxy if applied, then kill core |
 | `get_log_view` | `{ n: number }` → text lines: merged app+core logs, warnings/errors and key events only (display filter, log files untouched) |
 | `get_runtime_config` | current `config.json` text (read-only) |
 | `reveal_data_dir` | open the data directory (opener plugin) |
@@ -908,10 +909,30 @@ Rules:
 ## 24. TUN capture (TUN slice)
 
 Status: **T0 complete per `docs/tun-mode-plan.md`** (shared/macOS feasibility locks plus the
-host-free journaled recovery core in `crates/ice-tun-sys`); **T1+ pending** — this section records the
-approved product model, state machine, data contract, and the T0 platform locks. The plan's
-§2 decision record (capture selection ≠ routing policy) is approved; T0's three open decisions
-are resolved as follows.
+host-free journaled recovery core in `crates/ice-tun-sys`), **T1 shared complete**
+(`TunSettings` in `settings.json`, `CaptureIntent::{Diagnostic, Tun}` config generation,
+structural intent validation, `tun_gate` capability preflight), **T2 shared complete**
+(macOS backend `MacosTunBackend`: host reads, utun collision fallback, journaled
+apply/restore/recover with rollback; `CoreCoordinator` boundary; fail-closed
+`UnsupportedTunBackend`), **T3 shared complete** (`CaptureController` in the shell:
+active backend + capture state machine, typed status payload, serialized settings
+transaction with `settings-pending.json`, startup/watchdog recovery, quit ordering,
+`adopt_external` core lifecycle for the elevated runner), **T4 complete** (typed TUN
+status/settings in the frontend API, Settings `tun.enabled` switch rendered from
+`tun_available`, Home active-backend status with TUN interface, `permission_required`
+fallback action and `recovery_required`「重试恢复」action via the `recover_tun` IPC
+command, frontend tests green), and **T5 (macOS helper + packaging) landed** (production
+privileged helper daemon `crates/ice-helper` with narrow authenticated IPC, app-side
+`HelperCoreCoordinator`, `create_backend` wiring, launchd install/uninstall scripts,
+entitlements, bundle embedding + CI check, and the G9.13 helper acceptance path (green on an
+authenticated host); the app is permanently unsigned — the helper is installed through the
+system authorization dialog (in-app `install_helper` / `uninstall_helper` IPC, `crates/ice-elevate`)
+or the install script, and the clean-machine gate is explicitly waived for this release.
+Windows T5 is blocked on
+`windows_tun_ready`).
+This section records the approved product model, state machine, data
+contract, and the T0 platform locks. The plan's §2 decision record (capture selection ≠
+routing policy) is approved; T0's three open decisions are resolved as follows.
 
 ### 24.1 Product model
 
@@ -939,6 +960,15 @@ proxy_mode:  rule | global | direct
   config: the TUN inbound exists in `config.json` only while a TUN capture transition is in
   flight or active, so the app's automatic core start can never silently create an adapter or
   install routes.
+- Frontend behavior (T4): Settings owns the TUN enable switch, rendered from `tun_available`
+  (unavailable → disabled switch + reason; transition in flight → disabled + status hint;
+  active → interface shown). Home reports the active backend (`TUN 已接管（utunN）` vs
+  system-proxy labels) and keeps the generic power button. `permission_required` offers a
+  system-proxy fallback **only when no TUN resource is active**; `recovery_required` replaces
+  the fallback with a「重试恢复」action (IPC `recover_tun`, journal recovery driver, never
+  enables capture) and blocks activation until recovery succeeds. A configured-but-unavailable
+  platform shows the reason and keeps the button disabled instead of a misleading enabled
+  state.
 
 ### 24.2 Capture state machine
 
@@ -1043,12 +1073,38 @@ tun_unavailable_reason: optional stable message
    `include_interface` / `exclude_interface`, `exclude_mptcp`, `udp_timeout`. The exact JSON
    shape and defaults are recorded in the T0 design note (`docs/design-notes/tun-t0-spike.md`).
 2. **macOS permission model (locked by the live spike):** creating a utun interface, assigning
-   addresses, and adding routes are **privileged** on macOS (unprivileged start fails at
-   `Connect: operation not permitted`). sing-box must therefore run elevated; the locked
-   execution context is a small **signed privileged helper daemon** (launchd) that runs the
-   core as root (native sing-box owns the adapter/addresses/routes/DNS; `ice-tun-sys`
-   coordinates and verifies). A network-extension package was not required for the first
-   release.
+     addresses, and adding routes are **privileged** on macOS (unprivileged start fails at
+     `Connect: operation not permitted`). sing-box must therefore run elevated; the locked
+     execution context is a small privileged helper daemon (launchd) that runs the core as root
+     (native sing-box owns the
+     adapter/addresses/routes/DNS; `ice-tun-sys`
+     coordinates and verifies). A network-extension package was not required for the first
+     release. **Production helper (T5, landed):** `crates/ice-helper` serves a narrow
+     one-frame-per-connection JSON protocol over a root-owned Unix socket — `status` /
+     `start {config}` / `stop` only, no binary path / route / interface input ever accepted
+     from the client. Security: peer uid (`getpeereid`), per-installation token
+     (constant-time compare, root-owned 0644 in the data dir), protocol version, and a
+     canonicalized config path inside the installed data dir. The core binary path is fixed
+     at install. The app side (`HelperCoreCoordinator`) implements `CoreCoordinator`;
+     `create_backend` picks the dev `sudo` opt-in first, then the helper when a read-only
+     `status` probe authorizes, else the fail-closed deferred runner. **Install (permanently
+     unsigned):** the app never signs or notarizes, so SMAppService is not used; the
+     `install_helper` / `uninstall_helper` IPC commands prompt the system authorization dialog
+     (`AuthorizationServices`, deprecated-but-functional, `crates/ice-elevate`) and execute
+     the helper's own privileged `install` / `uninstall` modes as root — the single shared
+     implementation of the install logic (token, plist, pinned SHA-256, launchctl), also
+     driven manually via
+     `scripts/install-helper-macos.sh` / `uninstall-helper-macos.sh`
+     (design note `docs/design-notes/ice-helper-design.md`).
+     The clean-machine install/uninstall gate is explicitly waived for this release.
+     **Dev path (T3,
+     live gate):** until the helper is installed, the
+     explicit `ICE_BOX_TUN_DEV_SUDO` opt-in wires `SudoCoreCoordinator`, which runs the core
+     as root via `sudo -n` (never prompts; `tun.permission_required` before any OS mutation
+     without a cached credential / NOPASSWD rule) and terminates as root with bounded TERM→KILL
+     grace, because a non-root shell cannot signal a root-owned process. The destructive live
+     suite is `scripts/run-acceptance-macos-tun.sh` (G9.12 via the dev runner, G9.13 via the
+     installed helper); the ordinary gates stay non-privileged.
 3. **DNS (locked, live-confirmed):** native sing-box on macOS does **not** modify system DNS
    (`scutil --dns` unchanged at start/stop). DNS interception happens at the sing-box router
    for tunneled traffic (UDP/TCP 53 → DNS module); LAN/private resolvers bypass the tunnel via

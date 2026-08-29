@@ -35,6 +35,19 @@ impl AppPaths {
         self.root.join("proxy-backup.json")
     }
 
+    /// TUN mutation journal + ownership records (plan §4.4 / architecture §24.4).
+    pub fn tun_state(&self) -> PathBuf {
+        self.root.join("tun-state.json")
+    }
+
+    /// Settings transaction pending record (plan §4.3): written before a live
+    /// capture-backend transition, committed only after health checks pass,
+    /// cleared after commit; startup treats a leftover as an interrupted
+    /// transition and restores the committed settings.
+    pub fn pending_settings(&self) -> PathBuf {
+        self.root.join("settings-pending.json")
+    }
+
     /// Persisted per-group member selections (survive restarts / config regeneration).
     pub fn group_selections(&self) -> PathBuf {
         self.root.join("group-selections.json")
@@ -106,6 +119,14 @@ mod tests {
         assert_eq!(
             p.proxy_backup(),
             PathBuf::from("/tmp/ice-box-data/proxy-backup.json")
+        );
+        assert_eq!(
+            p.tun_state(),
+            PathBuf::from("/tmp/ice-box-data/tun-state.json")
+        );
+        assert_eq!(
+            p.pending_settings(),
+            PathBuf::from("/tmp/ice-box-data/settings-pending.json")
         );
         assert_eq!(
             p.rule_overrides(),

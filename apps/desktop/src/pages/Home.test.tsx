@@ -10,6 +10,9 @@ const getTrafficSnapshot = vi.fn();
 const setProxyMode = vi.fn();
 const start = vi.fn();
 const stopSystemProxy = vi.fn();
+const saveSettings = vi.fn();
+const recoverTun = vi.fn();
+const installHelper = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -20,10 +23,38 @@ vi.mock("../api/tauri", () => ({
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     start: (...args: unknown[]) => start(...args),
     stopSystemProxy: (...args: unknown[]) => stopSystemProxy(...args),
+    saveSettings: (...args: unknown[]) => saveSettings(...args),
+    recoverTun: (...args: unknown[]) => recoverTun(...args),
+    installHelper: (...args: unknown[]) => installHelper(...args),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
+
+const tunStatus = {
+  traffic_capture: "inactive",
+  configured_tun: false,
+  tun_status: "disabled",
+  tun_interface: null,
+  tun_error: null,
+  capture_transition_id: null,
+  tun_available: true,
+  tun_unavailable_reason: null,
+  helper_installed: false,
+  helper_stale: false,
+} as const;
+
+const tunSettings = {
+  enabled: false,
+  interface_name: null,
+  ipv4_address: "10.0.0.1/30",
+  ipv6_address: "fdfe:dcba:9876::1/126",
+  mtu: 9000,
+  auto_route: true,
+  strict_route: true,
+  stack: "gvisor",
+  dns_hijack: false,
+} as const;
 
 describe("Home", () => {
   beforeEach(() => {
@@ -41,6 +72,7 @@ describe("Home", () => {
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([]);
     getSettings.mockResolvedValue({
@@ -52,10 +84,13 @@ describe("Home", () => {
       auto_set_system_proxy: true,
       allow_lan: false,
       proxy_mode: "rule",
+      tun: tunSettings,
     });
     getTrafficSnapshot.mockResolvedValue({ points: [], latest: null, peak: null });
     start.mockResolvedValue(undefined);
     stopSystemProxy.mockResolvedValue(undefined);
+    saveSettings.mockResolvedValue(undefined);
+    recoverTun.mockResolvedValue(null);
   });
 
   it("shows current outbound in the status list", async () => {
@@ -71,6 +106,7 @@ describe("Home", () => {
       system_proxy_applied: true,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([
       {
@@ -157,6 +193,7 @@ describe("Home", () => {
       system_proxy_applied: true,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
@@ -240,6 +277,7 @@ describe("Home", () => {
       system_proxy_applied: false,
       system_proxy_recorded: false,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
@@ -270,6 +308,7 @@ describe("Home", () => {
       system_proxy_applied: false,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
@@ -298,13 +337,15 @@ describe("Home", () => {
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: false,
+      ...tunStatus,
+      tun_available: false,
     });
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("当前平台不支持系统代理接管")).toBeInTheDocument();
+      expect(view.getByText("当前平台不支持系统代理或 TUN 接管")).toBeInTheDocument();
     });
     expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
     expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
@@ -323,6 +364,7 @@ describe("Home", () => {
       system_proxy_applied: false,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
@@ -389,6 +431,7 @@ describe("Home", () => {
       system_proxy_applied: true,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      ...tunStatus,
     });
     listNodes.mockResolvedValue([]);
     getSettings.mockResolvedValue({
@@ -400,6 +443,7 @@ describe("Home", () => {
       auto_set_system_proxy: true,
       allow_lan: false,
       proxy_mode: "rule",
+      tun: tunSettings,
     });
 
     resolveStart?.();
@@ -410,5 +454,198 @@ describe("Home", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows TUN active state and interface on the power control", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      traffic_capture: "tun",
+      tun_status: "enabled",
+      tun_interface: "utun42",
+    });
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "node-a",
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "停止代理服务" })).not.toBeDisabled();
+    });
+    const power = view.getByRole("button", { name: "停止代理服务" });
+    expect(power).toHaveAttribute("aria-pressed", "true");
+    expect(power).toHaveTextContent("TUN 已接管（utun42）");
+    expect(view.getByText("捕获")).toBeInTheDocument();
+    expect(view.getByText("TUN（utun42）")).toBeInTheDocument();
+  });
+
+  it("shows TUN-configured subtitle when service is off", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    });
+    expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
+      "将启用 TUN 模式接管流量",
+    );
+  });
+
+  it("disables the power control and shows the reason when TUN is unavailable", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      tun_available: false,
+      tun_unavailable_reason: "Windows TUN gate pending",
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
+    });
+    const power = view.getByRole("button", { name: "启动代理服务" });
+    expect(power).toBeDisabled();
+    expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
+  });
+
+  it("shows permission-required state with a system-proxy fallback action", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      tun_status: "permission_required",
+      tun_error: { code: "tun.permission_required", message: "sudo" },
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("alert")).toHaveTextContent("启用 TUN 需要系统权限");
+    });
+    installHelper.mockResolvedValue(undefined);
+    start.mockResolvedValue(undefined);
+    fireEvent.click(view.getByRole("button", { name: "安装辅助组件" }));
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "停用 TUN，改用系统代理" }));
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: false }),
+        }),
+      );
+      expect(start).toHaveBeenCalled();
+    });
+  });
+
+  it("shows recovery-required state with a recovery action, no fallback", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      tun_status: "recovery_required",
+      tun_error: { code: "tun.recovery_required", message: "cleanup" },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("alert")).toHaveTextContent("TUN 清理未确认");
+    });
+    expect(
+      view.queryByRole("button", { name: "停用 TUN，改用系统代理" }),
+    ).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "重试恢复" }));
+    await waitFor(() => {
+      expect(recoverTun).toHaveBeenCalled();
+    });
   });
 });

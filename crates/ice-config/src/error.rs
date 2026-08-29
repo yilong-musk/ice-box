@@ -101,7 +101,11 @@ impl From<ConfigError> for AppError {
             ConfigError::EmptyOutbounds => {
                 AppError::new(ErrorCode::ConfigEmptyOutbounds, err.to_string())
             }
-            ConfigError::Invalid(_)
+            ConfigError::TunUnavailable(reason) => {
+                AppError::with_code("tun.not_supported", reason.clone())
+            }
+            ConfigError::TunInvalid(_)
+            | ConfigError::Invalid(_)
             | ConfigError::RouteInvalid(_)
             | ConfigError::Json(_)
             | ConfigError::Io(_) => AppError::new(ErrorCode::ConfigInvalid, err.to_string()),
@@ -156,5 +160,12 @@ mod tests {
 
         let invalid: AppError = ConfigError::Invalid("missing inbounds").into();
         assert_eq!(invalid.code, "config.invalid");
+
+        let unavailable: AppError = ConfigError::TunUnavailable("gate pending".into()).into();
+        assert_eq!(unavailable.code, "tun.not_supported");
+        assert_eq!(unavailable.message, "gate pending");
+
+        let tun_invalid: AppError = ConfigError::TunInvalid("bad cidr".into()).into();
+        assert_eq!(tun_invalid.code, "config.invalid");
     }
 }

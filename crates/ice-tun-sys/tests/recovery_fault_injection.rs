@@ -582,9 +582,13 @@ fn apply_without_auto_route_records_no_routes() {
         .unwrap();
     let prepared = bk.prepare(&cfg).unwrap();
     let applied = bk.apply(&prepared).unwrap();
-    assert!(applied.routes.is_empty());
+    assert!(
+        applied.routes.is_empty(),
+        "no routes are claimed without auto_route"
+    );
     let health = bk.verify(&applied).unwrap();
     assert!(health.routes_owned);
+    assert!(health.all_ok());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -620,7 +624,7 @@ fn fake_apply_is_idempotent() {
     assert_eq!(first, second, "replayed apply must be a no-op");
     assert_eq!(
         bk.state.routes.len(),
-        ice_tun_sys::fake::AUTO_ROUTE_RANGES.len() + 1
+        ice_tun_sys::fake::AUTO_ROUTE_RANGES.len()
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -916,8 +920,8 @@ fn dual_stack_config() -> TunConfig {
     cfg
 }
 
-/// A dual-stack config must install and verify the IPv6 default-route split
-/// and the IPv6 connected route, and recovery must remove them all.
+/// A dual-stack config must install and verify the IPv6 default-route split,
+/// and recovery must remove all of its routes.
 #[test]
 fn dual_stack_config_installs_and_verifies_ipv6_routes() {
     let dir = temp_dir("dual-stack");
@@ -934,25 +938,18 @@ fn dual_stack_config_installs_and_verifies_ipv6_routes() {
     let prepared = bk.prepare(&dual_stack_config()).unwrap();
     let applied = bk.apply(&prepared).unwrap();
     assert!(
-        applied.routes.iter().any(|r| r.destination == "::/1"),
-        "IPv6 default-route split must be installed"
+        applied.routes.iter().any(|r| r.destination == "100::/8"),
+        "IPv6 default-route sub-ranges must be installed"
     );
     assert!(applied.routes.iter().any(|r| r.destination == "8000::/1"));
-    assert!(
-        applied
-            .routes
-            .iter()
-            .any(|r| r.destination == "fdfe:dcba:9876:0:0:0:0:2/126"),
-        "IPv6 connected route must be installed"
-    );
     assert_eq!(
         applied
             .routes
             .iter()
             .filter(|r| r.destination.contains(':'))
             .count(),
-        ice_tun_sys::fake::AUTO_ROUTE_RANGES_V6.len() + 1,
-        "v6 auto-ranges + v6 connected route"
+        ice_tun_sys::fake::AUTO_ROUTE_RANGES_V6.len(),
+        "v6 auto-ranges"
     );
     let health = bk.verify(&applied).unwrap();
     assert!(health.all_ok(), "dual-stack health must be all-ok");
@@ -1014,8 +1011,8 @@ fn missing_ipv6_route_fails_dual_stack_health() {
         .unwrap();
     let prepared = bk.prepare(&dual_stack_config()).unwrap();
     let applied = bk.apply(&prepared).unwrap();
-    // Simulate an IPv6 leak: the IPv6 default route never got installed.
-    bk.state.routes.retain(|r| r.destination != "::/1");
+    // Simulate an IPv6 leak: an IPv6 default-route sub-range never got installed.
+    bk.state.routes.retain(|r| r.destination != "100::/8");
     let health = bk.verify(&applied).unwrap();
     assert!(!health.routes_owned, "missing IPv6 route must fail health");
     assert!(!health.all_ok(), "an IPv6 leak must never pass all_ok");

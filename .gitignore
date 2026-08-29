@@ -39,3 +39,6 @@ third_party/sing-box/**
 apps/desktop/src-tauri/resources/sing-box
 apps/desktop/src-tauri/resources/sing-box.exe
 !apps/desktop/src-tauri/resources/.gitkeep
+
+apps/desktop/src-tauri/resources/sing-box
+apps/desktop/src-tauri/resources/ice-helper

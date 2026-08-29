@@ -7,6 +7,19 @@ import { clearNodesSnapshot } from "./lib/nodes";
 const getStatus = vi.fn();
 const listNodes = vi.fn();
 
+const tunStatus = {
+  traffic_capture: "inactive",
+  configured_tun: false,
+  tun_status: "disabled",
+  tun_interface: null,
+  tun_error: null,
+  capture_transition_id: null,
+  tun_available: true,
+  tun_unavailable_reason: null,
+  helper_installed: false,
+  helper_stale: false,
+} as const;
+
 vi.mock("./api/tauri", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
@@ -20,6 +33,17 @@ vi.mock("./api/tauri", () => ({
       auto_set_system_proxy: false,
       allow_lan: false,
       proxy_mode: "rule",
+      tun: {
+        enabled: false,
+        interface_name: null,
+        ipv4_address: "10.0.0.1/30",
+        ipv6_address: "fdfe:dcba:9876::1/126",
+        mtu: 9000,
+        auto_route: true,
+        strict_route: true,
+        stack: "gvisor",
+        dns_hijack: false,
+      },
     }),
     getTrafficSnapshot: vi
       .fn()
@@ -49,6 +73,7 @@ describe("App", () => {
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: true,
+      ...tunStatus,
     });
   });
 
@@ -65,6 +90,7 @@ describe("App", () => {
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: true,
+      ...tunStatus,
     });
 
     const { container } = render(<App />);

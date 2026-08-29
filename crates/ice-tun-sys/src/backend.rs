@@ -76,8 +76,20 @@ pub struct AppliedTun {
     pub interface_id: Option<String>,
     pub addresses: Vec<CidrRecord>,
     pub routes: Vec<RouteRecord>,
+    /// Config-required addresses (journal `expected_addresses`). Health
+    /// verification requires *all* of them on the interface — never just the
+    /// owned subset, so a missing address family cannot pass unnoticed.
+    pub expected_addresses: Vec<String>,
+    /// Config-required route destinations (journal `expected_routes`).
+    /// Verification requires every one to still resolve to the adapter
+    /// (full-route lock).
+    pub expected_routes: Vec<String>,
     pub dns_before: Option<DnsSnapshot>,
     pub dns_after: Option<DnsSnapshot>,
+    /// Process id of the elevated core the backend started (native path).
+    /// The shell adopts it so the normal core lifecycle keeps working;
+    /// `None` on backends that do not start an external core.
+    pub core_pid: Option<u32>,
 }
 
 impl AppliedTun {
@@ -88,8 +100,12 @@ impl AppliedTun {
             interface_id: journal.interface_id.clone(),
             addresses: journal.addresses.clone(),
             routes: journal.routes.clone(),
+            expected_addresses: journal.expected_addresses.clone(),
+            expected_routes: journal.expected_routes.clone(),
             dns_before: journal.dns_before.clone(),
             dns_after: journal.dns_after.clone(),
+            // The journal does not record the pid; recovery never re-adopts.
+            core_pid: None,
         }
     }
 }
@@ -167,6 +183,14 @@ pub trait TunBackend {
     /// Explicit recovery retry (startup / watchdog). Never enables capture;
     /// returns whether all owned resources are confirmed clean.
     fn recover(&mut self, journal: &TunJournal) -> Result<RecoveryOutcome, TunError>;
+
+    /// Downcast hook for tests and shells that need the concrete backend.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// Attach the mutation journal the backend must update after every
+    /// granular OS mutation. Called by the shell when the backend is created;
+    /// backends that journal nothing are no-ops.
+    fn attach_journal(&mut self, _path: std::path::PathBuf) {}
 }
 
 /// Reject a capture request whose platform cannot run TUN at all.

@@ -3,6 +3,7 @@ import { Power } from "lucide-react";
 import {
   api,
   formatInvokeError,
+  type AppSettings,
   type CoreState,
   type NodeInfo,
   type ProxyMode,
@@ -62,6 +63,7 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [proxyMode, setProxyMode] = useState<ProxyMode>("rule");
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +86,7 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
       const selected = resolveSelectedTag(settings.selected_tag, n);
       setStatus(s);
       setNodes(n);
+      setSettings(settings);
       setProxyMode(settings.proxy_mode);
       setSelectedTag(selected);
       writeNodesSnapshot({
@@ -124,10 +127,13 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   }, [active, refresh]);
 
   const core: CoreState | undefined = status?.core;
+  const tunTransitioning =
+    status?.tun_status === "preparing" || status?.tun_status === "stopping";
   const busy =
     pending ||
     core?.status === "starting" ||
-    core?.status === "stopping";
+    core?.status === "stopping" ||
+    tunTransitioning;
 
   useEffect(() => {
     onBusyChange?.(busy);
@@ -181,15 +187,28 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
     }
   }
 
-  // Core follows the app; this control only toggles OS system proxy.
+  // Core follows the app; this control toggles whichever capture backend is
+  // active (system proxy or TUN, plan §2) — the frontend never chooses.
   const running = core?.status === "running";
   const proxyAvailable = status?.system_proxy_available !== false;
   const proxyLive = status?.system_proxy_applied === true;
   const proxyRecorded = status?.system_proxy_recorded === true;
-  const canEnableProxy = proxyAvailable && !busy && !proxyLive;
-  const canDisableProxy = proxyAvailable && !busy && running && proxyRecorded;
+  const tunActive = status?.traffic_capture === "tun";
+  const configuredTun = status?.configured_tun === true;
+  const tunAvailable = status?.tun_available === true;
+  // When TUN is the configured backend but the platform gate is pending /
+  // failed, the button stays disabled and the unavailable reason is shown
+  // (plan §2: the setting remains a desired value, never a misleading state).
+  const canEnableProxy =
+    !busy &&
+    !proxyLive &&
+    !tunActive &&
+    status?.tun_status !== "recovery_required" &&
+    (configuredTun ? tunAvailable : proxyAvailable);
+  const canDisableProxy =
+    !busy && running && (proxyRecorded || (tunActive && tunAvailable));
   // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
-  const proxyOn = proxyLive || (proxyRecorded && running);
+  const proxyOn = proxyLive || (proxyRecorded && running) || tunActive;
   const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
   const outboundLabel =
     nodes.length === 0
@@ -208,20 +227,56 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
     }
   }
 
+  /** Fallback offered after a TUN failure (plan §4.6): disable the TUN
+   * setting, then start the system proxy. Only offered when no TUN
+   * resource is active and cleanup is not uncertain. */
+  function onFallbackToSystemProxy() {
+    if (!settings) return;
+    void run(async () => {
+      await api.saveSettings({
+        ...settings,
+        tun: { ...settings.tun, enabled: false },
+      });
+      await api.start();
+    });
+  }
+
+  function onRecoverTun() {
+    void run(async () => {
+      await api.recoverTun();
+    });
+  }
+
+  /** In-app elevation (unsigned release): prompt the system authorization
+   * dialog to install the privileged helper, then retry the TUN enable. */
+  function onInstallHelper() {
+    void run(async () => {
+      await api.installHelper();
+      await api.start();
+    });
+  }
+
   const inboundLabel =
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
       : "—";
   const emptyTitle = running ? "仅直连模式运行中" : "还没有可用节点";
   const emptyDescription = running
-    ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管系统代理。"
-    : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管系统代理，或先导入订阅。";
+    ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管流量（系统代理或 TUN）。"
+    : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。";
+  const captureLabel =
+    status?.traffic_capture === "tun"
+      ? `TUN${status.tun_interface ? `（${status.tun_interface}）` : ""}`
+      : status?.traffic_capture === "system_proxy"
+        ? "系统代理"
+        : "未接管";
   const infoRows: { label: string; value: string; valueClassName?: string }[] = [
     {
       label: "内核",
       value: core?.status ?? "—",
       valueClassName: `status status-${core?.status ?? "unknown"}`,
     },
+    { label: "捕获", value: captureLabel },
     { label: "当前出站", value: outboundLabel },
     {
       label: "入站",
@@ -236,11 +291,18 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   const powerTitle = proxyOn ? "停止代理服务" : "启动代理服务";
   const powerSubtitle = busy
     ? "处理中…"
-    : proxyLive
-      ? "系统代理已接管"
-      : proxyOn
-        ? "已记录，可恢复系统代理"
-        : "点击接管系统代理";
+    : tunActive
+      ? `TUN 已接管${status?.tun_interface ? `（${status.tun_interface}）` : ""}`
+      : proxyLive
+        ? "系统代理已接管"
+        : proxyOn
+          ? "已记录，可恢复系统代理"
+          : configuredTun
+            ? "将启用 TUN 模式接管流量"
+            : "点击接管系统代理";
+
+  const permissionRequired = status?.tun_status === "permission_required";
+  const recoveryRequired = status?.tun_status === "recovery_required";
 
   return (
     <div className="home-panel flex min-h-0 flex-1 flex-col gap-3">
@@ -250,6 +312,46 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
         status?.system_proxy_applied === false && (
           <WarnAlert className="shrink-0">系统代理未接管或已不同步</WarnAlert>
         )}
+      {permissionRequired && (
+        <WarnAlert className="shrink-0">
+          启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。
+          <span className="mt-2 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={onInstallHelper}
+              disabled={busy || status?.helper_installed === true}
+            >
+              安装辅助组件
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onFallbackToSystemProxy}
+              disabled={busy}
+            >
+              停用 TUN，改用系统代理
+            </Button>
+          </span>
+        </WarnAlert>
+      )}
+      {recoveryRequired && (
+        <ErrorAlert className="shrink-0">
+          TUN 清理未确认，已阻止新的 TUN 激活。清理不确定时不会启用系统代理回退；请先重试恢复。
+          <span className="mt-2 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onRecoverTun}
+              disabled={busy}
+            >
+              重试恢复
+            </Button>
+          </span>
+        </ErrorAlert>
+      )}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       <div className="grid shrink-0 grid-cols-3 items-stretch gap-3">
@@ -258,34 +360,43 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
             <CardTitle>代理状态</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            {proxyAvailable ? (
-              <Button
-                type="button"
-                size="lg"
-                variant={proxyOn ? "default" : "outline"}
-                className="h-auto w-full justify-start gap-2 py-2"
-                disabled={!canToggleProxy}
-                aria-pressed={proxyOn}
-                aria-label={powerTitle}
-                onClick={onToggleProxy}
-              >
-                <Power />
-                <span className="min-w-0 text-left">
-                  <span className="block text-sm font-medium">{powerTitle}</span>
-                  <span
-                    className={cn(
-                      "block text-xs font-normal",
-                      proxyOn
-                        ? "text-primary-foreground/80"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    {powerSubtitle}
+            {proxyAvailable || configuredTun || tunActive ? (
+              <>
+                <Button
+                  type="button"
+                  size="lg"
+                  variant={proxyOn ? "default" : "outline"}
+                  className="h-auto w-full justify-start gap-2 py-2"
+                  disabled={!canToggleProxy}
+                  aria-pressed={proxyOn}
+                  aria-label={powerTitle}
+                  onClick={onToggleProxy}
+                >
+                  <Power />
+                  <span className="min-w-0 text-left">
+                    <span className="block text-sm font-medium">{powerTitle}</span>
+                    <span
+                      className={cn(
+                        "block text-xs font-normal",
+                        proxyOn
+                          ? "text-primary-foreground/80"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {powerSubtitle}
+                    </span>
                   </span>
-                </span>
-              </Button>
+                </Button>
+                {configuredTun && !tunActive && !tunAvailable && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {status?.tun_unavailable_reason ?? "TUN 暂不可用"}
+                  </p>
+                )}
+              </>
             ) : (
-              <p className="muted text-sm">当前平台不支持系统代理接管</p>
+              <p className="muted text-sm">
+                当前平台不支持系统代理或 TUN 接管
+              </p>
             )}
           </CardContent>
         </Card>

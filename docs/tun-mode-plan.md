@@ -1,12 +1,13 @@
 # TUN Mode Support Plan
 
-Status: **proposal — shared/macOS T0 complete, Windows T0 pending, slices T1+ pending**
+Status: **proposal — shared/macOS T0 complete, T1–T4 shared complete, T5 macOS helper + packaging landed, macOS live orchestration gates G9.12 and G9.13 green; macOS is a permanently unsigned release with in-app elevated helper installation (system authorization dialog), the clean-machine gate is explicitly waived for this release, and Windows T0 pending**
 
 T0 (feasibility + architecture lock) is done and recorded in
 `docs/architecture.md` §24 and `docs/design-notes/tun-t0-spike.md`: schema
 pin locked against the exact bundled 1.13.19 (`address` field, route-action
-sniff), macOS permission model locked (signed privileged helper daemon runs
-the core; utun/routes require root), DNS locked (no OS DNS on macOS;
+sniff), macOS permission model locked (privileged helper daemon runs
+the core; the app is permanently unsigned — the helper is installed through
+the system authorization dialog; utun/routes require root), DNS locked (no OS DNS on macOS;
 router-level interception + LAN bypass), **dual-stack tun locked** (an
 IPv4-only tun silently leaks IPv6 — `ipv6_address` becomes required),
 ownership model locked (sing-box owns all TUN resources on macOS), control
@@ -14,6 +15,113 @@ path locked (process_name direct rules + sniff-before-domain-rules), and the
 host-free journaled recovery core + fault-injection tests landed in
 `crates/ice-tun-sys` (30 tests green). Windows T0 host spike remains open; it blocks only
 Windows-specific TUN implementation and release gates, not shared T1 work or macOS-gated slices.
+
+T1 (shared) landed: `TunSettings` (backward-compatible serde defaults, disabled by default,
+locked CIDR / MTU / stack / interface-name validation), `CaptureIntent::{Diagnostic, Tun}`
+threaded through `BuildInput`, both config builders, `generate_config`, the `ice-engine`
+facade and every desktop caller, the locked TUN inbound shape + reserved bypass rules
+(process_name / ip_is_private / ip_cidr → sniff → clash_mode → custom/subscription),
+structural intent/config mismatch validation (`validate_config_for_intent`), and the
+compile-time capability preflight (`tun_gate`: macOS green, Windows pending, other
+platforms out of scope).
+
+T2 (shared) landed: the macOS backend (`crates/ice-tun-sys`, `MacosTunBackend`) with the
+native sing-box ownership contract — read-only host probes (`ifconfig -l` /
+`ifconfig <name>` / `route -n get`, with host-free parsing tests), dual-stack and
+`utun<N>` validation, utun collision fallback probe (higher index, fail closed),
+journaled apply that records observed ownership after the elevated core starts and rolls
+back (stops the core) on journal-write failure, verify (identity = name + utun index),
+idempotent restore with bounded teardown wait and fail-closed `recovery_required` when
+the adapter survives the core stop, and kill-9 recovery (kernel already removed the
+adapter → `Cleaned`). The `CoreCoordinator` boundary (`start_with_config` / `stop`)
+keeps `ice-tun-sys` free of `ice-core`; the real privileged runner (helper IPC or the
+dev `sudo` wrapper) is wired by orchestration in T3 — until then transitions fail
+cleanly with `tun.permission_required`. Windows/Linux hosts get the fail-closed
+`UnsupportedTunBackend` (`tun.not_supported` + stable reason) via `create_backend()`.
+Shared exit gate: 16 host-free macOS-backend tests (prepare/apply/rollback/verify/
+restore/recover/unsupported) run deterministically on all CI platforms. The per-platform
+live gate still waits for the T3 controller + runner wiring.
+
+T3 (shared) landed: `CaptureController` in `AppState` (`capture.rs`) — the single owner of
+the active backend (`TrafficCapture::{Inactive, SystemProxy, Tun}`) and the capture state
+machine; the typed status payload (`traffic_capture`, `configured_tun`, `tun_status`,
+`tun_interface`, `tun_error`, `capture_transition_id`, `tun_available`,
+`tun_unavailable_reason`) merged into the Home status response; Home start dispatches by
+`tun.enabled` through the controller, `stop_system_proxy` is retained as an IPC name but
+delegates to `disable_active_backend`; the serialized settings transaction
+(`settings-pending.json`: written before the transition, committed only after the
+requested backend is healthy, rollback to the old backend on failure, uncertain rollback
+→ `RecoveryRequired`); TUN topology changes go through the explicit
+stop/reconfigure/start sequence while policy-only changes keep the normal reload path
+with the controller-chosen intent; startup recovery (pending-record discard + journal
+`RecoveryDriver`, never enables capture, rewrites the Diagnostic config after a clean);
+the unexpected-exit watchdog path (release + verify + Diagnostic config rewrite) is wired
+into `core_watch`; quit disables TUN before killing the core (bounded timeouts, warning
+on unconfirmed cleanup). `ice-core` gained `PidProcess` + `CoreController::adopt_external`
+so the elevated core started by the backend's coordinator is adopted by the shell
+lifecycle (reload/stop/reap all work). Shared exit gate: 15 host-free controller tests
+(enable/disable/switch/rollback/recovery/status/exclusivity) plus the existing suites are
+green on all CI platforms. **The macOS live orchestration gate is green via the dev
+`sudo` runner:** `SudoCoreCoordinator` (`crates/ice-tun-sys`) runs the bundled core as
+root through `sudo -n` (never prompts; `tun.permission_required` before any OS mutation
+when no cached credential / NOPASSWD rule exists), `stop()` terminates as root (a
+non-root shell cannot signal a root-owned process) with bounded TERM→KILL grace, and the
+backend waits bounded for the adapter to appear after the elevated start. It is an
+explicit opt-in only: `create_backend` wires it when `ICE_BOX_TUN_DEV_SUDO` is set
+(anything else keeps the fail-closed `DeferredCoreCoordinator`), and the destructive
+live suite runs via `scripts/run-acceptance-macos-tun.sh` (G9.12: enable → mixed curl →
+disable → adapter-removed verification). The permanently unsigned release uses the helper path
+installed through the system authorization dialog (in-app, `install_helper` IPC, or
+`scripts/install-helper-macos.sh`); no OS mutation ever happens without an explicit opt-in.
+
+T4 (shared) landed: the Settings TUN enable switch and Home capture-status UI. Typed
+frontend wrappers (`apps/desktop/src/api/tauri.ts`) expose the full §4.3 status payload
+(`traffic_capture`, `configured_tun`, `tun_status`, `tun_interface`, `tun_error`,
+`capture_transition_id`, `tun_available`, `tun_unavailable_reason`) and
+`AppSettings.tun`; `formatInvokeError` maps the stable TUN error codes
+(`tun.not_supported`, `tun.permission_required`, `tun.apply_failed`,
+`tun.restore_failed`, `tun.healthcheck_failed`, `tun.recovery_required`) to actionable
+Chinese text. Settings renders one TUN enable switch, clearly separate from
+Rule/Global/Direct, driven by `tun_available` (unavailable → disabled switch + reason;
+transition in flight → disabled + status hint; active → interface + switch back hint).
+Home keeps one generic proxy-service button whose behavior follows `tun.enabled`
+(controller-chosen backend); it reports the active backend and interface
+(`TUN 已接管（utunN）` vs system-proxy labels), disables the control during
+`preparing`/`stopping`/`recovery_required`, shows `permission_required` with a
+「停用 TUN，改用系统代理」fallback action (offered only with no TUN resource active),
+and shows `recovery_required` with a「重试恢复」action backed by the new `recover_tun`
+IPC command (runs the journal recovery driver under the orchestration lock; never
+enables capture). A configured-but-unavailable platform shows the reason and keeps the
+button disabled rather than presenting a misleading enabled state. Shared exit gate:
+frontend typecheck green and 155 Vitest cases cover the status/error contract and the
+platform-independent state transitions.
+
+T5 (macOS helper + packaging) landed: the production privileged helper daemon
+(`crates/ice-helper`, design note `docs/design-notes/ice-helper-design.md`) replaces the
+dev `sudo` runner as the elevated core context. It is a small launchd daemon whose only
+capability is starting the bundled sing-box with an allowlisted config path and stopping
+it (TERM→KILL with bounded grace, reaped). The wire protocol (`ice-tun-sys`,
+`helper_protocol`) is one JSON frame per connection with a 16 KiB cap; security is peer
+uid (`getpeereid`), a per-installation token (constant-time compare), protocol versioning,
+and a canonicalized config path inside the installed data dir. The app side
+(`HelperCoreCoordinator`, `helper.rs`) implements `CoreCoordinator` with bounded timeouts;
+`create_backend` on macOS picks the dev `sudo` opt-in first (live gate), then the helper
+when a read-only `status` probe authorizes, else the fail-closed deferred runner.
+Packaging: `scripts/install-helper-macos.sh` / `uninstall-helper-macos.sh` (launchctl
+bootstrap, root-owned socket + token), entitlements files, helper embedded in the bundle
+resources with a CI artifact check, and a G9.13 live acceptance mode
+(`scripts/run-acceptance-macos-tun.sh --helper`: install → enable → mixed curl → disable →
+adapter removed → uninstall). Host-free exit gate: protocol/validation tests, client
+tests, and three end-to-end helper tests (start/stop, unauthorized token, outside-path
+rejection) run on all CI platforms. **In-app elevated install (unsigned elevation):** the
+app is permanently unsigned, so helper installation cannot use SMAppService; instead the
+`install_helper` / `uninstall_helper` IPC commands prompt the system authorization dialog
+(`AuthorizationServices`, deprecated-but-functional, in `crates/ice-elevate`) and execute
+the helper's own privileged `install` / `uninstall` modes as root — the single
+implementation of the install logic, shared with the shell scripts. G9.13 has passed on an
+authenticated macOS host using this helper. The clean-machine install/uninstall gate
+is explicitly waived for this release and is not a release blocker. The existing system-proxy
+release path stays green independently. Windows T5 stays blocked on `windows_tun_ready`.
 
 Decision record: the separation between traffic capture and routing policy described in
 §2 is approved. The user-facing TUN choice is a configuration switch, not a second service
@@ -64,7 +172,7 @@ The repository already has the pieces that should remain the foundation:
 | Recovery | `proxy-backup.json`, `sing-box.pid`, startup restore, and an unexpected-exit watchdog already exist | Add a TUN mutation journal that records ownership and every completed OS mutation. |
 | Health checks | TCP probe to the local Clash API, 5 second timeout | Keep the Clash API probe, and add a TUN-specific readiness probe that proves the adapter and route state are usable. |
 | UI | Home page has one generic proxy-service toggle and the Rule/Global/Direct control; Settings edits ports and LAN sharing | Add the TUN enable switch in Settings, active-backend status, permission errors, and a safe fallback path without exposing platform APIs. |
-| CI and packaging | Linux/macOS/Windows gates; macOS `.app`/`.dmg`; Windows NSIS; sing-box and GeoIP resources are bundled | TUN-specific driver, entitlements, signing, and elevated-install tests are not present and must be added before release. |
+| CI and packaging | Linux/macOS/Windows gates; macOS `.app`/`.dmg`; Windows NSIS; sing-box and GeoIP resources are bundled | TUN-specific driver, entitlements, in-app elevated helper installation, and elevated-install tests are not present and must be added before release. |
 
 Important existing constraints to preserve:
 
@@ -158,17 +266,18 @@ platform gate (`macos_tun_ready` or `windows_tun_ready`):
 - Does stopping sing-box remove the adapter and all routes after a normal stop?
 - What remains after `kill -9` / task termination?
 - Can the app request elevation once and keep the main Tauri process unelevated?
-- What must be signed or installed for a clean-machine install/uninstall?
+- For a future broad distribution, what must be installed or authorized on a clean machine?
 
 The result for each platform chooses independently between the following implementation options:
 
 1. **Native sing-box path (preferred):** sing-box owns the adapter and route changes; ice-box
    only coordinates permission and verifies state.
-2. **Small privileged helper:** a signed, narrowly scoped helper performs adapter/route/DNS
+2. **Small privileged helper:** a narrowly scoped helper performs adapter/route/DNS
    operations and exposes an authenticated local IPC contract. The UI process remains
-   unelevated.
+   unelevated. On the unsigned macOS release, the helper is installed through the system
+   authorization dialog on first use (in-app) or via the install script.
 3. **Platform network extension/driver package:** required if native sing-box cannot meet the
-   platform security model. This expands signing, installer, and release work and must be
+   platform security model. This expands installer and release work and must be
    explicitly approved.
 
 The plan must not assume that a WinTUN DLL, a macOS Network Extension entitlement, or a UAC
@@ -595,13 +704,13 @@ cannot commit the new desired backend.
 platforms whose T0/T2 gates are green. A pending platform gate keeps that platform fail-closed
 without blocking the other platform's orchestration work.
 
-### Slice T4: UI and user-facing documentation
+### Slice T4: UI and user-facing documentation ✅ landed
 
-- Add the TUN enable switch in Settings, plus active-backend status details on Home.
+- Add the TUN enable switch in Settings, plus active-backend status details on Home. ✅
 - Keep the Home page to one generic proxy-service start/stop control; do not add a separate TUN
-  service button.
-- Add permission and fallback UX.
-- Update README, architecture docs, troubleshooting, and platform prerequisites.
+  service button. ✅
+- Add permission and fallback UX. ✅
+- Update README, architecture docs, troubleshooting, and platform prerequisites. ✅
 - Keep all user-visible technical messages precise about whether core, capture, and routing are
   active.
 - Render the TUN switch and activation controls from `tun_available`; a platform with a pending
@@ -614,19 +723,20 @@ platform-independent state transitions.
 **Per-platform exit gate:** manual desktop checks cover TUN transitions only on platforms with a
 green platform gate.
 
-### Slice T5: packaging, signing, and release readiness
+### Slice T5: packaging and release readiness ✅ (macOS code and packaging landed; in-app elevated helper installation landed; clean-machine gate waived for this release)
 
-- macOS: after `macos_tun_ready`, add required entitlements, helper/extension embedding,
-  signing, notarization inputs, and clean-install/uninstall checks if the spike requires them.
-- Windows: after `windows_tun_ready`, bundle/install the required signed driver or helper, define
-  NSIS elevation behavior, verify uninstall cleanup, and document SmartScreen/code-signing
-  requirements.
-- Update resource preparation scripts and CI artifact checks.
+- macOS: after `macos_tun_ready`, add required entitlements and helper/extension embedding. ✅
+  (entitlements, bundle embedding + CI check, in-app elevated install/uninstall via the
+  system authorization dialog, and helper daemon; the app is permanently unsigned — the
+  in-app installer replaces SMAppService, which requires signing)
+- Windows: after `windows_tun_ready`, bundle/install the required driver or helper, define
+  NSIS elevation behavior, and verify uninstall cleanup. ⏳ (blocked on `windows_tun_ready`)
+- Update resource preparation scripts and CI artifact checks. ✅
 
-**Per-platform exit gate:** each platform's clean-machine install enables TUN only after
-explicit permission and uninstall does not leave an adapter/helper/route. A platform cannot be
-included in a TUN-enabled release until its own packaging gate passes; the existing system-proxy
-release path remains green independently.
+**macOS exit gate for this release:** G9.12, G9.13, and unsigned packaging.
+The clean-machine install/uninstall gate is intentionally excluded
+and is not a prerequisite for the macOS TUN release. The existing system-proxy
+release path remains green independently; Windows remains blocked on `windows_tun_ready`.
 
 ## 6. Test and acceptance matrix
 
@@ -650,8 +760,11 @@ release path remains green independently.
 
 ### Live macOS acceptance (ignored/manual, real host)
 
-This suite is gated only by `macos_tun_ready`; its result does not wait for the Windows gate and
-does not qualify Windows.
+This suite is gated only by `macos_tun_ready`; its result does not wait for the Windows gate
+and does not qualify Windows. It runs via `scripts/run-acceptance-macos-tun.sh`, which
+opts into the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`) and preflights `sudo -n`
+(cached credential or NOPASSWD); G9.12 covers the enable → traffic → disable roundtrip,
+and the remaining manual items below are run on a real host by the release gate.
 
 - TUN adapter creation and expected interface/address.
 - IPv4 TCP and UDP traffic through Rule, Global, and Direct modes.
@@ -691,7 +804,7 @@ mutate host routes or proxy settings.
 ## 7. Security and failure requirements
 
 - TUN activation is an explicit user action; no silent enablement on upgrade or startup.
-- Any privileged component is signed, versioned with the app, and exposes a narrow authenticated
+- Any privileged component is versioned with the app and exposes a narrow authenticated
   IPC surface. It must reject arbitrary paths, commands, route targets, and interface names.
 - Only loopback control endpoints are accepted. `allow_lan` must not expose the Clash API or a
   privileged control socket.
@@ -720,13 +833,14 @@ mutate host routes or proxy settings.
 3. Enable the macOS TUN slices only after `macos_tun_ready`; enable the Windows TUN slices only
    after `windows_tun_ready`.
 4. Promote each platform to TUN release readiness only after that platform's acceptance and
-   clean-machine packaging gates pass. A combined macOS + Windows release requires both gates,
-   but one platform may ship or be tested independently during development.
+   packaging gates pass. For this macOS release, the clean-machine gate is explicitly waived.
+   A combined macOS + Windows release still requires the Windows platform gate, but one
+   platform may ship or be tested independently during development.
 5. Keep system proxy as the documented fallback on platforms whose TUN gate is pending or failed.
 6. Do not expand to Linux, mobile, per-app routing, or remote control in the same slice.
 
 Versioning and release notes must call out new host prerequisites (driver, entitlement, UAC,
-helper, or signing) and any behavior change to routes/DNS. Formal releases still follow
+helper, or in-app elevation) and any behavior change to routes/DNS. Formal releases still follow
 `docs/release-process.md`.
 
 ## 9. Remaining T0 decisions and locked product answers
@@ -736,7 +850,8 @@ The following are the only decisions allowed to remain open after this plan is a
 1. **sing-box schema and pin:** the shared schema is locked in T0-S; whether the exact Tun config
    is accepted on each host is a per-platform gate. If not, an explicit pin upgrade or platform
    adapter decision is required before enabling TUN on that platform, not before shared T1.
-2. **Platform permission mechanism:** native sing-box, a signed helper, or a signed
+2. **Platform permission mechanism:** native sing-box, a privileged helper (installed through
+   the system authorization dialog on the unsigned macOS release), or a
    extension/driver, selected independently per platform. The selected path must have one clear
    owner for each adapter/route/DNS resource.
 3. **DNS implementation:** DNS correctness and no-loop behavior are mandatory. T0 chooses

@@ -133,7 +133,27 @@ impl ProcessSpawner for CommandSpawner {
     }
 }
 
+/// Whether an io error means the process is already gone (ESRCH). The
+/// liveness probe and the signal can race with an exit, so a failed signal
+/// to an already-dead pid is a successful stop.
+fn is_esrch(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
+}
+
 /// Terminate with grace period, then force kill. Idempotent if already exited.
+///
+/// Fails instead of pretending success when the process cannot be signalled
+/// (e.g. an adopted root-owned pid: TERM/KILL return EPERM, and only the
+/// privileged coordinator may terminate it). The caller must surface such a
+/// failure rather than report the process as stopped.
 pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(), CoreError> {
     match child.try_wait() {
         Ok(Some(_)) => return Ok(()),
@@ -141,7 +161,13 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
         Err(e) => return Err(CoreError::SpawnFailed(format!("try_wait: {e}"))),
     }
 
-    let _ = child.request_terminate();
+    if let Err(e) = child.request_terminate() {
+        if is_esrch(&e) {
+            // Exited between the liveness probe and the signal.
+            return Ok(());
+        }
+        return Err(CoreError::SpawnFailed(format!("request_terminate: {e}")));
+    }
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         match child.try_wait() {
@@ -151,10 +177,137 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
         }
     }
 
-    let _ = child.force_kill();
-    // Best-effort reap
-    let _ = child.try_wait();
-    Ok(())
+    if let Err(e) = child.force_kill() {
+        if is_esrch(&e) {
+            return Ok(());
+        }
+        return Err(CoreError::SpawnFailed(format!("force_kill: {e}")));
+    }
+    match child.try_wait() {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(CoreError::SpawnFailed(
+            "process survived TERM and KILL; termination is unconfirmed".into(),
+        )),
+        Err(e) => Err(CoreError::SpawnFailed(format!("try_wait: {e}"))),
+    }
+}
+
+/// A process the controller did not spawn itself (TUN slice: the elevated
+/// core is started by the `CoreCoordinator` helper/`sudo` path and then
+/// adopted so the normal lifecycle, health probes, reload and watchdog
+/// reaping keep working). Identity is the pid only.
+///
+/// `try_wait` probes liveness via `kill(pid, 0)`; the exit code is
+/// unavailable, so a detected exit reports `-1`.
+#[derive(Debug, Clone)]
+pub struct PidProcess {
+    pid: u32,
+}
+
+impl PidProcess {
+    pub fn new(pid: u32) -> Self {
+        Self { pid }
+    }
+}
+
+impl ManagedProcess for PidProcess {
+    fn id(&self) -> u32 {
+        self.pid
+    }
+
+    fn request_terminate(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let rc = unsafe { libc::kill(self.pid as i32, libc::SIGTERM) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EPERM) {
+                    // The process belongs to another user (the elevated root
+                    // core); this process cannot signal it. The coordinator
+                    // (privileged helper / sudo stop) owns termination.
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!(
+                            "pid {0} is owned by another user; terminate it via the privileged coordinator",
+                            self.pid
+                        ),
+                    ));
+                }
+                Err(err)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "PidProcess termination requires a unix host",
+            ))
+        }
+    }
+
+    fn force_kill(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let rc = unsafe { libc::kill(self.pid as i32, libc::SIGKILL) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EPERM) {
+                    // See `request_terminate`: a root-owned process is not
+                    // signalable by this process; the coordinator owns it.
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!(
+                            "pid {0} is owned by another user; terminate it via the privileged coordinator",
+                            self.pid
+                        ),
+                    ));
+                }
+                Err(err)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "PidProcess termination requires a unix host",
+            ))
+        }
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<i32>> {
+        #[cfg(unix)]
+        {
+            // `kill(pid, 0)` is a pure liveness probe:
+            // - 0     → the process exists and we may signal it → alive.
+            // - EPERM → the process exists but belongs to another user (the
+            //   elevated root core adopted from the helper/`sudo` path). It is
+            //   alive; signals cannot reach it from this process, so liveness
+            //   is the only thing `try_wait` can report.
+            // - ESRCH → the process is gone (or never existed).
+            let rc = unsafe { libc::kill(self.pid as i32, 0) };
+            if rc == 0 {
+                Ok(None)
+            } else {
+                let err = io::Error::last_os_error();
+                match err.raw_os_error() {
+                    Some(libc::ESRCH) => Ok(Some(-1)),
+                    Some(libc::EPERM) => Ok(None),
+                    _ => Err(err),
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "PidProcess liveness requires a unix host",
+            ))
+        }
+    }
 }
 
 /// Mock process for unit tests.
@@ -286,4 +439,72 @@ impl ManagedProcess for TrackingMock {
 #[allow(dead_code)]
 pub fn open_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_process_reports_liveness_for_own_and_exited_processes() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let mut pid_proc = PidProcess::new(child.id());
+        assert_eq!(
+            pid_proc.try_wait().expect("try_wait live"),
+            None,
+            "a running process reports alive"
+        );
+
+        // Terminate and reap so the pid is really gone (ESRCH).
+        let _ = child.kill();
+        child.wait().expect("wait reap");
+        let mut gone = false;
+        for _ in 0..200 {
+            if pid_proc.try_wait().expect("try_wait gone") == Some(-1) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(gone, "a reaped process must report exited");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_process_terminate_fails_with_permission_denied_for_foreign_pid() {
+        // PID 1 (launchd/init) exists but belongs to root. When this test
+        // runs as root it *can* signal PID 1, so only assert the EPERM
+        // contract from a non-root process.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let mut pid_proc = PidProcess::new(1);
+        let err = pid_proc.request_terminate().expect_err("EPERM");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let err = pid_proc.force_kill().expect_err("EPERM");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        // Liveness still resolves: the process is alive, just not signalable.
+        assert_eq!(pid_proc.try_wait().expect("EPERM is alive"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_process_propagates_permission_denied_for_foreign_pid() {
+        // PID 1 (launchd/init) exists but belongs to root. A non-root
+        // process cannot signal it, so stop_process must fail instead of
+        // reporting the process as stopped.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let mut pid_proc = PidProcess::new(1);
+        let err = stop_process(&mut pid_proc, Duration::from_millis(10)).expect_err("EPERM");
+        assert!(
+            err.to_string().contains("request_terminate"),
+            "stop must surface the signal failure: {err}"
+        );
+    }
 }

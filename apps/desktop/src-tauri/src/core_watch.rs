@@ -1,6 +1,7 @@
-//! Background core health checks: reap exited sing-box and restore system proxy.
+//! Background core health checks: reap exited sing-box and restore capture.
 
-use crate::orchestrate::restore_proxy_after_unexpected_core_exit;
+use crate::capture::TrafficCapture;
+use crate::orchestrate::{current_settings, restore_proxy_after_unexpected_core_exit};
 use crate::AppState;
 use ice_core::CoreStatus;
 use std::time::Duration;
@@ -8,10 +9,11 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Reap an unexpectedly exited sing-box child and restore system proxy when needed.
+/// Reap an unexpectedly exited sing-box child and restore the active capture
+/// backend (system proxy via `proxy-backup.json`, or the TUN journal).
 ///
 /// Uses `try_lock` on the orchestrate mutex so start/stop/apply are never blocked by
-/// `networksetup` restore. Skips when a mutation is in flight (watchdog retries).
+/// `networksetup` restore or TUN cleanup. Skips when a mutation is in flight (watchdog retries).
 pub fn reconcile_unexpected_core_exit(state: &AppState) {
     let reaped = {
         let Ok(_orch) = state.orchestrate.try_lock() else {
@@ -39,6 +41,27 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
         return;
     }
 
+    // TUN capture was claimed: run the controller's idempotent release
+    // (journal + Diagnostic config) instead of the proxy-backup path.
+    if state.capture.active_backend() == TrafficCapture::Tun {
+        let Ok(_orch) = state.orchestrate.try_lock() else {
+            return;
+        };
+        let settings = current_settings(&state.paths).unwrap_or_default();
+        let warning = {
+            let Ok(mut core) = state.core.lock() else {
+                return;
+            };
+            state
+                .capture
+                .handle_unexpected_core_exit(&mut **core, &settings)
+        };
+        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+            *slot = warning;
+        }
+        return;
+    }
+
     let Ok(proxy) = state.proxy.lock() else {
         return;
     };
@@ -62,6 +85,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::CaptureController;
     use ice_config::{write_json_atomic, AppPaths};
     use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
     use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
@@ -145,6 +169,10 @@ mod tests {
             self.state.inbound_port = None;
             true
         }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock adopt unsupported"))
+        }
     }
 
     fn temp_state(label: &str, restore_calls: Arc<AtomicUsize>) -> Arc<AppState> {
@@ -170,6 +198,7 @@ mod tests {
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
         })
     }
 

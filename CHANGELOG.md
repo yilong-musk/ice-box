@@ -5,6 +5,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- In-app privileged helper installation for TUN mode (macOS): the app prompts
+  the system authorization dialog (`AuthorizationServices`) and installs or
+  removes the `ice-helper` launchd daemon itself, replacing the manual
+  `sudo` script as the primary flow. The install logic now lives once in
+  `crates/ice-helper/src/install.rs` (token, plist, pinned SHA-256, launchctl)
+  and is shared with `scripts/install-helper-macos.sh` /
+  `uninstall-helper-macos.sh`. New IPC commands `install_helper` /
+  `uninstall_helper`; Home and Settings surface「安装辅助组件」/「卸载辅助组件」
+  actions.
+
+### Changed
+
+- The macOS release is permanently unsigned (documented product decision):
+  code signing, notarization, and SMAppService are not part of the product;
+  all signing-related content was removed from the documentation. Gatekeeper
+  warnings are expected on published artifacts.
+
 ## [0.1.1] - 2026-08-28
 
 First public release. Tauri 2 + React desktop client for macOS (Apple Silicon) and

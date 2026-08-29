@@ -107,6 +107,18 @@ pub struct TunJournal {
     /// Routes recorded as owned during the transition.
     #[serde(default)]
     pub routes: Vec<RouteRecord>,
+    /// Addresses the transition *required* on the adapter (the config CIDRs).
+    /// Health verification compares the live interface against this set, not
+    /// just the recorded owned subset, so a missing address family (e.g. a
+    /// tun that silently lost IPv6) can never pass because it was never
+    /// recorded.
+    #[serde(default)]
+    pub expected_addresses: Vec<String>,
+    /// Route destinations the transition *required* to resolve to the
+    /// adapter. Verification requires every one of them to still resolve to
+    /// us (full-route lock); a partially missing route set is never accepted.
+    #[serde(default)]
+    pub expected_routes: Vec<String>,
     /// DNS state before the first OS mutation (restore target).
     pub dns_before: Option<DnsSnapshot>,
     /// DNS state while capture is applied (compare-before-restore).
@@ -128,6 +140,8 @@ impl TunJournal {
             interface_id: None,
             addresses: Vec::new(),
             routes: Vec::new(),
+            expected_addresses: Vec::new(),
+            expected_routes: Vec::new(),
             dns_before: None,
             dns_after: None,
             owner_token,
@@ -259,12 +273,14 @@ mod tests {
                     cidr: "10.0.0.1/30".into(),
                     owned: true,
                 });
+                j.expected_addresses = vec!["10.0.0.1/30".into(), "fdfe:dcba:9876::1/126".into()];
                 j.routes.push(RouteRecord {
                     destination: "128.0.0.0/1".into(),
                     gateway: Some("10.0.0.2".into()),
                     metric: 0,
                     owned: true,
                 });
+                j.expected_routes = vec!["128.0.0.0/1".into()];
                 j.dns_before = Some(DnsSnapshot {
                     platform_snapshot: "before".into(),
                 });
@@ -281,6 +297,14 @@ mod tests {
         assert_eq!(loaded.addresses.len(), 1);
         assert!(loaded.addresses[0].owned);
         assert!(loaded.routes[0].owned);
+        assert_eq!(
+            loaded.expected_addresses,
+            vec![
+                "10.0.0.1/30".to_string(),
+                "fdfe:dcba:9876::1/126".to_string()
+            ]
+        );
+        assert_eq!(loaded.expected_routes, vec!["128.0.0.0/1".to_string()]);
         assert!(loaded.is_capture_outstanding());
 
         loaded
@@ -292,6 +316,8 @@ mod tests {
                 j.interface_id = None;
                 j.addresses.clear();
                 j.routes.clear();
+                j.expected_addresses.clear();
+                j.expected_routes.clear();
                 j.dns_before = None;
                 j.dns_after = None;
             })
@@ -304,6 +330,8 @@ mod tests {
             0,
             "clean journal keeps no owned resources"
         );
+        assert!(clean.expected_addresses.is_empty());
+        assert!(clean.expected_routes.is_empty());
 
         let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
             .unwrap()

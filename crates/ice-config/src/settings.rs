@@ -49,6 +49,208 @@ pub const fn default_auto_set_system_proxy() -> bool {
     false
 }
 
+/// Locked default TUN adapter IPv4 address (CIDR). Verified live in the T0 spike.
+pub const TUN_DEFAULT_IPV4_ADDRESS: &str = "10.0.0.1/30";
+/// Locked default TUN adapter IPv6 address (CIDR, ULA).
+///
+/// Required, not optional (architecture §24.5 point 4): an IPv4-only tun installs no
+/// IPv6 routes and silently leaks IPv6. The ULA gateway sits inside the excluded
+/// `fc00::/7`, so the adapter stays reachable.
+pub const TUN_DEFAULT_IPV6_ADDRESS: &str = "fdfe:dcba:9876::1/126";
+/// Locked default MTU (verified live at 9000 in the T0 spike).
+pub const TUN_DEFAULT_MTU: u16 = 9000;
+/// Locked default stack (first-release default per the T0 spike).
+pub const TUN_DEFAULT_STACK: &str = "gvisor";
+
+/// Locked default for `TunSettings::auto_route` (capture all sub-ranges).
+pub const fn default_tun_auto_route() -> bool {
+    true
+}
+
+/// Locked default for `TunSettings::strict_route`.
+pub const fn default_tun_strict_route() -> bool {
+    true
+}
+
+pub fn default_tun_ipv4_address() -> String {
+    TUN_DEFAULT_IPV4_ADDRESS.into()
+}
+
+pub fn default_tun_ipv6_address() -> String {
+    TUN_DEFAULT_IPV6_ADDRESS.into()
+}
+
+pub fn default_tun_mtu() -> u16 {
+    TUN_DEFAULT_MTU
+}
+
+pub fn default_tun_stack() -> String {
+    TUN_DEFAULT_STACK.into()
+}
+
+/// Validated TUN capture parameters (plan §4.1; defaults locked by the T0 spike).
+///
+/// Only `enabled` is a user-facing switch. The remaining fields are validated
+/// implementation parameters with locked defaults; they are not additional capture
+/// modes and are not exposed as free-form UI inputs in the first release. Existing
+/// `settings.json` files load unchanged — missing TUN fields mean disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunSettings {
+    /// Desired capture backend for the next proxy-service start (plan §2).
+    /// This is a *desired* value: the active backend is owned by the runtime
+    /// controller and reported separately in status.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Adapter interface name. Optional in settings: the platform backend /
+    /// helper may resolve a free name at apply time. When present it must pass
+    /// platform validation (macOS requires a `utun<N>` numeric suffix).
+    #[serde(default)]
+    pub interface_name: Option<String>,
+    /// Adapter IPv4 address as CIDR (e.g. `10.0.0.1/30`), never a bare host.
+    #[serde(default = "default_tun_ipv4_address")]
+    pub ipv4_address: String,
+    /// Adapter IPv6 address as CIDR. **Required** (dual-stack lock §24.5.4):
+    /// an IPv4-only tun silently leaks IPv6.
+    #[serde(default = "default_tun_ipv6_address")]
+    pub ipv6_address: String,
+    #[serde(default = "default_tun_mtu")]
+    pub mtu: u16,
+    #[serde(default = "default_tun_auto_route")]
+    pub auto_route: bool,
+    #[serde(default = "default_tun_strict_route")]
+    pub strict_route: bool,
+    /// Stack name, one of `gvisor` / `system` / `mixed` (locked by the spike).
+    #[serde(default = "default_tun_stack")]
+    pub stack: String,
+    /// OS-level DNS interception request. T0 lock: a no-op on the macOS native
+    /// sing-box path (sing-box never touches system DNS there); the backend
+    /// decides per platform.
+    #[serde(default)]
+    pub dns_hijack: bool,
+}
+
+impl Default for TunSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interface_name: None,
+            ipv4_address: TUN_DEFAULT_IPV4_ADDRESS.into(),
+            ipv6_address: TUN_DEFAULT_IPV6_ADDRESS.into(),
+            mtu: TUN_DEFAULT_MTU,
+            auto_route: true,
+            strict_route: true,
+            stack: TUN_DEFAULT_STACK.into(),
+            dns_hijack: false,
+        }
+    }
+}
+
+impl TunSettings {
+    /// Validate addresses, prefixes, MTU, stack, and interface name without
+    /// mutating or writing disk (plan §4.1). Platform-exact interface rules
+    /// (e.g. macOS `utun<N>`) are enforced per compile-time target; further
+    /// host checks belong to the platform backend (`ice-tun-sys`, T2).
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_cidr("tun.ipv4_address", &self.ipv4_address, false)?;
+        validate_cidr("tun.ipv6_address", &self.ipv6_address, true)?;
+        if !(1280..=TUN_DEFAULT_MTU).contains(&self.mtu) {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!(
+                    "tun.mtu must be in 1280..={TUN_DEFAULT_MTU}, got {}",
+                    self.mtu
+                ),
+            ));
+        }
+        if !matches!(self.stack.as_str(), "gvisor" | "system" | "mixed") {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!(
+                    "tun.stack must be one of gvisor/system/mixed, got {}",
+                    self.stack
+                ),
+            ));
+        }
+        if let Some(name) = &self.interface_name {
+            if !tun_interface_name_valid(name) {
+                return Err(AppError::new(
+                    ErrorCode::ConfigInvalid,
+                    format!("tun.interface_name is invalid: {name}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A CIDR is `address/prefix`; the address must parse for the expected family
+/// (v4 or v6) and the prefix must be in `1..=32` (IPv4) / `1..=128` (IPv6).
+/// A `/0` interface address is rejected: an adapter cannot own an entire
+/// address family.
+fn validate_cidr(field: &str, cidr: &str, ipv6: bool) -> Result<(), AppError> {
+    let (addr, prefix) = cidr.split_once('/').ok_or_else(|| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("{field} must be a CIDR (address/prefix), got {cidr}"),
+        )
+    })?;
+    let prefix: u32 = prefix.parse().map_err(|_| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("{field} has a non-numeric prefix: {cidr}"),
+        )
+    })?;
+    let parsed: Result<(), _> = if ipv6 {
+        addr.parse::<std::net::Ipv6Addr>().map(|_| ())
+    } else {
+        addr.parse::<std::net::Ipv4Addr>().map(|_| ())
+    };
+    parsed.map_err(|_| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!(
+                "{field} has an invalid {} address: {cidr}",
+                if ipv6 { "IPv6" } else { "IPv4" }
+            ),
+        )
+    })?;
+    let max = if ipv6 { 128 } else { 32 };
+    if prefix == 0 || prefix > max {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("{field} prefix must be in 1..={max}, got {prefix}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Shared interface-name sanity rules plus per-platform locks.
+///
+/// macOS (locked by the T0 spike): sing-tun parses the name with
+/// `fmt.Sscanf("utun%d")`, so a bare `utun` is FATAL and only `utun<N>` works.
+fn tun_interface_name_valid(name: &str) -> bool {
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    if name
+        .chars()
+        .any(|c| c.is_whitespace() || c == '/' || c == '\\')
+    {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if !name.starts_with("utun") {
+            return false;
+        }
+        let digits = &name[4..];
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Application settings (not the sing-box runtime config).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -65,6 +267,10 @@ pub struct AppSettings {
     /// Routing mode; defaults to `rule` for existing `settings.json` files.
     #[serde(default)]
     pub proxy_mode: ProxyMode,
+    /// TUN capture parameters. Defaults to disabled for existing `settings.json`
+    /// files; no settings migration ever enables TUN implicitly (plan §2.6).
+    #[serde(default)]
+    pub tun: TunSettings,
 }
 
 impl Default for AppSettings {
@@ -78,6 +284,7 @@ impl Default for AppSettings {
             auto_set_system_proxy: default_auto_set_system_proxy(),
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
+            tun: TunSettings::default(),
         }
     }
 }
@@ -121,6 +328,7 @@ impl AppSettings {
                 "mixed_port must differ from clash_api_port",
             ));
         }
+        self.tun.validate()?;
         Ok(())
     }
 
@@ -132,6 +340,7 @@ impl AppSettings {
             clash_api_port: self.clash_api_port,
             allow_lan: self.allow_lan,
             proxy_mode: self.proxy_mode,
+            tun: self.tun.clone(),
         }
     }
 }
@@ -397,5 +606,201 @@ mod tests {
         assert_eq!(err.code, "config.invalid");
         assert!(err.message.contains("parse settings"));
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // --- TUN settings (slice T1, plan §4.1) ---
+
+    #[test]
+    fn legacy_settings_without_tun_loads_disabled_with_locked_defaults() {
+        let path = temp_settings_path("legacy-tun");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without tun");
+        assert!(
+            !s.tun.enabled,
+            "missing TUN fields must mean disabled (no silent migration)"
+        );
+        assert_eq!(s.tun, TunSettings::default());
+        assert_eq!(s.tun.ipv4_address, "10.0.0.1/30");
+        assert_eq!(s.tun.ipv6_address, "fdfe:dcba:9876::1/126");
+        assert_eq!(s.tun.mtu, 9000);
+        assert_eq!(s.tun.stack, "gvisor");
+        assert!(s.tun.auto_route);
+        assert!(s.tun.strict_route);
+        assert!(!s.tun.dns_hijack);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tun_enabled_round_trips_through_save_and_load() {
+        let path = temp_settings_path("tun-roundtrip");
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                interface_name: Some("utun420".into()),
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        save_settings(&path, &settings).expect("save tun settings");
+        let loaded = load_settings(&path).expect("reload");
+        assert!(loaded.tun.enabled);
+        assert_eq!(loaded.tun.interface_name.as_deref(), Some("utun420"));
+        assert_eq!(loaded.tun, settings.tun);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tun_validation_rejects_bad_cidrs_without_writing() {
+        let path = temp_settings_path("tun-bad-cidr");
+        fs::write(&path, b"keep-me").expect("seed");
+        let base = || AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let cases = [
+            "10.0.0.1",              // not a CIDR
+            "10.0.0.1/",             // empty prefix
+            "10.0.0.1/33",           // prefix out of range
+            "10.0.0.1/0",            // /0 interface address rejected
+            "10.0.0.1/24/x",         // extra segment
+            "999.1.1.1/24",          // bad octet
+            "fdfe:dcba:9876::1",     // v6 without prefix
+            "fdfe:dcba:9876::1/129", // v6 prefix out of range
+            "fdfe:dcba:9876::1/0",   // v6 /0 rejected
+            "not-an-address/24",     // junk address
+        ];
+        for cidr in cases {
+            let bad = AppSettings {
+                tun: TunSettings {
+                    ipv4_address: cidr.into(),
+                    ..TunSettings::default()
+                },
+                ..base()
+            };
+            let err = save_settings(&path, &bad).expect_err("reject bad v4 cidr");
+            assert_eq!(err.code, "config.invalid", "case: {cidr}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "keep-me");
+        }
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tun_validation_rejects_bad_ipv6_and_mtu_and_stack() {
+        let path = temp_settings_path("tun-bad-rest");
+        fs::write(&path, b"keep-me").expect("seed");
+        let mut settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+
+        settings.tun.ipv6_address = "10.0.0.1/24".into();
+        let err = save_settings(&path, &settings).expect_err("v4 address in v6 field");
+        assert_eq!(err.code, "config.invalid");
+        assert!(err.message.contains("tun.ipv6_address"));
+
+        settings.tun = TunSettings::default();
+        settings.tun.mtu = 576;
+        let err = save_settings(&path, &settings).expect_err("mtu below minimum");
+        assert_eq!(err.code, "config.invalid");
+        assert!(err.message.contains("tun.mtu"));
+
+        settings.tun = TunSettings::default();
+        settings.tun.stack = "tap".into();
+        let err = save_settings(&path, &settings).expect_err("unknown stack");
+        assert_eq!(err.code, "config.invalid");
+        assert!(err.message.contains("tun.stack"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "keep-me");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tun_validation_rejects_bad_interface_names() {
+        let path = temp_settings_path("tun-bad-iface");
+        fs::write(&path, b"keep-me").expect("seed");
+        let mut settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        for name in [
+            "",
+            " ",
+            "with space",
+            "a/b",
+            "a\\b",
+            "a\nb",
+            &"x".repeat(65),
+        ] {
+            settings.tun.interface_name = Some(name.into());
+            let err = save_settings(&path, &settings).expect_err("reject bad interface name");
+            assert_eq!(err.code, "config.invalid", "case: {name:?}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "keep-me");
+        }
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tun_interface_name_requires_utun_numeric_suffix() {
+        let path = temp_settings_path("tun-macos-iface");
+        fs::write(&path, b"keep-me").expect("seed");
+        let mut settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        for name in ["tun0", "utun", "utunx", "utun-1", "Utun4"] {
+            settings.tun.interface_name = Some(name.into());
+            let err = save_settings(&path, &settings).expect_err("reject non-utun<N>");
+            assert_eq!(err.code, "config.invalid", "case: {name}");
+        }
+        for name in ["utun0", "utun420", "utun0007"] {
+            settings.tun.interface_name = Some(name.into());
+            save_settings(&path, &settings).expect("accept utun<N>");
+        }
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_accepts_arbitrary_sane_interface_names() {
+        // Platform-exact checks belong to each platform backend (T2); the shared
+        // validator only enforces the sanity rules.
+        assert!(tun_interface_name_valid("utun420"));
+        assert!(tun_interface_name_valid("wintun-ice-box"));
+        assert!(tun_interface_name_valid("Tun0"));
+        assert!(!tun_interface_name_valid("with space"));
+        assert!(!tun_interface_name_valid("a/b"));
+    }
+
+    #[test]
+    fn tun_defaults_are_locked_and_never_enable_capture() {
+        let d = TunSettings::default();
+        assert!(!d.enabled);
+        assert_eq!(d.ipv4_address, TUN_DEFAULT_IPV4_ADDRESS);
+        assert_eq!(d.ipv6_address, TUN_DEFAULT_IPV6_ADDRESS);
+        assert_eq!(d.mtu, TUN_DEFAULT_MTU);
+        assert_eq!(d.stack, TUN_DEFAULT_STACK);
+        assert!(d.auto_route && d.strict_route);
+        assert!(!d.dns_hijack);
     }
 }

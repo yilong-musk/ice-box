@@ -10,10 +10,12 @@
 //! dependencies, keeping future mobile hosts (embedded libsing-box) viable.
 
 pub use ice_config::{
-    build_runtime_config, clash_mode_name, config_to_pretty_json, minimal_dns_block,
-    redact_config_str, rule_type_of, validate_template, AppSettings, BuildInput, ConfigError,
-    GroupSelections, LocalTemplate, NormalizedOutbound, NormalizedProfile, NormalizedRoute,
-    ProxyMode, RuleOverrides, ENGINE_COMPAT_CORE_VERSION, RULE_TYPE_KEYS,
+    build_direct_only_config, build_runtime_config, clash_mode_name, config_to_pretty_json,
+    minimal_dns_block, redact_config_str, rule_type_of, tun_gate, tun_reserved_rules,
+    validate_config_for_intent, validate_template, AppSettings, BuildInput, CaptureIntent,
+    ConfigError, GroupSelections, LocalTemplate, NormalizedOutbound, NormalizedProfile,
+    NormalizedRoute, ProxyMode, RuleOverrides, TunGate, TunSettings, ENGINE_COMPAT_CORE_VERSION,
+    RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
     detect_format, maybe_decode_base64, normalize_raw_body, parse_clash_profile, parse_profile,
@@ -50,10 +52,13 @@ pub fn build_config(input: &BuildInput) -> Result<serde_json::Value, EngineError
 ///
 /// `geoip_rule_set_dir` points at bundled `geoip-{code}.srs` rule-set files;
 /// GEOIP rules without a matching file are dropped at build time.
+/// `capture_intent` is supplied explicitly by the caller and never inferred
+/// from `tun.enabled` alone (plan §4.1).
 pub fn subscription_to_config(
     raw: &str,
     template: LocalTemplate,
     geoip_rule_set_dir: Option<PathBuf>,
+    capture_intent: CaptureIntent,
 ) -> Result<String, EngineError> {
     let (_, profile) = normalize_raw_body(raw)?;
     let input = BuildInput {
@@ -63,6 +68,7 @@ pub fn subscription_to_config(
         geoip_rule_set_dir,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
+        capture_intent,
     };
     let config = build_runtime_config(&input)?;
     Ok(config_to_pretty_json(&config)?)
@@ -98,8 +104,13 @@ proxies:
 
     #[test]
     fn subscription_to_config_produces_usable_json() {
-        let json = subscription_to_config(CLASH_FIXTURE, LocalTemplate::default(), None)
-            .expect("pipeline");
+        let json = subscription_to_config(
+            CLASH_FIXTURE,
+            LocalTemplate::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("pipeline");
         let value: serde_json::Value = serde_json::from_str(&json).expect("json");
         let outbounds = value["outbounds"].as_array().expect("outbounds");
         let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
@@ -107,6 +118,62 @@ proxies:
         assert!(tags.contains(&"server2"));
         assert_eq!(value["inbounds"][0]["type"], "mixed");
         assert_eq!(value["inbounds"][0]["listen_port"], 17890);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn subscription_to_config_honors_tun_intent() {
+        let json = subscription_to_config(
+            CLASH_FIXTURE,
+            LocalTemplate {
+                tun: TunSettings {
+                    enabled: true,
+                    interface_name: Some("utun420".into()),
+                    ..TunSettings::default()
+                },
+                ..LocalTemplate::default()
+            },
+            None,
+            CaptureIntent::Tun,
+        )
+        .expect("tun pipeline");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        validate_config_for_intent(&value, CaptureIntent::Tun).expect("intent structural check");
+        assert_eq!(value["inbounds"][1]["type"], "tun");
+        assert_eq!(value["inbounds"][1]["tag"], "tun-in");
+        assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn subscription_to_config_rejects_tun_intent_off_green_platforms() {
+        let err = subscription_to_config(
+            CLASH_FIXTURE,
+            LocalTemplate {
+                tun: TunSettings {
+                    enabled: true,
+                    interface_name: Some("utun420".into()),
+                    ..TunSettings::default()
+                },
+                ..LocalTemplate::default()
+            },
+            None,
+            CaptureIntent::Tun,
+        )
+        .expect_err("tun gate not green");
+        assert!(matches!(
+            err,
+            EngineError::Config(ConfigError::TunUnavailable(_))
+        ));
+    }
+
+    #[test]
+    fn engine_exposes_tun_gate_for_preflight() {
+        let gate: TunGate = tun_gate();
+        #[cfg(target_os = "macos")]
+        assert!(gate.ready);
+        #[cfg(not(target_os = "macos"))]
+        assert!(!gate.ready);
     }
 
     #[test]
@@ -129,6 +196,7 @@ proxies:
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .expect("build");
         let first = &value["route"]["rules"][0];
@@ -161,6 +229,7 @@ proxies:
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .expect_err("empty profile");
         assert!(matches!(

@@ -44,7 +44,12 @@
     ],
     "resources": {
       "resources/sing-box": "sing-box",
-      "resources/geoip": "geoip"
+      "resources/geoip": "geoip",
+      "resources/ice-helper": "ice-helper"
+    },
+    "macOS": {
+      "entitlements": "entitlements/ice-box.entitlements",
+      "minimumSystemVersion": "12.0"
     }
   }
 }

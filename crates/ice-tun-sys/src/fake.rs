@@ -19,6 +19,8 @@ use crate::backend::{
 };
 use crate::error::{TunError, TunErrorCode};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
+use crate::routes;
+pub use crate::routes::{AUTO_ROUTE_RANGES, AUTO_ROUTE_RANGES_V6};
 
 /// Simulated adapter interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,25 +72,6 @@ pub enum TraceEvent {
     InterfaceRemoved,
     DnsRestored,
 }
-
-/// Routes the fake installs for `auto_route`, mirroring the darwin
-/// sub-range trick sing-box uses (so tests assert the same shape the
-/// native path produces).
-pub const AUTO_ROUTE_RANGES: &[&str] = &[
-    "1.0.0.0/8",
-    "2.0.0.0/7",
-    "4.0.0.0/6",
-    "8.0.0.0/5",
-    "16.0.0.0/4",
-    "32.0.0.0/3",
-    "64.0.0.0/2",
-    "128.0.0.0/1",
-];
-
-/// IPv6 auto-route ranges (the IPv6 default-route split), installed
-/// alongside the IPv4 ranges whenever the config carries IPv6 addresses
-/// (dual-stack lock, architecture §24.5 point 4).
-pub const AUTO_ROUTE_RANGES_V6: &[&str] = &["::/1", "8000::/1"];
 
 pub struct FakeTunBackend {
     pub state: FakeOsState,
@@ -201,92 +184,30 @@ impl FakeTunBackend {
         Ok(())
     }
 
-    /// The full auto-route set for `auto_route`: the IPv4 sub-range trick,
-    /// the IPv6 default-route split, and the connected routes — one per
-    /// address family present in the config.
+    /// The route set for `auto_route`: the IPv4 and IPv6 sub-range sets. TUN
+    /// address destinations are excluded by the locked policy and are not
+    /// claimed as routes by the native macOS backend.
     fn build_auto_routes(config: &TunConfig) -> Vec<RouteRecord> {
-        let has_v4 = config.addresses.iter().any(|c| !c.contains(':'));
-        let has_v6 = config.addresses.iter().any(|c| c.contains(':'));
         let mut routes = Vec::new();
-        if has_v4 {
-            routes.extend(AUTO_ROUTE_RANGES.iter().map(|d| RouteRecord {
-                destination: (*d).to_string(),
-                gateway: Some("10.0.0.2".into()),
-                metric: 0,
-                owned: true,
-            }));
-        }
-        if has_v6 {
-            routes.extend(AUTO_ROUTE_RANGES_V6.iter().map(|d| RouteRecord {
-                destination: (*d).to_string(),
-                gateway: Some("fdfe:dcba:9876::2".into()),
-                metric: 0,
-                owned: true,
-            }));
-        }
-        routes.extend(Self::connected_routes(config));
-        routes
-    }
-
-    /// Connected routes, one per config address (IPv4 and IPv6): the
-    /// address +1 on the same prefix, via the address itself.
-    fn connected_routes(config: &TunConfig) -> Vec<RouteRecord> {
-        let mut routes = Vec::new();
-        for cidr in &config.addresses {
-            let Some((network, _bits)) = cidr.split_once('/') else {
-                continue;
-            };
-            let bits = cidr.split_once('/').map(|(_, b)| b).unwrap_or("32");
-            if network.contains(':') {
-                let Some(mut groups) = Self::ipv6_groups(network) else {
-                    continue;
-                };
-                groups[7] = groups[7].wrapping_add(1);
-                routes.push(RouteRecord {
-                    destination: format!("{}/{bits}", Self::format_ipv6(groups)),
-                    gateway: Some(network.to_string()),
+        if config.auto_route {
+            if routes::has_v4(&config.addresses) {
+                routes.extend(AUTO_ROUTE_RANGES.iter().map(|d| RouteRecord {
+                    destination: (*d).to_string(),
+                    gateway: Some("10.0.0.2".into()),
                     metric: 0,
                     owned: true,
-                });
-            } else {
-                let mut octets: Vec<u32> = network
-                    .split('.')
-                    .filter_map(|o| o.parse::<u32>().ok())
-                    .collect();
-                if octets.len() == 4 {
-                    if let Some(last) = octets.last_mut() {
-                        *last += 1;
-                    }
-                    routes.push(RouteRecord {
-                        destination: format!(
-                            "{}.{}.{}.{}/{bits}",
-                            octets[0], octets[1], octets[2], octets[3]
-                        ),
-                        gateway: Some(network.to_string()),
-                        metric: 0,
-                        owned: true,
-                    });
-                }
+                }));
+            }
+            if routes::has_v6(&config.addresses) {
+                routes.extend(AUTO_ROUTE_RANGES_V6.iter().map(|d| RouteRecord {
+                    destination: (*d).to_string(),
+                    gateway: Some("fdfe:dcba:9876::2".into()),
+                    metric: 0,
+                    owned: true,
+                }));
             }
         }
         routes
-    }
-
-    /// Parse an IPv6 address (optionally with a `/prefix` suffix) into 8
-    /// 16-bit groups; `None` when malformed.
-    fn ipv6_groups(addr: &str) -> Option<[u16; 8]> {
-        let (addr, _) = addr.split_once('/').unwrap_or((addr, ""));
-        let parsed: std::net::Ipv6Addr = addr.parse().ok()?;
-        let octets = parsed.octets();
-        let mut groups = [0u16; 8];
-        for (i, group) in groups.iter_mut().enumerate() {
-            *group = u16::from_be_bytes([octets[i * 2], octets[i * 2 + 1]]);
-        }
-        Some(groups)
-    }
-
-    fn format_ipv6(groups: [u16; 8]) -> String {
-        groups.map(|g| format!("{g:x}")).join(":")
     }
 }
 
@@ -329,7 +250,7 @@ impl TunBackend for FakeTunBackend {
         // routes; an unparseable IPv6 address would silently skip them and
         // leak IPv6 traffic (dual-stack lock).
         for cidr in &config.addresses {
-            if cidr.contains(':') && Self::ipv6_groups(cidr).is_none() {
+            if cidr.contains(':') && routes::ipv6_groups(cidr).is_none() {
                 return Err(TunError::new(
                     TunErrorCode::ApplyFailed,
                     format!("invalid IPv6 address in tun config: {cidr}"),
@@ -365,6 +286,8 @@ impl TunBackend for FakeTunBackend {
                 |j| {
                     j.interface_name = Some(name.clone());
                     j.interface_id = Some(id.clone());
+                    j.expected_addresses = config.addresses.clone();
+                    j.expected_routes = routes::auto_route_destinations(config);
                 },
                 TraceEvent::InterfaceCreated(name.clone()),
                 mutations,
@@ -405,7 +328,7 @@ impl TunBackend for FakeTunBackend {
             )?;
         }
 
-        if self.state.routes.is_empty() && config.auto_route {
+        if self.state.routes.is_empty() {
             let routes = Self::build_auto_routes(config);
             mutations += 1;
             self.mutate_and_journal(
@@ -490,8 +413,16 @@ impl TunBackend for FakeTunBackend {
                 })
                 .collect(),
             routes: self.state.routes.clone(),
+            // Required sets: the fake installs exactly what the config
+            // required, so verification against the required sets doubles as
+            // the dual-stack / full-route lock in host-free tests too.
+            expected_addresses: config.addresses.clone(),
+            expected_routes: routes::auto_route_destinations(config),
             dns_before,
             dns_after,
+            // The fake does not start an external core; the shell restarts
+            // its own core on the generated config instead.
+            core_pid: None,
         })
     }
 
@@ -507,15 +438,18 @@ impl TunBackend for FakeTunBackend {
             applied.interface_name.as_deref() == Some(i.name.as_str())
                 && applied.interface_id.as_deref() == Some(i.id.as_str())
         });
+        // Exact-address / full-route locks against the *required* sets: a
+        // resource missing before it was recorded must never pass.
         let addresses_present = applied
-            .addresses
+            .expected_addresses
             .iter()
-            .all(|a| self.state.addresses.contains(&a.cidr));
-        let routes_owned = applied
-            .routes
-            .iter()
-            .filter(|r| r.owned)
-            .all(|r| self.state.routes.contains(r));
+            .all(|addr| self.state.addresses.contains(addr));
+        let routes_owned = applied.expected_routes.iter().all(|destination| {
+            self.state
+                .routes
+                .iter()
+                .any(|r| &r.destination == destination)
+        });
         let dns_consistent = match &applied.dns_after {
             Some(after) => {
                 self.state.dns_current.as_deref() == Some(after.platform_snapshot.as_str())
@@ -681,5 +615,13 @@ impl TunBackend for FakeTunBackend {
         } else {
             Ok(RecoveryOutcome::RecoveryRequired)
         }
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn attach_journal(&mut self, path: PathBuf) {
+        self.journal_path = Some(path);
     }
 }

@@ -233,6 +233,7 @@ mod tests_g5 {
             geoip_rule_set_dir: None,
             group_selections: Default::default(),
             rule_overrides: Default::default(),
+            capture_intent: Default::default(),
         })
         .unwrap();
         assert!(cfg["outbounds"].as_array().unwrap().len() >= 3);

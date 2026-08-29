@@ -75,6 +75,8 @@ impl<'a> RecoveryDriver<'a> {
                         j.interface_id = None;
                         j.addresses.clear();
                         j.routes.clear();
+                        j.expected_addresses.clear();
+                        j.expected_routes.clear();
                         j.dns_before = None;
                         j.dns_after = None;
                     },

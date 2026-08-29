@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::orchestrate::{generate_config, orchestrate_start};
-    use ice_config::{write_json_atomic, AppPaths, AppSettings};
+    use ice_config::{write_json_atomic, AppPaths, AppSettings, CaptureIntent};
     use ice_core::{CoreController, CoreStatus, ImmediateHealthProbe, MockReloader, MockSpawner};
     use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
     use ice_subscription::{
@@ -89,7 +89,15 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("direct-only");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("direct-only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
@@ -172,13 +180,20 @@ mod tests {
         assert_eq!(meta.format, SubscriptionFormat::Clash);
         assert!(meta.node_count >= 5, "expected known types from fixture");
 
-        generate_config(&paths, &AppSettings::default(), None).expect("config from clash nodes");
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("config from clash nodes");
         assert!(paths.config().is_file());
         let _ = fs::remove_dir_all(paths.root());
     }
 
     #[test]
     fn g9_8_graceful_stop_serializes_with_orchestrate_lock() {
+        use crate::capture::CaptureController;
         use crate::shutdown::graceful_stop;
         use crate::AppState;
         use ice_core::CoreHandle;
@@ -198,13 +213,14 @@ mod tests {
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
         });
 
         let bg = state.clone();
         let guard = state.orchestrate.lock().unwrap();
         let handle = thread::spawn(move || {
             let t0 = Instant::now();
-            graceful_stop(&bg).expect("stop");
+            graceful_stop(&bg, PathBuf::from("/bin/true")).expect("stop");
             t0.elapsed()
         });
 
@@ -228,7 +244,7 @@ mod live {
         orchestrate_apply, orchestrate_enable_system_proxy, orchestrate_set_proxy_mode,
         orchestrate_start, orchestrate_stop, repo_third_party_singbox,
     };
-    use ice_config::{AppPaths, AppSettings};
+    use ice_config::{AppPaths, AppSettings, CaptureIntent};
     use ice_core::{resolve_singbox_binary, CoreController, CoreStatus};
     use ice_proxy_sys::{create_system_proxy, ProxyBackupFile, SystemProxy};
     use ice_subscription::{
@@ -322,7 +338,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert!(
             curl_via_mixed(MIXED_PORT),
@@ -344,7 +368,15 @@ mod live {
         let before = proxy.backup().expect("backup before");
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
             .expect("enable system proxy");
         orchestrate_stop(&paths, &mut core, proxy.as_ref()).expect("stop");
@@ -369,7 +401,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         // Simulate subscription refresh (same fixture, still valid nodes).
         seed_singbox_subscription(&paths);
         orchestrate_apply(
@@ -380,6 +420,7 @@ mod live {
             proxy.as_ref(),
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .expect("apply while running");
 
@@ -398,7 +439,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         orchestrate_enable_system_proxy(&paths, &settings, &core, proxy.as_ref())
             .expect("enable system proxy");
         let new_settings = AppSettings {
@@ -414,6 +463,7 @@ mod live {
             proxy.as_ref(),
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .expect("apply new port");
 
@@ -445,7 +495,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         std::thread::sleep(Duration::from_millis(300));
 
         let lines = read_log_tail(&paths.core_log(), 50).expect("tail");
@@ -495,7 +553,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert!(
             curl_via_mixed(MIXED_PORT),
@@ -551,7 +617,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
 
         let endpoints = HealthEndpoints {
@@ -616,7 +690,8 @@ mod live {
         let mut selections = load_group_selections(&paths.group_selections());
         selections.insert(selector.tag.clone(), other.clone());
         save_group_selections(&paths.group_selections(), &selections).expect("persist");
-        crate::orchestrate::generate_config(&paths, &settings, None).expect("regenerate");
+        crate::orchestrate::generate_config(&paths, &settings, None, CaptureIntent::Diagnostic)
+            .expect("regenerate");
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
         let rebuilt = config["outbounds"]
@@ -655,7 +730,15 @@ mod live {
         let proxy = create_system_proxy();
         let bin = real_binary();
 
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).expect("start");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
         let endpoints = HealthEndpoints {
             host: "127.0.0.1".into(),
@@ -683,6 +766,7 @@ mod live {
                 proxy.as_ref(),
                 bin.clone(),
                 None,
+                CaptureIntent::Diagnostic,
             )
             .expect("set mode");
             assert_eq!(
@@ -700,5 +784,186 @@ mod live {
 
         cleanup(&paths, &mut core, proxy.as_ref());
         println!("G9.11 ok: Rule -> Global -> Direct -> Rule via rebuild + reload, no restart");
+    }
+
+    /// macOS TUN live gate (plan §6 live acceptance; §5 T3 exit gate).
+    /// Uses the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`, cached root
+    /// credential or NOPASSWD) to exercise the native-path enable →
+    /// traffic → disable roundtrip on a real host. Run via
+    /// `scripts/run-acceptance-macos-tun.sh`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "live: real sing-box + sudo (macOS TUN gate)"]
+    fn g9_12_live_tun_enable_curl_disable() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_config::TunSettings;
+        use ice_tun_sys::{JournalState, MacOsHost, ProcessMacOsHost, TunJournal};
+
+        let dev_sudo = std::env::var("ICE_BOX_TUN_DEV_SUDO")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+        assert!(
+            dev_sudo,
+            "run via scripts/run-acceptance-macos-tun.sh (sets ICE_BOX_TUN_DEV_SUDO and preflights sudo -n)"
+        );
+
+        let paths = temp_app("tun-live");
+        seed_singbox_subscription(&paths);
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..settings()
+        };
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start diagnostic core");
+        assert_eq!(core.state().status, CoreStatus::Running);
+
+        let capture = CaptureController::new(paths.clone(), None);
+        capture
+            .enable_tun(&settings, &mut core, bin.clone())
+            .expect("enable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Tun);
+        assert_eq!(capture.tun_status(), TunStatus::Enabled);
+        let status = capture.status(&settings);
+        let interface = status
+            .tun_interface
+            .as_deref()
+            .expect("tun_interface after enable");
+        assert_eq!(status.traffic_capture, TrafficCapture::Tun);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Applied);
+
+        // Traffic: the mixed inbound is still usable while TUN is active,
+        // and TUN capture is on the utun interface (backend verified).
+        assert!(curl_via_mixed(MIXED_PORT), "mixed must answer during TUN");
+
+        capture
+            .disable_active_backend(&settings, &mut core, proxy.as_ref(), bin.clone(), true)
+            .expect("disable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessMacOsHost
+                .interface_state(interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after disable"
+        );
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!("G9.12 ok: TUN enable -> mixed curl -> disable -> adapter removed ({interface})");
+    }
+
+    /// macOS TUN live gate through the **production privileged helper**
+    /// (plan §5 T5). Runs the native-path enable → traffic → disable
+    /// roundtrip via the installed launchd helper instead of the dev `sudo`
+    /// runner. Run via `scripts/run-acceptance-macos-tun.sh --helper`,
+    /// which installs the helper (sudo) with the real app data dir,
+    /// sets `ICE_BOX_TUN_LIVE_DATA_DIR`, and uninstalls afterwards.
+    ///
+    /// The test must use the *installed* data dir: the helper's path
+    /// allowlist only accepts `config.json` inside it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "live: real sing-box + installed privileged helper (macOS TUN gate)"]
+    fn g9_13_live_tun_via_helper() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_config::TunSettings;
+        use ice_tun_sys::{JournalState, MacOsHost, ProcessMacOsHost, TunJournal};
+
+        let data_dir = std::env::var("ICE_BOX_TUN_LIVE_DATA_DIR").unwrap_or_else(|_| {
+            format!(
+                "{}/Library/Application Support/com.yilong-musk.icebox",
+                std::env::var("HOME").expect("HOME")
+            )
+        });
+        assert!(
+            !ice_tun_sys::dev_sudo_runner_enabled(),
+            "G9.13 exercises the helper path; run without ICE_BOX_TUN_DEV_SUDO"
+        );
+        let paths = AppPaths::new(&data_dir);
+        paths.ensure_dirs().expect("ensure dirs");
+        seed_singbox_subscription(&paths);
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..settings()
+        };
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start diagnostic core");
+        assert_eq!(core.state().status, CoreStatus::Running);
+
+        // create_backend picks the helper coordinator when it is installed
+        // and authorized (probed via a Status frame); the test proves the
+        // production wiring end to end.
+        let capture = CaptureController::new(paths.clone(), None);
+        capture
+            .enable_tun(&settings, &mut core, bin.clone())
+            .expect("enable tun via helper");
+        assert_eq!(capture.active_backend(), TrafficCapture::Tun);
+        assert_eq!(capture.tun_status(), TunStatus::Enabled);
+        let status = capture.status(&settings);
+        let interface = status
+            .tun_interface
+            .as_deref()
+            .expect("tun_interface after enable");
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Applied);
+
+        assert!(curl_via_mixed(MIXED_PORT), "mixed must answer during TUN");
+
+        capture
+            .disable_active_backend(&settings, &mut core, proxy.as_ref(), bin.clone(), true)
+            .expect("disable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessMacOsHost
+                .interface_state(interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after disable"
+        );
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!("G9.13 ok: TUN enable -> mixed curl -> disable via helper IPC ({interface})");
     }
 }

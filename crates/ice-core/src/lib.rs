@@ -22,8 +22,8 @@ pub use health::{
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
 pub use process::{
-    stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, ProcessSpawner,
-    STOP_GRACE_TIMEOUT,
+    stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, PidProcess,
+    ProcessSpawner, STOP_GRACE_TIMEOUT,
 };
 pub use reload::{
     ConfigReloader, MockReloadMode, MockReloader, SignalReloader, WINDOWS_PORT_RELEASE_WAIT,
@@ -217,6 +217,55 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         Ok(())
     }
 
+    /// Adopt an externally started sing-box (TUN slice: the elevated core is
+    /// launched by the `CoreCoordinator` helper/`sudo` path). The controller
+    /// takes over lifecycle from the pid: writes the pid file, probes Clash
+    /// API health, and treats the process as its own child afterwards
+    /// (reload / stop / unexpected-exit reaping all work).
+    pub fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError> {
+        if !is_op_allowed(self.state.status, CoreOp::Start) {
+            return Err(reject_op(self.state.status, CoreOp::Start));
+        }
+
+        self.state.status = CoreStatus::Starting;
+        self.state.message = None;
+        self.state.inbound_host = None;
+        self.state.inbound_port = None;
+        self.needs_proxy_restore = false;
+
+        let child: Box<dyn ManagedProcess> = Box::new(PidProcess::new(pid));
+        if let Err(err) = write_pid(&paths.pid_file, pid) {
+            self.fail(format!("write pid: {err}"));
+            return Err(CoreError::SpawnFailed(format!("write pid: {err}")));
+        }
+        self.child = Some(child);
+
+        if let Err(err) = self.wait_health_while_running(paths) {
+            // Best-effort stop; a root-owned adopted pid may not be signalable
+            // from here (the privileged coordinator owns it). The pid file is
+            // kept when the kill fails so the failure stays visible.
+            let _ = self.kill_child_and_clear_pid(&paths.pid_file);
+            let msg = err.to_string();
+            self.fail(msg.clone());
+            return Err(match err {
+                CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
+                other => other,
+            });
+        }
+
+        self.state.status = CoreStatus::Running;
+        self.state.message = None;
+        self.state.inbound_host = Some(paths.inbound_host.clone());
+        self.state.inbound_port = Some(paths.inbound_port);
+        tracing::info!(
+            pid,
+            host = %paths.inbound_host,
+            port = paths.inbound_port,
+            "adopted externally started sing-box (TUN capture)"
+        );
+        Ok(())
+    }
+
     pub fn start(&mut self, paths: &CorePaths) -> Result<(), CoreError> {
         if !is_op_allowed(self.state.status, CoreOp::Start) {
             return Err(reject_op(self.state.status, CoreOp::Start));
@@ -269,12 +318,19 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
             CoreStatus::Starting => {
                 self.state.status = CoreStatus::Stopping;
-                self.kill_child_and_clear_pid(pid_file);
-                self.state.status = CoreStatus::Stopped;
-                self.state.message = None;
-                self.clear_inbound();
-                self.needs_proxy_restore = false;
-                return Ok(());
+                return match self.kill_child_and_clear_pid(pid_file) {
+                    Ok(()) => {
+                        self.state.status = CoreStatus::Stopped;
+                        self.state.message = None;
+                        self.clear_inbound();
+                        self.needs_proxy_restore = false;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        self.fail(format!("stop failed: {err}"));
+                        Err(err)
+                    }
+                };
             }
             CoreStatus::Stopped if self.child.is_none() => {
                 let _ = clear_pid(pid_file);
@@ -285,12 +341,22 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         }
 
         self.state.status = CoreStatus::Stopping;
-        self.kill_child_and_clear_pid(pid_file);
-        self.state.status = CoreStatus::Stopped;
-        self.state.message = None;
-        self.clear_inbound();
-        self.needs_proxy_restore = false;
-        Ok(())
+        match self.kill_child_and_clear_pid(pid_file) {
+            Ok(()) => {
+                self.state.status = CoreStatus::Stopped;
+                self.state.message = None;
+                self.clear_inbound();
+                self.needs_proxy_restore = false;
+                Ok(())
+            }
+            Err(err) => {
+                // The process could not be terminated (e.g. an adopted
+                // root-owned pid that only the privileged coordinator may
+                // signal). Never report Stopped while it may still run.
+                self.fail(format!("stop failed: {err}"));
+                Err(err)
+            }
+        }
     }
 
     /// Hot-reload via SIGHUP (Unix): sing-box rebuilds itself from `config.json`
@@ -329,7 +395,18 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     /// Stop child and start again from `config.json`. Does **not** restore system proxy.
     fn restart_in_place(&mut self, paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
         // Keep logical Running intent until success/failure; tear down process only.
-        self.kill_child_and_clear_pid(&paths.pid_file);
+        // A failed kill (e.g. an adopted root-owned pid that only the privileged
+        // coordinator may signal) aborts the restart: spawning a second core while
+        // the original still owns the TUN adapter must never happen.
+        if let Err(err) = self.kill_child_and_clear_pid(&paths.pid_file) {
+            let msg = err.to_string();
+            self.fail(msg.clone());
+            self.needs_proxy_restore = true;
+            return Err(match err {
+                CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
+                other => other,
+            });
+        }
 
         #[cfg(windows)]
         {
@@ -380,7 +457,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         self.child = Some(child);
 
         if let Err(err) = self.wait_health_while_running(paths) {
-            self.kill_child_and_clear_pid(&paths.pid_file);
+            let _ = self.kill_child_and_clear_pid(&paths.pid_file);
             return Err(err);
         }
         Ok(())
@@ -500,6 +577,10 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     }
 
     /// On app start: if pid file points at a live sing-box process, kill it and enter Stopped.
+    /// A live pid that cannot be signalled (root-owned elevated core) keeps the
+    /// pid file and returns an error: the failure must stay visible so the TUN
+    /// recovery path (or a later privileged stop) converges it instead of
+    /// silently clearing the record of the still-running process.
     pub fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
         let Some(pid) = ice_config::read_pid(pid_file)
             .map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
@@ -510,7 +591,11 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         if pid_is_alive(pid) {
             if looks_like_singbox_process(pid) {
                 tracing::warn!(pid, "reclaiming orphan sing-box pid");
-                force_kill_pid(pid);
+                if !force_kill_pid(pid) {
+                    return Err(CoreError::SpawnFailed(format!(
+                        "orphan sing-box pid {pid} is not signalable (root-owned elevated core?); pid file kept for recovery"
+                    )));
+                }
             } else {
                 tracing::warn!(
                     pid,
@@ -525,11 +610,20 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         Ok(())
     }
 
-    fn kill_child_and_clear_pid(&mut self, pid_file: &Path) {
-        if let Some(mut child) = self.child.take() {
-            let _ = stop_process(child.as_mut(), self.stop_grace);
+    fn kill_child_and_clear_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
+        if self.child.is_some() {
+            // Keep the handle until termination is confirmed. An adopted
+            // root-owned process may reject the signal; dropping the handle
+            // would make the controller forget a still-running core.
+            let stop_result = {
+                let child = self.child.as_mut().expect("child checked above");
+                stop_process(child.as_mut(), self.stop_grace)
+            };
+            stop_result?;
+            self.child = None;
         }
-        let _ = clear_pid(pid_file);
+        clear_pid(pid_file).map_err(|e| CoreError::SpawnFailed(format!("clear pid: {e}")))?;
+        Ok(())
     }
 
     fn fail(&mut self, message: String) {
@@ -575,6 +669,8 @@ pub trait CoreHandle: Send {
     fn needs_proxy_restore(&self) -> bool;
     fn clear_needs_proxy_restore(&mut self);
     fn reap_exited_child(&mut self, pid_file: &Path) -> bool;
+    /// Adopt an externally started sing-box (TUN slice; see `CoreController::adopt_external`).
+    fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError>;
 }
 
 impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreController<S, H> {
@@ -604,6 +700,10 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
 
     fn reap_exited_child(&mut self, pid_file: &Path) -> bool {
         CoreController::reap_exited_child(self, pid_file)
+    }
+
+    fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError> {
+        CoreController::adopt_external(self, pid, paths)
     }
 }
 
@@ -750,8 +850,14 @@ fn strip_ansi_light(s: &str) -> String {
 fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
+        // `kill(pid, 0)` probes liveness only. EPERM means the process
+        // exists but belongs to another user (e.g. an elevated root core);
+        // it is alive, just not signalable by us.
         let rc = unsafe { libc::kill(pid as i32, 0) };
-        rc == 0
+        if rc == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
     #[cfg(windows)]
     {
@@ -819,26 +925,36 @@ fn looks_like_singbox_process(pid: u32) -> bool {
     }
 }
 
-fn force_kill_pid(pid: u32) {
+/// Best-effort kill of a pid; returns whether the TERM signal was delivered.
+/// An EPERM on a root-owned pid returns `false` so the caller does not
+/// pretend the process was reclaimed.
+fn force_kill_pid(pid: u32) -> bool {
     #[cfg(unix)]
     {
+        let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        if rc != 0 {
+            return false;
+        }
         unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
             libc::kill(pid as i32, libc::SIGKILL);
         }
+        true
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
-        let _ = Command::new("taskkill")
+        Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .creation_flags(0x08000000)
-            .status();
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
+        false
     }
 }
 
@@ -1069,6 +1185,90 @@ mod tests {
         core.stop(&paths.pid_file).expect("stop2");
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert!(core.state().inbound_host.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_of_foreign_pid_fails_and_keeps_pid_file() {
+        // PID 1 (launchd/init) is a live root-owned process; a non-root
+        // process cannot signal it. stop must fail and must NOT clear the
+        // pid file or report Stopped while the process may still run.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = temp_root("stop-foreign");
+        let paths = paths_in(&dir, PathBuf::from("/unused"));
+        fs::write(&paths.pid_file, b"1").unwrap();
+
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        core.begin_start().expect("begin");
+        core.child = Some(Box::new(PidProcess::new(1)));
+        core.state.status = CoreStatus::Running;
+
+        let err = core.stop(&paths.pid_file).expect_err("EPERM stop");
+        assert!(
+            err.to_string().contains("request_terminate"),
+            "the stop must surface the signal failure: {err}"
+        );
+        assert_ne!(core.state().status, CoreStatus::Stopped);
+        assert_eq!(
+            core.state().message.as_deref(),
+            Some("stop failed: request_terminate: pid 1 is owned by another user; terminate it via the privileged coordinator"),
+            "the controller must not claim the foreign process was stopped"
+        );
+        assert_eq!(
+            ice_config::read_pid(&paths.pid_file).unwrap(),
+            Some(1),
+            "the pid file must be kept while the foreign process may still run"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reload_restart_of_foreign_pid_never_spawns_second_core() {
+        // The adopted root-owned core cannot be SIGHUP'd (EPERM) and cannot
+        // be killed; the reload fallback must fail instead of spawning a
+        // second sing-box while the original still runs.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = temp_root("reload-foreign");
+        let paths = paths_in(&dir, PathBuf::from("/unused"));
+        fs::write(&paths.pid_file, b"1").unwrap();
+        fs::write(&paths.config, b"{}").unwrap();
+
+        let spawner = MockSpawner::default();
+        let mut core = mock_ctrl(
+            spawner,
+            ImmediateHealthProbe,
+            MockReloader::new(MockReloadMode::Http5xx),
+        );
+        core.begin_start().expect("begin");
+        core.child = Some(Box::new(PidProcess::new(1)));
+        core.state.status = CoreStatus::Running;
+
+        let err = core.reload(&paths).expect_err("SIGHUP + kill EPERM");
+        assert!(
+            err.to_string().contains("stop failed")
+                || err.to_string().contains("request_terminate"),
+            "the restart must fail on the un-killable foreign pid: {err}"
+        );
+        assert_eq!(
+            ice_config::read_pid(&paths.pid_file).unwrap(),
+            Some(1),
+            "no second core may be spawned (a new pid would replace this file) while the original still runs"
+        );
+        assert_eq!(core.state().status, CoreStatus::Error);
+        assert!(
+            core.child.is_some(),
+            "failed stop must retain the child handle"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

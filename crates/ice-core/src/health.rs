@@ -222,6 +222,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         assert!(tcp_port_is_in_use("127.0.0.1", port));
         drop(listener);
-        assert!(!tcp_port_is_in_use("127.0.0.1", port));
+        // Another process may legitimately reuse the ephemeral port between
+        // drop() and this assertion. Port zero is never a connectable service,
+        // so use it for the negative branch without relying on host state.
+        assert!(!tcp_port_is_in_use("127.0.0.1", 0));
     }
 }

@@ -41,3 +41,19 @@ else
   echo "error: missing $GEOIP_SRC — run scripts/fetch-geoip.sh (packaged app would silently drop GEOIP rules)" >&2
   exit 1
 fi
+
+# Privileged helper daemon (plan §5 T5, macOS): embedded into the bundle so
+# the installer/release pipeline can install it into /Library/PrivilegedHelperTools.
+case "$ICE_PLATFORM_ALIAS" in
+  mac-arm64 | mac-x64)
+    HELPER_DEST="$DEST_DIR/ice-helper"
+    if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >/dev/null 2>&1; then
+      cp "$ROOT/target/release/ice-helper" "$HELPER_DEST"
+      chmod +x "$HELPER_DEST"
+      echo "Prepared helper resource $HELPER_DEST (macOS privileged helper daemon)"
+    else
+      echo "error: cargo build -p ice-helper failed; run it manually before the release build" >&2
+      exit 1
+    fi
+    ;;
+esac

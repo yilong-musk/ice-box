@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ice-helper daemon entitlements (plan §5 T5).
+
+  The helper is a plain launchd daemon binary (not sandboxed, not an XPC
+  service): it runs as root and only needs the standard hard runtime
+  protections. It performs no sandbox-exempt operations beyond spawning the
+  bundled sing-box with an allowlisted config path, so no special
+  entitlements are required. The release is permanently unsigned; the helper
+  is installed elevated by its own `install` mode (in-app authorization
+  dialog or `scripts/install-helper-macos.sh`).
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <false/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <false/>
+</dict>
+</plist>

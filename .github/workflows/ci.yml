@@ -80,6 +80,13 @@ jobs:
         run: npm run tauri build
         working-directory: apps/desktop
 
+      - name: Verify privileged helper embedded (T5)
+        run: |
+          APP=$(find target/release/bundle/macos -name '*.app' -maxdepth 1 | head -n 1)
+          test -n "$APP"
+          test -x "$APP/Contents/Resources/ice-helper"
+          echo "helper embedded: $APP/Contents/Resources/ice-helper"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:

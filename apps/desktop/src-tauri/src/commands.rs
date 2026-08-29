@@ -1,10 +1,10 @@
 //! Tauri IPC commands (architecture §14).
 
+use crate::capture::{tun_topology_changed, TrafficCapture, TunStatus};
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
-    orchestrate_disable_system_proxy, orchestrate_enable_system_proxy, orchestrate_set_proxy_mode,
-    orchestrate_start, resolve_binary,
+    orchestrate_set_proxy_mode_with_apply, orchestrate_start, resolve_binary,
 };
 use crate::shutdown::graceful_stop;
 use crate::AppState;
@@ -12,7 +12,7 @@ use ice_config::NormalizedOutbound;
 use ice_config::{
     load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint, rule_type_of,
     save_group_selections, save_rule_overrides, save_settings as persist_settings, AppError,
-    AppSettings, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
+    AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
 };
 use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
@@ -43,11 +43,13 @@ fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, AppError> {
         .map_err(|_| lock_poisoned("orchestrate"))
 }
 
-fn resource_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn resource_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path().resource_dir().ok()
 }
 
-fn binary_for(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+pub(crate) fn binary_for<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<std::path::PathBuf, AppError> {
     resolve_binary(resource_dir(app).as_deref())
 }
 
@@ -105,6 +107,24 @@ pub struct StatusResponse {
     pub system_proxy_recorded: Option<bool>,
     /// False on platforms without a real system-proxy backend (e.g. Linux Noop).
     pub system_proxy_available: bool,
+    // --- TUN capture status (plan §4.3) ---
+    /// Derived only from the runtime capture controller.
+    pub traffic_capture: TrafficCapture,
+    /// Committed settings desire (`settings.tun.enabled`).
+    pub configured_tun: bool,
+    pub tun_status: TunStatus,
+    pub tun_interface: Option<String>,
+    pub tun_error: Option<AppError>,
+    pub capture_transition_id: Option<String>,
+    pub tun_available: bool,
+    pub tun_unavailable_reason: Option<String>,
+    /// Privileged helper daemon installed + authorized (read-only probe).
+    /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
+    pub helper_installed: bool,
+    /// The installed helper's root-owned core differs from the app's bundled
+    /// core (app updated): only one core version may exist, so TUN stays
+    /// blocked until the helper is refreshed.
+    pub helper_stale: bool,
 }
 
 /// How long a `system_proxy_applied` check result is reused. The check spawns
@@ -241,6 +261,10 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     } else {
         None
     };
+    let capture = current_settings(&state.paths)
+        .ok()
+        .map(|settings| state.capture.status(&settings))
+        .unwrap_or_else(|| state.capture.status(&ice_config::AppSettings::default()));
     Ok(StatusResponse {
         core: core_state,
         subscription_count: count,
@@ -248,6 +272,16 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         system_proxy_applied,
         system_proxy_recorded,
         system_proxy_available: proxy_available,
+        traffic_capture: capture.traffic_capture,
+        configured_tun: capture.configured_tun,
+        tun_status: capture.tun_status,
+        tun_interface: capture.tun_interface,
+        tun_error: capture.tun_error,
+        capture_transition_id: capture.capture_transition_id,
+        tun_available: capture.tun_available,
+        tun_unavailable_reason: capture.tun_unavailable_reason,
+        helper_installed: crate::helper_install::helper_installed(state),
+        helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
     })
 }
 
@@ -306,6 +340,7 @@ pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
                 &mut **core,
                 binary,
                 resource_dir(app).as_deref(),
+                CaptureIntent::Diagnostic,
             )?;
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                 *slot = None;
@@ -316,7 +351,9 @@ pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-fn start_system_proxy(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+/// Home「启动代理服务」: ensure core is running on the Diagnostic config, then
+/// start the configured capture backend (system proxy or TUN, plan §2).
+fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
     {
@@ -329,22 +366,72 @@ fn start_system_proxy(app: &AppHandle, state: &AppState) -> Result<(), AppError>
                 &mut **core,
                 binary,
                 resource_dir(app).as_deref(),
+                CaptureIntent::Diagnostic,
             )?;
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                 *slot = None;
             }
         }
     }
-    {
-        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-        orchestrate_enable_system_proxy(&state.paths, &settings, &**core, proxy.as_ref())?;
-    }
-    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = None;
-    }
-    if let Ok(mut cache) = state.proxy_applied_cache.lock() {
-        *cache = None;
+    if settings.tun.enabled {
+        // TUN path: the controller stops the app-managed core and the
+        // backend starts the elevated one (adopted afterwards).
+        state.capture.refresh_backend()?;
+        let binary = binary_for(app)?;
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let resolved = state
+            .capture
+            .enable_tun(&settings, &mut **core, binary.clone())?;
+        // Persist the resolved interface name only after the transition is
+        // healthy (plan §4.3 commit-after-health).
+        if resolved
+            .as_ref()
+            .is_some_and(|name| settings.tun.interface_name.as_deref() != Some(name.as_str()))
+        {
+            let mut committed = settings.clone();
+            committed.tun.interface_name = resolved;
+            if let Err(commit_err) = persist_settings(&state.paths.settings(), &committed) {
+                let rollback = {
+                    let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+                    state.capture.disable_active_backend(
+                        &settings,
+                        &mut **core,
+                        proxy.as_ref(),
+                        binary,
+                        true,
+                    )
+                };
+                return match rollback {
+                    Ok(()) => Err(commit_err),
+                    Err(rollback_err) => Err(AppError::with_code(
+                        "tun.recovery_required",
+                        format!(
+                            "TUN interface commit failed ({commit_err}) and rollback was not verified ({rollback_err})"
+                        ),
+                    )),
+                };
+            }
+        }
+        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+            *slot = None;
+        }
+    } else {
+        // System-proxy branch: exclusivity is enforced by the capture
+        // controller (TUN active / preparing / stopping / recovery_required
+        // all reject the enable), never inferred from `tun.enabled` alone.
+        {
+            let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+            let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+            state
+                .capture
+                .enable_system_proxy(&settings, &**core, proxy.as_ref())?;
+        }
+        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+            *slot = None;
+        }
+        if let Ok(mut cache) = state.proxy_applied_cache.lock() {
+            *cache = None;
+        }
     }
     attach_traffic(state, &settings);
     Ok(())
@@ -355,15 +442,24 @@ fn start_system_proxy(app: &AppHandle, state: &AppState) -> Result<(), AppError>
 pub async fn start(app: AppHandle) -> Result<(), AppError> {
     run_blocking("start", move || {
         let state = app.state::<AppState>();
-        start_system_proxy(&app, &state)
+        start_service(&app, &state)
     })
     .await
 }
 
-fn disable_system_proxy_inner(state: &AppState) -> Result<(), AppError> {
+/// Home「停止代理服务」: disable whichever capture backend is active. The IPC
+/// name is retained for compatibility (plan §4.3); it delegates to the
+/// controller, so it restores the OS proxy for the system-proxy backend and
+/// releases TUN capture (core may stay Running on the Diagnostic config).
+fn disable_active_backend_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
+    let settings = current_settings(&state.paths)?;
+    let binary = binary_for(app)?;
+    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    orchestrate_disable_system_proxy(&state.paths, proxy.as_ref())?;
+    state
+        .capture
+        .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, true)?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         *slot = None;
     }
@@ -373,22 +469,66 @@ fn disable_system_proxy_inner(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Home「停止代理服务」: restore OS system proxy; keep the core running.
+/// Home「重试恢复」: on-demand retry of TUN recovery (plan §4.3 / §4.4). Runs
+/// the journal recovery driver under the orchestration lock; never enables
+/// capture. Returns a warning message when cleanup is still uncertain
+/// (`recovery_required` persists, fail-closed).
 #[tauri::command]
-pub async fn stop_system_proxy(app: AppHandle) -> Result<(), AppError> {
-    run_blocking("stop_system_proxy", move || {
+pub async fn recover_tun(app: AppHandle) -> Result<Option<String>, AppError> {
+    run_blocking("recover_tun", move || {
         let state = app.state::<AppState>();
-        disable_system_proxy_inner(&state)
+        let _orch = lock_orchestrate(&state)?;
+        state.capture.refresh_backend()?;
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let warning = state.capture.recover(&mut **core)?;
+        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+            *slot = warning.clone();
+        }
+        Ok(warning)
     })
     .await
 }
 
-/// Full stop used by tray Quit / app exit (restore system proxy, then kill core).
+#[tauri::command]
+pub async fn stop_system_proxy(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("stop_system_proxy", move || {
+        let state = app.state::<AppState>();
+        disable_active_backend_inner(&app, &state)
+    })
+    .await
+}
+
+/// Install and authorize the trusted helper component (TUN elevation path):
+/// prompts with the system authorization dialog and runs the bundled
+/// `ice-helper install` as root. macOS only; cancelling modifies nothing.
+/// On success the backend is refreshed so the fresh helper is usable at once.
+#[tauri::command]
+pub async fn install_helper(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("install_helper", move || {
+        crate::helper_install::install_helper_inner(&app)
+    })
+    .await
+}
+
+/// Uninstall the trusted helper component: prompts with the system
+/// authorization dialog, runs `ice-helper uninstall` as root, and refreshes
+/// the backend (back to fail-closed).
+#[tauri::command]
+pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("uninstall_helper", move || {
+        crate::helper_install::uninstall_helper_inner(&app)
+    })
+    .await
+}
+
+/// Full stop used by tray Quit / app exit (disable TUN capture first, restore
+/// system proxy, then kill core).
 #[tauri::command]
 pub async fn stop(app: AppHandle) -> Result<(), AppError> {
     run_blocking("stop", move || {
         let state = app.state::<AppState>();
-        graceful_stop(&state)
+        let binary = binary_for(&app)?;
+        graceful_stop(&state, binary)
     })
     .await
 }
@@ -449,8 +589,40 @@ pub fn save_settings(
 ) -> Result<(), AppError> {
     let _orch = lock_orchestrate(&state)?;
     let previous = current_settings(&state.paths).unwrap_or_default();
-    persist_settings(&state.paths.settings(), &settings)?;
-    apply_after_change(&app, &state, &settings, &previous)
+    settings.validate()?;
+    let active = state.capture.active_backend();
+    let tun_transition = active != TrafficCapture::Inactive
+        && (previous.tun.enabled != settings.tun.enabled
+            || (previous.tun.enabled && tun_topology_changed(&previous.tun, &settings.tun)));
+    if tun_transition {
+        // Serialized backend transition (plan §4.3): the pending record is
+        // committed only after the requested backend is healthy.
+        let binary = binary_for(&app)?;
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+        state.capture.transition_tun_settings(
+            &previous,
+            &settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary,
+        )?;
+        if state.capture.active_backend() == TrafficCapture::Tun {
+            // The transition re-enabled TUN from the full candidate, so the
+            // runtime config already reflects the change (incl. ports/mode);
+            // a second apply would tear down and re-create the TUN for
+            // nothing.
+            Ok(())
+        } else {
+            // TUN was disabled: the disable path restarted the app-managed
+            // core on the previous config; apply the non-backend parts of
+            // the change (ports, mode, rules) now.
+            apply_after_change(&app, &state, &settings, &previous)
+        }
+    } else {
+        persist_settings(&state.paths.settings(), &settings)?;
+        apply_after_change(&app, &state, &settings, &previous)
+    }
 }
 
 #[derive(Deserialize)]
@@ -488,7 +660,8 @@ fn set_proxy_mode_inner(
     let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    orchestrate_set_proxy_mode(
+    let tun_active = state.capture.active_backend() == TrafficCapture::Tun;
+    orchestrate_set_proxy_mode_with_apply(
         &state.paths,
         &settings,
         &previous,
@@ -496,6 +669,28 @@ fn set_proxy_mode_inner(
         proxy.as_ref(),
         binary,
         resource_dir(app).as_deref(),
+        state.capture.apply_intent(),
+        |paths, settings, previous, core, proxy, binary, resource_dir, intent| {
+            if tun_active {
+                // The rebuild + reload fallback cannot signal the elevated
+                // core; route it through the capture controller so TUN health
+                // is re-verified and failures fall back to disable/re-apply.
+                state
+                    .capture
+                    .apply_while_tun_active(settings, previous, core, proxy, binary)
+            } else {
+                orchestrate_apply(
+                    paths,
+                    settings,
+                    previous,
+                    core,
+                    proxy,
+                    binary,
+                    resource_dir,
+                    intent,
+                )
+            }
+        },
     )
 }
 
@@ -515,7 +710,13 @@ pub async fn set_proxy_mode(app: AppHandle, req: SetProxyModeRequest) -> Result<
 
 /// Apply after a settings / subscription mutation. `generate_config` falls back
 /// to a direct-only config when no subscription exists, so this always writes a
-/// valid config.json (and reloads while Running).
+/// valid config.json (and reloads while Running). The capture intent comes
+/// from the runtime controller, never from `tun.enabled` alone.
+///
+/// While TUN capture is active the apply is routed through the capture
+/// controller: the elevated core cannot be signalled by the app, so the
+/// controller runs the stop/reconfigure/start sequence and re-verifies TUN
+/// health instead of a plain `core.reload()`.
 fn apply_after_change(
     app: &AppHandle,
     state: &AppState,
@@ -525,15 +726,27 @@ fn apply_after_change(
     let binary = binary_for(app)?;
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
-    orchestrate_apply(
-        &state.paths,
-        settings,
-        previous_settings,
-        &mut **core,
-        proxy.as_ref(),
-        binary,
-        resource_dir(app).as_deref(),
-    )?;
+
+    if state.capture.active_backend() == TrafficCapture::Tun {
+        state.capture.apply_while_tun_active(
+            settings,
+            previous_settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary,
+        )?;
+    } else {
+        orchestrate_apply(
+            &state.paths,
+            settings,
+            previous_settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary,
+            resource_dir(app).as_deref(),
+            state.capture.apply_intent(),
+        )?;
+    }
     let running = core.state().status == CoreStatus::Running;
     drop(proxy);
     drop(core);
@@ -1281,7 +1494,12 @@ pub fn set_selected_node(
     };
 
     persist_settings(&state.paths.settings(), &settings)?;
-    if let Err(err) = generate_config(&state.paths, &settings, resource_dir(&app).as_deref()) {
+    if let Err(err) = generate_config(
+        &state.paths,
+        &settings,
+        resource_dir(&app).as_deref(),
+        state.capture.apply_intent(),
+    ) {
         let _ = persist_settings(&state.paths.settings(), &previous);
         rollback_group_selection(&state, &previous_selection);
         return Err(err);
@@ -1300,7 +1518,12 @@ pub fn set_selected_node(
         if let Err(err) = result {
             let _ = persist_settings(&state.paths.settings(), &previous);
             rollback_group_selection(&state, &previous_selection);
-            let _ = generate_config(&state.paths, &previous, resource_dir(&app).as_deref());
+            let _ = generate_config(
+                &state.paths,
+                &previous,
+                resource_dir(&app).as_deref(),
+                state.capture.apply_intent(),
+            );
             return Err(AppError::from(err));
         }
     }
@@ -1388,7 +1611,12 @@ pub fn set_group_selection(
         let endpoints = clash_endpoints(&settings);
         select_group(&endpoints, &req.group, &req.member).map_err(AppError::from)?;
     } else {
-        generate_config(&state.paths, &settings, resource_dir(&app).as_deref())?;
+        generate_config(
+            &state.paths,
+            &settings,
+            resource_dir(&app).as_deref(),
+            state.capture.apply_intent(),
+        )?;
     }
     Ok(())
 }
@@ -1468,6 +1696,7 @@ pub async fn get_traffic_snapshot(app: AppHandle) -> Result<TrafficSnapshot, App
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::CaptureController;
     use ice_config::{AppPaths, NormalizedOutbound};
     use ice_subscription::{
         load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
@@ -1531,6 +1760,7 @@ mod tests {
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
         }
     }
 
@@ -1584,6 +1814,7 @@ mod tests {
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
         }
     }
 
@@ -1612,6 +1843,9 @@ mod tests {
     #[test]
     fn collect_status_does_not_block_on_held_proxy_lock() {
         let state = temp_state_with_node("proxy-held");
+        // Warm the helper-core drift caches (one-time SHA-256 of the bundled
+        // core) outside the measured window: the poll itself must stay cheap.
+        let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
         let _guard = state.proxy.lock().unwrap();
         let started = std::time::Instant::now();
         let status = collect_status(&state).expect("status");
@@ -1888,7 +2122,13 @@ mod tests {
         )
         .unwrap();
 
-        generate_config(&state.paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &state.paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
         let rules = config["route"]["rules"].as_array().unwrap();
@@ -2086,7 +2326,13 @@ mod tests {
         overrides.set_disabled(fp, true);
         save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
 
-        generate_config(&state.paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &state.paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
         let rules = config["route"]["rules"].as_array().unwrap();

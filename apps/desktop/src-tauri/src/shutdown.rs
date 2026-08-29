@@ -1,9 +1,11 @@
 //! Graceful shutdown shared by IPC `stop` and tray Quit.
 
-use crate::orchestrate::orchestrate_stop;
+use crate::capture::TrafficCapture;
+use crate::orchestrate::{current_settings, orchestrate_stop};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode};
 use ice_core::CoreStatus;
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
 fn lock_poisoned(context: &str) -> AppError {
@@ -24,7 +26,11 @@ fn detach_traffic_if_core_not_live(state: &AppState, status: CoreStatus) {
 }
 
 /// Stop core + restore system proxy under the orchestrate lock (same serialization as `start`).
-pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
+///
+/// TUN capture is disabled first (bounded timeouts inside the backend); a
+/// failed TUN cleanup is surfaced as a warning and the core is still stopped
+/// so no capture remains enabled.
+pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
     // Abort any in-flight auto-start healthcheck before waiting on the orchestrate lock.
     state
         .shutdown_requested
@@ -33,6 +39,28 @@ pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
         .orchestrate
         .lock()
         .map_err(|_| lock_poisoned("orchestrate"))?;
+
+    let mut tun_warning: Option<String> = None;
+    if state.capture.active_backend() == TrafficCapture::Tun {
+        let settings = current_settings(&state.paths).unwrap_or_default();
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+        match state.capture.disable_active_backend(
+            &settings,
+            &mut **core,
+            proxy.as_ref(),
+            binary.clone(),
+            false,
+        ) {
+            Ok(()) => {}
+            Err(err) => {
+                // Fail closed: keep stopping the core; the journal stays for
+                // startup recovery, and the warning is surfaced.
+                tun_warning = Some(format!("TUN 捕获关闭未确认（{err}）"));
+            }
+        }
+    }
+
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     match orchestrate_stop(&state.paths, &mut **core, proxy.as_ref()) {
@@ -41,7 +69,7 @@ pub fn graceful_stop(state: &AppState) -> Result<(), AppError> {
             drop(core);
             state.traffic.set_endpoints(None);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = None;
+                *slot = tun_warning;
             }
             Ok(())
         }
@@ -91,8 +119,9 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
     let Some(state) = app.try_state::<AppState>() else {
         return QuitOutcome::Stopped;
     };
+    let binary = crate::commands::binary_for(app).unwrap_or_default();
 
-    match graceful_stop(state.inner()) {
+    match graceful_stop(state.inner(), binary) {
         Ok(()) => QuitOutcome::Stopped,
         Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
             tracing::error!(error = %err, "tray quit: proxy restore failed; staying open");
@@ -120,6 +149,7 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::CaptureController;
     use ice_config::AppPaths;
     use ice_core::{
         CoreController, CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, HealthEndpoints,
@@ -209,6 +239,7 @@ mod tests {
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
+            capture: CaptureController::new(paths.clone(), None),
         }
     }
 
@@ -247,6 +278,10 @@ mod tests {
         fn reap_exited_child(&mut self, _: &Path) -> bool {
             false
         }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Err(CoreError::invalid_state("mock adopt unsupported"))
+        }
     }
 
     use std::sync::Mutex;
@@ -259,7 +294,7 @@ mod tests {
 
         let handle = thread::spawn(move || {
             let t0 = Instant::now();
-            graceful_stop(&state_bg).expect("stop");
+            graceful_stop(&state_bg, PathBuf::from("/bin/true")).expect("stop");
             t0.elapsed()
         });
 
@@ -297,7 +332,7 @@ mod tests {
             .save(&state.paths.proxy_backup())
             .expect("seed backup");
 
-        let err = graceful_stop(&state).expect_err("restore fail");
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("restore fail");
         assert_eq!(err.code, "proxy.restore_failed");
 
         let warning = state.proxy_recovery_warning.lock().unwrap().clone();
@@ -314,7 +349,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 9,
         }));
-        graceful_stop(&state).expect("stop");
+        graceful_stop(&state, PathBuf::from("/bin/true")).expect("stop");
         let core = state.core.lock().unwrap();
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert!(!state.traffic.has_target());
@@ -337,7 +372,7 @@ mod tests {
         }));
         assert!(state.traffic.has_target());
 
-        let err = graceful_stop(&state).expect_err("stop fail");
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
         assert_eq!(err.code, "core.invalid_state");
         assert!(!state.traffic.has_target());
 
@@ -358,7 +393,7 @@ mod tests {
             port: 9,
         }));
 
-        let err = graceful_stop(&state).expect_err("stop fail");
+        let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
         assert_eq!(err.code, "core.invalid_state");
         assert!(
             state.traffic.has_target(),

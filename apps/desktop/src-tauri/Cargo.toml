@@ -23,6 +23,10 @@ ice-core = { workspace = true }
 ice-proxy-sys = { workspace = true }
 ice-config = { workspace = true }
 ice-subscription = { workspace = true }
+ice-tun-sys = { workspace = true }
+ice-elevate = { workspace = true }
+sha2 = "0.10"
+libc = "0.2"
 tracing = { workspace = true }
 chrono = { workspace = true }
 fs2 = "0.4"
