@@ -1,4 +1,11 @@
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
 import { Settings } from "./Settings";
@@ -298,6 +305,10 @@ describe("Settings", () => {
   });
 
   it("auto-saves the TUN switch", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_installed: true,
+    });
     const { container } = render(<Settings />);
     const view = within(container);
 
@@ -325,6 +336,156 @@ describe("Settings", () => {
       },
       { timeout: 2000 },
     );
+  });
+
+  it("prompts helper install before enabling TUN when the helper is missing", async () => {
+    installHelper.mockResolvedValue(undefined);
+    // After the install action the status reports the helper as authorized.
+    getStatus
+      .mockResolvedValue({ ...defaultStatus, helper_installed: false })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: false })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: true });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    // First attempt: no helper -> dialog, switch stays off, nothing saved.
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    // Cancel: dialog closes, switch stays off, nothing saved.
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+
+    // Second attempt: confirm -> install runs, then the TUN-on setting saves.
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+  });
+
+  it("keeps TUN off when the guided helper install fails", async () => {
+    installHelper.mockRejectedValue("tun.helper_install_failed: x");
+    getStatus.mockResolvedValue({ ...defaultStatus, helper_installed: false });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("tun.helper_install_failed");
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+  });
+
+  it("rejects the guided install when the form has validation errors", async () => {
+    installHelper.mockResolvedValue(undefined);
+    // Install converges (poll sees the helper installed); the persistence
+    // step then rejects the invalid form.
+    getStatus
+      .mockResolvedValue({ ...defaultStatus, helper_installed: false })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: false })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: true });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    // Make the form invalid, like the auto-save guard would block.
+    fireEvent.change(view.getByDisplayValue("17890"), {
+      target: { value: "80" },
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("1024");
+      expect(saveSettings).not.toHaveBeenCalled();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("TUN 设置未保存");
+    });
+    // No TUN-on save, no success flash, switch stays off.
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("已保存");
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+  });
+
+  it("does not claim success when the helper state never converges", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      installHelper.mockResolvedValue(undefined);
+      getStatus.mockResolvedValue({ ...defaultStatus, helper_installed: false });
+
+      const { container } = render(<Settings />);
+      const view = within(container);
+      await waitFor(() => {
+        expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      });
+
+      fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+      fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+      await waitFor(() => {
+        expect(installHelper).toHaveBeenCalled();
+      });
+
+      // Let the status-poll window (8 x 400ms) exhaust.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      expect(container.textContent).toContain("辅助组件状态未确认");
+      expect(saveSettings).not.toHaveBeenCalled();
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "unchecked",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disables the TUN switch and shows the reason when unavailable", async () => {
@@ -488,6 +649,56 @@ describe("Settings", () => {
       expect(uninstallHelper).toHaveBeenCalled();
     });
     expect(container.textContent).not.toContain("辅助组件安装失败");
+  });
+
+  it("turns the TUN setting off when the helper is uninstalled while TUN is enabled", async () => {
+    uninstallHelper.mockResolvedValue(undefined);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+    // Initial load reports the helper installed; after the uninstall action
+    // it reports the helper gone.
+    getStatus
+      .mockResolvedValue({ ...defaultStatus, helper_installed: true })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: true })
+      .mockResolvedValueOnce({ ...defaultStatus, helper_installed: false });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+
+    fireEvent.click(view.getByRole("button", { name: "卸载辅助组件" }));
+    await waitFor(() => {
+      expect(uninstallHelper).toHaveBeenCalled();
+    });
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tun: expect.objectContaining({ enabled: false }),
+          }),
+        );
+      },
+      { timeout: 2000 },
+    );
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
   });
 
   it("surfaces a helper install failure without claiming success", async () => {

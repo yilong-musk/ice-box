@@ -35,6 +35,12 @@ const HELPER_RESOURCE_NAME: &str = "ice-helper";
 /// Stable error codes surfaced to the UI (plan §4.5 extension).
 pub const ERR_HELPER_INSTALL_FAILED: &str = "tun.helper_install_failed";
 pub const ERR_HELPER_INSTALL_CANCELLED: &str = "tun.helper_install_cancelled";
+/// The elevated install reported OK but the daemon did not accept status
+/// probes within the readiness window. The helper *is* installed; this is a
+/// transient "not ready yet" state, distinct from an install failure so the
+/// UI does not claim nothing was modified (which would push the user into a
+/// needless reinstall + password re-prompt).
+pub const ERR_HELPER_NOT_READY: &str = "tun.helper_not_ready";
 
 /// Refuse install/uninstall while TUN capture is active: the elevated modes
 /// restart (or remove) the launchd daemon, which would orphan the running
@@ -139,6 +145,35 @@ pub fn helper_installed(state: &AppState) -> bool {
         let _ = state;
         false
     }
+}
+
+/// Wait for the freshly installed daemon to accept `Status` probes. `launchctl
+/// bootstrap` returns once launchd loaded the job, which can precede the
+/// daemon binding its socket by a moment; probing too early would report the
+/// helper as missing and stall the backend refresh / UI state. A slow boot
+/// (heavily loaded machine, cold disk) is given a generous window before the
+/// install is reported as "installed but not ready" (fail-closed, distinct
+/// from an install failure).
+fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
+    const ATTEMPTS: u32 = 20;
+    const DELAY_MS: u64 = 500;
+    let socket = ice_tun_sys::helper::helper_socket_path();
+    let token = ice_tun_sys::helper::helper_token(data_dir).map_err(|err| {
+        AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!("辅助组件未授权：{}", err.message),
+        )
+    })?;
+    for _ in 0..ATTEMPTS {
+        if ice_tun_sys::helper::helper_reachable_bounded(&socket, &token) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(DELAY_MS));
+    }
+    Err(AppError::with_code(
+        ERR_HELPER_NOT_READY,
+        "辅助组件已安装但守护进程尚未就绪，请稍后重试",
+    ))
 }
 
 // --- Core version drift (one installed core version at a time) -----------
@@ -246,6 +281,10 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     let outcome = run_elevated(&helper, &args)?;
     parse_outcome(outcome)?;
     reset_helper_core_cache();
+    // The daemon may not have bound its socket yet (launchctl bootstrap
+    // returns before the process is serving); wait for it so the backend
+    // refresh below actually probes a reachable helper.
+    wait_for_helper_ready(data_dir)?;
     // Make the freshly installed helper the active coordinator (the probe is
     // read-only; no capture is enabled here).
     state.capture.refresh_backend()?;

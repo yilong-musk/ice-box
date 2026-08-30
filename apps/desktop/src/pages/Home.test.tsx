@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
@@ -137,16 +137,23 @@ describe("Home", () => {
     expect(view.getByText("流量")).toBeInTheDocument();
     expect(view.getByText("代理状态")).toBeInTheDocument();
     expect(view.getByText("信息")).toBeInTheDocument();
-    expect(view.getByText("代理模式")).toBeInTheDocument();
     expect(view.queryByText("系统代理")).toBeNull();
     expect(container.querySelector(".home-panel")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
     );
-    expect(view.getByRole("radiogroup", { name: "模式" })).toBeInTheDocument();
+    // The mode switch lives inside the 代理状态 card, below the power button.
+    const statusCard = view
+      .getByText("代理状态")
+      .closest("[data-slot=card]") as HTMLElement;
+    expect(
+      within(statusCard).getByRole("radiogroup", { name: "模式" }),
+    ).toBeInTheDocument();
     expect(view.getByRole("radio", { name: "规则" })).toHaveAttribute("data-state", "on");
     expect(view.getByRole("radio", { name: "全局" })).toHaveAttribute("data-state", "off");
     expect(view.getByRole("radio", { name: "直连" })).toHaveAttribute("data-state", "off");
-    expect(view.getByRole("button", { name: "停止代理服务" })).toBeInTheDocument();
+    expect(
+      within(statusCard).getByRole("button", { name: "停止代理服务" }),
+    ).toBeInTheDocument();
     expect(view.queryByRole("button", { name: "测延迟" })).toBeNull();
   });
 
@@ -646,6 +653,161 @@ describe("Home", () => {
     fireEvent.click(view.getByRole("button", { name: "重试恢复" }));
     await waitFor(() => {
       expect(recoverTun).toHaveBeenCalled();
+    });
+  });
+
+  it("toggles the TUN setting from the home page when the helper is installed", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: false,
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(tunToggle);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+  });
+
+  it("reflects the TUN toggle optimistically and snaps back when the save is not committed", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: false,
+      helper_installed: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+
+    // The toggle reflects the intent immediately instead of waiting for the
+    // next 2s status poll.
+    fireEvent.click(tunToggle);
+    expect(tunToggle).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+
+    // The post-action refresh reports the committed value; the backend still
+    // says TUN is not configured, so the toggle snaps back.
+    await waitFor(() => {
+      expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  it("prompts helper install before enabling TUN on the home page", async () => {
+    installHelper.mockResolvedValue(undefined);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+
+    // No helper: dialog appears, nothing is saved.
+    fireEvent.click(tunToggle);
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    // Cancel: dialog closes, still nothing saved.
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+
+    // Confirm: install runs, then the TUN-on setting is saved.
+    fireEvent.click(tunToggle);
+    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
     });
   });
 });

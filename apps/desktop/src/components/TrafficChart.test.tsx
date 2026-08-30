@@ -78,7 +78,7 @@ describe("TrafficChart", () => {
     expect(view.getByText(/后台持续采样/)).toBeInTheDocument();
   });
 
-  it("uses the cumulative run peak when the visible window is lower", async () => {
+  it("uses the 60-second window peak for the y scale", async () => {
     getTrafficSnapshot.mockResolvedValue(
       snap(
         [{ up: 80 * 1024, down: 40 * 1024, t: 1_000 }],

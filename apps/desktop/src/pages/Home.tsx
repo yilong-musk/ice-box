@@ -30,6 +30,8 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Toggle } from "@/components/ui/toggle";
+import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -69,6 +71,12 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
+  /** Optimistic TUN-toggle state while a settings save is in flight: the
+   * toggle reflects the user's intent immediately instead of waiting for the
+   * 2s status poll; cleared whenever fresh status arrives, so the control
+   * always snaps back to the committed setting on failure. */
+  const [tunOverride, setTunOverride] = useState<boolean | null>(null);
+  const tunInstall = useTunInstallDialog(onInstallHelperThenEnableTun);
   const modeBusyRef = useRef(false);
   const pendingRef = useRef(false);
   const activeRef = useRef(active);
@@ -87,6 +95,7 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
       setStatus(s);
       setNodes(n);
       setSettings(settings);
+      setTunOverride(null);
       setProxyMode(settings.proxy_mode);
       setSelectedTag(selected);
       writeNodesSnapshot({
@@ -227,6 +236,32 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
     }
   }
 
+  /** TUN setting switch on the home page: persists `tun.enabled` through the
+   * normal settings path (the capture backend follows the committed setting).
+   * Enabling without an authorized helper guides the user through install
+   * first (same flow as the Settings page). */
+  function onToggleTunSetting(enabled: boolean) {
+    if (!settings) return;
+    setTunOverride(enabled);
+    void run(async () => {
+      await api.saveSettings({
+        ...settings,
+        tun: { ...settings.tun, enabled },
+      });
+    });
+  }
+
+  function onInstallHelperThenEnableTun() {
+    if (!settings) return;
+    void run(async () => {
+      await api.installHelper();
+      await api.saveSettings({
+        ...settings,
+        tun: { ...settings.tun, enabled: true },
+      });
+    });
+  }
+
   /** Fallback offered after a TUN failure (plan §4.6): disable the TUN
    * setting, then start the system proxy. Only offered when no TUN
    * resource is active and cleanup is not uncertain. */
@@ -354,7 +389,7 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
       )}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
-      <div className="grid shrink-0 grid-cols-3 items-stretch gap-3">
+      <div className="grid shrink-0 grid-cols-2 items-stretch gap-3">
         <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>代理状态</CardTitle>
@@ -398,6 +433,57 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
                 当前平台不支持系统代理或 TUN 接管
               </p>
             )}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              orientation="horizontal"
+              spacing={2}
+              value={proxyMode}
+              onValueChange={(value) => {
+                if (value === "rule" || value === "global" || value === "direct") {
+                  void onSetMode(value);
+                }
+              }}
+              disabled={modeBusy || busy}
+              className="mt-3 w-full"
+              aria-label="模式"
+            >
+              {PROXY_MODES.map(([mode, label]) => (
+                <ToggleGroupItem key={mode} value={mode} className="flex-1">
+                  {label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <Toggle
+              variant="outline"
+              size="sm"
+              pressed={tunOverride ?? configuredTun}
+              onPressedChange={(pressed) => {
+                if (pressed) {
+                  if (status?.helper_installed !== true) {
+                    // No authorized helper: guide the user to install it
+                    // first; the TUN-on setting is persisted only after a
+                    // successful install (cancel leaves it off).
+                    tunInstall.setOpen(true);
+                    return;
+                  }
+                  onToggleTunSetting(true);
+                } else {
+                  onToggleTunSetting(false);
+                }
+              }}
+              disabled={
+                busy ||
+                !settings ||
+                status?.tun_available === false ||
+                status?.helper_stale === true
+              }
+              className="mt-3 w-full"
+              aria-label="TUN 模式"
+            >
+              TUN 模式
+            </Toggle>
           </CardContent>
         </Card>
 
@@ -419,36 +505,6 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
                 </div>
               ))}
             </ItemGroup>
-          </CardContent>
-        </Card>
-
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>代理模式</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-1 flex-col">
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              orientation="horizontal"
-              spacing={2}
-              value={proxyMode}
-              onValueChange={(value) => {
-                if (value === "rule" || value === "global" || value === "direct") {
-                  void onSetMode(value);
-                }
-              }}
-              disabled={modeBusy || busy}
-              className="w-full"
-              aria-label="模式"
-            >
-              {PROXY_MODES.map(([mode, label]) => (
-                <ToggleGroupItem key={mode} value={mode} className="flex-1">
-                  {label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
           </CardContent>
         </Card>
       </div>
@@ -496,6 +552,13 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
           )}
         </CardContent>
       </Card>
+
+      <TunInstallDialog
+        open={tunInstall.open}
+        onOpenChange={tunInstall.setOpen}
+        onConfirm={tunInstall.confirm}
+        busy={busy}
+      />
     </div>
   );
 }

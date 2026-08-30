@@ -14,6 +14,7 @@ import {
   portsConflict,
 } from "../lib/generationGuard";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
+import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -81,6 +82,7 @@ export function Settings({ active = true }: { active?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const tunInstall = useTunInstallDialog(installHelperThenEnableTun);
   const { preference, setPreference } = useThemePreference();
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
@@ -125,21 +127,70 @@ export function Settings({ active = true }: { active?: boolean }) {
   }
 
   /** In-app helper install/uninstall (unsigned elevation path): prompts the
-   * system authorization dialog; cancel modifies nothing. */
-  async function runHelperAction(action: () => Promise<void>) {
+   * system authorization dialog; cancel modifies nothing. After the action,
+   * polls `getStatus` until the expected helper state is observed — launchd
+   * bootstrap returns before the daemon binds its socket, so a single probe
+   * right after install can still report the helper as missing. When the
+   * state never converges, the action is reported as unconfirmed (fail-closed:
+   * no success flash, no follow-up persistence). */
+  async function runHelperAction(
+    action: () => Promise<void>,
+    expectedInstalled: boolean,
+    afterReady?: () => void | Promise<void>,
+  ) {
     setBusy(true);
     setError(null);
     try {
       await action();
+      let s = await api.getStatus();
+      for (
+        let attempt = 0;
+        attempt < 8 && s.helper_installed !== expectedInstalled;
+        attempt++
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        s = await api.getStatus();
+      }
+      setStatus(s);
+      if (s.helper_installed !== expectedInstalled) {
+        setError("辅助组件状态未确认，未更改 TUN 设置；请稍后重试");
+        return;
+      }
+      await afterReady?.();
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
-      const s = await api.getStatus();
-      setStatus(s);
     } catch (e) {
       setError(formatInvokeError(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Persist `tun.enabled` directly (bypassing the debounced auto-save) with
+   * the same validation the save pipeline applies. An invalid form rejects
+   * with a visible error instead of silently keeping the change unsaved —
+   * e.g. a guided install must never flash「已保存」while the TUN-on setting
+   * was dropped by validation. */
+  async function persistTunEnabled(enabled: boolean) {
+    const candidate = { ...form, tun: { ...form.tun, enabled } };
+    const errs = validateForm(candidate);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      throw new Error("TUN 设置未保存：请先修正上方表单中的错误后重试");
+    }
+    await api.saveSettings(candidate);
+    setForm(candidate);
+  }
+
+  /** Enabling TUN without an authorized helper: install first, then persist
+   * the TUN-on setting. Cancel or a failed install leaves the switch off and
+   * settings untouched. */
+  function installHelperThenEnableTun() {
+    void runHelperAction(
+      () => api.installHelper(),
+      true,
+      () => persistTunEnabled(true),
+    );
   }
 
   function validateForm(next: AppSettings): Record<string, string> {
@@ -275,6 +326,7 @@ export function Settings({ active = true }: { active?: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-col gap-3">
           <Field orientation="horizontal" className="w-auto gap-2">
             <Switch
               id="settings-tun-enabled"
@@ -290,6 +342,13 @@ export function Settings({ active = true }: { active?: boolean }) {
               }
               aria-label="启用 TUN 模式"
               onCheckedChange={(checked) => {
+                if (checked === true && status?.helper_installed !== true) {
+                  // No authorized helper: guide the user to install it first;
+                  // the TUN-on setting is persisted only after a successful
+                  // install (cancel leaves the switch off).
+                  tunInstall.setOpen(true);
+                  return;
+                }
                 setForm({
                   ...form,
                   tun: { ...form.tun, enabled: checked === true },
@@ -328,11 +387,11 @@ export function Settings({ active = true }: { active?: boolean }) {
                 : "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查"}
             </FieldDescription>
           )}
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
-              onClick={() => void runHelperAction(() => api.installHelper())}
+              onClick={() => void runHelperAction(() => api.installHelper(), true)}
               disabled={
                 busy ||
                 (status?.helper_installed === true &&
@@ -350,7 +409,14 @@ export function Settings({ active = true }: { active?: boolean }) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => void runHelperAction(() => api.uninstallHelper())}
+              onClick={() =>
+                  void runHelperAction(() => api.uninstallHelper(), false, () => {
+                    // The helper is gone: the TUN-on setting can no longer be
+                    // applied, so persist it off with the uninstall.
+                    if (!form.tun.enabled) return;
+                    return persistTunEnabled(false);
+                  })
+                }
               disabled={
                 busy ||
                 status?.helper_installed !== true ||
@@ -361,6 +427,7 @@ export function Settings({ active = true }: { active?: boolean }) {
             >
               卸载辅助组件
             </Button>
+          </div>
           </div>
         </CardContent>
       </Card>
@@ -523,6 +590,13 @@ export function Settings({ active = true }: { active?: boolean }) {
       </Card>
         </div>
       </ScrollArea>
+
+      <TunInstallDialog
+        open={tunInstall.open}
+        onOpenChange={tunInstall.setOpen}
+        onConfirm={tunInstall.confirm}
+        busy={busy}
+      />
     </div>
   );
 }

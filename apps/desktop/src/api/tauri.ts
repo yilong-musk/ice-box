@@ -194,6 +194,8 @@ const FRIENDLY_ERROR_CODES: Record<string, string> = {
   "tun.helper_install_cancelled":
     "已取消系统授权，未修改任何系统配置。可在需要时重新点击「安装辅助组件」",
   "tun.helper_install_failed": "辅助组件安装失败，未修改任何系统配置",
+  "tun.helper_not_ready":
+    "辅助组件已安装，但守护进程尚未就绪，请稍后重试",
   "tun.helper_stale":
     "辅助组件仍在使用旧版内核：应用已更新内核版本，请先在设置中点击「更新辅助组件」（将弹出系统授权密码框）",
   "tun.apply_failed": "TUN 启动失败，已回滚到切换前的状态",
