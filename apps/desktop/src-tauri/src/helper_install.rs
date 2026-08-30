@@ -26,7 +26,9 @@ use crate::AppState;
 use ice_config::AppError;
 use ice_elevate::{ElevateError, ElevateOutcome};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 use tauri::Manager;
 
 /// Bundle resource name of the helper binary.
@@ -39,7 +41,9 @@ pub const ERR_HELPER_INSTALL_CANCELLED: &str = "tun.helper_install_cancelled";
 /// probes within the readiness window. The helper *is* installed; this is a
 /// transient "not ready yet" state, distinct from an install failure so the
 /// UI does not claim nothing was modified (which would push the user into a
-/// needless reinstall + password re-prompt).
+/// needless reinstall + password re-prompt). Created only on unix hosts (the
+/// readiness wait itself is unix-only).
+#[cfg(unix)]
 pub const ERR_HELPER_NOT_READY: &str = "tun.helper_not_ready";
 
 /// Refuse install/uninstall while TUN capture is active: the elevated modes
