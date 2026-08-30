@@ -1696,6 +1696,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ice-config",
+ "percent-encoding",
  "rustls",
  "serde",
  "serde_json",

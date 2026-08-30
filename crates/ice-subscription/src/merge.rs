@@ -4,6 +4,7 @@ use ice_config::{NormalizedOutbound, NormalizedProfile};
 
 use crate::error::SubscriptionError;
 use crate::store::{read_profile, SubscriptionPaths};
+use crate::uri::apply_builtin_default_rules;
 use crate::{SubscriptionIndex, SubscriptionMeta};
 
 /// Returns the active subscription meta, if any.
@@ -11,10 +12,22 @@ pub fn active_subscription(index: &SubscriptionIndex) -> Option<&SubscriptionMet
     index.items.iter().find(|m| m.active)
 }
 
-/// Load profile for the active subscription.
+/// Load profile for the active subscription, attaching the built-in
+/// split-routing defaults (they are not baked into the cached profile).
 pub fn load_active_profile(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
+) -> Result<NormalizedProfile, SubscriptionError> {
+    load_active_profile_with_default_rules(paths, index, true)
+}
+
+/// Like [`load_active_profile`], honoring the app's `auto_default_rules`
+/// setting: when enabled, rule-less profiles get the built-in defaults at
+/// load time so both the Rules page and the generated config stay consistent.
+pub fn load_active_profile_with_default_rules(
+    paths: &SubscriptionPaths,
+    index: &SubscriptionIndex,
+    auto_default_rules: bool,
 ) -> Result<NormalizedProfile, SubscriptionError> {
     let meta = active_subscription(index).ok_or(SubscriptionError::NoActiveSubscription)?;
     if !paths.sub_dir(meta.id).exists() {
@@ -23,7 +36,11 @@ pub fn load_active_profile(
             meta.name, meta.id
         )));
     }
-    read_profile(paths, meta.id)
+    let mut profile = read_profile(paths, meta.id)?;
+    if auto_default_rules {
+        apply_builtin_default_rules(&mut profile);
+    }
+    Ok(profile)
 }
 
 /// Resolve `selected_tag`: keep if present in outbounds/groups, else default_outbound or first tag.

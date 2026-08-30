@@ -84,6 +84,7 @@ export type AppSettings = {
   allow_lan: boolean;
   proxy_mode: ProxyMode;
   tun: TunSettings;
+  auto_default_rules: boolean;
 };
 
 export type SubscriptionMeta = {

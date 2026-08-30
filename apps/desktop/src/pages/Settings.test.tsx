@@ -73,6 +73,7 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       allow_lan: false,
       proxy_mode: "rule",
+      auto_default_rules: true,
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -157,6 +158,30 @@ describe("Settings", () => {
       },
       { timeout: 2000 },
     );
+  });
+
+  it("default rules toggle defaults on and saves the change", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByLabelText("为无规则的订阅附加默认分流规则"),
+      ).toBeInTheDocument();
+    });
+
+    const toggle = view.getByLabelText("为无规则的订阅附加默认分流规则");
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ auto_default_rules: false }),
+        );
+      },
+      { timeout: 2000 },
+    );
+    expect(toggle).not.toBeChecked();
   });
 
   it("blocks save when mixed and clash api ports conflict", async () => {

@@ -22,11 +22,18 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                     let _ = win.set_focus();
                 }
             }
-            "quit" => match request_tray_quit(app) {
-                QuitOutcome::Stopped => app.exit(0),
-                QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {}
-                QuitOutcome::LockPoisoned => app.exit(1),
-            },
+            "quit" => {
+                // The stop can take seconds with TUN active (teardown waits +
+                // core stop + `networksetup` restore); run it off the main
+                // thread so the window never freezes, and exit from the
+                // worker once the state is consistent.
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || match request_tray_quit(&app) {
+                    QuitOutcome::Stopped => app.exit(0),
+                    QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {}
+                    QuitOutcome::LockPoisoned => app.exit(1),
+                });
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

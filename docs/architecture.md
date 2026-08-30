@@ -23,7 +23,7 @@ IPC, or platform backend integration yet).
 | Core | sing-box as an **independent subprocess** |
 | Proxy mode | System HTTP / HTTPS / SOCKS (pointing at the local mixed inbound) |
 | Subscriptions | Import, list, **single active subscription** (switching switches the entire routing), update, delete |
-| Subscription formats | **sing-box JSON first**; **Clash compatible** (YAML / common subscription bodies; incl. proxy-groups / rules / dns) |
+| Subscription formats | **sing-box JSON first**; **Clash compatible** (YAML / common subscription bodies; incl. proxy-groups / rules / dns); **proxy URI list** (vless / vmess / trojan / ss / hysteria / hysteria2 / tuic / socks / http / wireguard share links) |
 | Runtime updates | **sing-box hot reload first**; restart the process on failure |
 | Config ownership | UI generates the final `config.json`; sing-box never reads subscription URLs directly |
 

@@ -274,18 +274,25 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
-            // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray Quit
-            // (stop core + restore system proxy) before the process dies, instead of
-            // orphaning sing-box and leaving the proxy applied until the next launch.
+            // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray
+            // Quit (stop core + restore system proxy) before the process dies,
+            // instead of orphaning sing-box and leaving the proxy applied until
+            // the next launch. The stop runs off the main thread — it can take
+            // seconds with TUN active (teardown waits + core stop +
+            // `networksetup` restore) — and the process exits from the worker
+            // once the state is consistent.
             api.prevent_exit();
-            match request_tray_quit(app_handle) {
-                QuitOutcome::Stopped => std::process::exit(0),
-                QuitOutcome::LockPoisoned => std::process::exit(1),
-                QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {
-                    // Stay running so the user can retry from the UI; the warning is
-                    // surfaced on the next get_status poll.
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match request_tray_quit(&handle) {
+                    QuitOutcome::Stopped => std::process::exit(0),
+                    QuitOutcome::LockPoisoned => std::process::exit(1),
+                    QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {
+                        // Stay running so the user can retry from the UI; the
+                        // warning is surfaced on the next get_status poll.
+                    }
                 }
-            }
+            });
         }
     });
 }

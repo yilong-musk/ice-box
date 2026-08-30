@@ -15,7 +15,8 @@ use ice_proxy_sys::{
     ProxyEndpoints, SystemProxy,
 };
 use ice_subscription::{
-    load_active_profile, load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
+    load_active_profile_with_default_rules, load_index, resolve_selected_tag, SubscriptionError,
+    SubscriptionPaths,
 };
 use std::path::{Path, PathBuf};
 
@@ -151,7 +152,11 @@ pub fn generate_config(
 ) -> Result<(), AppError> {
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
-    let profile = match load_active_profile(&sub_paths, &index) {
+    let profile = match load_active_profile_with_default_rules(
+        &sub_paths,
+        &index,
+        settings.auto_default_rules,
+    ) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => {
             // First-run / all subscriptions removed: fall back to a direct-only

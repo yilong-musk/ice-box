@@ -271,6 +271,16 @@ pub struct AppSettings {
     /// files; no settings migration ever enables TUN implicitly (plan §2.6).
     #[serde(default)]
     pub tun: TunSettings,
+    /// When true, subscriptions whose body carries no routing rules get the
+    /// built-in split-routing defaults (private IPs / China direct, rest via
+    /// the selected node) plus a matching DNS split. Defaults to on for
+    /// existing `settings.json` files.
+    #[serde(default = "default_auto_default_rules")]
+    pub auto_default_rules: bool,
+}
+
+fn default_auto_default_rules() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -285,6 +295,7 @@ impl Default for AppSettings {
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
+            auto_default_rules: true,
         }
     }
 }

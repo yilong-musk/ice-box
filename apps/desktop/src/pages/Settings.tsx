@@ -45,6 +45,7 @@ const defaults: AppSettings = {
   auto_set_system_proxy: false,
   allow_lan: false,
   proxy_mode: "rule",
+  auto_default_rules: true,
   tun: {
     enabled: false,
     interface_name: null,
@@ -568,6 +569,31 @@ export function Settings({ active = true }: { active?: boolean }) {
               <FieldDescription>
                 局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP
                 连接；Clash API 仍仅限本机
+              </FieldDescription>
+            ) : null}
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-auto-default-rules"
+                size="sm"
+                checked={form.auto_default_rules}
+                disabled={busy || !loaded}
+                aria-label="为无规则的订阅附加默认分流规则"
+                onCheckedChange={(checked) => {
+                  setForm({
+                    ...form,
+                    auto_default_rules: checked === true,
+                  });
+                }}
+              />
+              <FieldLabel htmlFor="settings-auto-default-rules">
+                为无规则的订阅附加默认分流规则
+              </FieldLabel>
+            </Field>
+            {form.auto_default_rules ? (
+              <FieldDescription>
+                订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP /
+                国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS
+                分流
               </FieldDescription>
             ) : null}
             <div className="flex flex-wrap gap-2">

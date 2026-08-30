@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Proxy URI list ("share link") subscription support: subscriptions whose body
+  is a base64-wrapped or plain list of `vless://`, `vmess://`, `trojan://`,
+  `ss://`, `hysteria://`, `hysteria2://`, `tuic://`, `socks://`, `http(s)://`,
+  `wireguard://` links now import as nodes (v2rayN / v2rayNG / ClashMeta /
+  Hiddify / sing-box converter formats, incl. reality, vision flow, ws/grpc/
+  http transports, SIP002 + legacy ss, v2rayN base64 vmess). Every link is
+  preserved as-is, including provider metadata links (e.g. `剩余流量：...`);
+  `ssr://` and unsupported flows/transports are skipped with per-line warnings
+  because sing-box cannot run them.
+
+- URI list imports route through the injected `proxy` selector (flat profiles),
+  so node selection actually takes effect; reality outbounds always carry a uTLS
+  fingerprint (`uTLS is required by reality client`); hysteria2 links with
+  `pinSHA256` degrade to `insecure` because sing-box has no cert-pinning support
+  (providers ship pins precisely because their certificates are not
+  standards-compliant and would otherwise fail TLS verification).
+
+- Built-in split routing for rule-less subscriptions (share-link URI lists, or
+  any Clash / sing-box body without rules): private IPs, Chinese IPs
+  (`geoip-cn`) and a curated list of ~170 common Chinese domain suffixes go
+  direct, everything else follows the selected node. A matching DNS block
+  routes Chinese domains to 223.5.5.5 and everything else to a remote DoH
+  through the proxy (anti-pollution). The defaults are attached at profile
+  load time (not baked into the cache), so the Rules page shows them and they
+  stay individually toggleable via rule overrides. A new Settings toggle
+  「为无规则的订阅附加默认分流规则」(on by default) turns the whole feature
+  off. The domain tier is designed to be swappable for a bundled `geosite-cn`
+  rule-set later.
+
 - In-app privileged helper installation for TUN mode (macOS): the app prompts
   the system authorization dialog (`AuthorizationServices`) and installs or
   removes the `ice-helper` launchd daemon itself, replacing the manual
