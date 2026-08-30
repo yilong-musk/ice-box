@@ -105,6 +105,10 @@ struct CaptureInner {
     transition_id: Option<String>,
     tun_interface: Option<String>,
     tun_error: Option<AppError>,
+    /// Whether the helper has run the elevated core at least once this app
+    /// session; latched, never cleared, so the log view keeps merging the
+    /// helper core log after TUN capture stops.
+    helper_core_used: bool,
 }
 
 /// The runtime capture controller (plan §4.3).
@@ -183,6 +187,7 @@ impl CaptureController {
                 transition_id: None,
                 tun_interface: None,
                 tun_error: None,
+                helper_core_used: false,
             }),
         }
     }
@@ -212,6 +217,7 @@ impl CaptureController {
                 transition_id: None,
                 tun_interface: None,
                 tun_error: None,
+                helper_core_used: false,
             }),
         }
     }
@@ -221,6 +227,17 @@ impl CaptureController {
             .lock()
             .map(|inner| inner.active)
             .unwrap_or(TrafficCapture::Inactive)
+    }
+
+    /// Whether the helper has run the elevated core this app session (latched
+    /// on the first helper-managed TUN transition). The log view merges the
+    /// helper core log while this holds, so a finished TUN session's core
+    /// lines stay visible after capture stops.
+    pub fn helper_core_used(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|inner| inner.helper_core_used)
+            .unwrap_or(false)
     }
 
     /// Resource dir handed to backend construction (bundle resources in
@@ -422,6 +439,14 @@ impl CaptureController {
         inner.tun_error = None;
         inner.transition_id = None;
         inner.tun_interface = tun_interface;
+        // A successful TUN transition outside the dev `sudo` runner means the
+        // elevated core was spawned by the helper and wrote to the helper's
+        // fixed core log; latch it so the log view keeps merging that file
+        // after TUN stops (the app-data core log is frozen during the helper
+        // session).
+        if active == TrafficCapture::Tun && !ice_tun_sys::dev_sudo_runner_enabled() {
+            inner.helper_core_used = true;
+        }
         Ok(())
     }
 
@@ -1747,6 +1772,10 @@ mod tests {
 
         assert_eq!(c.active_backend(), TrafficCapture::Tun);
         assert_eq!(c.tun_status(), TunStatus::Enabled);
+        assert!(
+            c.helper_core_used(),
+            "helper core log latched after a helper-managed TUN enable"
+        );
         let journal = TunJournal::load(&paths.tun_state()).unwrap().unwrap();
         assert_eq!(journal.state, JournalState::Applied);
         assert_eq!(journal.last_completed_step, steps::VERIFY_APPLIED);

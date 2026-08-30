@@ -563,7 +563,21 @@ pub struct LogViewRequest {
 pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<String>, AppError> {
     run_blocking("get_log_view", move || {
         let state = app.state::<AppState>();
-        crate::log_view::read_log_view(&state.paths.app_log(), &state.paths.core_log(), req.n)
+        // While TUN capture runs through the privileged helper (production
+        // macOS path), the elevated core's output goes to the helper's fixed
+        // log instead of the app-data core log; the dev sudo runner keeps the
+        // app-data path, so it must not read the helper log. The capture
+        // controller latches helper usage for the app session, so the merge
+        // also persists after a TUN session ends.
+        let helper_log = (state.capture.helper_core_used()
+            && !ice_tun_sys::dev_sudo_runner_enabled())
+        .then(|| std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST));
+        crate::log_view::read_log_view(
+            &state.paths.app_log(),
+            &state.paths.core_log(),
+            helper_log,
+            req.n,
+        )
     })
     .await
 }

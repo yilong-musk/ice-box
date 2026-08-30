@@ -50,7 +50,8 @@ enum Source {
 struct LogLine {
     ts: DateTime<FixedOffset>,
     source: Source,
-    /// Position in the source tail; preserves actual file order for same-second lines.
+    /// Global read order across the merged tails; tiebreak for same-timestamp
+    /// lines from different files (files are read app → core → helper).
     order: usize,
     level: Level,
     text: String,
@@ -153,11 +154,15 @@ fn display_worthy(source: Source, level: Level, text: &str) -> bool {
     }
 }
 
-fn collect(out: &mut Vec<LogLine>, source: Source, path: &Path) -> Result<(), AppError> {
-    for (order, raw) in read_log_tail_deep(path, SCAN_PER_SOURCE)?
-        .into_iter()
-        .enumerate()
-    {
+fn collect(
+    out: &mut Vec<LogLine>,
+    source: Source,
+    path: &Path,
+    next_order: &mut usize,
+) -> Result<(), AppError> {
+    for raw in read_log_tail_deep(path, SCAN_PER_SOURCE)? {
+        let order = *next_order;
+        *next_order += 1;
         let parsed = match source {
             Source::App => parse_app_line(&raw),
             Source::Core => parse_core_line(&raw),
@@ -306,13 +311,31 @@ fn format_display_line(
 
 /// Read the merged, filtered log view: app + core tails, sorted by time, capped at `n`.
 ///
-/// Display lines use a compact timestamp and omit source tags; the filter never
-/// touches the log files themselves.
-pub fn read_log_view(app_log: &Path, core_log: &Path, n: usize) -> Result<Vec<String>, AppError> {
+/// `helper_core_log` is the privileged helper's core log destination
+/// (`/var/log/ice-box-core.log`): while TUN capture runs through the helper,
+/// the elevated core's output lands there instead of the app-data core log, so
+/// it is merged in as an extra core source. Best-effort — a missing or
+/// unreadable helper log is ignored, never a view error.
+///
+/// Lines with identical timestamps keep file read order (app, then core, then
+/// the helper core log). Display lines use a compact timestamp and omit source
+/// tags; the filter never touches the log files themselves.
+pub fn read_log_view(
+    app_log: &Path,
+    core_log: &Path,
+    helper_core_log: Option<&Path>,
+    n: usize,
+) -> Result<Vec<String>, AppError> {
     let n = n.min(VIEW_MAX);
     let mut lines: Vec<LogLine> = Vec::new();
-    collect(&mut lines, Source::App, app_log)?;
-    collect(&mut lines, Source::Core, core_log)?;
+    let mut next_order = 0usize;
+    collect(&mut lines, Source::App, app_log, &mut next_order)?;
+    collect(&mut lines, Source::Core, core_log, &mut next_order)?;
+    if let Some(helper_log) = helper_core_log {
+        // Missing / unreadable helper log: read_tail yields an empty tail for
+        // missing paths, and collect errors are dropped — never a view error.
+        let _ = collect(&mut lines, Source::Core, helper_log, &mut next_order);
+    }
     lines.sort_by_key(|a| (a.ts, a.source, a.order));
     // Keep the newest lines after merging both sources. Truncating the ascending
     // list directly would retain stale entries and hide the latest connections.
@@ -508,7 +531,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, 500).unwrap();
+        let view = read_log_view(&app, &core, None, 500).unwrap();
         assert_eq!(
             view.len(),
             5,
@@ -567,7 +590,7 @@ mod tests {
         fs::write(&app, app_text).unwrap();
         fs::write(&core, "").unwrap();
 
-        let view = read_log_view(&app, &core, 3).unwrap();
+        let view = read_log_view(&app, &core, None, 3).unwrap();
         assert_eq!(
             view,
             vec![
@@ -595,7 +618,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, 1).unwrap();
+        let view = read_log_view(&app, &core, None, 1).unwrap();
         assert_eq!(
             view,
             vec!["INFO 08-23 13:47:06 second.example:443 → direct"]
@@ -606,8 +629,73 @@ mod tests {
     #[test]
     fn missing_files_yield_empty_view() {
         let dir = temp_dir("missing");
-        let view = read_log_view(&dir.join("nope.log"), &dir.join("nope2.log"), 500).unwrap();
+        let view = read_log_view(&dir.join("nope.log"), &dir.join("nope2.log"), None, 500).unwrap();
         assert!(view.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merges_helper_core_log_best_effort() {
+        let dir = temp_dir("helper");
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("ice-box.log");
+        let core = dir.join("sing-box.log");
+        let helper = dir.join("helper-core.log");
+        fs::write(&app, "").unwrap();
+        fs::write(
+            &core,
+            "+0000 2026-08-23 13:47:00 INFO sing-box started (0.00s)\n",
+        )
+        .unwrap();
+        fs::write(
+            &helper,
+            "+0000 2026-08-23 13:47:10 INFO [1 0ms] outbound/trojan[TUN-01]: outbound connection to tunneled.example:443\n",
+        )
+        .unwrap();
+
+        let view = read_log_view(&app, &core, Some(&helper), 500).unwrap();
+        assert_eq!(
+            view,
+            vec![
+                "INFO 08-23 13:47:00 sing-box started (0.00s)",
+                "INFO 08-23 13:47:10 tunneled.example:443 → TUN-01",
+            ]
+        );
+
+        // Missing / unreadable helper log must not break the view.
+        let view = read_log_view(&app, &core, Some(&dir.join("missing.log")), 500).unwrap();
+        assert_eq!(view.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn same_second_lines_across_files_keep_read_order() {
+        let dir = temp_dir("cross-order");
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("ice-box.log");
+        let core = dir.join("sing-box.log");
+        let helper = dir.join("helper-core.log");
+        fs::write(&app, "").unwrap();
+        fs::write(
+            &core,
+            "+0000 2026-08-23 13:47:10 INFO [1 0ms] outbound/direct: outbound connection to appdata.example:443\n",
+        )
+        .unwrap();
+        fs::write(
+            &helper,
+            "+0000 2026-08-23 13:47:10 INFO [2 0ms] outbound/direct: outbound connection to helper.example:443\n",
+        )
+        .unwrap();
+
+        let view = read_log_view(&app, &core, Some(&helper), 500).unwrap();
+        assert_eq!(
+            view,
+            vec![
+                "INFO 08-23 13:47:10 appdata.example:443 → direct",
+                "INFO 08-23 13:47:10 helper.example:443 → direct",
+            ],
+            "same-timestamp lines keep file read order (core, then helper)"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

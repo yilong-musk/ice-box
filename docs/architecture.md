@@ -749,8 +749,8 @@ v1 minimal UI set:
 ## 16. Logging and observability
 
 - App: `tracing` → `ice-box.log` (`ice_config::init_logging`; append-only without rotation in v1, rotation can come later)
-- Core: stdout/stderr → `sing-box.log`
-- UI `get_log_view`: merges the two log files and **sorts by time**, each line prefixed `[app]` / `[core]`
+- Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path), where the elevated core's output goes to the helper's fixed root-owned `/var/log/ice-box-core.log`; the log view merges that file in as an extra core source (best-effort, latched on the first helper-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner)
+- UI `get_log_view`: merges the log files and **sorts by time** (same-timestamp lines keep file read order; display lines use a compact timestamp and omit source tags)
 - Display filter (UI only, never touches the log files): keep WARN/ERROR/FATAL; keep all app INFO (deliberate key events by developers); core INFO only keeps lifecycle keywords (started / stopped / ready / reload / restart), per-connection traffic noise is dropped; DEBUG/TRACE never shown
 - Read a tail window instead of the whole file into memory: at most 3000 lines scanned per source, display cap n ≤ 500
 - Sensitive data: subscription URLs may be logged; **node UUIDs / passwords must not be written to info logs** (debug requires an explicit switch, off by default)
