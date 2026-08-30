@@ -4,7 +4,9 @@
 //! Unix socket, drives it with the real client (`HelperCoreCoordinator`),
 //! and proves the auth / allowlist / start / stop / status contract against
 //! a fake core process. This is the shared exit gate for the helper IPC:
-//! it runs on every CI platform without root.
+//! it runs on every Unix CI platform without root. The helper is a macOS
+//! daemon built on Unix IPC, so the test does not compile on Windows.
+#![cfg(unix)]
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;

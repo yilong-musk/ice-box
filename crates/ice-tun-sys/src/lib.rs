@@ -95,6 +95,9 @@ pub fn create_backend(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        // The parameters feed only the macOS backends; drop them here so the
+        // platform gate branch stays warn-free on every other host.
+        let _ = (owner_token, config_path, binary, log_path);
         let reason = if cfg!(target_os = "windows") {
             "Windows TUN gate pending (windows_tun_ready): WinTUN/UAC host spike not run"
         } else {

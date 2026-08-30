@@ -8,6 +8,7 @@
 //! orchestration layer injects a `CoreCoordinator` that runs the core as
 //! root, and sing-box owns the adapter / addresses / routes.
 
+#[cfg(unix)]
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -389,6 +390,14 @@ fn find_singbox_pid(_launcher_pid: u32, _binary: &Path, _config_path: &Path) -> 
 fn pid_is_alive(pid: u32) -> bool {
     let rc = unsafe { libc::kill(pid as i32, 0) };
     rc == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Non-Unix fallback: the dev `sudo` runner cannot spawn a process on these
+/// platforms, so a pid is never tracked and liveness is never consulted in
+/// practice; report the process as gone (fail toward completion).
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(test)]

@@ -19,9 +19,11 @@ use ice_tun_sys::error::{TunError, TunErrorCode};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::macos::{MacInterfaceState, MacOsHost};
 use ice_tun_sys::routes;
+#[cfg(target_os = "macos")]
+use ice_tun_sys::ProcessMacOsHost;
 use ice_tun_sys::{
-    create_backend, AppliedTun, MacosTunBackend, PreparedTun, ProcessMacOsHost, TunBackend,
-    TunConfig, TunStack, UnsupportedTunBackend,
+    create_backend, AppliedTun, MacosTunBackend, PreparedTun, TunBackend, TunConfig, TunStack,
+    UnsupportedTunBackend,
 };
 
 const OWNER: &str = "ice-box:test-install-1";
