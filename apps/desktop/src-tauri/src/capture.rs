@@ -192,6 +192,11 @@ impl CaptureController {
         paths: AppPaths,
         mut backend: Box<dyn TunBackend + Send>,
     ) -> Self {
+        // Host-free controller tests run on every CI host with an injected
+        // (fake) backend; the compile-time platform TUN gate in ice-config
+        // would otherwise reject Tun config generation on non-macOS runners
+        // before the fake is ever exercised.
+        ice_config::force_tun_gate_ready();
         let owner = tun_owner_token(&paths);
         backend.attach_journal(paths.tun_state());
         let capability = backend.capability();

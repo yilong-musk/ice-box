@@ -76,7 +76,25 @@ pub struct TunGate {
 /// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready` — live
 /// spike passed); Windows is pending (`windows_tun_ready` — host spike not yet
 /// run); other platforms are out of scope for the first release.
+///
+/// Test-only override: the desktop crate's host-free controller tests run on
+/// every CI host and inject fake backends; forcing the gate green there lets
+/// them generate Tun configs on non-macOS runners. Production code never
+/// calls [`force_tun_gate_ready`].
+static TEST_TUN_GATE_READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Test-only escape hatch for host-free controller tests (see [`tun_gate`]).
+pub fn force_tun_gate_ready() {
+    let _ = TEST_TUN_GATE_READY.set(());
+}
+
 pub fn tun_gate() -> TunGate {
+    if TEST_TUN_GATE_READY.get().is_some() {
+        return TunGate {
+            ready: true,
+            reason: None,
+        };
+    }
     #[cfg(target_os = "macos")]
     {
         TunGate {
