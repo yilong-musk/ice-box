@@ -153,7 +153,9 @@ pub fn helper_installed(state: &AppState) -> bool {
 /// helper as missing and stall the backend refresh / UI state. A slow boot
 /// (heavily loaded machine, cold disk) is given a generous window before the
 /// install is reported as "installed but not ready" (fail-closed, distinct
-/// from an install failure).
+/// from an install failure). Unix-only: the helper IPC (`ice_tun_sys::helper`)
+/// exists only on unix platforms.
+#[cfg(unix)]
 fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
     const ATTEMPTS: u32 = 20;
     const DELAY_MS: u64 = 500;
@@ -183,11 +185,16 @@ fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
 // `install` mode overwrites it, so only one version ever exists on disk).
 // The bundle copy changes only across app rebuilds (process restart), so its
 // hash is cached once; the installed copy changes only via the elevated
-// install/uninstall modes, which reset its cache explicitly.
+// install/uninstall modes, which reset its cache explicitly. The drift check
+// drives the macOS helper refresh gate, so the drift machinery compiles on
+// macOS only; the hashing primitives stay available in tests everywhere
+// (host-free, temp-file based).
 
+#[cfg(target_os = "macos")]
 static BUNDLE_CORE_SHA: OnceLock<Option<String>> = OnceLock::new();
 static INSTALLED_CORE_SHA: Mutex<Option<Option<String>>> = Mutex::new(None);
 
+#[cfg(any(target_os = "macos", test))]
 fn sha256_of_file(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).ok()?;
@@ -196,6 +203,7 @@ fn sha256_of_file(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+#[cfg(target_os = "macos")]
 fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
     BUNDLE_CORE_SHA
         .get_or_init(|| {
@@ -206,6 +214,7 @@ fn bundle_core_sha(resource_dir: Option<&Path>) -> Option<String> {
         .clone()
 }
 
+#[cfg(target_os = "macos")]
 fn installed_core_sha() -> Option<String> {
     let mut slot = INSTALLED_CORE_SHA.lock().expect("helper sha lock");
     match slot.as_ref() {
@@ -245,6 +254,7 @@ pub fn helper_core_stale(resource_dir: Option<&Path>) -> bool {
 }
 
 /// Host-free comparison (tested with temp files).
+#[cfg(any(target_os = "macos", test))]
 fn cores_differ(bundle: &Option<String>, installed: &Option<String>) -> bool {
     match (bundle, installed) {
         (Some(bundle), Some(installed)) => bundle != installed,
@@ -283,7 +293,9 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     reset_helper_core_cache();
     // The daemon may not have bound its socket yet (launchctl bootstrap
     // returns before the process is serving); wait for it so the backend
-    // refresh below actually probes a reachable helper.
+    // refresh below actually probes a reachable helper. Unix-only: the helper
+    // IPC does not exist on Windows, where install is refused anyway.
+    #[cfg(unix)]
     wait_for_helper_ready(data_dir)?;
     // Make the freshly installed helper the active coordinator (the probe is
     // read-only; no capture is enabled here).

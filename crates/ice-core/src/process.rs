@@ -443,6 +443,9 @@ pub fn open_append(path: &Path) -> io::Result<File> {
 
 #[cfg(test)]
 mod tests {
+    // Every test in this module exercises unix-only behavior (PidProcess
+    // liveness/signals), so the parent-import is needed on unix only.
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]
