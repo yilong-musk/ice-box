@@ -36,6 +36,7 @@ import {
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 
 export function Subscriptions() {
@@ -156,7 +157,7 @@ export function Subscriptions() {
                   required
                 />
               </Field>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-end gap-2">
                 <Field className="min-w-48 flex-1">
                   <FieldLabel htmlFor="sub-name">名称</FieldLabel>
                   <Input
@@ -217,7 +218,7 @@ export function Subscriptions() {
             </Button>
           </CardAction>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto">
+        <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-1">
               <CardTitle>暂无订阅</CardTitle>
@@ -226,82 +227,88 @@ export function Subscriptions() {
               </CardDescription>
             </div>
           ) : (
-            <ItemGroup aria-label="订阅列表" className="gap-0">
-              {items.map((s, index) => {
-                const warnings = s.parse_warnings ?? [];
-                return (
-                  <div key={s.id}>
-                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                    <Item
-                      size="sm"
-                      variant={s.active ? "muted" : "default"}
-                    >
-                      <ItemContent className="min-w-0">
-                        <ItemTitle title={s.name}>
-                          <span className="truncate">{s.name}</span>
-                          {s.active ? <Badge>已激活</Badge> : null}
-                        </ItemTitle>
-                        <ItemDescription>
-                          {subscriptionSummary(s)}
-                        </ItemDescription>
-                        {s.last_error ? (
-                          <ItemDescription className="text-destructive">
-                            {s.last_error}
+            <ScrollArea
+              type="scroll"
+              scrollHideDelay={600}
+              className="min-h-0 flex-1 overflow-hidden"
+            >
+              <ItemGroup aria-label="订阅列表" className="gap-0">
+                {items.map((s, index) => {
+                  const warnings = s.parse_warnings ?? [];
+                  return (
+                    <div key={s.id}>
+                      {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                      <Item
+                        size="sm"
+                        variant={s.active ? "muted" : "default"}
+                      >
+                        <ItemContent className="min-w-0">
+                          <ItemTitle title={s.name}>
+                            <span className="truncate">{s.name}</span>
+                            {s.active ? <Badge>已激活</Badge> : null}
+                          </ItemTitle>
+                          <ItemDescription>
+                            {subscriptionSummary(s)}
                           </ItemDescription>
-                        ) : null}
-                        {warnings.length > 0 ? (
-                          <ItemDescription className="text-warn">
-                            {warnings.join("；")}
-                          </ItemDescription>
-                        ) : null}
-                      </ItemContent>
-                      <ItemActions className="flex-wrap">
-                        <Field orientation="horizontal" className="w-auto gap-1.5">
-                          <Switch
-                            id={`sub-active-${s.id}`}
+                          {s.last_error ? (
+                            <ItemDescription className="text-destructive">
+                              {s.last_error}
+                            </ItemDescription>
+                          ) : null}
+                          {warnings.length > 0 ? (
+                            <ItemDescription className="text-warn">
+                              {warnings.join("；")}
+                            </ItemDescription>
+                          ) : null}
+                        </ItemContent>
+                        <ItemActions className="flex-wrap">
+                          <Field orientation="horizontal" className="w-auto gap-1.5">
+                            <Switch
+                              id={`sub-active-${s.id}`}
+                              size="sm"
+                              checked={!!s.active}
+                              disabled={busy}
+                              aria-label="激活"
+                              onCheckedChange={(checked) =>
+                                void run(() =>
+                                  api.setSubscriptionActive(s.id, checked),
+                                )
+                              }
+                            />
+                            <FieldLabel
+                              htmlFor={`sub-active-${s.id}`}
+                              className="text-muted-foreground"
+                            >
+                              激活
+                            </FieldLabel>
+                          </Field>
+                          <Button
+                            type="button"
                             size="sm"
-                            checked={!!s.active}
+                            variant="outline"
                             disabled={busy}
-                            aria-label="激活"
-                            onCheckedChange={(checked) =>
-                              void run(() =>
-                                api.setSubscriptionActive(s.id, checked),
-                              )
+                            onClick={() =>
+                              void run(() => api.updateSubscription(s.id), true)
                             }
-                          />
-                          <FieldLabel
-                            htmlFor={`sub-active-${s.id}`}
-                            className="text-muted-foreground"
                           >
-                            激活
-                          </FieldLabel>
-                        </Field>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() =>
-                            void run(() => api.updateSubscription(s.id), true)
-                          }
-                        >
-                          {updating ? "更新中" : "更新"}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          disabled={busy}
-                          onClick={() => setPendingDelete(s)}
-                        >
-                          删除
-                        </Button>
-                      </ItemActions>
-                    </Item>
-                  </div>
-                );
-              })}
-            </ItemGroup>
+                            {updating ? "更新中" : "更新"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() => setPendingDelete(s)}
+                          >
+                            删除
+                          </Button>
+                        </ItemActions>
+                      </Item>
+                    </div>
+                  );
+                })}
+              </ItemGroup>
+            </ScrollArea>
           )}
         </CardContent>
       </Card>

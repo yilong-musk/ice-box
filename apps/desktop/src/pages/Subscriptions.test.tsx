@@ -70,7 +70,7 @@ describe("Subscriptions", () => {
     );
     expect(
       view.getByRole("button", { name: "导入" }).parentElement?.className.split(/\s+/),
-    ).toEqual(expect.arrayContaining(["items-center"]));
+    ).toEqual(expect.arrayContaining(["items-end"]));
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {
