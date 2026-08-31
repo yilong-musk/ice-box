@@ -41,3 +41,34 @@ else
   echo "error: missing $GEOIP_SRC — run scripts/fetch-geoip.sh (packaged app would silently drop GEOIP rules)" >&2
   exit 1
 fi
+
+# Privileged helper daemon (plan §5 T5, macOS): embedded into the bundle so
+# the installer/release pipeline can install it into /Library/PrivilegedHelperTools.
+case "$ICE_PLATFORM_ALIAS" in
+  mac-arm64 | mac-x64)
+    HELPER_DEST="$DEST_DIR/ice-helper"
+    if cargo build --release -p ice-helper --manifest-path "$ROOT/Cargo.toml" >/dev/null 2>&1; then
+      cp "$ROOT/target/release/ice-helper" "$HELPER_DEST"
+      chmod +x "$HELPER_DEST"
+      echo "Prepared helper resource $HELPER_DEST (macOS privileged helper daemon)"
+    else
+      echo "error: cargo build -p ice-helper failed; run it manually before the release build" >&2
+      exit 1
+    fi
+    ;;
+  win)
+    # Windows archive companions (Windows TUN packaging, plan §5 T5): the
+    # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
+    # is embedded in the pinned binary — the T0 spike re-verifies this before
+    # the Windows TUN gate flips.
+    for companion in libcronet.dll; do
+      COMPANION_SRC="$ROOT/third_party/sing-box/$ICE_TARGET_DIR/$companion"
+      if [[ -f "$COMPANION_SRC" ]]; then
+        cp "$COMPANION_SRC" "$DEST_DIR/$companion"
+        echo "Prepared resource $DEST_DIR/$companion (Windows archive companion)"
+      else
+        echo "warning: $COMPANION_SRC missing — run scripts/fetch-singbox.sh win (NaiveProxy outbound will fail at runtime)" >&2
+      fi
+    done
+    ;;
+esac

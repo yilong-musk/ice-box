@@ -3,8 +3,8 @@
 use ice_config::{
     build_direct_only_config, build_runtime_config, clash_mode_name, load_group_selections,
     load_rule_overrides, load_settings, restore_runtime_config_from_bak, save_settings,
-    write_runtime_config_file, AppError, AppPaths, AppSettings, BuildInput, ErrorCode,
-    NormalizedProfile,
+    write_runtime_config_file, AppError, AppPaths, AppSettings, BuildInput, CaptureIntent,
+    ErrorCode, NormalizedProfile,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
@@ -15,7 +15,8 @@ use ice_proxy_sys::{
     ProxyEndpoints, SystemProxy,
 };
 use ice_subscription::{
-    load_active_profile, load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
+    load_active_profile_with_default_rules, load_index, resolve_selected_tag, SubscriptionError,
+    SubscriptionPaths,
 };
 use std::path::{Path, PathBuf};
 
@@ -114,33 +115,54 @@ pub fn reconcile_selected_tag_in_settings(
     settings: &AppSettings,
     profile: &NormalizedProfile,
 ) -> Result<AppSettings, AppError> {
+    let updated = reconcile_selected_tag(settings, profile);
+    if updated.selected_tag != settings.selected_tag {
+        save_settings(&app_paths.settings(), &updated)?;
+    }
+    Ok(updated)
+}
+
+/// Resolve `selected_tag` against the active profile **without** writing disk.
+///
+/// The capture controller uses this to pre-reconcile a transition candidate so
+/// `generate_config` never persists settings mid-transition (plan §4.3 commits
+/// `settings.json` only after the requested backend is healthy).
+pub fn reconcile_selected_tag(settings: &AppSettings, profile: &NormalizedProfile) -> AppSettings {
     let resolved = resolve_selected_tag(settings.selected_tag.as_deref(), profile);
     if settings.selected_tag.as_ref() != resolved.as_ref() {
         let mut updated = settings.clone();
         updated.selected_tag = resolved;
-        save_settings(&app_paths.settings(), &updated)?;
-        Ok(updated)
+        updated
     } else {
-        Ok(settings.clone())
+        settings.clone()
     }
 }
 
 /// Rebuild `config.json` from the single active subscription profile. Returns whether inbound
 /// listen changed vs previous on-disk settings snapshot (caller compares ports).
+///
+/// `capture_intent` is supplied explicitly by the caller (plan §4.1): automatic core start
+/// and every pre-T3 path pass [`CaptureIntent::Diagnostic`]; the TUN controller (slice T3)
+/// passes `Tun` only during a TUN capture transition.
 pub fn generate_config(
     app_paths: &AppPaths,
     settings: &AppSettings,
     resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
 ) -> Result<(), AppError> {
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
-    let profile = match load_active_profile(&sub_paths, &index) {
+    let profile = match load_active_profile_with_default_rules(
+        &sub_paths,
+        &index,
+        settings.auto_default_rules,
+    ) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => {
             // First-run / all subscriptions removed: fall back to a direct-only
             // config so Start keeps working (system proxy + inbound, all traffic
             // direct) until a subscription is imported.
-            let config = build_direct_only_config(&settings.to_local_template())?;
+            let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
             write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
             return Ok(());
         }
@@ -150,7 +172,7 @@ pub fn generate_config(
         // Active subscription exists but yields no leaf outbounds (e.g. groups-only, or a
         // hand-edited profile): nothing usable to route through — direct-only fallback so
         // Start/Apply keep working (build_runtime_config errors on empty nodes).
-        let config = build_direct_only_config(&settings.to_local_template())?;
+        let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
         write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
         return Ok(());
     }
@@ -166,6 +188,7 @@ pub fn generate_config(
         geoip_rule_set_dir: Some(geoip_dir),
         group_selections,
         rule_overrides,
+        capture_intent,
     })?;
     write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
     Ok(())
@@ -180,14 +203,19 @@ pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> 
 /// System proxy is **not** applied here — the home-page「启动代理服务」button
 /// calls [`orchestrate_enable_system_proxy`]. Quitting the app still restores
 /// any applied system proxy via [`orchestrate_stop`].
+///
+/// Automatic core start always uses [`CaptureIntent::Diagnostic`]: the TUN
+/// inbound exists in `config.json` only while a TUN capture transition is in
+/// flight or active (architecture §24.1).
 pub fn orchestrate_start(
     app_paths: &AppPaths,
     settings: &AppSettings,
     core: &mut dyn CoreHandle,
     binary: PathBuf,
     resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
 ) -> Result<Option<String>, AppError> {
-    generate_config(app_paths, settings, resource_dir)?;
+    generate_config(app_paths, settings, resource_dir, capture_intent)?;
 
     let core_paths = build_core_paths(app_paths, settings, binary);
     core.start(&core_paths).map_err(AppError::from)?;
@@ -278,6 +306,8 @@ pub fn restore_proxy_after_unexpected_core_exit(
 }
 
 /// Apply subscriptions/settings to disk; if Running, reload (and sync system proxy when needed).
+// Argument count is consolidated by the TUN CaptureController restructure (slice T3).
+#[allow(clippy::too_many_arguments)]
 pub fn orchestrate_apply(
     app_paths: &AppPaths,
     settings: &AppSettings,
@@ -286,10 +316,11 @@ pub fn orchestrate_apply(
     proxy: &dyn SystemProxy,
     binary: PathBuf,
     resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
 ) -> Result<(), AppError> {
     // generate_config falls back to a direct-only config when no subscription /
     // no usable nodes exist, so Apply always writes a valid config.json.
-    generate_config(app_paths, settings, resource_dir)?;
+    generate_config(app_paths, settings, resource_dir, capture_intent)?;
 
     let status = core.state().status;
     if status != CoreStatus::Running {
@@ -324,6 +355,7 @@ pub fn orchestrate_apply(
                 app_paths,
                 previous_settings,
                 resource_dir,
+                capture_intent,
             );
             Err(AppError::from(err))
         }
@@ -400,6 +432,15 @@ pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
 /// next apply builds the new `default_mode`). The caller persists `settings.proxy_mode`
 /// beforehand; on-disk `config.json` intentionally lags while running (its baked
 /// `default_mode` is refreshed on the next apply/restart).
+///
+/// The rebuild + reload fallback is dispatched through [`orchestrate_apply`]; the TUN
+/// controller wires a TUN-aware apply via [`orchestrate_set_proxy_mode_with_apply`]
+/// because the elevated core cannot be signalled by the app.
+// Argument count is consolidated by the TUN CaptureController restructure (slice T3).
+// Currently exercised by the orchestration tests; the shell uses the `_with_apply`
+// variant so the fallback can route through the capture controller while TUN is active.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn orchestrate_set_proxy_mode(
     app_paths: &AppPaths,
     settings: &AppSettings,
@@ -408,6 +449,54 @@ pub fn orchestrate_set_proxy_mode(
     proxy: &dyn SystemProxy,
     binary: PathBuf,
     resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
+) -> Result<(), AppError> {
+    orchestrate_set_proxy_mode_with_apply(
+        app_paths,
+        settings,
+        previous_settings,
+        core,
+        proxy,
+        binary,
+        resource_dir,
+        capture_intent,
+        |app_paths, settings, previous_settings, core, proxy, binary, resource_dir, intent| {
+            orchestrate_apply(
+                app_paths,
+                settings,
+                previous_settings,
+                core,
+                proxy,
+                binary,
+                resource_dir,
+                intent,
+            )
+        },
+    )
+}
+
+/// [`orchestrate_set_proxy_mode`] with an injectable rebuild + reload step;
+/// the shell passes a TUN-aware apply while TUN capture is active.
+#[allow(clippy::too_many_arguments)]
+pub fn orchestrate_set_proxy_mode_with_apply(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    previous_settings: &AppSettings,
+    core: &mut dyn CoreHandle,
+    proxy: &dyn SystemProxy,
+    binary: PathBuf,
+    resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
+    apply: impl FnOnce(
+        &AppPaths,
+        &AppSettings,
+        &AppSettings,
+        &mut dyn CoreHandle,
+        &dyn SystemProxy,
+        PathBuf,
+        Option<&Path>,
+        CaptureIntent,
+    ) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     if core.state().status != CoreStatus::Running {
         return Ok(());
@@ -437,7 +526,7 @@ pub fn orchestrate_set_proxy_mode(
             }
         }
     }
-    orchestrate_apply(
+    apply(
         app_paths,
         settings,
         previous_settings,
@@ -445,6 +534,7 @@ pub fn orchestrate_set_proxy_mode(
         proxy,
         binary,
         resource_dir,
+        capture_intent,
     )
 }
 
@@ -453,13 +543,16 @@ fn rollback_runtime_config_after_reload_failure(
     app_paths: &AppPaths,
     previous_settings: &AppSettings,
     resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
 ) {
     match restore_runtime_config_from_bak(&app_paths.config(), &app_paths.config_bak()) {
         Ok(true) => {
             tracing::info!("restored config.json from config.json.bak after reload failure");
         }
         Ok(false) => {
-            if let Err(rollback) = generate_config(app_paths, previous_settings, resource_dir) {
+            if let Err(rollback) =
+                generate_config(app_paths, previous_settings, resource_dir, capture_intent)
+            {
                 tracing::error!(
                     error = %rollback,
                     "failed to regenerate config after reload failure (no .bak present)"
@@ -471,7 +564,9 @@ fn rollback_runtime_config_after_reload_failure(
                 error = %restore_err,
                 "failed to restore config.json.bak after reload failure"
             );
-            if let Err(rollback) = generate_config(app_paths, previous_settings, resource_dir) {
+            if let Err(rollback) =
+                generate_config(app_paths, previous_settings, resource_dir, capture_intent)
+            {
                 tracing::error!(
                     error = %rollback,
                     "failed to regenerate config after .bak restore error"
@@ -653,7 +748,15 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).expect("direct-only");
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("direct-only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(
             proxy.apply_calls.get(),
@@ -690,7 +793,15 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(proxy.apply_calls.get(), 0);
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
@@ -711,7 +822,15 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        let err = orchestrate_start(&paths, &settings, &mut core, bin, None).expect_err("hc");
+        let err = orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect_err("hc");
         assert_eq!(err.code, "core.healthcheck_failed");
         assert_eq!(proxy.apply_calls.get(), 0);
         if paths.proxy_backup().exists() {
@@ -733,7 +852,15 @@ mod tests {
         };
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
             .expect_err("apply fail");
@@ -756,7 +883,15 @@ mod tests {
         let proxy = NoopSystemProxy;
         let bin = marker_bin(&paths);
 
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
             .expect_err("noop unavailable");
@@ -777,8 +912,15 @@ mod tests {
         let mut core = mock_core_ok();
         let bin = marker_bin(&paths);
 
-        let warning =
-            orchestrate_start(&paths, &settings, &mut core, bin, None).expect("start core only");
+        let warning = orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start core only");
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(warning, None);
         assert!(!ice_proxy_sys::is_proxy_applied_on_disk(
@@ -807,7 +949,15 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         order.lock().unwrap().clear();
@@ -831,7 +981,15 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
 
@@ -850,7 +1008,17 @@ mod tests {
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
 
-        orchestrate_apply(&paths, &settings, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_apply(
+            &paths,
+            &settings,
+            &settings,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert!(paths.config().is_file());
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert_eq!(proxy.apply_calls.get(), 0);
@@ -865,12 +1033,30 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         let apply_before = proxy.apply_calls.get();
         let restore_before = proxy.restore_calls.get();
 
-        orchestrate_apply(&paths, &settings, &settings, &mut core, &proxy, bin, None).unwrap();
+        orchestrate_apply(
+            &paths,
+            &settings,
+            &settings,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         assert_eq!(proxy.apply_calls.get(), apply_before);
         assert_eq!(proxy.restore_calls.get(), restore_before);
@@ -889,7 +1075,15 @@ mod tests {
             ..TrackProxy::default()
         };
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
 
         let new_settings = AppSettings {
@@ -905,6 +1099,7 @@ mod tests {
             &proxy,
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .unwrap();
         assert!(order.lock().unwrap().contains(&"restore"));
@@ -920,7 +1115,15 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert!(
             ProxyBackupFile::load(&paths.proxy_backup())
@@ -947,7 +1150,15 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(proxy.apply_calls.get(), 0);
 
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
@@ -968,7 +1179,15 @@ mod tests {
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
         assert_eq!(proxy.apply_calls.get(), 1);
 
@@ -1019,7 +1238,13 @@ mod tests {
             &ice_config::NormalizedProfile::from_nodes_only(nodes),
         )
         .unwrap();
-        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         fn direct_only_tags(paths: &AppPaths) -> Vec<String> {
             let config: serde_json::Value =
@@ -1033,7 +1258,13 @@ mod tests {
         }
 
         ice_subscription::set_enabled(&sub, id, false).unwrap();
-        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(
             direct_only_tags(&paths),
             ["direct", "block"],
@@ -1041,11 +1272,23 @@ mod tests {
         );
 
         ice_subscription::set_enabled(&sub, id, true).unwrap();
-        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_ne!(direct_only_tags(&paths), ["direct", "block"]);
 
         ice_subscription::remove_subscription(&sub, id).unwrap();
-        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(
             direct_only_tags(&paths),
             ["direct", "block"],
@@ -1062,7 +1305,15 @@ mod tests {
         let mut core = mock_core_ok();
         let good = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &good).unwrap();
 
         let proxy = TrackProxy {
@@ -1081,6 +1332,7 @@ mod tests {
             &proxy,
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .expect_err("proxy apply after reload");
         assert_eq!(err.code, "proxy.apply_failed_core_reloaded");
@@ -1097,7 +1349,15 @@ mod tests {
         let start_proxy = TrackProxy::default();
         let mut core = mock_core_ok();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         orchestrate_enable_system_proxy(&paths, &settings, &core, &start_proxy).unwrap();
         assert_eq!(start_proxy.apply_calls.get(), 1);
 
@@ -1117,6 +1377,7 @@ mod tests {
             &sync_proxy,
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .expect_err("restore before re-apply");
         assert_eq!(err.code, "proxy.restore_failed");
@@ -1137,7 +1398,15 @@ mod tests {
         let mut core = mock_core_reload_restart_fail();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_start(&paths, &settings, &mut core, bin.clone(), None).unwrap();
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
@@ -1155,6 +1424,7 @@ mod tests {
             &proxy,
             bin,
             None,
+            CaptureIntent::Diagnostic,
         )
         .expect_err("reload restart fail");
         assert_eq!(err.code, "core.healthcheck_failed");
@@ -1179,7 +1449,7 @@ mod tests {
         };
         ice_config::save_settings(&settings_path, &stale).unwrap();
 
-        generate_config(&paths, &stale, None).unwrap();
+        generate_config(&paths, &stale, None, CaptureIntent::Diagnostic).unwrap();
 
         let on_disk = ice_config::load_settings(&settings_path).unwrap();
         assert_eq!(on_disk.selected_tag.as_deref(), Some("n1"));
@@ -1224,7 +1494,13 @@ mod tests {
         };
         write_subscription_success(&sub, &meta, "{}", &profile).unwrap();
 
-        generate_config(&paths, &AppSettings::default(), None).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         let config: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(paths.config()).unwrap()).unwrap();
         let tags: Vec<String> = config["outbounds"]
@@ -1250,7 +1526,15 @@ mod tests {
         let settings = AppSettings::default();
         let mut core = mock_core_with_reloader(reloader.clone());
         let bin = marker_bin(paths);
-        orchestrate_start(paths, &settings, &mut core, bin, None).unwrap();
+        orchestrate_start(
+            paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
         assert_eq!(core.state().status, CoreStatus::Running);
         core
     }
@@ -1280,8 +1564,17 @@ mod tests {
         };
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
-            .unwrap();
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         assert_eq!(
             reloader.call_count(),
@@ -1321,8 +1614,17 @@ mod tests {
         };
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
-            .unwrap();
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         assert_eq!(
             reloader.call_count(),
@@ -1350,8 +1652,17 @@ mod tests {
         };
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
-            .unwrap();
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         assert_eq!(
             reloader.call_count(),
@@ -1389,8 +1700,17 @@ mod tests {
         };
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
-            .unwrap();
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         assert_eq!(
             reloader.call_count(),
@@ -1420,8 +1740,17 @@ mod tests {
         };
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
-        orchestrate_set_proxy_mode(&paths, &settings, &previous, &mut core, &proxy, bin, None)
-            .unwrap();
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
 
         assert_eq!(reloader.call_count(), 0);
         assert_eq!(core.state().status, CoreStatus::Stopped);

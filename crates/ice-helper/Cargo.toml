@@ -1,0 +1,19 @@
+[package]
+name = "ice-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Privileged helper daemon for ice-box TUN capture (macOS launchd)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+sha2 = "0.10"
+ice-tun-sys = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lib]
+name = "ice_helper"

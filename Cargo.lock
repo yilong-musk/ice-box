@@ -1601,10 +1601,14 @@ dependencies = [
  "fs2",
  "ice-config",
  "ice-core",
+ "ice-elevate",
  "ice-proxy-sys",
  "ice-subscription",
+ "ice-tun-sys",
+ "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
@@ -1641,6 +1645,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ice-elevate"
+version = "0.1.1"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "ice-engine"
 version = "0.1.1"
 dependencies = [
@@ -1648,6 +1659,18 @@ dependencies = [
  "ice-subscription",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ice-helper"
+version = "0.1.1"
+dependencies = [
+ "ice-tun-sys",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
 ]
 
 [[package]]
@@ -1673,6 +1696,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ice-config",
+ "percent-encoding",
  "rustls",
  "serde",
  "serde_json",
@@ -1683,6 +1707,21 @@ dependencies = [
  "url",
  "uuid",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ice-tun-sys"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "ice-helper",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tracing",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

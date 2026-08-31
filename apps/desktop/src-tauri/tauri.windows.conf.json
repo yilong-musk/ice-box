@@ -28,7 +28,8 @@
     "resources": {
       "resources/sing-box.exe": "sing-box.exe",
       "resources/sing-box": null,
-      "resources/geoip": "geoip"
+      "resources/geoip": "geoip",
+      "resources/ice-helper": null
     },
     "windows": {
       "nsis": {

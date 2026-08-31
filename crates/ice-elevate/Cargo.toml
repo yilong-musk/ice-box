@@ -1,0 +1,11 @@
+[package]
+name = "ice-elevate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "macOS AuthorizationServices elevation for the unsigned helper installer"
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

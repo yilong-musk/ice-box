@@ -1,5 +1,5 @@
 //! Persistent Clash `/traffic` stream, a rolling 60-second history, and a
-//! cumulative peak for the current monitoring run.
+//! peak recomputed from that rolling window.
 //!
 //! Opening a new `/traffic` connection per UI poll waits ~1s for the first tick
 //! and then races the 1s interval, so the chart effectively samples at ~0.5Hz
@@ -39,7 +39,7 @@ pub struct TimedTrafficSample {
 pub struct TrafficSnapshot {
     pub points: Vec<TimedTrafficSample>,
     pub latest: Option<TrafficSample>,
-    /// Highest observed rate in either direction during the current run.
+    /// Highest up/down rate within the current 60-second rolling window.
     pub peak: Option<TrafficSample>,
 }
 
@@ -47,7 +47,6 @@ struct Inner {
     desired: Option<HealthEndpoints>,
     points: VecDeque<TimedTrafficSample>,
     latest: Option<TrafficSample>,
-    peak: Option<TrafficSample>,
 }
 
 struct Shared {
@@ -70,7 +69,6 @@ impl TrafficMonitor {
                     desired: None,
                     points: VecDeque::new(),
                     latest: None,
-                    peak: None,
                 }),
                 changed: Condvar::new(),
                 shutdown: AtomicBool::new(false),
@@ -80,8 +78,8 @@ impl TrafficMonitor {
     }
 
     /// Start (or retarget) the stream. Any change of target (including `Some` →
-    /// a different `Some`) drops history and the cumulative peak so the chart
-    /// cannot mix two Clash APIs. `None` stops collection.
+    /// a different `Some`) drops history so the chart cannot mix two Clash
+    /// APIs. `None` stops collection.
     pub fn set_endpoints(&self, endpoints: Option<HealthEndpoints>) {
         {
             let mut inner = lock_inner(&self.shared);
@@ -91,7 +89,6 @@ impl TrafficMonitor {
             inner.desired = endpoints.clone();
             inner.points.clear();
             inner.latest = None;
-            inner.peak = None;
         }
         if endpoints.is_some() {
             self.ensure_thread();
@@ -109,7 +106,7 @@ impl TrafficMonitor {
         TrafficSnapshot {
             points: inner.points.iter().copied().collect(),
             latest: inner.latest,
-            peak: inner.peak,
+            peak: window_peak(&inner.points),
         }
     }
 
@@ -179,19 +176,31 @@ fn retain_window(points: &mut VecDeque<TimedTrafficSample>, now_ms: u64) {
 
 fn push_sample(inner: &mut Inner, sample: TrafficSample, now_ms: u64) {
     inner.latest = Some(sample);
-    inner.peak = Some(match inner.peak {
-        Some(peak) => TrafficSample {
-            up: peak.up.max(sample.up),
-            down: peak.down.max(sample.down),
-        },
-        None => sample,
-    });
     inner.points.push_back(TimedTrafficSample {
         up: sample.up,
         down: sample.down,
         t: now_ms,
     });
     retain_window(&mut inner.points, now_ms);
+}
+
+/// Highest up/down rate among the samples currently inside the rolling
+/// window; `None` when the window is empty.
+fn window_peak(points: &VecDeque<TimedTrafficSample>) -> Option<TrafficSample> {
+    let mut peak: Option<TrafficSample> = None;
+    for point in points {
+        peak = Some(match peak {
+            Some(peak) => TrafficSample {
+                up: peak.up.max(point.up),
+                down: peak.down.max(point.down),
+            },
+            None => TrafficSample {
+                up: point.up,
+                down: point.down,
+            },
+        });
+    }
+    peak
 }
 
 fn wait_for_desired(shared: &Shared) -> Option<HealthEndpoints> {
@@ -297,12 +306,36 @@ mod tests {
     }
 
     #[test]
-    fn peak_survives_rolling_window_trim() {
+    fn window_peak_is_recomputed_from_the_rolling_window() {
+        let mut points = VecDeque::new();
+        points.push_back(TimedTrafficSample {
+            up: 100,
+            down: 200,
+            t: 1_000,
+        });
+        points.push_back(TimedTrafficSample {
+            up: 300,
+            down: 400,
+            t: 50_000,
+        });
+        points.push_back(TimedTrafficSample {
+            up: 50,
+            down: 60,
+            t: 61_000,
+        });
+        assert_eq!(
+            window_peak(&points),
+            Some(TrafficSample { up: 300, down: 400 })
+        );
+        assert_eq!(window_peak(&VecDeque::new()), None);
+    }
+
+    #[test]
+    fn rolling_trim_drops_the_former_peak_with_its_sample() {
         let mut inner = Inner {
             desired: None,
             points: VecDeque::new(),
             latest: None,
-            peak: None,
         };
         let high = TrafficSample {
             up: 2_000,
@@ -315,7 +348,11 @@ mod tests {
 
         assert_eq!(inner.points.len(), 1);
         assert_eq!(inner.latest, Some(low));
-        assert_eq!(inner.peak, Some(high));
+        assert_eq!(
+            window_peak(&inner.points),
+            Some(low),
+            "the window peak follows the retained window, not the run total"
+        );
     }
 
     #[test]

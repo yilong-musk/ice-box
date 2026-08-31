@@ -14,7 +14,7 @@ upstream naming restriction). See [NOTICE](NOTICE) and
 
 The implementation spec lives in [docs/architecture.md](docs/architecture.md) (process model, state machine, single active subscription, IPC, failure rollback).
 
-- System proxy (no TUN)
+- Traffic capture (system proxy or **TUN**): system proxy on macOS/Windows; TUN is a Settings switch — when enabled, the Home proxy-service button starts transparent capture through a sing-box `tun` inbound instead of changing the OS proxy (see [docs/tun-mode-plan.md](docs/tun-mode-plan.md) for the status/slices)
 - Subscriptions: sing-box first, Clash compatible; **only one subscription is active at a time**, switching the active subscription switches the entire set of policy groups / rules / DNS
 - Runtime updates: hot reload first (**SIGHUP** in-process rebuild, PID unchanged), restart as fallback
 - **Modes**: one-click switch between Rule / Global / Direct from the home page, switched **live via the Clash API** (`PATCH /configs`) on macOS **and** Windows — no config rebuild, no reload, no core restart, no connection drop
@@ -114,6 +114,17 @@ Tauri commands uniformly return JSON on failure:
 | macOS | ✅ Release gate passed |
 | CI | `.github/workflows/ci.yml` → Linux + macOS + **Windows** `npm run gate` |
 | Windows | ✅ System proxy (WinInet), mode switching, NSIS build script, acceptance script |
+| TUN | 🚧 Slices T0–T4 landed, T5 macOS helper + packaging landed (G9.12 + G9.13 live gates green; macOS release is permanently unsigned with in-app elevated helper installation; clean-machine gate waived for this release); Windows T0 pending — see [docs/tun-mode-plan.md](docs/tun-mode-plan.md) |
+
+### TUN status and prerequisites
+
+- The Settings page has a **TUN mode** switch; when enabled, the Home「启动代理服务」button starts transparent capture through a sing-box `tun` inbound instead of the OS system proxy. `system_proxy` and TUN stay mutually exclusive, and stopping the service disables whichever backend is active.
+- macOS needs root for adapter/route changes. Two elevated-core runners exist:
+  - **Production helper** (T5): a small `ice-helper` launchd daemon (root-owned socket + per-installation token; narrow start/stop IPC with path allowlist). The release is permanently unsigned, so on first use the app prompts the system authorization dialog and installs it itself (Settings → TUN 模式 →「安装辅助组件」); `scripts/install-helper-macos.sh` / `uninstall-helper-macos.sh` are the manual/CI equivalent. The install logic lives once in `crates/ice-helper/src/install.rs`.
+  - **Dev runner**: the opt-in `ICE_BOX_TUN_DEV_SUDO=1` plus a cached root credential (`sudo -v`) runs the core via `sudo -n`. The destructive live suite is `npm run acceptance:tun` (macOS only; `--helper` runs it through the installed helper).
+- Without the helper installed, TUN transitions fail closed with a permission error and no system change; the Home page then offers the in-app「安装辅助组件」action.
+- A platform with a pending gate (`tun_available=false`, e.g. Windows) shows the switch disabled with the reason; the system-proxy fallback remains the documented path there.
+- If TUN cleanup cannot be confirmed (e.g. crash), the app fail-closes (`recovery_required`), blocks new TUN activation, and Home offers「重试恢复」. Cleanup is ownership-verified from `tun-state.json`; unrelated routes/DNS are never touched.
 
 ### Common commands
 
@@ -126,6 +137,7 @@ npm run build            # macOS .app / .dmg
 npm run build:win        # Windows NSIS (Windows host, PowerShell fallback prepared)
 npm run gate             # fmt + clippy + test + tsc + vitest
 npm run acceptance       # full macOS acceptance (incl. live sing-box / system proxy)
+npm run acceptance:tun   # macOS TUN live acceptance (destructive; sudo -v or helper; add --helper for the T5 daemon path)
 npm run acceptance:win   # full Windows acceptance (incl. live WinInet / sing-box, Git Bash)
 ```
 
@@ -151,27 +163,15 @@ Releases are versioned with `vX.Y.Z` tags; the tag push triggers
 `.github/workflows/release.yml` (gate + macOS arm64 dmg + Windows NSIS build +
 GitHub Release with assets and `NOTICE`).
 
-1. **Bump the version** — keeps `Cargo.toml`, `apps/desktop/package.json` and
-   `apps/desktop/src-tauri/tauri.conf.json` in sync and refreshes `Cargo.lock`:
+Quick reference:
 
-   ```bash
-   bash scripts/bump-version.sh 0.1.1
-   ```
+```bash
+bash scripts/bump-version.sh 0.1.2   # sync all three version sources
+# update CHANGELOG.md, run gate-local.sh, merge to main via PR
+git tag -a v0.1.2 -m "ice-box v0.1.2"
+git push origin v0.1.2               # triggers the release pipeline
+```
 
-2. **Update `CHANGELOG.md`** — add a `## [0.1.1] - YYYY-MM-DD` section
-   (release notes are extracted from it automatically).
-
-3. **Gate** — `bash scripts/gate-local.sh` must pass; merge to `main` via PR and
-   let CI go green.
-
-4. **Tag and release** — the tag push publishes everything:
-
-   ```bash
-   git tag v0.1.1
-   git push origin v0.1.1
-   ```
-
-   Verify locally with `bash scripts/release-notes.sh v0.1.1` before tagging.
-
-Signed releases (macOS notarization, Windows code signing) are not configured
-yet; first-run Gatekeeper / SmartScreen warnings are expected.
+The full, step-by-step process (as executed for v0.1.1) is documented in
+[docs/release-process.md](docs/release-process.md), including known issues
+(network proxies, branch protection, CI warnings).

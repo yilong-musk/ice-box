@@ -18,5 +18,6 @@ base64 = "0.22"
 tracing = { workspace = true }
 serde_yaml = "0.9"
 url = "2"
+percent-encoding = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "0.26"

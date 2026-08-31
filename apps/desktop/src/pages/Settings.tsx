@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   formatInvokeError,
   type AppSettings,
+  type StatusResponse,
 } from "../api/tauri";
 import {
   formatListenValidationError,
@@ -13,6 +14,7 @@ import {
   portsConflict,
 } from "../lib/generationGuard";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
+import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,6 +31,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useThemePreference, type ThemePreference } from "../lib/theme";
@@ -42,6 +45,18 @@ const defaults: AppSettings = {
   auto_set_system_proxy: false,
   allow_lan: false,
   proxy_mode: "rule",
+  auto_default_rules: true,
+  tun: {
+    enabled: false,
+    interface_name: null,
+    ipv4_address: "10.0.0.1/30",
+    ipv6_address: "fdfe:dcba:9876::1/126",
+    mtu: 9000,
+    auto_route: true,
+    strict_route: true,
+    stack: "gvisor",
+    dns_hijack: false,
+  },
 };
 
 const APPEARANCE_OPTIONS = [
@@ -50,6 +65,16 @@ const APPEARANCE_OPTIONS = [
   ["dark", "深色"],
 ] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>;
 
+/** TUN lifecycle labels shown in the settings card while a transition runs. */
+const TUN_TRANSITION_LABELS: Record<string, string> = {
+  preparing: "正在启用 TUN…",
+  stopping: "正在关闭 TUN…",
+};
+
+/// Debounce before persisting a changed setting (typing coalesces; switches
+/// and radios feel instant).
+const SAVE_DEBOUNCE_MS = 500;
+
 export function Settings({ active = true }: { active?: boolean }) {
   const [form, setForm] = useState<AppSettings>(defaults);
   const [loaded, setLoaded] = useState(false);
@@ -57,17 +82,30 @@ export function Settings({ active = true }: { active?: boolean }) {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const tunInstall = useTunInstallDialog(installHelperThenEnableTun);
   const { preference, setPreference } = useThemePreference();
+  const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef(false);
+  const pendingSaveRef = useRef<AppSettings | null>(null);
+  /// Skip the first post-load snapshot so opening the page never persists
+  /// the just-read settings; re-armed on every reload cycle.
+  const skipInitialSaveRef = useRef(true);
 
   useEffect(() => {
     setLoaded(false);
+    skipInitialSaveRef.current = true;
     if (!active) return;
     let cancelled = false;
     void (async () => {
       try {
-        const settings = await api.getSettings();
+        const [settings, s] = await Promise.all([
+          api.getSettings(),
+          api.getStatus(),
+        ]);
         if (!cancelled) {
           setForm(settings);
+          setStatus(s);
           setLoaded(true);
         }
       } catch (e) {
@@ -87,6 +125,73 @@ export function Settings({ active = true }: { active?: boolean }) {
       delete next[key];
       return next;
     });
+  }
+
+  /** In-app helper install/uninstall (unsigned elevation path): prompts the
+   * system authorization dialog; cancel modifies nothing. After the action,
+   * polls `getStatus` until the expected helper state is observed — launchd
+   * bootstrap returns before the daemon binds its socket, so a single probe
+   * right after install can still report the helper as missing. When the
+   * state never converges, the action is reported as unconfirmed (fail-closed:
+   * no success flash, no follow-up persistence). */
+  async function runHelperAction(
+    action: () => Promise<void>,
+    expectedInstalled: boolean,
+    afterReady?: () => void | Promise<void>,
+  ) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      let s = await api.getStatus();
+      for (
+        let attempt = 0;
+        attempt < 8 && s.helper_installed !== expectedInstalled;
+        attempt++
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        s = await api.getStatus();
+      }
+      setStatus(s);
+      if (s.helper_installed !== expectedInstalled) {
+        setError("辅助组件状态未确认，未更改 TUN 设置；请稍后重试");
+        return;
+      }
+      await afterReady?.();
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(formatInvokeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Persist `tun.enabled` directly (bypassing the debounced auto-save) with
+   * the same validation the save pipeline applies. An invalid form rejects
+   * with a visible error instead of silently keeping the change unsaved —
+   * e.g. a guided install must never flash「已保存」while the TUN-on setting
+   * was dropped by validation. */
+  async function persistTunEnabled(enabled: boolean) {
+    const candidate = { ...form, tun: { ...form.tun, enabled } };
+    const errs = validateForm(candidate);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      throw new Error("TUN 设置未保存：请先修正上方表单中的错误后重试");
+    }
+    await api.saveSettings(candidate);
+    setForm(candidate);
+  }
+
+  /** Enabling TUN without an authorized helper: install first, then persist
+   * the TUN-on setting. Cancel or a failed install leaves the switch off and
+   * settings untouched. */
+  function installHelperThenEnableTun() {
+    void runHelperAction(
+      () => api.installHelper(),
+      true,
+      () => persistTunEnabled(true),
+    );
   }
 
   function validateForm(next: AppSettings): Record<string, string> {
@@ -115,32 +220,78 @@ export function Settings({ active = true }: { active?: boolean }) {
     return errs;
   }
 
-  async function onSave(e: FormEvent) {
-    e.preventDefault();
-    if (!loaded) return;
-    const errs = validateForm(form);
-    setFieldErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
-    setBusy(true);
-    setError(null);
-    setSaved(false);
+  /** Validate + persist one candidate. Serialized (latest-wins queue) so a
+   * slow settings apply never interleaves with the next change. Invalid
+   * candidates are rejected with field errors and the on-disk settings stay
+   * untouched. */
+  async function flushSave(candidate: AppSettings) {
+    if (saveInFlightRef.current) {
+      pendingSaveRef.current = candidate;
+      return;
+    }
+    saveInFlightRef.current = true;
     try {
-      await api.saveSettings(form);
+      const errs = validateForm(candidate);
+      setFieldErrors(errs);
+      if (Object.keys(errs).length > 0) {
+        return;
+      }
+      setError(null);
+      await api.saveSettings(candidate);
       setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setError(formatInvokeError(err));
     } finally {
-      setBusy(false);
+      saveInFlightRef.current = false;
+      const next = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      if (next) void flushSave(next);
     }
   }
+
+  function scheduleAutoSave(next: AppSettings) {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void flushSave(next);
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  // Auto-save: any form change persists after the debounce; the just-loaded
+  // snapshot is never written back (skipInitialSaveRef).
+  useEffect(() => {
+    if (!loaded) return;
+    if (skipInitialSaveRef.current) {
+      skipInitialSaveRef.current = false;
+      return;
+    }
+    scheduleAutoSave(form);
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [form, loaded]);
+
+  /** Windows hides the TUN controls entirely (gate blocked upstream). */
+  const tunUiHidden = status?.tun_ui_hidden === true;
 
   return (
     <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {saved && <OkAlert className="shrink-0">已保存</OkAlert>}
 
-      <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+      <ScrollArea
+        type="scroll"
+        scrollHideDelay={600}
+        className="min-h-0 flex-1 overflow-hidden"
+      >
+        <div className="flex w-full flex-col gap-3">
+          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
         <CardHeader>
           <CardTitle>外观</CardTitle>
           <CardDescription>
@@ -171,19 +322,131 @@ export function Settings({ active = true }: { active?: boolean }) {
         </CardContent>
       </Card>
 
-      <Card
-        size="sm"
-        className="flex min-h-0 w-full flex-1 flex-col overflow-hidden"
-      >
+      {tunUiHidden ? null : (
+        <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>TUN 模式</CardTitle>
+            <CardDescription>
+              开启后，主页的代理服务将使用透明代理接管应用流量（替代系统代理接管）
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3">
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-tun-enabled"
+                size="sm"
+                checked={form.tun.enabled}
+                disabled={
+                  busy ||
+                  !loaded ||
+                  status?.tun_available === false ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.helper_stale === true
+                }
+                aria-label="启用 TUN 模式"
+                onCheckedChange={(checked) => {
+                  if (checked === true && status?.helper_installed !== true) {
+                    // No authorized helper: guide the user to install it first;
+                    // the TUN-on setting is persisted only after a successful
+                    // install (cancel leaves the switch off).
+                    tunInstall.setOpen(true);
+                    return;
+                  }
+                  setForm({
+                    ...form,
+                    tun: { ...form.tun, enabled: checked === true },
+                  });
+                }}
+              />
+              <FieldLabel htmlFor="settings-tun-enabled">启用 TUN 模式</FieldLabel>
+            </Field>
+            {TUN_TRANSITION_LABELS[status?.tun_status ?? ""] ? (
+              <FieldDescription>
+                {TUN_TRANSITION_LABELS[status?.tun_status ?? ""]}
+              </FieldDescription>
+            ) : status?.tun_status === "recovery_required" ? (
+              <FieldDescription>
+                TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换
+              </FieldDescription>
+            ) : status?.tun_available === false ? (
+              <FieldDescription>
+                {status?.tun_unavailable_reason ??
+                  "当前平台暂不支持 TUN 模式"}
+              </FieldDescription>
+            ) : status?.traffic_capture === "tun" ? (
+              <FieldDescription>
+                当前通过 TUN 接管流量
+                {status.tun_interface ? `（接口 ${status.tun_interface}）` : ""}；
+                关闭后立即切回系统代理接管
+              </FieldDescription>
+            ) : status?.helper_stale === true ? (
+              <FieldDescription>
+                应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN
+              </FieldDescription>
+            ) : (
+              <FieldDescription>
+                {status?.helper_installed
+                  ? "辅助组件已安装并授权，可直接启用 TUN；切换后自动保存并生效"
+                  : "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查"}
+              </FieldDescription>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void runHelperAction(() => api.installHelper(), true)}
+                disabled={
+                  busy ||
+                  (status?.helper_installed === true &&
+                    status?.helper_stale !== true) ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.traffic_capture === "tun"
+                }
+              >
+                {status?.helper_stale === true
+                  ? "更新辅助组件"
+                  : "安装辅助组件"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                    void runHelperAction(() => api.uninstallHelper(), false, () => {
+                      // The helper is gone: the TUN-on setting can no longer be
+                      // applied, so persist it off with the uninstall.
+                      if (!form.tun.enabled) return;
+                      return persistTunEnabled(false);
+                    })
+                  }
+                disabled={
+                  busy ||
+                  status?.helper_installed !== true ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.traffic_capture === "tun"
+                }
+              >
+                卸载辅助组件
+              </Button>
+            </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card size="sm" className="w-full">
         <CardHeader className="shrink-0">
           <CardTitle>入站</CardTitle>
-          <CardDescription>Mixed 与 Clash API 监听地址</CardDescription>
+          <CardDescription>
+            Mixed 与 Clash API 监听地址（更改后自动保存）
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-auto">
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(e) => void onSave(e)}
-          >
+        <CardContent>
+          <div className="flex flex-col gap-3">
             <FieldGroup className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-2">
               <Field data-invalid={!!fieldErrors.mixed_listen || undefined}>
                 <FieldLabel htmlFor="settings-mixed-listen">
@@ -313,10 +576,32 @@ export function Settings({ active = true }: { active?: boolean }) {
                 连接；Clash API 仍仅限本机
               </FieldDescription>
             ) : null}
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-auto-default-rules"
+                size="sm"
+                checked={form.auto_default_rules}
+                disabled={busy || !loaded}
+                aria-label="为无规则的订阅附加默认分流规则"
+                onCheckedChange={(checked) => {
+                  setForm({
+                    ...form,
+                    auto_default_rules: checked === true,
+                  });
+                }}
+              />
+              <FieldLabel htmlFor="settings-auto-default-rules">
+                为无规则的订阅附加默认分流规则
+              </FieldLabel>
+            </Field>
+            {form.auto_default_rules ? (
+              <FieldDescription>
+                订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP /
+                国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS
+                分流
+              </FieldDescription>
+            ) : null}
             <div className="flex flex-wrap gap-2">
-              <Button type="submit" size="sm" disabled={busy || !loaded}>
-                保存
-              </Button>
               <Button
                 type="button"
                 size="sm"
@@ -331,9 +616,20 @@ export function Settings({ active = true }: { active?: boolean }) {
                 打开数据目录
               </Button>
             </div>
-          </form>
+          </div>
         </CardContent>
       </Card>
+        </div>
+      </ScrollArea>
+
+      {!tunUiHidden && (
+        <TunInstallDialog
+          open={tunInstall.open}
+          onOpenChange={tunInstall.setOpen}
+          onConfirm={tunInstall.confirm}
+          busy={busy}
+        />
+      )}
     </div>
   );
 }

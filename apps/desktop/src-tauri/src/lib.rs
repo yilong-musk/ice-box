@@ -1,6 +1,8 @@
 mod acceptance;
+mod capture;
 mod commands;
 mod core_watch;
+mod helper_install;
 mod instance;
 mod log_tail;
 mod log_view;
@@ -8,10 +10,13 @@ mod orchestrate;
 mod shutdown;
 mod tray;
 
+use crate::capture::CaptureController;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle, TrafficMonitor};
-use ice_proxy_sys::{create_system_proxy, recover_if_applied, ProxyEndpoints, SystemProxy};
+use ice_proxy_sys::{
+    create_system_proxy, is_proxy_applied_on_disk, recover_if_applied, ProxyEndpoints, SystemProxy,
+};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,6 +80,9 @@ pub struct AppState {
     _instance_lock: std::fs::File,
     /// Persistent Clash `/traffic` stream; survives home-page unmounts.
     pub traffic: TrafficMonitor,
+    /// TUN capture runtime controller (plan §4.3): owns the active backend,
+    /// the capture state machine, and the recovery journal.
+    pub capture: CaptureController,
 }
 
 fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
@@ -144,6 +152,17 @@ pub fn run() {
                 bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
+            let capture = CaptureController::new(paths.clone(), app.path().resource_dir().ok());
+            // Fail-closed exclusivity: when startup proxy recovery failed, the
+            // OS proxy is still applied and the app still owns it. Keep the
+            // capture controller consistent with disk so TUN activation stays
+            // rejected until the proxy is restored.
+            if is_proxy_applied_on_disk(&paths.proxy_backup()) {
+                tracing::warn!(
+                    "system proxy backup still records applied after startup recovery; capture controller treats system proxy as the active backend"
+                );
+                let _ = capture.set_system_proxy_active();
+            }
             app.manage(AppState {
                 paths,
                 core: Mutex::new(core),
@@ -155,7 +174,39 @@ pub fn run() {
                 shutdown_requested,
                 _instance_lock: instance_lock,
                 traffic: TrafficMonitor::new(),
+                capture,
             });
+            // Startup TUN recovery: inside the orchestration lock, after the
+            // orphan-core reclamation in bootstrap. Never enables capture. A
+            // recovery error (e.g. an unreadable journal) is fail-closed: it
+            // is surfaced as a warning and TUN activation stays rejected
+            // until an explicit retry succeeds.
+            {
+                let state = app.state::<AppState>();
+                let _orch = state.orchestrate.lock().ok();
+                let mut core = state.core.lock().ok();
+                if let Some(core) = core.as_deref_mut() {
+                    let recovery = state.capture.recover(&mut **core);
+                    let append_warning = |warning: String| {
+                        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                            let existing = slot.take().unwrap_or_default();
+                            *slot = Some(if existing.is_empty() {
+                                warning
+                            } else {
+                                format!("{existing}；{warning}")
+                            });
+                        }
+                    };
+                    match recovery {
+                        Ok(Some(warning)) => append_warning(warning),
+                        Ok(None) => {}
+                        Err(err) => {
+                            tracing::error!(error = %err, "startup tun recovery failed");
+                            append_warning(format!("TUN 状态恢复未确认（{err}）"));
+                        }
+                    }
+                }
+            }
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             tray::setup_tray(app.handle())?;
             core_watch::spawn_core_watchdog(app.handle().clone());
@@ -192,6 +243,9 @@ pub fn run() {
             commands::start,
             commands::stop_system_proxy,
             commands::stop,
+            commands::recover_tun,
+            commands::install_helper,
+            commands::uninstall_helper,
             commands::get_log_view,
             commands::get_runtime_config,
             commands::reveal_data_dir,
@@ -220,18 +274,25 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
-            // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray Quit
-            // (stop core + restore system proxy) before the process dies, instead of
-            // orphaning sing-box and leaving the proxy applied until the next launch.
+            // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray
+            // Quit (stop core + restore system proxy) before the process dies,
+            // instead of orphaning sing-box and leaving the proxy applied until
+            // the next launch. The stop runs off the main thread — it can take
+            // seconds with TUN active (teardown waits + core stop +
+            // `networksetup` restore) — and the process exits from the worker
+            // once the state is consistent.
             api.prevent_exit();
-            match request_tray_quit(app_handle) {
-                QuitOutcome::Stopped => std::process::exit(0),
-                QuitOutcome::LockPoisoned => std::process::exit(1),
-                QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {
-                    // Stay running so the user can retry from the UI; the warning is
-                    // surfaced on the next get_status poll.
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match request_tray_quit(&handle) {
+                    QuitOutcome::Stopped => std::process::exit(0),
+                    QuitOutcome::LockPoisoned => std::process::exit(1),
+                    QuitOutcome::ProxyRestoreFailed | QuitOutcome::StopFailed => {
+                        // Stay running so the user can retry from the UI; the
+                        // warning is surfaced on the next get_status poll.
+                    }
                 }
-            }
+            });
         }
     });
 }

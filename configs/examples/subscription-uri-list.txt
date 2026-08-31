@@ -1,0 +1,15 @@
+vless://11111111-2222-4333-8444-555555555555@cfyes.example.xyz:443?type=ws&encryption=none&host=jp1-lx.example.xyz&path=%2Fliangxin%2Fdata%2Fjp&headerType=none&quicSecurity=none&serviceName=&security=tls&fp=safari&insecure=0&sni=jp1-lx.example.xyz#%E6%97%A5%E6%9C%AC%E4%B8%9C%E4%BA%AC01%7C1023.81%20GB
+vless://11111111-2222-4333-8444-555555555555@aws-link1.example.xyz:36458?type=tcp&encryption=none&host=&path=&headerType=none&quicSecurity=none&serviceName=&security=tls&flow=xtls-rprx-vision&fp=safari&insecure=1&sni=iosapps.itunes.apple.com&pcs=d5c39647e414c144b719bc49cb41c4b8f46f09f4cf26c863cae15c01d4a7b96a#%E9%A6%99%E6%B8%AF%E6%9C%BA%E5%9C%BA01%7CBGP%7CCMCU
+vless://11111111-2222-4333-8444-555555555555@aws-link3.example.xyz:27786?type=tcp&encryption=none&host=&path=&headerType=none&quicSecurity=none&serviceName=&security=reality&flow=xtls-rprx-vision&fp=ios&insecure=0&sni=www.lamer.com.hk&pbk=EYa4ic3GAxqznV61U-Oww-WKsu5wuQQptyS3fw7czM&sid=c50db39f#%E9%A6%99%E6%B8%AF%E6%9C%BA%E5%9C%BA03%7CBGP%7CCMCU
+vless://11111111-2222-4333-8444-555555555555@cfyes.example2.xyz:443?type=ws&encryption=none&host=lx-hk1.example.xyz&path=%2Fliangxin%2Fdata%2Fhk1&headerType=none&quicSecurity=none&serviceName=&security=tls&fp=safari&insecure=0&sni=lx-hk1.example.xyz#%E9%A6%99%E6%B8%AF%E6%9C%BA%E5%9C%BA01%7CBGP%7CTCM
+hysteria2://11111111-2222-4333-8444-555555555555@aws-linkhy1.example.xyz:60000/?insecure=false&sni=www.apple.com.cn&pinSHA256=c77f0fb1aef429ebc3f7e15078ea13c3cc9fe85d8c7a9bda9637f919e340d355&mport=60000-65530#%E9%A6%99%E6%B8%AF%E6%9C%BA%E5%9C%BA05%7CBGP%7C%E6%96%B0%E5%8A%A0%E5%9D%A1
+hysteria2://secret%40word@hy2.example.xyz:8443?insecure=1&sni=hy2.example.xyz&obfs=salamander&obfs-password=salty#HK-01
+hysteria://example.xyz:443?protocol=udp&auth=sekret&insecure=1&sni=example.xyz&obfs=xplus&upmbps=100&downmbps=200&alpn=h3#HYS-01
+trojan://trojan-pass@trojan.example.xyz:443?type=ws&host=cdn.example.xyz&path=%2Ftrojan&sni=cdn.example.xyz&allowInsecure=1&fp=chrome&alpn=h2%2Chttp%2F1.1#TROJAN-01
+vmess://eyJ2IjogIjIiLCAicHMiOiAiVk1FU1MtMDEiLCAiYWRkIjogInZtZXNzLmV4YW1wbGUueHl6IiwgInBvcnQiOiAiNDQzIiwgImlkIjogIjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsICJhaWQiOiAiMCIsICJzY3kiOiAiYXV0byIsICJuZXQiOiAid3MiLCAidHlwZSI6ICJub25lIiwgImhvc3QiOiAiY2RuLmV4YW1wbGUueHl6IiwgInBhdGgiOiAiL3ZtZXNzIiwgInRscyI6ICJ0bHMiLCAic25pIjogImNkbi5leGFtcGxlLnh5eiIsICJhbHBuIjogImgyLGh0dHAvMS4xIiwgImZwIjogImNocm9tZSJ9
+tuic://11111111-2222-4333-8444-555555555555:token123@tuic.example.xyz:443?sni=tuic.example.xyz&alpn=h3&congestion_control=bbr&allow_insecure=1&udp_relay_mode=native#TUIC-01
+ss://YWVzLTEyOC1nY206c2VjcmV0@ss.example.xyz:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dss.example.xyz#SS-01
+socks5://user:pass@socks.example.xyz:1080#SOCKS-01
+http://user:pass@http.example.xyz:8080#HTTP-01
+wireguard://pubkey@wg.example.xyz:443?privatekey=privkey&presharedkey=psk&reserved=0,1,2&address=10.0.0.1%2F32&mtu=1420#WG-01
+ssr://cmFuc2RvbV9zZXJ2ZXI6ODM4ODpvcmlnaW46YWVzLTI1Ni1jZmI6cGxhaW46bmV4dD9vYnZzcGFyYW09JnJlbWFya3M9U1NSLTAx

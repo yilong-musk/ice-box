@@ -31,7 +31,8 @@ pub use selections::{
 };
 pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, load_settings, save_settings, AppSettings,
-    ProxyMode,
+    ProxyMode, TunSettings, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU,
+    TUN_DEFAULT_STACK,
 };
 
 /// sing-box core version the config generator targets (architecture §12 / §22).
@@ -46,6 +47,77 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The runtime capture intent for a generated config (plan §4.1).
+///
+/// Supplied explicitly by orchestration; never inferred from `tun.enabled`
+/// alone. `Diagnostic` is the default and matches the pre-TUN behavior exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureIntent {
+    /// Mixed inbound only. Used by automatic core start and a stopped proxy
+    /// service; never contains a TUN inbound.
+    #[default]
+    Diagnostic,
+    /// Mixed plus TUN inbounds, with the reserved bypass rules first. Used only
+    /// during a TUN capture transition and while TUN is active.
+    Tun,
+}
+
+/// TUN T0 gate status for the current platform (plan §3.2, §5 T1).
+///
+/// `ready == false` means this platform must never generate or activate a TUN
+/// config; the stable reason feeds `tun_available=false` in status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunGate {
+    pub ready: bool,
+    pub reason: Option<&'static str>,
+}
+
+/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready` — live
+/// spike passed); Windows is pending (`windows_tun_ready` — host spike not yet
+/// run); other platforms are out of scope for the first release.
+///
+/// Test-only override: the desktop crate's host-free controller tests run on
+/// every CI host and inject fake backends; forcing the gate green there lets
+/// them generate Tun configs on non-macOS runners. Production code never
+/// calls [`force_tun_gate_ready`].
+static TEST_TUN_GATE_READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Test-only escape hatch for host-free controller tests (see [`tun_gate`]).
+pub fn force_tun_gate_ready() {
+    let _ = TEST_TUN_GATE_READY.set(());
+}
+
+pub fn tun_gate() -> TunGate {
+    if TEST_TUN_GATE_READY.get().is_some() {
+        return TunGate {
+            ready: true,
+            reason: None,
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        TunGate {
+            ready: true,
+            reason: None,
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        TunGate {
+            ready: false,
+            reason: Some("Windows TUN gate pending (windows_tun_ready): WinTUN/UAC spike not run"),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        TunGate {
+            ready: false,
+            reason: Some("TUN is supported on macOS and Windows only in the first release"),
+        }
+    }
+}
+
 /// Local template knobs that wrap subscription-derived outbounds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalTemplate {
@@ -58,6 +130,11 @@ pub struct LocalTemplate {
     /// Routing mode applied at build time (rule / global / direct).
     #[serde(default)]
     pub proxy_mode: ProxyMode,
+    /// Validated TUN capture parameters. The TUN inbound is emitted only when
+    /// the build intent is [`CaptureIntent::Tun`], never from `tun.enabled`
+    /// alone.
+    #[serde(default)]
+    pub tun: TunSettings,
 }
 
 impl Default for LocalTemplate {
@@ -69,6 +146,7 @@ impl Default for LocalTemplate {
             clash_api_port: 19090,
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
+            tun: TunSettings::default(),
         }
     }
 }
@@ -96,6 +174,11 @@ pub struct BuildInput {
     /// Persisted rule overrides: disabled rules are dropped, custom rules prepended.
     #[serde(default)]
     pub rule_overrides: RuleOverrides,
+    /// Runtime capture intent: `Tun` adds the TUN inbound + reserved bypass
+    /// rules; `Diagnostic` keeps the Mixed-only shape. Never inferred from
+    /// `tun.enabled` alone (plan §4.1).
+    #[serde(default)]
+    pub capture_intent: CaptureIntent,
 }
 
 /// Legacy helper: build from flat node list (tests / fallback).
@@ -111,6 +194,7 @@ pub fn build_input_from_nodes(
         geoip_rule_set_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
     }
 }
 
@@ -118,8 +202,18 @@ pub fn build_input_from_nodes(
 /// `block` outbounds, every route final is `direct`. Lets a first-run user start
 /// the core (system proxy, inbound) before importing any subscription; importing
 /// one later hot-reloads to the real config.
-pub fn build_direct_only_config(template: &LocalTemplate) -> Result<Value, ConfigError> {
+///
+/// The capture intent is honored: a `Tun` intent adds the TUN inbound and the
+/// reserved bypass rules (a no-node profile must not silently downgrade a
+/// requested `Tun` intent to Mixed-only — plan §4.2.6).
+pub fn build_direct_only_config(
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+) -> Result<Value, ConfigError> {
     validate_template(template)?;
+    if capture_intent == CaptureIntent::Tun {
+        validate_tun_capture(template)?;
+    }
 
     let outbounds = vec![
         json!({"type": "direct", "tag": "direct"}),
@@ -127,18 +221,23 @@ pub fn build_direct_only_config(template: &LocalTemplate) -> Result<Value, Confi
     ];
 
     // Slice 4c: keep the `clash_mode` rules so a later reload to a real config keeps the
-    // mode switch wired; without proxy outbounds every mode routes direct anyway.
+    // mode switch wired; without proxy outbounds every mode routes direct anyway. A `Tun`
+    // intent prepends the reserved bypass rules so the control path stays direct even in
+    // direct-only fallback.
+    let mut rules = Vec::new();
+    if capture_intent == CaptureIntent::Tun {
+        rules.extend(tun_reserved_rules());
+    }
+    rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
+    rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
     let route = json!({
         "final": "direct",
         "auto_detect_interface": true,
-        "rules": [
-            { "clash_mode": "global", "outbound": "direct" },
-            { "clash_mode": "direct", "outbound": "direct" },
-        ],
+        "rules": rules,
         "default_domain_resolver": "local",
     });
 
-    let inbounds = vec![json!({
+    let mut inbounds = vec![json!({
         "type": "mixed",
         "tag": "mixed-in",
         "listen": if template.allow_lan {
@@ -148,6 +247,9 @@ pub fn build_direct_only_config(template: &LocalTemplate) -> Result<Value, Confi
         },
         "listen_port": template.mixed_port,
     })];
+    if capture_intent == CaptureIntent::Tun {
+        inbounds.push(tun_inbound(&template.tun));
+    }
 
     let config = json!({
         "log": { "level": "info", "timestamp": true },
@@ -170,7 +272,7 @@ pub fn build_direct_only_config(template: &LocalTemplate) -> Result<Value, Confi
         }
     });
 
-    validate_config(&config)?;
+    validate_config_for_intent(&config, capture_intent)?;
     Ok(config)
 }
 
@@ -227,6 +329,10 @@ fn dns_has_local_server(dns: &Value) -> bool {
 /// Merge template + subscription profile into a sing-box config object.
 pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     validate_template(&input.template)?;
+    let capture_intent = input.capture_intent;
+    if capture_intent == CaptureIntent::Tun {
+        validate_tun_capture(&input.template)?;
+    }
 
     if input.profile.nodes.is_empty() {
         return Err(ConfigError::EmptyOutbounds);
@@ -348,10 +454,15 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     // prepended after the `clash_mode` rules so a custom / subscription rule can never
     // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
-        let mut final_rules: Vec<Value> = vec![
-            json!({ "clash_mode": "global", "outbound": global_target }),
-            json!({ "clash_mode": "direct", "outbound": "direct" }),
-        ];
+        let mut final_rules: Vec<Value> = Vec::new();
+        if capture_intent == CaptureIntent::Tun {
+            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6): the control
+            // path, private/loopback/link-local/multicast destinations, and the TUN
+            // endpoint are never captured or sniffed, even in Global/Direct mode.
+            final_rules.extend(tun_reserved_rules());
+        }
+        final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
+        final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
         let enabled_sub_rules: Vec<Value> = input
             .profile
             .route
@@ -443,7 +554,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
 
     validate_route_refs(&route, &tag_set)?;
 
-    let inbounds = vec![json!({
+    let mut inbounds = vec![json!({
         "type": "mixed",
         "tag": "mixed-in",
         "listen": if input.template.allow_lan {
@@ -453,6 +564,9 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         },
         "listen_port": input.template.mixed_port,
     })];
+    if capture_intent == CaptureIntent::Tun {
+        inbounds.push(tun_inbound(&input.template.tun));
+    }
 
     let config = json!({
         "log": { "level": "info", "timestamp": true },
@@ -479,8 +593,86 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         }
     });
 
-    validate_config(&config)?;
+    validate_config_for_intent(&config, capture_intent)?;
     Ok(config)
+}
+
+/// Gate + TUN parameter validation shared by both builders. `Tun` configs must
+/// not be generated on a platform whose T0 gate is not green, and the emitted
+/// inbound needs a valid explicit interface name (locked macOS schema).
+fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
+    let gate = tun_gate();
+    if !gate.ready {
+        return Err(ConfigError::TunUnavailable(
+            gate.reason
+                .unwrap_or("TUN unavailable on this platform")
+                .to_string(),
+        ));
+    }
+    template
+        .tun
+        .validate()
+        .map_err(|e| ConfigError::TunInvalid(e.message))?;
+    if template.tun.interface_name.is_none() {
+        return Err(ConfigError::TunInvalid(
+            "tun.interface_name is required to generate a Tun config (platform backend resolves a free name before generation)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reserved bypass route rules for a `Tun` config (T0 spike §5, locked in
+/// architecture §24.5.6). Order is fixed: control path and local traffic are
+/// never captured or sniffed.
+pub fn tun_reserved_rules() -> Vec<Value> {
+    vec![
+        json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }),
+        json!({ "ip_is_private": true, "outbound": "direct" }),
+        json!({
+            "ip_cidr": [
+                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+                "224.0.0.0/4", "ff00::/8"
+            ],
+            "outbound": "direct"
+        }),
+        // The sniff action at this pin never rewrites destinations; the sniffed
+        // domain lands in `metadata.Domain`, so sniff must precede every
+        // domain-matching rule (T0 spike §1.1).
+        json!({ "action": "sniff" }),
+    ]
+}
+
+/// The locked TUN inbound shape for the bundled sing-box 1.13.19 (T0 spike §5):
+/// dual-stack `address` list, sub-range auto_route, and the fixed
+/// `route_exclude_address` / `loopback_address` sets. `interface_name` is
+/// required at build time (validated by [`validate_tun_capture`]).
+fn tun_inbound(tun: &TunSettings) -> Value {
+    let mut inbound = json!({
+        "type": "tun",
+        "tag": "tun-in",
+        "interface_name": tun.interface_name,
+        "address": [tun.ipv4_address, tun.ipv6_address],
+        "mtu": tun.mtu,
+        "auto_route": tun.auto_route,
+        "strict_route": tun.strict_route,
+        "stack": tun.stack,
+        "route_exclude_address": [
+            "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12",
+            "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4",
+            "fe80::/10", "fc00::/7"
+        ],
+        "loopback_address": ["127.0.0.1", "::1"],
+    });
+    // `interface_name` is Some here by construction; keep the key absent if a
+    // future caller relaxes the requirement.
+    if tun.interface_name.is_none() {
+        inbound
+            .as_object_mut()
+            .expect("tun inbound is an object")
+            .remove("interface_name");
+    }
+    inbound
 }
 
 /// Expand profile `geoip` rules into local rule-set references (sing-box 1.13 removed the
@@ -661,6 +853,51 @@ pub fn validate_config(config: &Value) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Structural intent validation (plan §4.2.7): a `Diagnostic` config must never
+/// contain a TUN inbound, and a `Tun` activation config must carry exactly one
+/// TUN inbound plus the Mixed inbound. A Mixed-only config is never accepted as
+/// a TUN activation config.
+pub fn validate_config_for_intent(
+    config: &Value,
+    intent: CaptureIntent,
+) -> Result<(), ConfigError> {
+    validate_config(config)?;
+    let inbounds = config
+        .get("inbounds")
+        .and_then(|v| v.as_array())
+        .ok_or(ConfigError::Invalid("missing inbounds array"))?;
+    let tun_count = inbounds
+        .iter()
+        .filter(|i| i.get("type").and_then(|v| v.as_str()) == Some("tun"))
+        .count();
+    let mixed_count = inbounds
+        .iter()
+        .filter(|i| i.get("type").and_then(|v| v.as_str()) == Some("mixed"))
+        .count();
+    match intent {
+        CaptureIntent::Diagnostic => {
+            if tun_count != 0 {
+                return Err(ConfigError::Invalid(
+                    "Diagnostic config must not contain a tun inbound",
+                ));
+            }
+        }
+        CaptureIntent::Tun => {
+            if tun_count != 1 {
+                return Err(ConfigError::Invalid(
+                    "Tun config must contain exactly one tun inbound",
+                ));
+            }
+            if mixed_count != 1 {
+                return Err(ConfigError::Invalid(
+                    "Tun config must keep the mixed inbound (diagnostic access)",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn config_to_pretty_json(config: &Value) -> Result<String, ConfigError> {
     Ok(serde_json::to_string_pretty(config)?)
 }
@@ -705,6 +942,10 @@ pub enum ConfigError {
     Invalid(&'static str),
     #[error("invalid route: {0}")]
     RouteInvalid(String),
+    #[error("tun unavailable: {0}")]
+    TunUnavailable(String),
+    #[error("invalid tun settings: {0}")]
+    TunInvalid(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -743,7 +984,8 @@ mod build_tests {
 
     #[test]
     fn direct_only_config_has_builtin_outbounds_and_direct_final() {
-        let cfg = build_direct_only_config(&LocalTemplate::default()).expect("build");
+        let cfg = build_direct_only_config(&LocalTemplate::default(), CaptureIntent::Diagnostic)
+            .expect("build");
         let outbounds = cfg["outbounds"].as_array().unwrap();
         let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
         assert_eq!(tags, ["direct", "block"]);
@@ -764,7 +1006,7 @@ mod build_tests {
             mixed_port: 80,
             ..LocalTemplate::default()
         };
-        assert!(build_direct_only_config(&invalid).is_err());
+        assert!(build_direct_only_config(&invalid, CaptureIntent::Diagnostic).is_err());
     }
 
     #[test]
@@ -811,6 +1053,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: selections,
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .expect("build");
         let group = cfg["outbounds"]
@@ -886,6 +1129,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .expect_err("empty");
         assert!(matches!(err, ConfigError::EmptyOutbounds));
@@ -928,6 +1172,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -974,6 +1219,7 @@ mod build_tests {
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1016,6 +1262,7 @@ mod build_tests {
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1070,6 +1317,7 @@ mod build_tests {
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1132,6 +1380,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1180,6 +1429,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1217,6 +1467,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
 
@@ -1252,6 +1503,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .expect_err("subscription rule with unknown outbound must still fail");
         assert!(matches!(err, ConfigError::RouteInvalid(_)));
@@ -1272,6 +1524,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "direct");
@@ -1318,6 +1571,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
         assert_eq!(
@@ -1351,6 +1605,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "direct");
@@ -1384,6 +1639,7 @@ mod build_tests {
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "a", "final stays at rule-mode value");
@@ -1457,5 +1713,379 @@ mod build_tests {
         assert_eq!(fs::read_to_string(&config).unwrap(), "keep");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --- Slice T1: CaptureIntent, TUN config generation, structural intent checks ---
+
+    #[test]
+    fn tun_gate_status_is_stable_per_platform() {
+        let gate = tun_gate();
+        #[cfg(target_os = "macos")]
+        {
+            assert!(gate.ready, "macos_tun_ready is green after the T0 spike");
+            assert_eq!(gate.reason, None);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(
+                !gate.ready,
+                "TUN must stay fail-closed off-macOS until its gate is green"
+            );
+            assert!(gate.reason.is_some());
+        }
+    }
+
+    /// TUN parameters with an explicit interface name (required at build time).
+    #[cfg(target_os = "macos")]
+    fn tun_template() -> LocalTemplate {
+        LocalTemplate {
+            tun: TunSettings {
+                enabled: true,
+                interface_name: Some("utun420".into()),
+                ..TunSettings::default()
+            },
+            ..LocalTemplate::default()
+        }
+    }
+
+    #[test]
+    fn diagnostic_intent_never_emits_tun_inbound_even_when_tun_enabled() {
+        let template = LocalTemplate {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..LocalTemplate::default()
+        };
+        // A requested Tun config is rejected by the gate / interface-name checks on
+        // non-green platforms, but Diagnostic must build identically everywhere.
+        let cfg = build_runtime_config(&BuildInput {
+            template: template.clone(),
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+        })
+        .expect("diagnostic build");
+        assert_eq!(
+            cfg["inbounds"].as_array().unwrap().len(),
+            1,
+            "tun.enabled=true must not add a tun inbound under Diagnostic intent"
+        );
+        assert_eq!(cfg["inbounds"][0]["type"], "mixed");
+
+        let direct = build_direct_only_config(&template, CaptureIntent::Diagnostic)
+            .expect("diagnostic direct-only");
+        assert_eq!(direct["inbounds"].as_array().unwrap().len(), 1);
+        validate_config_for_intent(&cfg, CaptureIntent::Diagnostic).expect("structural check");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tun_config_has_both_inbounds_and_locked_shape() {
+        let cfg = build_runtime_config(&BuildInput {
+            template: tun_template(),
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect("tun build");
+        validate_config_for_intent(&cfg, CaptureIntent::Tun).expect("structural check");
+
+        let inbounds = cfg["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 2, "mixed + tun");
+        assert_eq!(inbounds[0]["type"], "mixed");
+        assert_eq!(inbounds[0]["tag"], "mixed-in");
+
+        let tun = &inbounds[1];
+        assert_eq!(tun["type"], "tun");
+        assert_eq!(tun["tag"], "tun-in");
+        assert_eq!(tun["interface_name"], "utun420");
+        assert_eq!(tun["address"][0], "10.0.0.1/30");
+        assert_eq!(tun["address"][1], "fdfe:dcba:9876::1/126");
+        assert_eq!(tun["mtu"], 9000);
+        assert_eq!(tun["auto_route"], true);
+        assert_eq!(tun["strict_route"], true);
+        assert_eq!(tun["stack"], "gvisor");
+        let excludes: Vec<&str> = tun["route_exclude_address"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            excludes,
+            [
+                "192.168.0.0/16",
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "127.0.0.0/8",
+                "169.254.0.0/16",
+                "224.0.0.0/4",
+                "fe80::/10",
+                "fc00::/7"
+            ],
+            "route_exclude_address must match the locked T0 shape"
+        );
+        assert_eq!(
+            tun["loopback_address"],
+            serde_json::json!(["127.0.0.1", "::1"])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tun_config_reserved_rules_precede_clash_mode_and_sniff_precedes_domain_rules() {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.route.rules = vec![
+            json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
+            json!({ "domain_suffix": ["proxy.com"], "outbound": "a" }),
+        ];
+        let cfg = build_runtime_config(&BuildInput {
+            template: tun_template(),
+            profile,
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect("tun build");
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        assert_eq!(
+            rules.len(),
+            8,
+            "4 reserved + 2 clash_mode + 2 subscription rules"
+        );
+
+        assert_eq!(rules[0]["process_name"][0], "ice-box");
+        assert_eq!(rules[0]["outbound"], "direct");
+        assert_eq!(rules[1]["ip_is_private"], true);
+        assert_eq!(rules[1]["outbound"], "direct");
+        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[3]["action"], "sniff");
+        assert_eq!(rules[4]["clash_mode"], "global");
+        assert_eq!(rules[5]["clash_mode"], "direct");
+        assert_eq!(rules[6]["domain_suffix"][0], "keep.com");
+        assert_eq!(rules[7]["domain_suffix"][0], "proxy.com");
+
+        // Global mode must never bypass the reserved rules: the clash_mode rule
+        // still targets the proxy while the control path stays direct.
+        assert_eq!(rules[4]["outbound"], "proxy");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tun_config_works_for_every_proxy_mode_and_direct_only_keeps_tun() {
+        for mode in [ProxyMode::Rule, ProxyMode::Global, ProxyMode::Direct] {
+            let template = LocalTemplate {
+                proxy_mode: mode,
+                ..tun_template()
+            };
+            let cfg = build_runtime_config(&BuildInput {
+                template: template.clone(),
+                profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Tun,
+            })
+            .expect("tun build per mode");
+            validate_config_for_intent(&cfg, CaptureIntent::Tun).expect("structural check");
+            assert_eq!(
+                cfg["experimental"]["clash_api"]["default_mode"],
+                clash_mode_name(mode)
+            );
+
+            let direct = build_direct_only_config(&template, CaptureIntent::Tun)
+                .expect("tun direct-only per mode");
+            validate_config_for_intent(&direct, CaptureIntent::Tun)
+                .expect("direct-only Tun keeps the tun inbound");
+            let rules = direct["route"]["rules"].as_array().unwrap();
+            assert_eq!(rules[0]["process_name"][0], "ice-box");
+            assert_eq!(
+                clash_rules(&direct),
+                [("global", "direct"), ("direct", "direct")]
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tun_config_requires_interface_name_at_build_time() {
+        let template = LocalTemplate {
+            tun: TunSettings {
+                enabled: true,
+                interface_name: None,
+                ..TunSettings::default()
+            },
+            ..LocalTemplate::default()
+        };
+        let err = build_runtime_config(&BuildInput {
+            template: template.clone(),
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect_err("interface name required");
+        assert!(matches!(err, ConfigError::TunInvalid(_)));
+        assert!(build_direct_only_config(&template, CaptureIntent::Tun).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tun_config_rejects_invalid_mtu_and_address_at_build_time() {
+        let bad_mtu = LocalTemplate {
+            tun: TunSettings {
+                mtu: 576,
+                interface_name: Some("utun420".into()),
+                ..TunSettings::default()
+            },
+            ..tun_template()
+        };
+        let err = build_runtime_config(&BuildInput {
+            template: bad_mtu,
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect_err("bad mtu");
+        assert!(matches!(err, ConfigError::TunInvalid(_)));
+
+        let bad_addr = LocalTemplate {
+            tun: TunSettings {
+                ipv6_address: "10.0.0.1/24".into(),
+                interface_name: Some("utun420".into()),
+                ..TunSettings::default()
+            },
+            ..tun_template()
+        };
+        assert!(build_direct_only_config(&bad_addr, CaptureIntent::Tun).is_err());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
+        // Windows gate pending / Linux out of scope: Tun generation must fail
+        // closed with the stable unavailable error, never emit a tun inbound.
+        let template = LocalTemplate {
+            tun: TunSettings {
+                enabled: true,
+                interface_name: Some("utun420".into()),
+                ..TunSettings::default()
+            },
+            ..LocalTemplate::default()
+        };
+        let err = build_runtime_config(&BuildInput {
+            template: template.clone(),
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect_err("tun gate not green");
+        assert!(matches!(err, ConfigError::TunUnavailable(_)));
+        assert!(build_direct_only_config(&template, CaptureIntent::Tun).is_err());
+    }
+
+    #[test]
+    fn validate_config_for_intent_rejects_intent_mismatch_everywhere() {
+        // Platform-neutral structural checks: hand-built JSON, no builder gate.
+        let mixed_only = json!({
+            "inbounds": [ { "type": "mixed", "tag": "mixed-in" } ],
+            "outbounds": [ { "type": "direct", "tag": "direct" } ],
+        });
+        let mixed_tun = json!({
+            "inbounds": [
+                { "type": "mixed", "tag": "mixed-in" },
+                { "type": "tun", "tag": "tun-in" }
+            ],
+            "outbounds": [ { "type": "direct", "tag": "direct" } ],
+        });
+        let tun_only = json!({
+            "inbounds": [ { "type": "tun", "tag": "tun-in" } ],
+            "outbounds": [ { "type": "direct", "tag": "direct" } ],
+        });
+        let two_tun = json!({
+            "inbounds": [
+                { "type": "mixed", "tag": "mixed-in" },
+                { "type": "tun", "tag": "tun-in" },
+                { "type": "tun", "tag": "tun-in-2" }
+            ],
+            "outbounds": [ { "type": "direct", "tag": "direct" } ],
+        });
+
+        validate_config_for_intent(&mixed_only, CaptureIntent::Diagnostic).expect("mixed-only");
+        validate_config_for_intent(&mixed_tun, CaptureIntent::Tun).expect("mixed+tun");
+
+        assert!(
+            matches!(
+                validate_config_for_intent(&mixed_tun, CaptureIntent::Diagnostic),
+                Err(ConfigError::Invalid(_))
+            ),
+            "Diagnostic must never carry a tun inbound"
+        );
+        assert!(
+            matches!(
+                validate_config_for_intent(&mixed_only, CaptureIntent::Tun),
+                Err(ConfigError::Invalid(_))
+            ),
+            "a Mixed-only config must never be handed to a TUN activation"
+        );
+        assert!(
+            matches!(
+                validate_config_for_intent(&tun_only, CaptureIntent::Tun),
+                Err(ConfigError::Invalid(_))
+            ),
+            "Tun config must keep the mixed inbound"
+        );
+        assert!(
+            matches!(
+                validate_config_for_intent(&two_tun, CaptureIntent::Tun),
+                Err(ConfigError::Invalid(_))
+            ),
+            "exactly one tun inbound"
+        );
+    }
+
+    #[test]
+    fn build_input_serde_preserves_capture_intent_and_defaults_to_diagnostic() {
+        let value = serde_json::to_value(BuildInput {
+            template: LocalTemplate::default(),
+            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+        })
+        .expect("serialize");
+        assert_eq!(value["capture_intent"], "tun");
+
+        let legacy = serde_json::json!({
+            "template": LocalTemplate::default(),
+            "profile": NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            "selected_tag": null,
+            "geoip_rule_set_dir": null,
+            "group_selections": {},
+            "rule_overrides": {},
+        });
+        let parsed: BuildInput = serde_json::from_value(legacy).expect("legacy input");
+        assert_eq!(parsed.capture_intent, CaptureIntent::Diagnostic);
+        assert_eq!(parsed.template.tun, TunSettings::default());
     }
 }

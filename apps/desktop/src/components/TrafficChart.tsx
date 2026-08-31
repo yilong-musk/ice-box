@@ -218,7 +218,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         </AreaChart>
       </ChartContainer>
       <p className="muted shrink-0 text-xs">
-        峰值刻度 {formatRate(maxVal)} · 本次运行累计 · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
+        峰值刻度 {formatRate(maxVal)} · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
       </p>
     </div>
   );

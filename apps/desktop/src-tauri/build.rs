@@ -109,9 +109,32 @@ fn copy_geoip_resources(manifest_dir: &Path) {
     );
 }
 
+/// Ensure `resources/ice-helper` exists for the Tauri bundle (plan §5 T5).
+/// The production path builds the real daemon (`prepare-singbox-resource.sh`
+/// does it in beforeBuildCommand); plain `cargo check` / test / clippy on a
+/// fresh checkout gets a marker so the workspace gate stays green without a
+/// build.
+fn copy_helper_resource(manifest_dir: &Path) {
+    let dest = manifest_dir.join("resources").join("ice-helper");
+    if let Err(err) = fs::create_dir_all(dest.parent().expect("parent")) {
+        println!("cargo:warning=create resources dir: {err}");
+        return;
+    }
+    if dest.is_file() {
+        return;
+    }
+    // Touch an empty marker so non-release builds work on a fresh checkout;
+    // the real binary is built by scripts/prepare-singbox-resource.sh
+    // (beforeBuildCommand) and CI verifies it is embedded.
+    if let Err(err) = fs::write(&dest, b"") {
+        println!("cargo:warning=create ice-helper resource marker: {err}");
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     copy_singbox_resource(&manifest_dir);
     copy_geoip_resources(&manifest_dir);
+    copy_helper_resource(&manifest_dir);
     tauri_build::build()
 }

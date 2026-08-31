@@ -9,15 +9,17 @@ mod fetch;
 mod merge;
 mod store;
 mod tls_fetch;
+mod uri;
 mod url;
 
 #[cfg(test)]
 mod tests_g5 {
     use super::{
-        detect_format, load_active_profile, load_index, normalize_raw_body, parse_clash_with_stats,
-        parse_singbox, resolve_selected_tag, set_active, DirectFetcher, FetchResponse, HttpFetcher,
-        MockFetchMode, MockFetcher, SubscriptionError, SubscriptionFormat, SubscriptionManager,
-        SubscriptionPaths, CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES,
+        detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
+        normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_uri_list_profile,
+        resolve_selected_tag, set_active, DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode,
+        MockFetcher, SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionPaths,
+        CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
     };
     use base64::Engine;
     use ice_config::{
@@ -233,6 +235,7 @@ mod tests_g5 {
             geoip_rule_set_dir: None,
             group_selections: Default::default(),
             rule_overrides: Default::default(),
+            capture_intent: Default::default(),
         })
         .unwrap();
         assert!(cfg["outbounds"].as_array().unwrap().len() >= 3);
@@ -529,6 +532,164 @@ mod tests_g5 {
         assert_eq!(detect_format(&raw), SubscriptionFormat::SingBox);
         assert!(!parse_singbox(&raw).unwrap().is_empty());
     }
+
+    #[test]
+    fn g5_16_uri_list_import_and_manager() {
+        let raw = fs::read_to_string(fixtures_dir().join("subscription-uri-list.txt")).unwrap();
+
+        // Detection: raw body and base64-wrapped body both resolve to UriList.
+        assert_eq!(detect_format(&raw), SubscriptionFormat::UriList);
+        let (format, profile) = normalize_raw_body(&raw).unwrap();
+        assert_eq!(format, SubscriptionFormat::UriList);
+        assert_eq!(profile.nodes.len(), 14, "15 lines, only ssr:// skipped");
+        assert_eq!(profile.parse_stats.skipped_proxies, 1);
+        assert!(
+            profile
+                .parse_stats
+                .warnings
+                .iter()
+                .any(|w| w.contains("ssr://")),
+            "ssr skip must surface as a warning"
+        );
+
+        let types: Vec<&str> = profile
+            .nodes
+            .iter()
+            .map(|n| n.outbound["type"].as_str().unwrap())
+            .collect();
+        for t in [
+            "vless",
+            "hysteria2",
+            "hysteria",
+            "trojan",
+            "vmess",
+            "tuic",
+            "shadowsocks",
+            "socks",
+            "http",
+            "wireguard",
+        ] {
+            assert!(types.contains(&t), "missing {t}");
+        }
+
+        // Fragment names are percent-decoded; v2rayN vmess `ps` names nodes
+        // that have no fragment.
+        let tags: Vec<&str> = profile.nodes.iter().map(|n| n.tag.as_str()).collect();
+        assert!(tags.contains(&"日本东京01|1023.81 GB"));
+        assert!(tags.contains(&"香港机场05|BGP|新加坡"));
+        assert!(tags.contains(&"VMESS-01"));
+
+        // Rule-less URI lists stay pure at parse time; built-in split-routing
+        // rules + DNS are attached at profile load (honoring the setting).
+        assert!(profile.route.rules.is_empty());
+        assert_eq!(profile.route.final_outbound, "proxy");
+        assert!(profile.dns.is_none());
+
+        // vless reality node keeps pbk/sid and requires a utls fingerprint.
+        let reality = profile
+            .nodes
+            .iter()
+            .find(|n| n.outbound["tls"]["reality"]["enabled"] == true)
+            .expect("reality node");
+        assert_eq!(
+            reality.outbound["tls"]["reality"]["public_key"],
+            "EYa4ic3GAxqznV61U-Oww-WKsu5wuQQptyS3fw7czM"
+        );
+        assert_eq!(reality.outbound["tls"]["reality"]["short_id"], "c50db39f");
+        assert_eq!(reality.outbound["tls"]["server_name"], "www.lamer.com.hk");
+        assert_eq!(reality.outbound["flow"], "xtls-rprx-vision");
+        assert_eq!(reality.outbound["tls"]["utls"]["fingerprint"], "ios");
+
+        // vless vision over plain TLS keeps utls fingerprint and honors
+        // insecure=1; pcs pin is dropped.
+        let vision = profile
+            .nodes
+            .iter()
+            .find(|n| n.tag == "香港机场01|BGP|CMCU")
+            .expect("vision node");
+        assert_eq!(vision.outbound["flow"], "xtls-rprx-vision");
+        assert_eq!(vision.outbound["tls"]["utls"]["fingerprint"], "safari");
+        assert_eq!(vision.outbound["tls"]["insecure"], true);
+        assert!(vision.outbound["tls"]
+            .as_object()
+            .unwrap()
+            .get("pcs")
+            .is_none());
+
+        // hysteria2 node: password is userinfo; pinSHA256/mport dropped, obfs kept.
+        let hy2 = profile
+            .nodes
+            .iter()
+            .find(|n| n.tag == "HK-01")
+            .expect("hy2 obfs node");
+        assert_eq!(hy2.outbound["password"], "secret@word");
+        assert_eq!(hy2.outbound["obfs"]["type"], "salamander");
+        assert_eq!(hy2.outbound["obfs"]["password"], "salty");
+        assert!(hy2.outbound.as_object().unwrap().get("pinSHA256").is_none());
+
+        // Full import through SubscriptionManager (base64-wrapped body).
+        let encoded = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
+        let paths = temp_subs("uri");
+        let fetcher = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: encoded,
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+        let meta = mgr
+            .add("https://example.com/sub", Some("liangxin"))
+            .unwrap();
+        assert_eq!(meta.name, "liangxin");
+        assert_eq!(meta.format, SubscriptionFormat::UriList);
+        assert_eq!(meta.node_count, 14);
+        let profile = load_active_profile(&paths, &load_index(&paths).unwrap()).unwrap();
+        assert_eq!(profile.nodes.len(), 14);
+        // Load-time defaults: 3 split-routing rules + built-in DNS.
+        assert_eq!(profile.route.rules.len(), 3);
+        assert_eq!(profile.route.rules[1]["geoip"][0], "cn");
+        assert!(profile.route.rules[2]["domain_suffix"]
+            .as_array()
+            .is_some_and(|a| a.len() > 100));
+        assert_eq!(profile.route.final_outbound, "proxy");
+        let dns = profile.dns.expect("built-in dns block");
+        let dns_tags: Vec<&str> = dns["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s["tag"].as_str())
+            .collect();
+        assert!(dns_tags.contains(&"cn-dns"));
+        assert!(dns_tags.contains(&"remote-dns"));
+        assert_eq!(dns["final"], "remote-dns");
+        // Disabling the setting keeps the cached profile pure.
+        let raw_profile =
+            load_active_profile_with_default_rules(&paths, &load_index(&paths).unwrap(), false)
+                .unwrap();
+        assert!(raw_profile.route.rules.is_empty());
+        assert!(raw_profile.dns.is_none());
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g5_17_uri_list_rejects_empty() {
+        let err = parse_uri_list_profile("vmess://\ntrojan://\nss://").expect_err("no nodes");
+        assert!(matches!(err, SubscriptionError::EmptyNodes));
+    }
+
+    #[test]
+    fn g5_18_uri_list_line_limit() {
+        let mut raw = String::new();
+        for _ in 0..=MAX_URI_LINES {
+            raw.push_str("vless://u@h:443?encryption=none#n\n");
+        }
+        let err = parse_uri_list_profile(&raw).expect_err("too many lines");
+        assert!(err.to_string().contains("exceeds"));
+    }
 }
 
 pub use clash::{
@@ -542,13 +703,16 @@ pub use fetch::{
     MAX_BODY_BYTES,
 };
 pub use merge::{
-    active_subscription, list_profile_outbounds, load_active_profile, resolve_selected_tag,
-    short_id,
+    active_subscription, list_profile_outbounds, load_active_profile,
+    load_active_profile_with_default_rules, resolve_selected_tag, short_id,
 };
 pub use store::{
     clear_subscription_error, load_index, read_nodes, read_profile, remove_subscription,
     save_index, set_active, set_enabled, write_subscription_error, write_subscription_success,
     SubscriptionPaths,
+};
+pub use uri::{
+    apply_builtin_default_rules, looks_like_uri_list, parse_uri_list_profile, MAX_URI_LINES,
 };
 pub use url::{
     redact_subscription_url_for_log, redact_subscription_url_for_ui, redact_urls_in_text,
@@ -567,6 +731,8 @@ use crate::url::validate_subscription_url;
 pub enum SubscriptionFormat {
     SingBox,
     Clash,
+    /// Proxy share-link list (`vless://`, `trojan://`, `hysteria2://`, ...).
+    UriList,
     Unknown,
 }
 
@@ -619,6 +785,10 @@ pub fn detect_format(raw: &str) -> SubscriptionFormat {
         return SubscriptionFormat::Clash;
     }
 
+    if uri::looks_like_uri_list(trimmed) {
+        return SubscriptionFormat::UriList;
+    }
+
     SubscriptionFormat::Unknown
 }
 
@@ -630,6 +800,7 @@ pub fn parse_subscription(
     match format {
         SubscriptionFormat::SingBox => parse_singbox(raw),
         SubscriptionFormat::Clash => parse_clash(raw),
+        SubscriptionFormat::UriList => uri::parse_uri_list_profile(raw).map(|p| p.nodes),
         SubscriptionFormat::Unknown => {
             let detected = detect_format(raw);
             match detected {
@@ -660,6 +831,7 @@ pub fn parse_profile(
     match format {
         SubscriptionFormat::SingBox => parse_singbox_profile(raw),
         SubscriptionFormat::Clash => parse_clash_profile(raw),
+        SubscriptionFormat::UriList => uri::parse_uri_list_profile(raw),
         SubscriptionFormat::Unknown => {
             let detected = detect_format(raw);
             match detected {
@@ -761,7 +933,7 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
             final_outbound: groups
                 .first()
                 .map(|g| g.tag.clone())
-                .unwrap_or_else(|| nodes[0].tag.clone()),
+                .unwrap_or_else(|| "proxy".into()),
             ..Default::default()
         }
     };
