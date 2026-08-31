@@ -1,6 +1,7 @@
 //! sing-box Clash API helpers (loopback only; sing-box 1.13.x compatible).
 
 use std::io::{BufRead, BufReader, Read};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -35,12 +36,24 @@ fn base_url(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     Ok(format!("http://{}:{}", host, endpoints.port))
 }
 
+/// One process-wide agent (connection pool reused across requests; `Agent` is
+/// an `Arc` handle, so clones are cheap and thread-safe).
+fn shared_agent() -> ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::AgentBuilder::new()
+                .timeout_connect(CLASH_HTTP_TIMEOUT)
+                .timeout_read(CLASH_HTTP_TIMEOUT)
+                .timeout_write(CLASH_HTTP_TIMEOUT)
+                .build()
+        })
+        .clone()
+}
+
 fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(CLASH_HTTP_TIMEOUT)
-        .timeout_read(CLASH_HTTP_TIMEOUT)
-        .build();
+    let agent = shared_agent();
     let response = agent
         .get(&url)
         .call()
@@ -62,11 +75,7 @@ fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreErro
 
 fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(CLASH_HTTP_TIMEOUT)
-        .timeout_read(CLASH_HTTP_TIMEOUT)
-        .timeout_write(CLASH_HTTP_TIMEOUT)
-        .build();
+    let agent = shared_agent();
     let response = agent
         .put(&url)
         .set("Content-Type", "application/json")
@@ -85,11 +94,7 @@ fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result
 
 fn clash_patch_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(CLASH_HTTP_TIMEOUT)
-        .timeout_read(CLASH_HTTP_TIMEOUT)
-        .timeout_write(CLASH_HTTP_TIMEOUT)
-        .build();
+    let agent = shared_agent();
     let response = agent
         .patch(&url)
         .set("Content-Type", "application/json")

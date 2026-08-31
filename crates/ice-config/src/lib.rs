@@ -908,14 +908,25 @@ pub fn write_runtime_config_file(
     bak_path: &Path,
     config: &Value,
 ) -> Result<(), ConfigError> {
+    let rendered = config_to_pretty_json(config)?;
+    write_runtime_config_bytes(config_path, bak_path, &rendered)
+}
+
+/// Write pre-rendered config text to `config.json`, moving any previous file
+/// to `config.json.bak`. Callers that already serialized for change detection
+/// skip a second serialization.
+pub fn write_runtime_config_bytes(
+    config_path: &Path,
+    bak_path: &Path,
+    rendered: &str,
+) -> Result<(), ConfigError> {
     if config_path.exists() {
         if let Some(parent) = bak_path.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(config_path, bak_path)?;
     }
-    write_json_atomic(config_path, config)?;
-    Ok(())
+    write_bytes_atomic(config_path, rendered.as_bytes())
 }
 
 /// Restore `config.json` from `config.json.bak` after a failed reload (architecture §8.3).

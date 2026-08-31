@@ -134,12 +134,20 @@ function App() {
       }
     };
     void poll();
+    // The Home page polls the same status (plus nodes/settings) every 2s and
+    // reports it up via `onStatus`; skip the duplicate interval while Home is
+    // the active tab. Other tabs rely on this poll for the recovery banner.
+    if (tab === "home") {
+      return () => {
+        cancelled = true;
+      };
+    }
     const id = window.setInterval(() => void poll(), 2000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [tab]);
 
   const current = NAV_ITEMS.find((item) => item.id === tab);
 
@@ -216,7 +224,11 @@ function App() {
             <main className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4">
               {visited.has("home") && (
                 <TabPane active={tab === "home"}>
-                  <Home onNavigate={selectTab} active={tab === "home"} />
+                  <Home
+                    onNavigate={selectTab}
+                    active={tab === "home"}
+                    onStatus={setGlobalStatus}
+                  />
                 </TabPane>
               )}
               {visited.has("nodes") && (

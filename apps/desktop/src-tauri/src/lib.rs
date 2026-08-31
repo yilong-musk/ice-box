@@ -83,6 +83,23 @@ pub struct AppState {
     /// TUN capture runtime controller (plan §4.3): owns the active backend,
     /// the capture state machine, and the recovery journal.
     pub capture: CaptureController,
+    /// mtime-keyed cache of the parsed active profile (+ rule fingerprints);
+    /// read paths poll every 2-5s and must not re-parse a multi-MB profile
+    /// each time. Invalidated implicitly: the key changes when the active
+    /// subscription, its profile, or `auto_default_rules` changes on disk.
+    pub profile_cache: Mutex<Option<commands::ProfileCacheEntry>>,
+    /// Change-detected merged log view: re-read only when a source file's
+    /// size/mtime (or the requested line count) changes.
+    pub log_view_cache: Mutex<Option<commands::LogViewCache>>,
+    /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
+    /// install/uninstall); avoids a socket roundtrip on every status poll.
+    pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
+    /// Whether the running core supports live mode switches via the Clash API
+    /// (`PATCH /configs`). The pinned sing-box never honors it; the probe is
+    /// attempted once and the failure is remembered so later mode switches
+    /// skip the two wasted HTTP roundtrips (forward-compatible: a core that
+    /// honors the PATCH keeps the fast path).
+    pub clash_live_mode_cache: Mutex<bool>,
 }
 
 fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
@@ -175,6 +192,10 @@ pub fn run() {
                 _instance_lock: instance_lock,
                 traffic: TrafficMonitor::new(),
                 capture,
+                profile_cache: Mutex::new(None),
+                log_view_cache: Mutex::new(None),
+                helper_probe_cache: Mutex::new(None),
+                clash_live_mode_cache: Mutex::new(true),
             });
             // Startup TUN recovery: inside the orchestration lock, after the
             // orphan-core reclamation in bootstrap. Never enables capture. A

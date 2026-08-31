@@ -17,9 +17,10 @@ mod tests_g5 {
     use super::{
         detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
         normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_uri_list_profile,
-        resolve_selected_tag, set_active, DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode,
-        MockFetcher, SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionPaths,
-        CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
+        resolve_selected_tag, set_active, write_subscription_error, DirectFetcher, FetchResponse,
+        FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, SubscriptionError,
+        SubscriptionFormat, SubscriptionManager, SubscriptionPaths, CLASH_SUPPORTED_TYPES,
+        MAX_CLASH_PROXIES, MAX_URI_LINES,
     };
     use base64::Engine;
     use ice_config::{
@@ -28,6 +29,7 @@ mod tests_g5 {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/examples")
@@ -154,7 +156,11 @@ mod tests_g5 {
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
         let meta = mgr.add("https://example.com/s", Some("t1")).unwrap();
         let raw_before = fs::read(paths.raw(meta.id)).unwrap();
-        let nodes_before = fs::read(paths.nodes(meta.id)).unwrap();
+        let profile_before = fs::read(paths.profile(meta.id)).unwrap();
+        assert!(
+            !paths.nodes(meta.id).exists(),
+            "nodes.json is a legacy duplicate and is no longer written"
+        );
 
         let fail = MockFetcher {
             bypasses_proxy: true,
@@ -164,10 +170,96 @@ mod tests_g5 {
         let err = mgr.update(meta.id).expect_err("upd");
         assert_eq!(err.code().as_str(), "sub.fetch_failed");
         assert_eq!(fs::read(paths.raw(meta.id)).unwrap(), raw_before);
-        assert_eq!(fs::read(paths.nodes(meta.id)).unwrap(), nodes_before);
+        assert_eq!(fs::read(paths.profile(meta.id)).unwrap(), profile_before);
         let index = load_index(&paths).unwrap();
         let m = index.items.iter().find(|i| i.id == meta.id).unwrap();
         assert!(m.last_error.as_ref().unwrap().contains("network down"));
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn apply_all_commits_index_once_across_mixed_results() {
+        let paths = temp_subs("batch");
+        let body =
+            r#"{"outbounds":[{"type":"socks","tag":"same","server":"1.1.1.1","server_port":1}]}"#;
+        let ok = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: body.into(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
+        let a = mgr.add("https://example.com/a", Some("a")).unwrap();
+        let b = mgr.add("https://example.com/b", Some("b")).unwrap();
+        // Simulate a previously failed fetch on b.
+        write_subscription_error(&paths, b.id, "previous failure".into()).unwrap();
+
+        let index = load_index(&paths).unwrap();
+        let a_meta = index.items.iter().find(|m| m.id == a.id).unwrap().clone();
+        let b_meta = index.items.iter().find(|m| m.id == b.id).unwrap().clone();
+        let results = mgr.apply_all(vec![
+            (
+                a.id,
+                Ok(FetchedUpdate {
+                    meta: a_meta,
+                    fetched: FetchResponse {
+                        body: r#"{"outbounds":[{"type":"socks","tag":"x","server":"1.1.1.1","server_port":1},{"type":"socks","tag":"y","server":"2.2.2.2","server_port":2}]}"#
+                            .into(),
+                        not_modified: false,
+                        etag: Some("v2".into()),
+                        last_modified: None,
+                        content_disposition: None,
+                    },
+                }),
+            ),
+            (
+                b.id,
+                Ok(FetchedUpdate {
+                    meta: b_meta,
+                    fetched: FetchResponse {
+                        body: String::new(),
+                        not_modified: true,
+                        etag: None,
+                        last_modified: None,
+                        content_disposition: None,
+                    },
+                }),
+            ),
+            (
+                Uuid::new_v4(),
+                Err(SubscriptionError::FetchFailed("network down".into())),
+            ),
+        ]);
+
+        let updated_a = results[0].1.as_ref().expect("a updated");
+        assert_eq!(updated_a.node_count, 2);
+        assert!(results[1].1.is_ok(), "not-modified returns the meta");
+        assert!(results[2].1.is_err(), "fetch error surfaces");
+
+        let index = load_index(&paths).unwrap();
+        let a_after = index.items.iter().find(|m| m.id == a.id).unwrap();
+        assert_eq!(a_after.node_count, 2);
+        assert_eq!(a_after.etag.as_deref(), Some("v2"));
+        assert!(a_after.last_error.is_none());
+        let b_after = index.items.iter().find(|m| m.id == b.id).unwrap();
+        assert!(
+            b_after.last_error.is_none(),
+            "not-modified clears the recorded error"
+        );
+        assert_eq!(
+            index.items.iter().filter(|m| m.active).count(),
+            1,
+            "single active preserved across the batch"
+        );
+        assert_eq!(
+            index.items.len(),
+            2,
+            "a fetch for a removed/unknown id must not resurrect it"
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -259,7 +351,7 @@ mod tests_g5 {
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
         let meta = mgr.add("https://example.com/s", Some("t1")).unwrap();
         let raw_before = fs::read(paths.raw(meta.id)).unwrap();
-        let nodes_before = fs::read(paths.nodes(meta.id)).unwrap();
+        let profile_before = fs::read(paths.profile(meta.id)).unwrap();
 
         let not_modified = MockFetcher {
             bypasses_proxy: true,
@@ -270,7 +362,7 @@ mod tests_g5 {
         assert_eq!(updated.id, meta.id);
         assert_eq!(updated.node_count, meta.node_count);
         assert_eq!(fs::read(paths.raw(meta.id)).unwrap(), raw_before);
-        assert_eq!(fs::read(paths.nodes(meta.id)).unwrap(), nodes_before);
+        assert_eq!(fs::read(paths.profile(meta.id)).unwrap(), profile_before);
         let index = load_index(&paths).unwrap();
         let m = index.items.iter().find(|i| i.id == meta.id).unwrap();
         assert!(m.last_error.is_none());
@@ -343,7 +435,10 @@ mod tests_g5 {
         let meta = mgr.add("https://example.com/path/sub.json", None).unwrap();
         assert_eq!(meta.name, "my.json");
         assert!(paths.raw(meta.id).is_file());
-        assert!(paths.nodes(meta.id).is_file());
+        assert!(
+            !paths.nodes(meta.id).exists(),
+            "nodes.json is a legacy duplicate and is no longer written"
+        );
         assert!(paths.meta(meta.id).is_file());
         let index = load_index(&paths).unwrap();
         assert!(index.items.iter().any(|i| i.id == meta.id));
@@ -707,7 +802,8 @@ pub use merge::{
     load_active_profile_with_default_rules, resolve_selected_tag, short_id,
 };
 pub use store::{
-    clear_subscription_error, load_index, read_nodes, read_profile, remove_subscription,
+    apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
+    commit_subscription_success, load_index, read_nodes, read_profile, remove_subscription,
     save_index, set_active, set_enabled, write_subscription_error, write_subscription_success,
     SubscriptionPaths,
 };
@@ -769,18 +865,20 @@ pub struct SubscriptionIndex {
 /// Detect format from raw subscription body.
 pub fn detect_format(raw: &str) -> SubscriptionFormat {
     let trimmed = raw.trim_start();
-    if trimmed.starts_with('{') {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if value.get("outbounds").is_some() || value.get("endpoints").is_some() {
-                return SubscriptionFormat::SingBox;
-            }
-        }
+    // Cheap structural sniff instead of a full JSON parse (bodies can be up to
+    // 8 MiB): sing-box bodies are objects carrying a quoted `outbounds` /
+    // `endpoints` key. The real parse happens later in `parse_singbox_profile`,
+    // so a classification here loses no information or error detail.
+    if trimmed.starts_with('{')
+        && (trimmed.contains("\"outbounds\"") || trimmed.contains("\"endpoints\""))
+    {
+        return SubscriptionFormat::SingBox;
     }
 
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("proxies:")
-        || lower.contains("proxy-groups:")
-        || lower.contains("mixed-port:")
+    // Zero-allocation case-insensitive scan (no `to_ascii_lowercase` copy).
+    if crate::decode::contains_ascii_case_insensitive(trimmed, "proxies:")
+        || crate::decode::contains_ascii_case_insensitive(trimmed, "proxy-groups:")
+        || crate::decode::contains_ascii_case_insensitive(trimmed, "mixed-port:")
     {
         return SubscriptionFormat::Clash;
     }
@@ -1210,21 +1308,89 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Disk phase of [`SubscriptionManager::fetch_all`]: persists each fetched update
     /// serially so `index.json` writes never interleave. Under the orchestrate lock this
-    /// cannot race with add/remove/set_active.
+    /// cannot race with add/remove/set_active. The index is loaded once and written once
+    /// (per-item updates used to re-read and fsync `index.json` twice per subscription).
     pub fn apply_all(
         &self,
         fetched: Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>,
     ) -> Vec<(Uuid, Result<SubscriptionMeta, SubscriptionError>)> {
-        fetched
-            .into_iter()
-            .map(|(id, result)| match result {
-                Ok(upd) => (id, self.apply_update(upd)),
+        let mut index = match load_index(&self.paths) {
+            Ok(index) => index,
+            Err(err) => {
+                let message = err.to_string();
+                return fetched
+                    .into_iter()
+                    .map(|(id, _)| (id, Err(SubscriptionError::ParseFailed(message.clone()))))
+                    .collect();
+            }
+        };
+        let mut out = Vec::with_capacity(fetched.len());
+        for (id, result) in fetched {
+            match result {
                 Err(err) => {
-                    let _ = write_subscription_error(&self.paths, id, err.to_string());
-                    (id, Err(err))
+                    apply_error_to_index(&self.paths, &mut index, id, err.to_string());
+                    out.push((id, Err(err)));
                 }
-            })
-            .collect()
+                Ok(upd) => {
+                    // A subscription removed while its fetch was in flight must not be
+                    // resurrected (same guard as apply_update).
+                    if !index.items.iter().any(|m| m.id == id) {
+                        out.push((
+                            id,
+                            Err(SubscriptionError::ParseFailed(format!(
+                                "subscription {id} not found"
+                            ))),
+                        ));
+                        continue;
+                    }
+                    if upd.fetched.not_modified {
+                        let updated =
+                            clear_error_in_index(&self.paths, &mut index, id).unwrap_or(upd.meta);
+                        out.push((id, Ok(updated)));
+                        continue;
+                    }
+                    match normalize_raw_body(&upd.fetched.body) {
+                        Ok((format, profile)) => {
+                            let updated = meta_from_profile(
+                                upd.meta.id,
+                                upd.meta.name.clone(),
+                                upd.meta.url.clone(),
+                                format,
+                                &profile,
+                                upd.meta.active,
+                                upd.fetched.etag.or(upd.meta.etag),
+                                upd.fetched.last_modified.or(upd.meta.last_modified),
+                            );
+                            if let Err(err) = commit_subscription_success(
+                                &self.paths,
+                                &updated,
+                                &upd.fetched.body,
+                                &profile,
+                            ) {
+                                out.push((id, Err(err)));
+                                continue;
+                            }
+                            apply_success_to_index(&mut index, &updated);
+                            out.push((id, Ok(updated)));
+                        }
+                        Err(err) => {
+                            apply_error_to_index(&self.paths, &mut index, id, err.to_string());
+                            out.push((id, Err(err)));
+                        }
+                    }
+                }
+            }
+        }
+        if let Err(err) = save_index(&self.paths, &index) {
+            // The index write is the single commit point of the batch; surface
+            // the failure on every item so the caller cannot treat the batch
+            // as fully persisted.
+            let message = err.to_string();
+            for (_, item) in out.iter_mut() {
+                *item = Err(SubscriptionError::ParseFailed(message.clone()));
+            }
+        }
+        out
     }
 
     /// Update every subscription. Network fetches run in parallel, disk writes stay
