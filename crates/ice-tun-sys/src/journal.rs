@@ -10,6 +10,7 @@
 //! that recovery can remove exactly those resources and no others.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -170,7 +171,14 @@ impl TunJournal {
         Ok(Some(journal))
     }
 
-    /// Atomically persist the journal (temp sibling + rename).
+    /// Atomically persist the journal (temp sibling + fsync + rename).
+    ///
+    /// The journal is the only record of owned OS resources, and every
+    /// cleanup path starts by loading it, so a torn write must be impossible:
+    /// the temp file is fully written and `sync_all`'d before the rename, so
+    /// a crash can never leave a durable rename with non-durable data blocks
+    /// (which would read back as an empty/corrupt journal and permanently
+    /// fail-closed every recovery path).
     pub fn save(&self, path: &Path) -> Result<(), TunError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -189,7 +197,9 @@ impl TunJournal {
         ));
         let result = (|| -> std::io::Result<()> {
             let text = serde_json::to_string_pretty(self)?;
-            fs::write(&tmp, text)?;
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
             Ok(())
         })();
         if let Err(err) = result {

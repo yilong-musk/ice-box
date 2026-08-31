@@ -29,14 +29,22 @@ mod unix_main {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::process::exit;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use ice_helper::{ProcessCoreRunner, ServerConfig, SocketPeerAuth};
-    use ice_tun_sys::error::TunError;
+    use ice_tun_sys::error::{TunError, TunErrorCode};
 
     use crate::install::{
         ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_SOCKET,
         ENV_TOKEN,
     };
+
+    /// Upper bound on concurrently served connections. The socket is
+    /// world-connectable, so any local process can open one; a cap keeps an
+    /// idle-connection flood from exhausting threads (each connection holds a
+    /// thread only for its read bound).
+    const MAX_CONNECTIONS: usize = 16;
 
     fn env_required(key: &str) -> Result<String, String> {
         std::env::var(key).map_err(|_| format!("missing required env {key}"))
@@ -128,14 +136,41 @@ mod unix_main {
             std::process::id()
         );
 
-        let auth = SocketPeerAuth;
-        let mut runner = ProcessCoreRunner::new();
+        let runner = Arc::new(Mutex::new(ProcessCoreRunner::new()));
+        // The accept loop never blocks on a peer: each connection is served
+        // on its own thread (commands serialize on the runner mutex), so a
+        // stalled or unauthenticated connection cannot stall the daemon. The
+        // concurrent-connection cap bounds thread usage.
+        let active = Arc::new(AtomicUsize::new(0));
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if let Err(err) = serve_connection(stream, &config, &auth, &mut runner) {
-                        tracing::debug!(error = %err, "connection failed");
+                    if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                        // Fail-closed: excess connections are dropped without
+                        // a frame; the app reconnects per command.
+                        tracing::debug!("connection limit reached; dropping excess connection");
+                        continue;
                     }
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let config = config.clone();
+                    let runner = Arc::clone(&runner);
+                    let active = Arc::clone(&active);
+                    std::thread::spawn(move || {
+                        let result = match runner.lock() {
+                            Ok(mut runner) => {
+                                let auth = SocketPeerAuth;
+                                serve_connection(stream, &config, &auth, &mut runner)
+                            }
+                            Err(_) => Err(TunError::new(
+                                TunErrorCode::ApplyFailed,
+                                "runner lock poisoned",
+                            )),
+                        };
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        if let Err(err) = result {
+                            tracing::debug!(error = %err, "connection failed");
+                        }
+                    });
                 }
                 Err(err) => {
                     tracing::error!(error = %err, "accept failed");

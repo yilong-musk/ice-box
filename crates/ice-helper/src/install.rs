@@ -112,6 +112,24 @@ fn copy_root_owned(source: &Path, dest: &Path, mode: u32) -> Result<(), String> 
     set_mode(dest, mode)
 }
 
+/// Escape a string for inclusion as XML text content. The plist interpolates
+/// user-controlled values (the app data dir); `&`, `<`, `>`, quotes and
+/// apostrophes must never reach launchd's parser as raw markup.
+pub fn xml_escape(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 /// Render the launchd plist that pins token / data dir / core binary (with
 /// SHA-256) / log / authorized uid / socket. Host-free and tested.
 pub fn render_plist(
@@ -164,7 +182,7 @@ pub fn render_plist(
 </dict>
 </plist>
 "#,
-        data_dir.display(),
+        xml_escape(&data_dir.display().to_string()),
     )
 }
 
@@ -352,6 +370,29 @@ mod tests {
         ] {
             assert!(plist.contains(&format!("<key>{key}</key>")), "{key}");
         }
+    }
+
+    #[test]
+    fn plist_escapes_user_controlled_values() {
+        let plist = render_plist(
+            "tok123",
+            Path::new("/Users/u/Library/Application Support/a&b<c>\"d'e"),
+            CORE_BIN_DEST,
+            "sha256abc",
+            CORE_LOG_DEST,
+            501,
+            SOCKET_PATH,
+        );
+        assert!(plist.contains("&amp;"));
+        assert!(plist.contains("&lt;"));
+        assert!(plist.contains("&gt;"));
+        assert!(plist.contains("&quot;"));
+        assert!(plist.contains("&apos;"));
+        assert!(
+            !plist.contains("a&b"),
+            "raw ampersand must not reach the plist"
+        );
+        assert!(!plist.contains("<c>"), "raw angle brackets must be escaped");
     }
 
     #[test]

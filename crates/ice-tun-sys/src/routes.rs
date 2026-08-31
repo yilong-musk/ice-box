@@ -110,6 +110,68 @@ pub fn route_probe_address(destination: &str) -> String {
     address.to_string()
 }
 
+/// Multiple probe addresses spread across a destination prefix, used when a
+/// single probe can be shadowed by a more-specific local route.
+///
+/// The auto-route sub-ranges are broad (e.g. `128.0.0.0/1`), and sing-box
+/// keeps the LAN subnet on the host route, so a probe that lands inside the
+/// LAN resolves to the LAN interface instead of the utun — a single probe
+/// would then report the whole route as missing forever. Spreading the
+/// probes (base+1, quarters, top) means the route is accepted as owned as
+/// long as *any* probe still resolves to the adapter; a fully missing route
+/// fails every probe. The first probe matches the legacy single-probe
+/// behavior.
+pub fn route_probe_addresses(destination: &str) -> Vec<String> {
+    let Some((address, prefix)) = destination.split_once('/') else {
+        return vec![destination.to_string()];
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return vec![address.to_string()];
+    };
+    if let Ok(parsed) = address.parse::<std::net::Ipv4Addr>() {
+        if prefix >= 32 {
+            return vec![parsed.to_string()];
+        }
+        let base = u64::from(u32::from(parsed));
+        let size = 1u64 << (32 - prefix);
+        return probe_offsets(size as u128)
+            .into_iter()
+            .map(|offset| std::net::Ipv4Addr::from((base as u128 + offset) as u32).to_string())
+            .collect();
+    }
+    if let Ok(parsed) = address.parse::<std::net::Ipv6Addr>() {
+        if prefix >= 128 {
+            return vec![parsed.to_string()];
+        }
+        let base = u128::from(parsed);
+        let size = 1u128 << (128 - prefix);
+        return probe_offsets(size)
+            .into_iter()
+            .map(|offset| std::net::Ipv6Addr::from(base + offset).to_string())
+            .collect();
+    }
+    vec![address.to_string()]
+}
+
+/// Candidate offsets inside a prefix of `size` addresses: base+1, quarters,
+/// and the top (minus the last address, which is the IPv4 broadcast). The
+/// network address itself (offset 0) is skipped; duplicates collapse.
+fn probe_offsets(size: u128) -> Vec<u128> {
+    let mut offsets = Vec::new();
+    for candidate in [
+        1u128,
+        size / 4,
+        size / 2,
+        size - size / 4,
+        size.saturating_sub(2),
+    ] {
+        if candidate > 0 && candidate < size && !offsets.contains(&candidate) {
+            offsets.push(candidate);
+        }
+    }
+    offsets
+}
+
 /// `0xfffffffc` → 30 (IPv4 netmask string from `ifconfig` / Windows
 /// `route print -4` netmask columns).
 pub fn netmask_to_prefix(netmask: &str) -> Option<u32> {
@@ -216,6 +278,52 @@ mod tests {
             "fdfe:dcba:9876::1"
         );
         assert_eq!(route_probe_address("not-a-cidr"), "not-a-cidr");
+    }
+
+    #[test]
+    fn route_probe_addresses_spread_across_the_prefix() {
+        let v4 = route_probe_addresses("128.0.0.0/1");
+        assert_eq!(v4.first().map(String::as_str), Some("128.0.0.1"));
+        assert!(v4.len() >= 4, "spread probes: {v4:?}");
+        assert_eq!(
+            v4.last().map(String::as_str),
+            Some("255.255.255.254"),
+            "top probe skips the broadcast address"
+        );
+        assert!(v4.iter().all(|p| {
+            let value = u32::from(p.parse::<std::net::Ipv4Addr>().unwrap());
+            value >= u32::from("128.0.0.0".parse::<std::net::Ipv4Addr>().unwrap())
+        }));
+
+        let v6 = route_probe_addresses("100::/8");
+        assert_eq!(v6.first().map(String::as_str), Some("100::1"));
+        assert!(v6.len() >= 4, "spread probes: {v6:?}");
+        assert!(v6.iter().all(|p| p.parse::<std::net::Ipv6Addr>().is_ok()));
+
+        // Host-sized prefixes keep a single probe; bare addresses pass through.
+        assert_eq!(route_probe_addresses("10.0.0.1/32"), ["10.0.0.1"]);
+        assert_eq!(
+            route_probe_addresses("fdfe:dcba:9876::1/128"),
+            ["fdfe:dcba:9876::1"]
+        );
+        assert_eq!(route_probe_addresses("not-a-cidr"), ["not-a-cidr"]);
+    }
+
+    #[test]
+    fn route_probe_addresses_first_matches_single_probe() {
+        for destination in [
+            "1.0.0.0/8",
+            "64.0.0.0/2",
+            "128.0.0.0/1",
+            "100::/8",
+            "8000::/1",
+        ] {
+            assert_eq!(
+                route_probe_addresses(destination).first(),
+                Some(&route_probe_address(destination)),
+                "{destination}"
+            );
+        }
     }
 
     #[test]

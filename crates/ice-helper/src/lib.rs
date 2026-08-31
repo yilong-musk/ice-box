@@ -48,9 +48,10 @@ mod imp {
     const TERM_GRACE: Duration = Duration::from_secs(5);
     const KILL_GRACE: Duration = Duration::from_secs(2);
     /// Bounded time a peer may take to deliver its single request frame. A
-    /// stalled or half-written frame must not block the single-threaded
-    /// accept loop forever.
-    const READ_TIMEOUT: Duration = Duration::from_secs(5);
+    /// stalled or half-written frame must not hold a daemon thread for long
+    /// (the daemon serves each connection on its own thread with a bounded
+    /// concurrent-connection cap).
+    const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// Immutable daemon configuration, set by the installer.
     #[derive(Debug, Clone)]
@@ -186,7 +187,7 @@ mod imp {
     ) -> Result<(), TunError> {
         let peer_uid = peer_auth.peer_uid(&stream)?;
         // Bounded read: a peer that connects but never finishes its frame
-        // must not stall the single-threaded accept loop.
+        // must not hold a daemon thread for long.
         stream.set_read_timeout(Some(READ_TIMEOUT)).map_err(|e| {
             TunError::new(TunErrorCode::ApplyFailed, format!("set read timeout: {e}"))
         })?;

@@ -133,12 +133,52 @@ pub struct CaptureController {
     inner: Mutex<CaptureInner>,
 }
 
-/// Stable per-installation owner token: `ice-box:<hash of the data dir>`.
-/// Recovery refuses journals from other installations.
+/// File name of the per-installation owner token inside the app data dir.
+/// Persisted so the token survives data-dir relocations (a path-derived
+/// token would invalidate a non-clean journal after a move, stranding it as
+/// `ForeignJournal` with no in-app escape).
+pub const OWNER_TOKEN_FILE: &str = "installation-id";
+
+fn is_valid_owner_token(token: &str) -> bool {
+    token
+        .strip_prefix("ice-box:")
+        .is_some_and(|hex| hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// Stable per-installation owner token: `ice-box:<64-bit hex>`, persisted in
+/// the app data dir. Recovery refuses journals from other installations.
+///
+/// The token is a persisted random id, not a hash of the data-dir path, so
+/// moving/renaming the data dir keeps the token stable and a non-clean
+/// journal stays recoverable instead of becoming `ForeignJournal`.
 pub fn tun_owner_token(paths: &AppPaths) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    paths.root().to_string_lossy().hash(&mut hasher);
-    format!("ice-box:{:016x}", hasher.finish())
+    let _ = fs::create_dir_all(paths.root());
+    let token_path = paths.root().join(OWNER_TOKEN_FILE);
+    if let Ok(existing) = fs::read_to_string(&token_path) {
+        if is_valid_owner_token(existing.trim()) {
+            return existing.trim().to_string();
+        }
+    }
+    // Migration: a journal written before the token file existed carries the
+    // installation's owner token. Adopt it so an outstanding journal is not
+    // stranded as foreign by the move to a persisted token.
+    if let Ok(Some(journal)) = TunJournal::load(&paths.tun_state()) {
+        if is_valid_owner_token(&journal.owner_token) {
+            let _ = fs::write(&token_path, format!("{}\n", journal.owner_token));
+            return journal.owner_token;
+        }
+    }
+    // Fresh installation: generate and persist a random token. Best effort —
+    // a read-only data dir falls back to the path hash so the app still
+    // starts (TUN transitions would fail on the journal write anyway).
+    let token = format!("ice-box:{:016x}", (Uuid::new_v4().as_u128() >> 64) as u64);
+    if fs::write(&token_path, format!("{token}\n")).is_ok() {
+        token
+    } else {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        paths.root().to_string_lossy().hash(&mut hasher);
+        format!("ice-box:{:016x}", hasher.finish())
+    }
 }
 
 fn tun_config_from_settings(settings: &AppSettings) -> TunConfig {
@@ -255,12 +295,23 @@ impl CaptureController {
         self.resource_dir.as_deref()
     }
 
-    /// Rebuild the platform backend while no capture backend is active. The
-    /// helper coordinator is probed at construction, so this refresh allows a
-    /// helper installed or repaired while the app is open to become usable on
-    /// the next start/recovery attempt without replacing an active backend.
+    /// Rebuild the platform backend while no capture backend is active and no
+    /// transition is in flight. The helper coordinator is probed at
+    /// construction, so this refresh allows a helper installed or repaired
+    /// while the app is open to become usable on the next start/recovery
+    /// attempt without replacing an active backend.
+    ///
+    /// A transition in flight (`Preparing` / `Stopping`) is not yet reflected
+    /// in `active_backend()` (it is set only at `finish_transition`), but the
+    /// in-flight instance still owns transition state — e.g. the dev `sudo`
+    /// coordinator's pid/child handle — so swapping would make the next stop
+    /// a no-op that fails closed into `RecoveryRequired`. The helper path is
+    /// safe (the daemon holds the core state), but the guard applies to both.
     pub fn refresh_backend(&self) -> Result<(), AppError> {
         if self.active_backend() != TrafficCapture::Inactive {
+            return Ok(());
+        }
+        if !matches!(self.tun_status(), TunStatus::Disabled) {
             return Ok(());
         }
         let binary = crate::orchestrate::resolve_binary(self.resource_dir.as_deref()).ok();
@@ -1760,6 +1811,51 @@ mod tests {
         assert!(a.starts_with("ice-box:"));
         assert_eq!(a.len(), "ice-box:".len() + 16);
         let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn owner_token_survives_data_dir_relocation() {
+        let dir = temp_paths("token-move");
+        let token = tun_owner_token(&dir);
+        assert!(is_valid_owner_token(&token));
+        // Relocate the data dir: the persisted token moves with it, so the
+        // same installation keeps its identity and an outstanding journal
+        // stays recoverable (a path-derived token would change and strand it
+        // as ForeignJournal with no in-app escape).
+        let new_root = dir.root().with_file_name(format!(
+            "{}-relocated",
+            dir.root().file_name().unwrap().to_string_lossy()
+        ));
+        let relocated = AppPaths::new(&new_root);
+        relocated.ensure_dirs().unwrap();
+        fs::rename(
+            dir.root().join(OWNER_TOKEN_FILE),
+            relocated.root().join(OWNER_TOKEN_FILE),
+        )
+        .unwrap();
+        assert_eq!(tun_owner_token(&relocated), token);
+        let _ = fs::remove_dir_all(dir.root());
+        let _ = fs::remove_dir_all(relocated.root());
+    }
+
+    #[test]
+    fn owner_token_adopts_an_existing_journal_token() {
+        let dir = temp_paths("token-adopt");
+        // A journal written before the token file existed (e.g. an upgraded
+        // build) carries the installation's owner token; the controller must
+        // adopt it instead of generating a fresh one, which would strand the
+        // outstanding journal as foreign.
+        let journal = TunJournal::new("t-old".into(), "ice-box:0123456789abcdef".into());
+        journal.save(&dir.tun_state()).unwrap();
+        assert_eq!(tun_owner_token(&dir), "ice-box:0123456789abcdef");
+        assert_eq!(
+            fs::read_to_string(dir.root().join(OWNER_TOKEN_FILE))
+                .unwrap()
+                .trim(),
+            "ice-box:0123456789abcdef",
+            "the adopted token is persisted for future launches"
+        );
+        let _ = fs::remove_dir_all(dir.root());
     }
 
     #[test]

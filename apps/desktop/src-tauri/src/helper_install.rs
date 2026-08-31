@@ -21,7 +21,7 @@
 //! and a failed install reports a stable `tun.*` error code without claiming
 //! success.
 
-use crate::capture::TrafficCapture;
+use crate::capture::{TrafficCapture, TunStatus};
 use crate::AppState;
 use ice_config::AppError;
 use ice_elevate::{ElevateError, ElevateOutcome};
@@ -46,11 +46,20 @@ pub const ERR_HELPER_INSTALL_CANCELLED: &str = "tun.helper_install_cancelled";
 #[cfg(unix)]
 pub const ERR_HELPER_NOT_READY: &str = "tun.helper_not_ready";
 
-/// Refuse install/uninstall while TUN capture is active: the elevated modes
-/// restart (or remove) the launchd daemon, which would orphan the running
-/// elevated core and leave it impossible to stop or verify (fail-closed).
+/// Refuse install/uninstall while TUN capture is active *or* a transition is
+/// in flight: the elevated modes restart (or remove) the launchd daemon,
+/// which would orphan the running elevated core and leave it impossible to
+/// stop or verify (fail-closed). The `Preparing` / `Stopping` window is
+/// covered too — that is exactly when the elevated core may be starting or
+/// stopping, and `active_backend()` still reads `Inactive` there (it is set
+/// only at `finish_transition`).
 fn refuse_while_tun_active(state: &AppState) -> Result<(), AppError> {
-    if state.capture.active_backend() == TrafficCapture::Tun {
+    if state.capture.active_backend() == TrafficCapture::Tun
+        || matches!(
+            state.capture.tun_status(),
+            TunStatus::Preparing | TunStatus::Stopping
+        )
+    {
         return Err(AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
             "TUN 捕获仍处于激活状态：请先关闭 TUN 再操作辅助组件",

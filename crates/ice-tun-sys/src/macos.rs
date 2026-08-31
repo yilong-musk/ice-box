@@ -378,17 +378,16 @@ impl MacosTunBackend {
             let mut missing_route = None;
             if addresses_ok {
                 for destination in &expected_routes {
-                    match self.host.route_interface(destination)? {
-                        Some(iface) if iface == name => {}
-                        Some(iface) => {
-                            missing_route = Some(format!("{destination} -> {iface}"));
-                            break;
-                        }
-                        None => {
-                            missing_route = Some(format!("{destination} -> <none>"));
-                            break;
-                        }
+                    if self.route_resolves_to(destination, name)? {
+                        continue;
                     }
+                    missing_route = Some(format!(
+                        "{destination} -> {}",
+                        self.host
+                            .route_interface(&routes::route_probe_address(destination))?
+                            .unwrap_or_else(|| "<none>".into())
+                    ));
+                    break;
                 }
             }
             let routes_ok = addresses_ok && missing_route.is_none();
@@ -432,10 +431,27 @@ impl MacosTunBackend {
         ))
     }
 
+    /// Whether any probe inside `destination` resolves to `name`.
+    ///
+    /// A single probe can be shadowed by a more-specific local route:
+    /// sing-box keeps the LAN subnet on the host route, so a LAN inside a
+    /// broad auto-route range (e.g. `128.0.0.0/1`) resolves the base probe to
+    /// the LAN interface instead of the utun. Spreading the probes accepts
+    /// the route as owned when any probe still resolves to the adapter; a
+    /// fully missing route fails every probe.
+    fn route_resolves_to(&self, destination: &str, name: &str) -> Result<bool, TunError> {
+        for probe in routes::route_probe_addresses(destination) {
+            if self.host.route_interface(&probe)?.as_deref() == Some(name) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Whether any journaled owned route still resolves to `name`.
     fn owned_routes_remain(&self, applied: &AppliedTun, name: &str) -> Result<bool, TunError> {
         for route in applied.routes.iter().filter(|r| r.owned) {
-            if self.host.route_interface(&route.destination)?.as_deref() == Some(name) {
+            if self.route_resolves_to(&route.destination, name)? {
                 return Ok(true);
             }
         }
@@ -619,7 +635,7 @@ impl TunBackend for MacosTunBackend {
         // us; a partially missing route set is never healthy.
         let mut routes_owned = true;
         for destination in &applied.expected_routes {
-            if self.host.route_interface(destination)?.as_deref() != Some(name) {
+            if !self.route_resolves_to(destination, name)? {
                 routes_owned = false;
                 break;
             }
@@ -641,17 +657,21 @@ impl TunBackend for MacosTunBackend {
     }
 
     fn restore(&mut self, applied: &AppliedTun) -> Result<(), TunError> {
-        self.journal_record(steps::RESTORE_STARTED, |_| {})?;
-
-        // Release: stop the core; the native path's sing-box removes its
-        // routes and the interface (SIGTERM) — or the kernel already did
-        // (kill -9). Bounded wait for the adapter to disappear.
+        // Release first: stopping the elevated core must never depend on
+        // journal durability. A journal write that keeps failing (e.g. disk
+        // full) must not abort restore before the core is stopped — that
+        // would leave the OS captured with no way through the UI. The
+        // controller already journals `restore_started` before calling us on
+        // the disable path; on the recovery path the idempotent stop
+        // converges even if this granular record cannot be persisted.
         self.coordinator.stop().map_err(|err| {
             TunError::new(
                 err.code,
                 format!("stop core during restore: {}", err.message),
             )
         })?;
+
+        self.journal_record(steps::RESTORE_STARTED, |_| {})?;
 
         let name = applied.interface_name.as_deref();
         let mut interface_gone = false;

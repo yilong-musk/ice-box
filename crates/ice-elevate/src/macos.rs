@@ -6,9 +6,10 @@
 //! involved.
 
 use std::ffi::CString;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use libc::{c_char, c_int, c_void};
 
@@ -16,6 +17,12 @@ use crate::{ElevateError, ElevateOutcome};
 
 /// `errAuthorizationCanceled`
 const ERR_AUTHORIZATION_CANCELED: c_int = -60006;
+
+/// How long the elevated tool may take to finish before the caller gives up.
+/// The installer normally completes in a few seconds (one `launchctl
+/// bootstrap`); a hung tool must not leave the caller blocked forever with no
+/// cancel path.
+const ELEVATED_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Right name that lets a normal user authorize with an admin password.
 const RIGHT_ADMIN: &[u8] = b"system.privilege.admin\0";
@@ -112,9 +119,11 @@ fn reap_trampoline() {
     }
 }
 
-/// Read the tool's output pipe to EOF, then reap the trampoline. The pipe
-/// blocks until the tool exits (and the trampoline closes its copy of the
-/// fd), so EOF is the completion signal.
+/// Read the tool's output pipe to EOF, then reap the trampoline. EOF is the
+/// completion signal (the tool exits and the trampoline closes its copy of
+/// the fd). The read is bounded: a tool that hangs must not block the caller
+/// indefinitely (the exit code is unavailable through the pipe, so the
+/// printed line is the only outcome signal).
 fn read_output(pipe: *mut libc::FILE) -> Result<String, ElevateError> {
     let fd = unsafe { libc::fileno(pipe) };
     if fd < 0 {
@@ -123,9 +132,43 @@ fn read_output(pipe: *mut libc::FILE) -> Result<String, ElevateError> {
     // Take ownership of the fd (closes on drop) and skip the explicit
     // fclose on the FILE* to avoid a double close.
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    // Non-blocking reads + poll: EOF still terminates, but a hung tool hits
+    // the deadline instead of blocking forever.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags >= 0 {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+    let deadline = Instant::now() + ELEVATED_TOOL_TIMEOUT;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| ElevateError::Io(format!("read pipe: {e}")))?;
+    let mut buf = [0u8; 4096];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(ElevateError::Io(format!("read pipe: {e}"))),
+        }
+        if Instant::now() >= deadline {
+            return Err(ElevateError::Io(format!(
+                "elevated tool did not finish within {} s",
+                ELEVATED_TOOL_TIMEOUT.as_secs()
+            )));
+        }
+        let wait_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(100) as c_int;
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        unsafe {
+            libc::poll(&mut pollfd, 1, wait_ms);
+        }
+    }
     drop(file);
     reap_trampoline();
     let output = String::from_utf8_lossy(&bytes).to_string();

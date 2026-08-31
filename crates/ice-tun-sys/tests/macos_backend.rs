@@ -167,7 +167,30 @@ impl MacOsHost for FakeHost {
     }
 
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError> {
-        Ok(self.state.lock().unwrap().routes.get(destination).cloned())
+        let state = self.state.lock().unwrap();
+        let probe_v4 = destination.parse::<std::net::Ipv4Addr>().is_ok();
+        let probe_v6 = destination.parse::<std::net::Ipv6Addr>().is_ok();
+        if !probe_v4 && !probe_v6 {
+            // Direct route-key probe (CIDR destination).
+            return Ok(state.routes.get(destination).cloned());
+        }
+        // Probe address: resolve like the kernel — the most specific route
+        // containing the address wins (a /32 host route beats the broad
+        // auto-route ranges, which is how LAN exclusions shadow probes).
+        let entries: Vec<(String, String)> = state
+            .routes
+            .iter()
+            .map(|(key, iface)| (key.clone(), iface.clone()))
+            .collect();
+        let table: Vec<(String, u32)> = entries
+            .iter()
+            .map(|(key, _)| match key.split_once('/') {
+                Some((net, bits)) => (net.to_string(), bits.parse().unwrap_or(0)),
+                // Bare host routes (e.g. `127.0.0.1` → lo0) are /32 (or /128).
+                None => (key.clone(), if key.contains(':') { 128 } else { 32 }),
+            })
+            .collect();
+        Ok(routes::longest_prefix_route(&table, destination).map(|index| entries[index].1.clone()))
     }
 }
 
@@ -685,6 +708,66 @@ fn restore_fails_closed_when_interface_survives_stop() {
     assert!(
         host.has_utun("utun420"),
         "unverified resource is never deleted"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restore_stops_core_even_when_journal_writes_fail() {
+    let dir = temp_dir("restore-nojournal");
+    let host = FakeHost::default();
+    let applied = apply_ok(&dir, &host, FakeCoreCoordinator::new(host.clone()));
+    assert!(host.has_utun("utun420"));
+
+    // The journal can no longer be written (its parent path is a file):
+    // restore must still stop the elevated core and release the OS — the stop
+    // must never depend on journal durability, or a persistent journal write
+    // failure would leave the OS captured with no way through the UI.
+    let blocker = dir.join("blocker");
+    fs::write(&blocker, b"x").unwrap();
+    let broken_journal = blocker.join("tun-state.json");
+    let mut bk = MacosTunBackend::new(
+        OWNER,
+        Box::new(host.clone()),
+        Box::new(FakeCoreCoordinator::new(host.clone())),
+        config_path(&dir),
+    )
+    .with_journal(broken_journal);
+
+    let err = bk.restore(&applied).expect_err("journal write fails");
+    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert!(
+        !host.has_utun("utun420"),
+        "the core must be stopped even when the journal cannot be written"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn route_check_accepts_lan_shadowed_auto_route_probe() {
+    let dir = temp_dir("route-shadow");
+    let host = FakeHost::default();
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let mut bk = backend(&dir, host.clone(), FakeCoreCoordinator::new(host.clone()));
+    let prepared = bk.prepare(&mac_config()).expect("prepare");
+    let applied = bk.apply(&prepared).expect("apply");
+
+    // A host whose LAN subnet lies inside a broad auto-route range (e.g.
+    // 128.0.0.0/16 on en0): sing-box legitimately keeps the LAN route, so the
+    // base probe 128.0.0.1 resolves to en0, not the utun. The spread probes
+    // must still find the owned route; a single-probe check would fail the
+    // full-route lock forever.
+    host.state
+        .lock()
+        .unwrap()
+        .routes
+        .insert("128.0.0.0/16".into(), "en0".into());
+
+    let health = bk.verify(&applied).expect("verify");
+    assert!(
+        health.all_ok(),
+        "a LAN-shadowed route must still verify as owned: {health:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
