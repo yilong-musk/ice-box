@@ -753,6 +753,7 @@ mod live {
         assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
 
         let mut previous = settings.clone();
+        let mut live_mode_ok = true;
         for mode in [
             ice_config::ProxyMode::Global,
             ice_config::ProxyMode::Direct,
@@ -771,6 +772,7 @@ mod live {
                 bin.clone(),
                 None,
                 CaptureIntent::Diagnostic,
+                &mut live_mode_ok,
             )
             .expect("set mode");
             assert_eq!(
