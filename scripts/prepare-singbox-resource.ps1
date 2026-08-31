@@ -36,6 +36,19 @@ if ($Platform -eq "win") {
   $Bare = Join-Path $DestDir "sing-box"
   Copy-Item $Src $Bare -Force
   Write-Host "Prepared resource $Bare for $Platform (bundle entry compatibility)"
+
+  # Windows archive companion (Windows TUN packaging, plan §5 T5): the
+  # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
+  # is embedded in the pinned binary; the T0 spike re-verifies this before
+  # the Windows TUN gate flips.
+  $Cronet = Join-Path $DestDir "libcronet.dll"
+  $CronetSrc = Join-Path $Root "third_party/sing-box/$TargetDir/libcronet.dll"
+  if (Test-Path $CronetSrc) {
+    Copy-Item $CronetSrc $Cronet -Force
+    Write-Host "Prepared resource $Cronet for $Platform (Windows archive companion)"
+  } else {
+    Write-Warning "missing $CronetSrc - run scripts/fetch-singbox.sh win (NaiveProxy outbound will fail at runtime)"
+  }
 }
 
 $GeoipSrc = Join-Path $Root "third_party/sing-geoip/rule-set"

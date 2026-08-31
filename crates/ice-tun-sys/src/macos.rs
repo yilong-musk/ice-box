@@ -28,6 +28,7 @@ use crate::coordinator::CoreCoordinator;
 use crate::error::{TunError, TunErrorCode};
 use crate::journal::{steps, CidrRecord, JournalState, RouteRecord, TunJournal};
 use crate::routes;
+use crate::routes::netmask_to_prefix;
 
 /// Probe floor for a free utun index (T0 spike: keep `utun0..5` used by
 /// other software untouched; probe a higher index, else fail closed).
@@ -132,7 +133,7 @@ impl MacOsHost for ProcessMacOsHost {
         // journal stores route prefixes because that is the ownership contract,
         // so probe a representative address inside the prefix. This also
         // avoids asking for `::`, which macOS treats as the default route.
-        let probe = route_probe_address(destination);
+        let probe = routes::route_probe_address(destination);
         let args: &[&str] = if probe.contains(':') {
             &["-n", "get", "-inet6", &probe]
         } else {
@@ -145,39 +146,6 @@ impl MacOsHost for ProcessMacOsHost {
         }
         Ok(parse_route_interface(&out.stdout))
     }
-}
-
-/// Convert a CIDR ownership key into an address accepted by `route -n get`.
-///
-/// sing-box may split a broad auto-route around excluded ranges, so the
-/// queried address only needs to be a member of the expected prefix. Adding
-/// one avoids a network-only lookup; `::1` is skipped because it is reserved
-/// for loopback and would resolve to `lo0` instead of the TUN split route.
-fn route_probe_address(destination: &str) -> String {
-    let Some((address, prefix)) = destination.split_once('/') else {
-        return destination.to_string();
-    };
-    let Ok(prefix) = prefix.parse::<u8>() else {
-        return address.to_string();
-    };
-    if let Ok(parsed) = address.parse::<std::net::Ipv4Addr>() {
-        if prefix == 32 {
-            return parsed.to_string();
-        }
-        let value = u32::from(parsed).saturating_add(1);
-        return std::net::Ipv4Addr::from(value).to_string();
-    }
-    if let Ok(parsed) = address.parse::<std::net::Ipv6Addr>() {
-        if prefix == 128 {
-            return parsed.to_string();
-        }
-        let mut value = u128::from(parsed).saturating_add(1);
-        if value == 1 {
-            value = 2;
-        }
-        return std::net::Ipv6Addr::from(value).to_string();
-    }
-    address.to_string()
 }
 
 /// `ifconfig -l` → space-separated interface names.
@@ -232,12 +200,6 @@ pub fn parse_route_interface(output: &str) -> Option<String> {
     output
         .lines()
         .find_map(|line| line.trim().strip_prefix("interface: ").map(str::to_string))
-}
-
-/// `0xfffffffc` → 30.
-fn netmask_to_prefix(netmask: &str) -> Option<u32> {
-    let raw = u32::from_str_radix(netmask.trim_start_matches("0x"), 16).ok()?;
-    Some(raw.count_ones())
 }
 
 fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
@@ -833,27 +795,6 @@ mod parsing_tests {
            flags: <UP,GATEWAY,DONE,STATIC,PRCLONING>\n";
         assert_eq!(parse_route_interface(output).as_deref(), Some("en0"));
         assert_eq!(parse_route_interface("no route here\n"), None);
-    }
-
-    #[test]
-    fn route_probe_address_converts_cidr_to_non_reserved_member() {
-        assert_eq!(route_probe_address("1.0.0.0/8"), "1.0.0.1");
-        assert_eq!(route_probe_address("10.0.0.2/30"), "10.0.0.3");
-        assert_eq!(route_probe_address("::/1"), "::2");
-        assert_eq!(route_probe_address("8000::/1"), "8000::1");
-        assert_eq!(
-            route_probe_address("fdfe:dcba:9876::1/128"),
-            "fdfe:dcba:9876::1"
-        );
-        assert_eq!(route_probe_address("not-a-cidr"), "not-a-cidr");
-    }
-
-    #[test]
-    fn netmask_to_prefix_counts_bits() {
-        assert_eq!(netmask_to_prefix("0xfffffffc"), Some(30));
-        assert_eq!(netmask_to_prefix("0xffffffff"), Some(32));
-        assert_eq!(netmask_to_prefix("0xffffff00"), Some(24));
-        assert_eq!(netmask_to_prefix("nope"), None);
     }
 
     #[test]

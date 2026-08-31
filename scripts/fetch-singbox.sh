@@ -83,3 +83,21 @@ cp "$src" "$dest/$ICE_BIN"
 chmod +x "$dest/$ICE_BIN" 2>/dev/null || true
 echo "Installed $dest/$ICE_BIN"
 "$dest/$ICE_BIN" version
+
+# Windows archive companions: libcronet.dll (NaiveProxy outbound, shipped in
+# the same zip since 1.13) must sit next to sing-box.exe. wintun.dll is NOT
+# needed — the pinned binary embeds the wintun driver (sing-tun loads it from
+# memory); the T0 spike re-verifies this before the Windows TUN gate flips.
+case "$ASSET" in
+  *windows*)
+    for companion in libcronet.dll; do
+      companion_src="$(find "$TMP" -type f -name "$companion" | head -n 1)"
+      if [[ -n "${companion_src:-}" && -f "$companion_src" ]]; then
+        cp "$companion_src" "$dest/$companion"
+        echo "Installed $dest/$companion"
+      else
+        echo "warning: $companion not found in $ASSET" >&2
+      fi
+    done
+    ;;
+esac

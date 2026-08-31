@@ -33,6 +33,7 @@ pub mod macos;
 pub mod recovery;
 pub mod routes;
 pub mod unsupported;
+pub mod windows;
 
 pub use backend::{
     unsupported_capability, AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability,
@@ -44,6 +45,9 @@ pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, Tun
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
 pub use recovery::RecoveryDriver;
 pub use unsupported::UnsupportedTunBackend;
+pub use windows::{
+    ProcessWindowsHost, WindowsHost, WindowsInterfaceState, WindowsTunBackend, DEFAULT_WINTUN_NAME,
+};
 
 /// Create the platform backend selected for this host (plan §3.2 / §5 T2).
 ///
@@ -93,16 +97,39 @@ pub fn create_backend(
             config_path,
         ))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        // The parameters feed only the macOS backends; drop them here so the
-        // platform gate branch stays warn-free on every other host.
-        let _ = (owner_token, config_path, binary, log_path);
-        let reason = if cfg!(target_os = "windows") {
-            "Windows TUN gate pending (windows_tun_ready): WinTUN/UAC host spike not run"
+        if windows_dev_runner_enabled() {
+            let coordinator: Box<dyn CoreCoordinator + Send> = match binary {
+                Some(binary) => Box::new(crate::coordinator::WindowsElevatedCoreCoordinator::new(
+                    binary, log_path,
+                )),
+                None => {
+                    tracing::warn!(
+                        "ICE_BOX_TUN_WINDOWS_DEV is set but no sing-box binary was resolved; TUN transitions stay fail-closed"
+                    );
+                    Box::new(DeferredCoreCoordinator)
+                }
+            };
+            Box::new(WindowsTunBackend::new(
+                owner_token,
+                Box::new(ProcessWindowsHost),
+                coordinator,
+                config_path,
+            ))
         } else {
-            "TUN is supported on macOS and Windows only in the first release"
-        };
+            let _ = (owner_token, config_path, binary, log_path);
+            let reason =
+                "Windows TUN gate pending (windows_tun_ready): WinTUN/UAC host spike not run";
+            Box::new(UnsupportedTunBackend::new(reason))
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // The parameters feed only the platform backends; drop them here so
+        // the platform gate branch stays warn-free on every other host.
+        let _ = (owner_token, config_path, binary, log_path);
+        let reason = "TUN is supported on macOS and Windows only in the first release";
         Box::new(UnsupportedTunBackend::new(reason))
     }
 }
@@ -142,6 +169,18 @@ fn helper_coordinator(config_path: &std::path::Path) -> Option<Box<dyn CoreCoord
 /// no OS mutation happens without an explicit opt-in.
 pub fn dev_sudo_runner_enabled() -> bool {
     std::env::var("ICE_BOX_TUN_DEV_SUDO")
+        .map(|value| !value.is_empty() && value != "0")
+        .unwrap_or(false)
+}
+
+/// Dev-only opt-in for the Windows elevated runner (plan §5 T3 exit gate
+/// analogue, Windows live gate). Set `ICE_BOX_TUN_WINDOWS_DEV=1` to exercise
+/// the native Windows TUN path from an already-elevated context (run the
+/// acceptance suite from an Administrator shell); production stays
+/// fail-closed (`UnsupportedTunBackend`) until `windows_tun_ready` turns
+/// green. Anything else (unset, empty, `0`) keeps the fail-closed backend.
+pub fn windows_dev_runner_enabled() -> bool {
+    std::env::var("ICE_BOX_TUN_WINDOWS_DEV")
         .map(|value| !value.is_empty() && value != "0")
         .unwrap_or(false)
 }

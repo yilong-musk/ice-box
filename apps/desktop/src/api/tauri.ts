@@ -50,6 +50,9 @@ export type StatusResponse = {
   /** False when the platform gate is pending/failed; the switch stays disabled. */
   tun_available: boolean;
   tun_unavailable_reason: string | null;
+  /** True when the platform must not surface TUN controls at all (Windows:
+   * TUN gate blocked upstream); the frontend hides the TUN card/switches. */
+  tun_ui_hidden: boolean;
   /** Privileged helper installed + authorized (read-only probe); drives the
    *「安装/卸载辅助组件」actions. */
   helper_installed: boolean;

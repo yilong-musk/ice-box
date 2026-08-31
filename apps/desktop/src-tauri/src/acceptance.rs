@@ -966,4 +966,97 @@ mod live {
         cleanup(&paths, &mut core, proxy.as_ref());
         println!("G9.13 ok: TUN enable -> mixed curl -> disable via helper IPC ({interface})");
     }
+
+    /// Windows TUN live gate (plan §6 live Windows acceptance; the
+    /// `windows_tun_ready` gate is still pending — this is the dev opt-in
+    /// runner). Mirrors G9.12 with the Windows native path: requires
+    /// `ICE_BOX_TUN_WINDOWS_DEV=1` and an already-elevated context (run the
+    /// acceptance suite from an Administrator shell). The compile-time
+    /// `tun_gate` is forced green only for this live test; production stays
+    /// fail-closed until the Windows T0 spike passes. Run via
+    /// `scripts/run-acceptance-windows-tun.sh`.
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "live: real sing-box + elevated context (Windows TUN gate)"]
+    fn g9_14_live_tun_enable_curl_disable() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_config::TunSettings;
+        use ice_tun_sys::{JournalState, ProcessWindowsHost, TunJournal, WindowsHost};
+
+        let dev_windows = std::env::var("ICE_BOX_TUN_WINDOWS_DEV")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false);
+        assert!(
+            dev_windows,
+            "run via scripts/run-acceptance-windows-tun.sh (sets ICE_BOX_TUN_WINDOWS_DEV and preflights elevation)"
+        );
+        // Live test only: let the real Windows backend generate a Tun config
+        // on this host. Production gating is untouched (tun_gate stays
+        // fail-closed on Windows).
+        ice_config::force_tun_gate_ready();
+
+        let paths = temp_app("tun-live");
+        seed_singbox_subscription(&paths);
+        let settings = AppSettings {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            ..settings()
+        };
+        let mut core = CoreController::new();
+        let proxy = create_system_proxy();
+        let bin = real_binary();
+
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("start diagnostic core");
+        assert_eq!(core.state().status, CoreStatus::Running);
+
+        let capture = CaptureController::new(paths.clone(), None);
+        capture
+            .enable_tun(&settings, &mut core, bin.clone())
+            .expect("enable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Tun);
+        assert_eq!(capture.tun_status(), TunStatus::Enabled);
+        let status = capture.status(&settings);
+        let interface = status
+            .tun_interface
+            .as_deref()
+            .expect("tun_interface after enable");
+        assert_eq!(status.traffic_capture, TrafficCapture::Tun);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Applied);
+
+        // Traffic: the mixed inbound is still usable while TUN is active.
+        assert!(curl_via_mixed(MIXED_PORT), "mixed must answer during TUN");
+
+        capture
+            .disable_active_backend(&settings, &mut core, proxy.as_ref(), bin.clone(), true)
+            .expect("disable tun");
+        assert_eq!(capture.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessWindowsHost
+                .interface_state(interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after disable"
+        );
+
+        cleanup(&paths, &mut core, proxy.as_ref());
+        println!("G9.14 ok: TUN enable -> mixed curl -> disable -> adapter removed ({interface})");
+    }
 }

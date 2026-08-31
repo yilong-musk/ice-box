@@ -277,6 +277,9 @@ export function Settings({ active = true }: { active?: boolean }) {
     };
   }, [form, loaded]);
 
+  /** Windows hides the TUN controls entirely (gate blocked upstream). */
+  const tunUiHidden = status?.tun_ui_hidden === true;
+
   return (
     <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
@@ -319,119 +322,121 @@ export function Settings({ active = true }: { active?: boolean }) {
         </CardContent>
       </Card>
 
-      <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-        <CardHeader>
-          <CardTitle>TUN 模式</CardTitle>
-          <CardDescription>
-            开启后，主页的代理服务将使用透明代理接管应用流量（替代系统代理接管）
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-3">
-          <Field orientation="horizontal" className="w-auto gap-2">
-            <Switch
-              id="settings-tun-enabled"
-              size="sm"
-              checked={form.tun.enabled}
-              disabled={
-                busy ||
-                !loaded ||
-                status?.tun_available === false ||
-                status?.tun_status === "preparing" ||
-                status?.tun_status === "stopping" ||
-                status?.helper_stale === true
-              }
-              aria-label="启用 TUN 模式"
-              onCheckedChange={(checked) => {
-                if (checked === true && status?.helper_installed !== true) {
-                  // No authorized helper: guide the user to install it first;
-                  // the TUN-on setting is persisted only after a successful
-                  // install (cancel leaves the switch off).
-                  tunInstall.setOpen(true);
-                  return;
+      {tunUiHidden ? null : (
+        <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+          <CardHeader>
+            <CardTitle>TUN 模式</CardTitle>
+            <CardDescription>
+              开启后，主页的代理服务将使用透明代理接管应用流量（替代系统代理接管）
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3">
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-tun-enabled"
+                size="sm"
+                checked={form.tun.enabled}
+                disabled={
+                  busy ||
+                  !loaded ||
+                  status?.tun_available === false ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.helper_stale === true
                 }
-                setForm({
-                  ...form,
-                  tun: { ...form.tun, enabled: checked === true },
-                });
-              }}
-            />
-            <FieldLabel htmlFor="settings-tun-enabled">启用 TUN 模式</FieldLabel>
-          </Field>
-          {TUN_TRANSITION_LABELS[status?.tun_status ?? ""] ? (
-            <FieldDescription>
-              {TUN_TRANSITION_LABELS[status?.tun_status ?? ""]}
-            </FieldDescription>
-          ) : status?.tun_status === "recovery_required" ? (
-            <FieldDescription>
-              TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换
-            </FieldDescription>
-          ) : status?.tun_available === false ? (
-            <FieldDescription>
-              {status?.tun_unavailable_reason ??
-                "当前平台暂不支持 TUN 模式"}
-            </FieldDescription>
-          ) : status?.traffic_capture === "tun" ? (
-            <FieldDescription>
-              当前通过 TUN 接管流量
-              {status.tun_interface ? `（接口 ${status.tun_interface}）` : ""}；
-              关闭后立即切回系统代理接管
-            </FieldDescription>
-          ) : status?.helper_stale === true ? (
-            <FieldDescription>
-              应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN
-            </FieldDescription>
-          ) : (
-            <FieldDescription>
-              {status?.helper_installed
-                ? "辅助组件已安装并授权，可直接启用 TUN；切换后自动保存并生效"
-                : "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查"}
-            </FieldDescription>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void runHelperAction(() => api.installHelper(), true)}
-              disabled={
-                busy ||
-                (status?.helper_installed === true &&
-                  status?.helper_stale !== true) ||
-                status?.tun_status === "preparing" ||
-                status?.tun_status === "stopping" ||
-                status?.traffic_capture === "tun"
-              }
-            >
-              {status?.helper_stale === true
-                ? "更新辅助组件"
-                : "安装辅助组件"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                  void runHelperAction(() => api.uninstallHelper(), false, () => {
-                    // The helper is gone: the TUN-on setting can no longer be
-                    // applied, so persist it off with the uninstall.
-                    if (!form.tun.enabled) return;
-                    return persistTunEnabled(false);
-                  })
+                aria-label="启用 TUN 模式"
+                onCheckedChange={(checked) => {
+                  if (checked === true && status?.helper_installed !== true) {
+                    // No authorized helper: guide the user to install it first;
+                    // the TUN-on setting is persisted only after a successful
+                    // install (cancel leaves the switch off).
+                    tunInstall.setOpen(true);
+                    return;
+                  }
+                  setForm({
+                    ...form,
+                    tun: { ...form.tun, enabled: checked === true },
+                  });
+                }}
+              />
+              <FieldLabel htmlFor="settings-tun-enabled">启用 TUN 模式</FieldLabel>
+            </Field>
+            {TUN_TRANSITION_LABELS[status?.tun_status ?? ""] ? (
+              <FieldDescription>
+                {TUN_TRANSITION_LABELS[status?.tun_status ?? ""]}
+              </FieldDescription>
+            ) : status?.tun_status === "recovery_required" ? (
+              <FieldDescription>
+                TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换
+              </FieldDescription>
+            ) : status?.tun_available === false ? (
+              <FieldDescription>
+                {status?.tun_unavailable_reason ??
+                  "当前平台暂不支持 TUN 模式"}
+              </FieldDescription>
+            ) : status?.traffic_capture === "tun" ? (
+              <FieldDescription>
+                当前通过 TUN 接管流量
+                {status.tun_interface ? `（接口 ${status.tun_interface}）` : ""}；
+                关闭后立即切回系统代理接管
+              </FieldDescription>
+            ) : status?.helper_stale === true ? (
+              <FieldDescription>
+                应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN
+              </FieldDescription>
+            ) : (
+              <FieldDescription>
+                {status?.helper_installed
+                  ? "辅助组件已安装并授权，可直接启用 TUN；切换后自动保存并生效"
+                  : "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查"}
+              </FieldDescription>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void runHelperAction(() => api.installHelper(), true)}
+                disabled={
+                  busy ||
+                  (status?.helper_installed === true &&
+                    status?.helper_stale !== true) ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.traffic_capture === "tun"
                 }
-              disabled={
-                busy ||
-                status?.helper_installed !== true ||
-                status?.tun_status === "preparing" ||
-                status?.tun_status === "stopping" ||
-                status?.traffic_capture === "tun"
-              }
-            >
-              卸载辅助组件
-            </Button>
-          </div>
-          </div>
-        </CardContent>
-      </Card>
+              >
+                {status?.helper_stale === true
+                  ? "更新辅助组件"
+                  : "安装辅助组件"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                    void runHelperAction(() => api.uninstallHelper(), false, () => {
+                      // The helper is gone: the TUN-on setting can no longer be
+                      // applied, so persist it off with the uninstall.
+                      if (!form.tun.enabled) return;
+                      return persistTunEnabled(false);
+                    })
+                  }
+                disabled={
+                  busy ||
+                  status?.helper_installed !== true ||
+                  status?.tun_status === "preparing" ||
+                  status?.tun_status === "stopping" ||
+                  status?.traffic_capture === "tun"
+                }
+              >
+                卸载辅助组件
+              </Button>
+            </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card size="sm" className="w-full">
         <CardHeader className="shrink-0">
@@ -617,12 +622,14 @@ export function Settings({ active = true }: { active?: boolean }) {
         </div>
       </ScrollArea>
 
-      <TunInstallDialog
-        open={tunInstall.open}
-        onOpenChange={tunInstall.setOpen}
-        onConfirm={tunInstall.confirm}
-        busy={busy}
-      />
+      {!tunUiHidden && (
+        <TunInstallDialog
+          open={tunInstall.open}
+          onOpenChange={tunInstall.setOpen}
+          onConfirm={tunInstall.confirm}
+          busy={busy}
+        />
+      )}
     </div>
   );
 }

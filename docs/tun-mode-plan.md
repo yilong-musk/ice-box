@@ -1,6 +1,6 @@
 # TUN Mode Support Plan
 
-Status: **proposal — shared/macOS T0 complete, T1–T4 shared complete, T5 macOS helper + packaging landed, macOS live orchestration gates G9.12 and G9.13 green; macOS is a permanently unsigned release with in-app elevated helper installation (system authorization dialog), the clean-machine gate is explicitly waived for this release, and Windows T0 pending**
+Status: **proposal — shared/macOS T0 complete, T1–T4 shared complete, T5 macOS helper + packaging landed, macOS live orchestration gates G9.12 and G9.13 green; macOS is a permanently unsigned release with in-app elevated helper installation (system authorization dialog), the clean-machine gate is explicitly waived for this release, and Windows T0 pending** (the host-free Windows TUN backend — `WindowsTunBackend`, `netsh`/`route print` probes with host-free parsing tests, dev elevated runner — has landed behind the `ICE_BOX_TUN_WINDOWS_DEV` opt-in so the host spike can run as a repeatable gate via `scripts/run-acceptance-windows-tun.sh`; see `docs/design-notes/tun-windows-t0.md`. Production Windows stays fail-closed until `windows_tun_ready`).
 
 T0 (feasibility + architecture lock) is done and recorded in
 `docs/architecture.md` §24 and `docs/design-notes/tun-t0-spike.md`: schema

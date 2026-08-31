@@ -46,6 +46,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `uninstall_helper`; Home and Settings surface「安装辅助组件」/「卸载辅助组件」
   actions.
 
+- Windows TUN backend (T2 shape, host-free): `WindowsTunBackend` in
+  `ice-tun-sys` with read-only `netsh` / `route print` host probes (host-free
+  parsing tests on all CI hosts), interface-index identity, observed-route
+  ownership, journaled apply/verify/restore/recover, and the dev elevated
+  core runner (`WindowsElevatedCoreCoordinator`, `taskkill /T /F` stop).
+  Wired by `create_backend` behind the explicit `ICE_BOX_TUN_WINDOWS_DEV`
+  opt-in only — production Windows stays fail-closed until the
+  `windows_tun_ready` T0 spike passes on a real host
+  (`scripts/run-acceptance-windows-tun.sh`, G9.14 live gate;
+  `docs/design-notes/tun-windows-t0.md`).
+
+- `scripts/fetch-singbox.sh` / `prepare-singbox-resource.sh` / `.ps1` now
+  also ship `libcronet.dll` next to `sing-box.exe` on Windows (NaiveProxy
+  outbound companion from the pinned archive; the wintun driver is embedded
+  in the binary).
+
 ### Changed
 
 - The macOS release is permanently unsigned (documented product decision):

@@ -40,6 +40,7 @@ const tunStatus = {
   capture_transition_id: null,
   tun_available: true,
   tun_unavailable_reason: null,
+  tun_ui_hidden: false,
   helper_installed: false,
   helper_stale: false,
 } as const;
@@ -566,6 +567,42 @@ describe("Home", () => {
     const power = view.getByRole("button", { name: "启动代理服务" });
     expect(power).toBeDisabled();
     expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
+  });
+
+  it("hides the TUN toggle and ignores TUN state when the platform hides TUN UI", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      tun_available: false,
+      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_ui_hidden: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
+    });
+    // No TUN switch on the home page, no TUN reason text anywhere.
+    expect(view.queryByRole("button", { name: "TUN 模式" })).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("Windows TUN gate pending");
+    // The power control ignores the hidden TUN desire: system proxy stays usable.
+    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
+      "点击接管系统代理",
+    );
   });
 
   it("shows permission-required state with a system-proxy fallback action", async () => {

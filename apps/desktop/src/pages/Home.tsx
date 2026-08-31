@@ -203,8 +203,12 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
   const proxyLive = status?.system_proxy_applied === true;
   const proxyRecorded = status?.system_proxy_recorded === true;
   const tunActive = status?.traffic_capture === "tun";
-  const configuredTun = status?.configured_tun === true;
-  const tunAvailable = status?.tun_available === true;
+  // Windows hides the TUN controls entirely (gate blocked upstream): the
+  // configured/active TUN states can never drive the power control there.
+  const tunUiHidden = status?.tun_ui_hidden === true;
+  const configuredTun =
+    status?.configured_tun === true && !tunUiHidden;
+  const tunAvailable = status?.tun_available === true && !tunUiHidden;
   // When TUN is the configured backend but the platform gate is pending /
   // failed, the button stays disabled and the unavailable reason is shown
   // (plan §2: the setting remains a desired value, never a misleading state).
@@ -455,35 +459,37 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <Toggle
-              variant="outline"
-              size="sm"
-              pressed={tunOverride ?? configuredTun}
-              onPressedChange={(pressed) => {
-                if (pressed) {
-                  if (status?.helper_installed !== true) {
-                    // No authorized helper: guide the user to install it
-                    // first; the TUN-on setting is persisted only after a
-                    // successful install (cancel leaves it off).
-                    tunInstall.setOpen(true);
-                    return;
+            {!tunUiHidden && (
+              <Toggle
+                variant="outline"
+                size="sm"
+                pressed={tunOverride ?? configuredTun}
+                onPressedChange={(pressed) => {
+                  if (pressed) {
+                    if (status?.helper_installed !== true) {
+                      // No authorized helper: guide the user to install it
+                      // first; the TUN-on setting is persisted only after a
+                      // successful install (cancel leaves it off).
+                      tunInstall.setOpen(true);
+                      return;
+                    }
+                    onToggleTunSetting(true);
+                  } else {
+                    onToggleTunSetting(false);
                   }
-                  onToggleTunSetting(true);
-                } else {
-                  onToggleTunSetting(false);
+                }}
+                disabled={
+                  busy ||
+                  !settings ||
+                  status?.tun_available === false ||
+                  status?.helper_stale === true
                 }
-              }}
-              disabled={
-                busy ||
-                !settings ||
-                status?.tun_available === false ||
-                status?.helper_stale === true
-              }
-              className="mt-3 w-full"
-              aria-label="TUN 模式"
-            >
-              TUN 模式
-            </Toggle>
+                className="mt-3 w-full"
+                aria-label="TUN 模式"
+              >
+                TUN 模式
+              </Toggle>
+            )}
           </CardContent>
         </Card>
 
@@ -553,12 +559,14 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
         </CardContent>
       </Card>
 
-      <TunInstallDialog
-        open={tunInstall.open}
-        onOpenChange={tunInstall.setOpen}
-        onConfirm={tunInstall.confirm}
-        busy={busy}
-      />
+      {!tunUiHidden && (
+        <TunInstallDialog
+          open={tunInstall.open}
+          onOpenChange={tunInstall.setOpen}
+          onConfirm={tunInstall.confirm}
+          busy={busy}
+        />
+      )}
     </div>
   );
 }

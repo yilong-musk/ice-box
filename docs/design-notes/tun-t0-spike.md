@@ -136,7 +136,10 @@ Route rules verified live: `process_name`, `clash_mode`, `ip_is_private`,
 1. **Windows T0 host spike** (blocker for T1 completion): WinTUN driver
    discovery / install permission (admin?), adapter creation without
    elevation, cleanup after normal stop and task kill, UAC/helper selection,
-   NSIS install/uninstall residue.
+   NSIS install/uninstall residue. The host-free Windows backend has landed
+   behind the `ICE_BOX_TUN_WINDOWS_DEV` dev opt-in (see
+   `docs/design-notes/tun-windows-t0.md`); the spike now runs as the
+   repeatable `scripts/run-acceptance-windows-tun.sh` gate on a real host.
 2. macOS interface-name collision handling for `utun420` (fallback probe).
 3. Long-running behavior: adapter/route survival across network changes
    (Wi-Fi switch) with `auto_detect_interface` — add to live acceptance.

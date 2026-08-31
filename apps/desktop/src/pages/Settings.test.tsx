@@ -55,6 +55,7 @@ const defaultStatus = {
   capture_transition_id: null,
   tun_available: true,
   tun_unavailable_reason: null,
+  tun_ui_hidden: false,
   helper_installed: false,
   helper_stale: false,
 } as const;
@@ -527,6 +528,30 @@ describe("Settings", () => {
       expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
     });
     expect(container.textContent).toContain("Windows TUN gate pending");
+  });
+
+  it("hides the TUN card entirely when the platform hides TUN UI", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_available: false,
+      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_ui_hidden: true,
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByLabelText("外观")).toBeInTheDocument();
+    });
+    expect(view.queryByText("TUN 模式")).not.toBeInTheDocument();
+    expect(
+      view.queryByLabelText("启用 TUN 模式"),
+    ).not.toBeInTheDocument();
+    expect(
+      view.queryByRole("button", { name: "安装辅助组件" }),
+    ).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("Windows TUN gate pending");
   });
 
   it("disables the TUN switch while a TUN transition is in progress", async () => {

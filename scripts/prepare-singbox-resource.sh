@@ -56,4 +56,19 @@ case "$ICE_PLATFORM_ALIAS" in
       exit 1
     fi
     ;;
+  win)
+    # Windows archive companions (Windows TUN packaging, plan §5 T5): the
+    # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
+    # is embedded in the pinned binary — the T0 spike re-verifies this before
+    # the Windows TUN gate flips.
+    for companion in libcronet.dll; do
+      COMPANION_SRC="$ROOT/third_party/sing-box/$ICE_TARGET_DIR/$companion"
+      if [[ -f "$COMPANION_SRC" ]]; then
+        cp "$COMPANION_SRC" "$DEST_DIR/$companion"
+        echo "Prepared resource $DEST_DIR/$companion (Windows archive companion)"
+      else
+        echo "warning: $COMPANION_SRC missing — run scripts/fetch-singbox.sh win (NaiveProxy outbound will fail at runtime)" >&2
+      fi
+    done
+    ;;
 esac

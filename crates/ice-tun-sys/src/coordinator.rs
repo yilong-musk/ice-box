@@ -400,6 +400,237 @@ fn pid_is_alive(_pid: u32) -> bool {
     false
 }
 
+/// Dev-only elevated runner for the Windows live gate (plan §5 T3 exit gate
+/// analogue; `windows_tun_ready` pending).
+///
+/// The Windows TUN path requires an Administrator context: the wintun driver
+/// is embedded in the bundled sing-box binary, and `WintunCreateAdapter`
+/// needs admin. This runner (opt-in via `ICE_BOX_TUN_WINDOWS_DEV`) requires
+/// the *current* process to already be elevated (run the acceptance suite
+/// from an Administrator shell) and spawns sing-box directly; the child
+/// inherits the elevation. `stop` terminates the process tree with
+/// `taskkill /T /F` — the accepted Windows termination model (windows-plan
+/// §2); whether the wintun adapter survives the hard kill is a T0 spike item
+/// that the journal + recovery handle.
+#[cfg(target_os = "windows")]
+pub struct WindowsElevatedCoreCoordinator {
+    binary: PathBuf,
+    log_path: PathBuf,
+    child: Option<Child>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsElevatedCoreCoordinator {
+    pub fn new(binary: PathBuf, log_path: PathBuf) -> Self {
+        Self {
+            binary,
+            log_path,
+            child: None,
+        }
+    }
+
+    /// Read-only preflight: the current process must carry an elevated
+    /// (Administrator) token. Fails with `tun.permission_required` before
+    /// any process or OS mutation.
+    fn check_elevation(&self) -> Result<(), TunError> {
+        if process_is_elevated() {
+            Ok(())
+        } else {
+            Err(TunError::new(
+                TunErrorCode::PermissionRequired,
+                "the Windows TUN dev runner needs an elevated context (run the acceptance suite from an Administrator shell); the production path will use the privileged helper (T5)",
+            ))
+        }
+    }
+
+    fn spawn_elevated(&self, config_path: &Path) -> Result<Child, TunError> {
+        if !self.binary.is_file() {
+            return Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!(
+                    "sing-box binary not found at {} (dev elevated runner)",
+                    self.binary.display()
+                ),
+            ));
+        }
+        if !config_path.is_file() {
+            return Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("config not found at {}", config_path.display()),
+            ));
+        }
+        if let Some(parent) = self.log_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!("create log dir {}: {err}", parent.display()),
+                )
+            })?;
+        }
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .map_err(|err| {
+                TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!("open core log {}: {err}", self.log_path.display()),
+                )
+            })?;
+        let log_err = log.try_clone().map_err(|err| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("clone core log handle: {err}"),
+            )
+        })?;
+        Command::new(&self.binary)
+            .arg("run")
+            .arg("-c")
+            .arg(config_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err))
+            .spawn()
+            .map_err(|err| {
+                TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!(
+                        "spawn {} run -c {}: {err}",
+                        self.binary.display(),
+                        config_path.display()
+                    ),
+                )
+            })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl CoreCoordinator for WindowsElevatedCoreCoordinator {
+    fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
+        self.check_elevation()?;
+        let child = self.spawn_elevated(config_path)?;
+        let pid = child.id();
+        self.child = Some(child);
+
+        // Bounded liveness wait: catch immediate config/bind errors so the
+        // backend's interface verification is not the only signal.
+        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
+        loop {
+            match self.child.as_mut().expect("child stored").try_wait() {
+                Ok(Some(code)) => {
+                    self.child = None;
+                    return Err(TunError::new(
+                        TunErrorCode::HealthcheckFailed,
+                        format!(
+                            "elevated sing-box exited during startup (code {code}); check {}",
+                            self.log_path.display()
+                        ),
+                    ));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    self.child = None;
+                    return Err(TunError::new(
+                        TunErrorCode::ApplyFailed,
+                        format!("poll elevated core: {err}"),
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        tracing::info!(pid, "elevated sing-box started via the dev Windows runner");
+        Ok(pid)
+    }
+
+    fn stop(&mut self) -> Result<(), TunError> {
+        let Some(pid) = self.child.as_ref().map(|child| child.id()) else {
+            return Ok(());
+        };
+        let kill = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match kill {
+            Ok(status) if status.success() => {}
+            Ok(_) => {
+                // taskkill fails harmlessly when the process already exited;
+                // the handle decides.
+                let still_alive = self
+                    .child
+                    .as_mut()
+                    .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+                if still_alive {
+                    return Err(TunError::new(
+                        TunErrorCode::RestoreFailed,
+                        format!("taskkill /PID {pid} /T /F failed"),
+                    ));
+                }
+            }
+            Err(err) => {
+                return Err(TunError::new(
+                    TunErrorCode::RestoreFailed,
+                    format!("taskkill /PID {pid}: {err}"),
+                ));
+            }
+        }
+        // Bounded wait for the process tree to die.
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline {
+            match self.child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(_)) => {
+                        self.child = None;
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        self.child = None;
+                        return Ok(());
+                    }
+                },
+                None => return Ok(()),
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        Err(TunError::new(
+            TunErrorCode::RecoveryRequired,
+            format!("elevated sing-box (pid {pid}) survived taskkill /T /F"),
+        ))
+    }
+}
+
+/// Whether the current process carries an elevated (Administrator) token.
+#[cfg(target_os = "windows")]
+fn process_is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        );
+        let _ = CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -118,6 +118,9 @@ pub struct StatusResponse {
     pub capture_transition_id: Option<String>,
     pub tun_available: bool,
     pub tun_unavailable_reason: Option<String>,
+    /// True when the platform must not surface TUN controls at all; the
+    /// frontend hides the TUN card and switches when set.
+    pub tun_ui_hidden: bool,
     /// Privileged helper daemon installed + authorized (read-only probe).
     /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
     pub helper_installed: bool,
@@ -301,6 +304,7 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         capture_transition_id: capture.capture_transition_id,
         tun_available: capture.tun_available,
         tun_unavailable_reason: capture.tun_unavailable_reason,
+        tun_ui_hidden: capture.tun_ui_hidden,
         helper_installed: crate::helper_install::helper_installed(state),
         helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
     })

@@ -16,6 +16,7 @@ const tunStatus = {
   capture_transition_id: null,
   tun_available: true,
   tun_unavailable_reason: null,
+  tun_ui_hidden: false,
   helper_installed: false,
   helper_stale: false,
 } as const;
