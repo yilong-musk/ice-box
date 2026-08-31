@@ -122,11 +122,17 @@ pub struct TunSettings {
     /// Stack name, one of `gvisor` / `system` / `mixed` (locked by the spike).
     #[serde(default = "default_tun_stack")]
     pub stack: String,
-    /// OS-level DNS interception request. T0 lock: a no-op on the macOS native
-    /// sing-box path (sing-box never touches system DNS there); the backend
-    /// decides per platform.
-    #[serde(default)]
+    /// Route DNS through the sing-box DNS engine in TUN mode: the generated
+    /// config prepends a `hijack-dns` route rule so port-53 traffic (including
+    /// queries to the LAN resolver) is answered by the subscription's
+    /// resolvers instead of a GFW-poisoned system resolver. On by default;
+    /// the macOS backend itself still performs no OS DNS mutation.
+    #[serde(default = "default_tun_dns_hijack")]
     pub dns_hijack: bool,
+}
+
+fn default_tun_dns_hijack() -> bool {
+    true
 }
 
 impl Default for TunSettings {
@@ -140,7 +146,7 @@ impl Default for TunSettings {
             auto_route: true,
             strict_route: true,
             stack: TUN_DEFAULT_STACK.into(),
-            dns_hijack: false,
+            dns_hijack: true,
         }
     }
 }
@@ -645,7 +651,7 @@ mod tests {
         assert_eq!(s.tun.stack, "gvisor");
         assert!(s.tun.auto_route);
         assert!(s.tun.strict_route);
-        assert!(!s.tun.dns_hijack);
+        assert!(s.tun.dns_hijack, "dns hijack is the locked default");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -812,6 +818,6 @@ mod tests {
         assert_eq!(d.mtu, TUN_DEFAULT_MTU);
         assert_eq!(d.stack, TUN_DEFAULT_STACK);
         assert!(d.auto_route && d.strict_route);
-        assert!(!d.dns_hijack);
+        assert!(d.dns_hijack, "dns hijack is the locked default");
     }
 }

@@ -226,6 +226,9 @@ pub fn build_direct_only_config(
     // direct-only fallback.
     let mut rules = Vec::new();
     if capture_intent == CaptureIntent::Tun {
+        if template.tun.dns_hijack {
+            rules.push(tun_dns_hijack_rule());
+        }
         rules.extend(tun_reserved_rules());
     }
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
@@ -456,9 +459,15 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         if capture_intent == CaptureIntent::Tun {
-            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6): the control
-            // path, private/loopback/link-local/multicast destinations, and the TUN
-            // endpoint are never captured or sniffed, even in Global/Direct mode.
+            // DNS hijack must precede every other rule: port-53 queries to the LAN
+            // resolver would otherwise match the private-IP bypass below and reach a
+            // GFW-poisoned answer. The rest of the reserved bypass rules follow (T0
+            // lock, §24.5.6): the control path, private/loopback/link-local/multicast
+            // destinations, and the TUN endpoint are never captured or sniffed, even
+            // in Global/Direct mode.
+            if input.template.tun.dns_hijack {
+                final_rules.push(tun_dns_hijack_rule());
+            }
             final_rules.extend(tun_reserved_rules());
         }
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
@@ -620,6 +629,19 @@ fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
         ));
     }
     Ok(())
+}
+
+/// DNS hijack rule for a `Tun` config: port-53 traffic is diverted into the
+/// sing-box DNS engine so answers come from the subscription's resolvers
+/// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver. Must be
+/// the first route rule: DNS queries to a LAN resolver would otherwise match
+/// the private-IP bypass and go direct.
+///
+/// This replaces the TUN inbound `dns_hijack` field, which the pinned
+/// sing-box 1.13.19 rejects as an unknown field (the feature moved to route
+/// rule actions in sing-box 1.9).
+pub fn tun_dns_hijack_rule() -> Value {
+    json!({ "port": [53], "action": "hijack-dns" })
 }
 
 /// Reserved bypass route rules for a `Tun` config (T0 spike §5, locked in
@@ -1870,24 +1892,26 @@ mod build_tests {
         let rules = cfg["route"]["rules"].as_array().unwrap();
         assert_eq!(
             rules.len(),
-            8,
-            "4 reserved + 2 clash_mode + 2 subscription rules"
+            9,
+            "1 dns hijack + 4 reserved + 2 clash_mode + 2 subscription rules"
         );
 
-        assert_eq!(rules[0]["process_name"][0], "ice-box");
-        assert_eq!(rules[0]["outbound"], "direct");
-        assert_eq!(rules[1]["ip_is_private"], true);
+        assert_eq!(rules[0]["action"], "hijack-dns");
+        assert_eq!(rules[0]["port"][0], 53);
+        assert_eq!(rules[1]["process_name"][0], "ice-box");
         assert_eq!(rules[1]["outbound"], "direct");
-        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
-        assert_eq!(rules[3]["action"], "sniff");
-        assert_eq!(rules[4]["clash_mode"], "global");
-        assert_eq!(rules[5]["clash_mode"], "direct");
-        assert_eq!(rules[6]["domain_suffix"][0], "keep.com");
-        assert_eq!(rules[7]["domain_suffix"][0], "proxy.com");
+        assert_eq!(rules[2]["ip_is_private"], true);
+        assert_eq!(rules[2]["outbound"], "direct");
+        assert_eq!(rules[3]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[4]["action"], "sniff");
+        assert_eq!(rules[5]["clash_mode"], "global");
+        assert_eq!(rules[6]["clash_mode"], "direct");
+        assert_eq!(rules[7]["domain_suffix"][0], "keep.com");
+        assert_eq!(rules[8]["domain_suffix"][0], "proxy.com");
 
         // Global mode must never bypass the reserved rules: the clash_mode rule
         // still targets the proxy while the control path stays direct.
-        assert_eq!(rules[4]["outbound"], "proxy");
+        assert_eq!(rules[5]["outbound"], "proxy");
     }
 
     #[cfg(target_os = "macos")]
@@ -1919,7 +1943,8 @@ mod build_tests {
             validate_config_for_intent(&direct, CaptureIntent::Tun)
                 .expect("direct-only Tun keeps the tun inbound");
             let rules = direct["route"]["rules"].as_array().unwrap();
-            assert_eq!(rules[0]["process_name"][0], "ice-box");
+            assert_eq!(rules[0]["action"], "hijack-dns");
+            assert_eq!(rules[1]["process_name"][0], "ice-box");
             assert_eq!(
                 clash_rules(&direct),
                 [("global", "direct"), ("direct", "direct")]
