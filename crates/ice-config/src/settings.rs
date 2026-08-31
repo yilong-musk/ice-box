@@ -123,10 +123,11 @@ pub struct TunSettings {
     #[serde(default = "default_tun_stack")]
     pub stack: String,
     /// Route DNS through the sing-box DNS engine in TUN mode: the generated
-    /// config prepends a `hijack-dns` route rule so port-53 traffic (including
-    /// queries to the LAN resolver) is answered by the subscription's
-    /// resolvers instead of a GFW-poisoned system resolver. On by default;
-    /// the macOS backend itself still performs no OS DNS mutation.
+    /// config prepends a `hijack-dns` route rule (port-53 traffic is answered
+    /// by the subscription's resolvers instead of a GFW-poisoned system
+    /// resolver), and on macOS the backend additionally points the primary
+    /// service's DNS at public resolvers so queries on the LAN enter the TUN
+    /// (a connected-subnet resolver would bypass it). On by default.
     #[serde(default = "default_tun_dns_hijack")]
     pub dns_hijack: bool,
 }

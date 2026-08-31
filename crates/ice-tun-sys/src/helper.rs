@@ -206,6 +206,17 @@ impl CoreCoordinator for HelperCoreCoordinator {
             None => Ok(()),
         }
     }
+
+    fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+        let response = self.request(HelperCommand::SetDns {
+            service: service.to_string(),
+            servers: servers.to_vec(),
+        })?;
+        match response.into_error() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Probe whether an authorized helper is reachable right now. Read-only:

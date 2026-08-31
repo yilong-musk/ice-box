@@ -58,7 +58,7 @@ Route rules verified live: `process_name`, `clash_mode`, `ip_is_private`,
 
 - sing-tun darwin performs **no OS DNS mutation**: `scutil --dns` diff before/after TUN start and after SIGTERM = identical (no OS DNS hijack; only `dscacheutil -flushcache` runs on close).
 - DNS interception happens at the **sing-box router** for tunneled traffic: `dig @8.8.8.8` (public resolver, captured) was answered through the DNS module; `dig` via the system resolver (192.168.5.1, LAN → excluded from capture) went direct. No loop, no leak.
-- → macOS backend performs no DNS operation; journal `dns_before` / `dns_after` stay absent. `dns_hijack` is implemented at the sing-box router instead: the generated TUN config prepends a `hijack-dns` route rule (port 53 → DNS engine; the TUN inbound `dns_hijack` field was removed in sing-box 1.9) so queries to the LAN resolver no longer escape to a poisoned system DNS. The OS resolver is never mutated.
+- → macOS backend performs no OS DNS operation on its own; journal `dns_before` / `dns_after` stay absent unless `dns_hijack` is enabled. `dns_hijack` is implemented in two layers: the generated TUN config prepends a `hijack-dns` route rule (port 53 → DNS engine; the TUN inbound `dns_hijack` field was removed in sing-box 1.9), and the backend points the primary network service's DNS at public resolvers (elevated, journaled) — otherwise queries to a LAN resolver bypass the TUN via the connected-subnet route and answers stay poisoned. The OS resolver is restored on teardown (compare-before-restore).
 
 ## 4. Self-traffic / control path (macOS, native path) — live-confirmed
 
