@@ -284,11 +284,11 @@ pub fn parse_service_order(output: &str, hardware_port: &str) -> Option<String> 
 }
 
 /// `networksetup -getdnsservers <service>` → the configured DNS servers.
+/// The output is the bare IP list (one per line, no header);
 /// "There aren't any DNS Servers set on <service>." parses as empty.
 pub fn parse_dns_servers(output: &str) -> Vec<String> {
     output
         .lines()
-        .skip(1)
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("There aren't"))
         .filter(|line| line.parse::<std::net::IpAddr>().is_ok())
@@ -1086,8 +1086,11 @@ mod parsing_tests {
 
     #[test]
     fn dns_servers_parser_reads_configured_list_and_empty_state() {
-        let output = "DNS Servers:\n223.5.5.5\n119.29.29.29\n";
+        // Real `networksetup -getdnsservers` output: bare IP list, no header.
+        let output = "223.5.5.5\n119.29.29.29\n";
         assert_eq!(parse_dns_servers(output), ["223.5.5.5", "119.29.29.29"]);
+        let single = "119.29.29.29\n";
+        assert_eq!(parse_dns_servers(single), ["119.29.29.29"]);
         let empty = "There aren't any DNS Servers set on Wi-Fi.\n";
         assert!(parse_dns_servers(empty).is_empty());
         assert!(parse_dns_servers("garbage\nnot-an-ip\n").is_empty());
