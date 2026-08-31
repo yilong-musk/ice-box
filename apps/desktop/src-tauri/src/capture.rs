@@ -1560,6 +1560,10 @@ mod tests {
             tun: TunSettings {
                 enabled,
                 interface_name: Some("utun420".into()),
+                // Crash-recovery tests exercise interface/address/route
+                // topology; keep DNS mutations out so the simulated OS reset
+                // converges to Clean instead of RecoveryRequired.
+                dns_hijack: false,
                 ..TunSettings::default()
             },
             ..AppSettings::default()
