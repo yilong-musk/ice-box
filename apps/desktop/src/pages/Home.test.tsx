@@ -531,12 +531,14 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
 
+    // The power button is enabled before the first status arrives; wait for
+    // the status-dependent subtitle so the assertion cannot race the mocked
+    // status resolution.
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
+        "将启用 TUN 模式接管流量",
+      );
     });
-    expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
-      "将启用 TUN 模式接管流量",
-    );
   });
 
   it("disables the power control and shows the reason when TUN is unavailable", async () => {
@@ -561,12 +563,14 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
 
+    // The power button renders before the first status arrives; wait for the
+    // status-dependent reason text so the disabled assertion below cannot
+    // race the mocked status resolution.
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
+      expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
     });
     const power = view.getByRole("button", { name: "启动代理服务" });
     expect(power).toBeDisabled();
-    expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
   });
 
   it("hides the TUN toggle and ignores TUN state when the platform hides TUN UI", async () => {

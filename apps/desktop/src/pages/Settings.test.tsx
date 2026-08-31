@@ -524,10 +524,13 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
+    // Wait for the status payload to render: the switch is also disabled
+    // before the first status arrives (`!loaded`), so asserting the disabled
+    // state alone would race with the mocked status resolution.
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
+      expect(container.textContent).toContain("Windows TUN gate pending");
     });
-    expect(container.textContent).toContain("Windows TUN gate pending");
+    expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
   });
 
   it("hides the TUN card entirely when the platform hides TUN UI", async () => {
@@ -564,10 +567,12 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
+    // The switch is disabled before the first status arrives (`!loaded`);
+    // wait for the transition hint to render first.
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
+      expect(container.textContent).toContain("正在启用 TUN…");
     });
-    expect(container.textContent).toContain("正在启用 TUN…");
+    expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
   });
 
   it("shows the active TUN interface and transition hint when capture is live", async () => {
@@ -608,11 +613,13 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
+    // The install button is also disabled before the first status arrives
+    // (`!loaded`); wait for the installed-state text first.
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "安装辅助组件" })).toBeDisabled();
+      expect(container.textContent).toContain("辅助组件已安装并授权");
     });
+    expect(view.getByRole("button", { name: "安装辅助组件" })).toBeDisabled();
     expect(view.getByRole("button", { name: "卸载辅助组件" })).not.toBeDisabled();
-    expect(container.textContent).toContain("辅助组件已安装并授权");
   });
 
   it("enables install and disables uninstall when the helper is missing", async () => {
