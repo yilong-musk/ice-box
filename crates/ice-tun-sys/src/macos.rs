@@ -753,14 +753,27 @@ impl TunBackend for MacosTunBackend {
     fn verify(&self, applied: &AppliedTun) -> Result<TunHealth, TunError> {
         let name = applied.interface_name.as_deref();
         let Some(name) = name else {
-            // No interface was ever claimed: nothing owned.
+            // No interface was ever claimed: nothing owned — unless DNS is
+            // still applied (recovery must restore it before reporting
+            // clean, so `nothing_owned` must be false while the platform
+            // still carries the applied `after` snapshot).
+            let dns_owned = match &applied.dns_after {
+                Some(after) => {
+                    let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+                    self.host
+                        .dns_servers(&service)
+                        .map(|current| current == expected)
+                        .unwrap_or(false)
+                }
+                None => false,
+            };
             return Ok(TunHealth {
                 interface_up: false,
                 addresses_present: false,
                 routes_owned: false,
-                dns_consistent: true,
+                dns_consistent: !dns_owned,
                 control_path_reachable: true,
-                nothing_owned: true,
+                nothing_owned: !dns_owned,
             });
         };
         let expected_id = applied.interface_id.as_deref();
@@ -817,14 +830,24 @@ impl TunBackend for MacosTunBackend {
             None => false,
         };
         let nothing_owned = interface_gone && !owned_routes_remain && !dns_owned;
-        Ok(TunHealth {
+        let health = TunHealth {
             interface_up,
             addresses_present,
             routes_owned,
             dns_consistent,
             control_path_reachable,
             nothing_owned,
-        })
+        };
+        if !health.all_ok() {
+            tracing::warn!(
+                ?health,
+                name,
+                "macos tun verify disagrees; expected addresses {:?}, routes {:?}",
+                applied.expected_addresses,
+                applied.expected_routes
+            );
+        }
+        Ok(health)
     }
 
     fn restore(&mut self, applied: &AppliedTun) -> Result<(), TunError> {

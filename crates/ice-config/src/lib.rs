@@ -226,10 +226,7 @@ pub fn build_direct_only_config(
     // direct-only fallback.
     let mut rules = Vec::new();
     if capture_intent == CaptureIntent::Tun {
-        if template.tun.dns_hijack {
-            rules.push(tun_dns_hijack_rule());
-        }
-        rules.extend(tun_reserved_rules());
+        rules.extend(tun_reserved_rules(template.tun.dns_hijack));
     }
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -459,16 +456,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         if capture_intent == CaptureIntent::Tun {
-            // DNS hijack must precede every other rule: port-53 queries to the LAN
-            // resolver would otherwise match the private-IP bypass below and reach a
-            // GFW-poisoned answer. The rest of the reserved bypass rules follow (T0
-            // lock, §24.5.6): the control path, private/loopback/link-local/multicast
-            // destinations, and the TUN endpoint are never captured or sniffed, even
-            // in Global/Direct mode.
-            if input.template.tun.dns_hijack {
-                final_rules.push(tun_dns_hijack_rule());
-            }
-            final_rules.extend(tun_reserved_rules());
+            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6):
+            // the control path, private/loopback/link-local/multicast
+            // destinations, and the TUN endpoint are never captured or
+            // sniffed, even in Global/Direct mode.
+            final_rules.extend(tun_reserved_rules(input.template.tun.dns_hijack));
         }
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -633,9 +625,7 @@ fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
 
 /// DNS hijack rule for a `Tun` config: port-53 traffic is diverted into the
 /// sing-box DNS engine so answers come from the subscription's resolvers
-/// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver. Must be
-/// the first route rule: DNS queries to a LAN resolver would otherwise match
-/// the private-IP bypass and go direct.
+/// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver.
 ///
 /// This replaces the TUN inbound `dns_hijack` field, which the pinned
 /// sing-box 1.13.19 rejects as an unknown field (the feature moved to route
@@ -647,22 +637,31 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// Reserved bypass route rules for a `Tun` config (T0 spike §5, locked in
 /// architecture §24.5.6). Order is fixed: control path and local traffic are
 /// never captured or sniffed.
-pub fn tun_reserved_rules() -> Vec<Value> {
-    vec![
-        json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }),
-        json!({ "ip_is_private": true, "outbound": "direct" }),
-        json!({
-            "ip_cidr": [
-                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
-                "224.0.0.0/4", "ff00::/8"
-            ],
-            "outbound": "direct"
-        }),
-        // The sniff action at this pin never rewrites destinations; the sniffed
-        // domain lands in `metadata.Domain`, so sniff must precede every
-        // domain-matching rule (T0 spike §1.1).
-        json!({ "action": "sniff" }),
-    ]
+///
+/// When `dns_hijack` is set, the `hijack-dns` rule is inserted directly
+/// after the `process_name` rule: the elevated core's *own* DNS dials
+/// (outbound server hostnames, DoH host resolution) match `process_name`
+/// and stay direct, so they never re-enter the DNS engine and receive
+/// fake-ip answers; client DNS queries (browser etc.) fall through to the
+/// hijack rule and are answered by the engine.
+pub fn tun_reserved_rules(dns_hijack: bool) -> Vec<Value> {
+    let mut rules = vec![json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" })];
+    if dns_hijack {
+        rules.push(tun_dns_hijack_rule());
+    }
+    rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
+    rules.push(json!({
+        "ip_cidr": [
+            "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+            "224.0.0.0/4", "ff00::/8"
+        ],
+        "outbound": "direct"
+    }));
+    // The sniff action at this pin never rewrites destinations; the sniffed
+    // domain lands in `metadata.Domain`, so sniff must precede every
+    // domain-matching rule (T0 spike §1.1).
+    rules.push(json!({ "action": "sniff" }));
+    rules
 }
 
 /// The locked TUN inbound shape for the bundled sing-box 1.13.19 (T0 spike §5):
@@ -1893,13 +1892,13 @@ mod build_tests {
         assert_eq!(
             rules.len(),
             9,
-            "1 dns hijack + 4 reserved + 2 clash_mode + 2 subscription rules"
+            "4 reserved + 1 dns hijack + 2 clash_mode + 2 subscription rules"
         );
 
-        assert_eq!(rules[0]["action"], "hijack-dns");
-        assert_eq!(rules[0]["port"][0], 53);
-        assert_eq!(rules[1]["process_name"][0], "ice-box");
-        assert_eq!(rules[1]["outbound"], "direct");
+        assert_eq!(rules[0]["process_name"][0], "ice-box");
+        assert_eq!(rules[0]["outbound"], "direct");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[1]["port"][0], 53);
         assert_eq!(rules[2]["ip_is_private"], true);
         assert_eq!(rules[2]["outbound"], "direct");
         assert_eq!(rules[3]["ip_cidr"][0], "127.0.0.0/8");
@@ -1943,8 +1942,8 @@ mod build_tests {
             validate_config_for_intent(&direct, CaptureIntent::Tun)
                 .expect("direct-only Tun keeps the tun inbound");
             let rules = direct["route"]["rules"].as_array().unwrap();
-            assert_eq!(rules[0]["action"], "hijack-dns");
-            assert_eq!(rules[1]["process_name"][0], "ice-box");
+            assert_eq!(rules[0]["process_name"][0], "ice-box");
+            assert_eq!(rules[1]["action"], "hijack-dns");
             assert_eq!(
                 clash_rules(&direct),
                 [("global", "direct"), ("direct", "direct")]

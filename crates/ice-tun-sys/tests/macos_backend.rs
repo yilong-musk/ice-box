@@ -640,6 +640,40 @@ fn dns_parts(applied: &AppliedTun) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
+fn recovery_without_interface_still_restores_applied_dns() {
+    let dir = temp_dir("recover-dns");
+    let host = FakeHost::default();
+    host.set_dns("Wi-Fi", vec!["192.168.5.1".into()]);
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host.clone(), coordinator);
+    let mut config = mac_config();
+    config.dns_hijack = true;
+    let prepared = bk.prepare(&config).expect("prepare");
+    let _applied = bk.apply(&prepared).expect("apply");
+
+    // kill -9 residue: the kernel removed the adapter; DNS is still applied.
+    host.simulate_kill9();
+    let journal = TunJournal::load(&journal_path(&dir))
+        .unwrap()
+        .expect("journal");
+    let outcome = bk.recover(&journal).expect("recover");
+    assert_eq!(
+        outcome,
+        RecoveryOutcome::Cleaned,
+        "recovery must restore the applied DNS before reporting clean"
+    );
+    assert_eq!(
+        host.dns("Wi-Fi"),
+        vec!["192.168.5.1".to_string()],
+        "the DHCP resolver must be back"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn apply_propagates_permission_required_without_records() {
     let dir = temp_dir("apply-permission");
     let host = FakeHost::default();
