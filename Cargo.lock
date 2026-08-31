@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "fs2",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "ice-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ice-config",
@@ -1646,14 +1646,14 @@ dependencies = [
 
 [[package]]
 name = "ice-elevate"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ice-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ice-config",
  "ice-subscription",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "ice-helper"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ice-tun-sys",
  "libc",
@@ -1675,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "ice-proxy-sys"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "ice-subscription"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-sys"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "ice-helper",
