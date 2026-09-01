@@ -189,54 +189,57 @@ export function Subscriptions() {
                 />
               </Field>
               <div className="flex flex-wrap items-end gap-2">
-                <Field className="w-48">
-                  <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
-                  <Input
-                    id="sub-name"
-                    type="text"
-                    placeholder={t("subs.namePlaceholder")}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={busy}
-                  />
-                </Field>
-                <Field orientation="horizontal" className="w-auto gap-1.5">
-                  <Switch
-                    id="sub-auto-update"
-                    size="sm"
-                    checked={autoUpdate}
-                    disabled={busy}
-                    aria-label={t("subs.autoUpdate")}
-                    onCheckedChange={setAutoUpdate}
-                  />
-                  <FieldLabel
-                    htmlFor="sub-auto-update"
-                    className="text-muted-foreground"
-                  >
-                    {t("subs.autoUpdate")}
-                  </FieldLabel>
-                  <NativeSelect
-                    size="sm"
-                    className="w-auto"
-                    aria-label={t("subs.interval")}
-                    value={autoUpdateInterval}
-                    disabled={busy || !autoUpdate}
-                    onChange={(e) =>
-                      setAutoUpdateInterval(
-                        e.target.value as SubscriptionAutoUpdateInterval,
-                      )
-                    }
-                  >
-                    {AUTO_UPDATE_INTERVALS.map((interval) => (
-                      <NativeSelectOption key={interval} value={interval}>
-                        {intervalLabel(interval)}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                </Field>
+                <div className="flex flex-wrap items-end gap-4">
+                  <Field className="w-48">
+                    <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
+                    <Input
+                      id="sub-name"
+                      type="text"
+                      placeholder={t("subs.namePlaceholder")}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      disabled={busy}
+                    />
+                  </Field>
+                  <Field orientation="horizontal" className="w-auto gap-1.5">
+                    <Switch
+                      id="sub-auto-update"
+                      size="sm"
+                      checked={autoUpdate}
+                      disabled={busy}
+                      aria-label={t("subs.autoUpdate")}
+                      onCheckedChange={setAutoUpdate}
+                    />
+                    <FieldLabel
+                      htmlFor="sub-auto-update"
+                      className="text-muted-foreground"
+                    >
+                      {t("subs.autoUpdate")}
+                    </FieldLabel>
+                    <NativeSelect
+                      size="sm"
+                      className="w-auto"
+                      aria-label={t("subs.interval")}
+                      value={autoUpdateInterval}
+                      disabled={busy || !autoUpdate}
+                      onChange={(e) =>
+                        setAutoUpdateInterval(
+                          e.target.value as SubscriptionAutoUpdateInterval,
+                        )
+                      }
+                    >
+                      {AUTO_UPDATE_INTERVALS.map((interval) => (
+                        <NativeSelectOption key={interval} value={interval}>
+                          {intervalLabel(interval)}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                </div>
                 <Button
                   type="submit"
                   size="sm"
+                  className="ml-auto"
                   disabled={busy || !url.trim()}
                 >
                   {t("subs.importAction")}
