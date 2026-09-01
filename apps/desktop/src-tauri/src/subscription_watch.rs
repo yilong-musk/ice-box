@@ -13,6 +13,16 @@ use uuid::Uuid;
 /// How often the watchdog wakes up to check for due auto-update subscriptions.
 pub const AUTO_UPDATE_TICK: Duration = Duration::from_secs(60 * 60);
 
+/// Grace period before the first due-check pass: lets the core auto-start and
+/// startup recovery finish so a network refresh never races app initialization.
+const STARTUP_GRACE: Duration = Duration::from_secs(30);
+
+/// Startup retry window for the first due-check pass: a user action holding the
+/// orchestrate lock briefly defers the pass, which retries a few times before
+/// settling into the hourly loop.
+const STARTUP_RETRIES: usize = 6;
+const STARTUP_RETRY_DELAY: Duration = Duration::from_secs(10);
+
 fn interval_of(meta: &SubscriptionMeta) -> Duration {
     meta.auto_update_interval
         .map(AutoUpdateInterval::duration)
@@ -51,26 +61,27 @@ pub(crate) fn due_auto_update_ids(
 /// Refresh every due auto-update subscription. Fetches (parallel, up to one
 /// `FETCH_TIMEOUT`) run without the orchestrate lock so the background pass never
 /// queues Start/Stop/Settings behind it; the lock is taken with `try_lock` for
-/// the disk phase + Apply so a busy user operation simply defers the refresh to
-/// the next tick.
-pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) {
+/// the disk phase + Apply so a busy user operation simply defers the refresh.
+/// Returns `false` when the pass was deferred (orchestrate busy); the caller
+/// may retry shortly.
+pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths);
     let items = match mgr.list() {
         Ok(items) => items,
         Err(err) => {
             tracing::warn!(error = %err, "auto-update: load index failed");
-            return;
+            return true;
         }
     };
     let due = due_auto_update_ids(&items, chrono::Utc::now());
     if due.is_empty() {
-        return;
+        return true;
     }
     let fetched = mgr.fetch_ids(due);
     let Ok(_orch) = state.orchestrate.try_lock() else {
         tracing::debug!("auto-update: orchestrate busy, deferring apply");
-        return;
+        return false;
     };
     let results = mgr.apply_all(fetched);
     let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
@@ -84,17 +95,32 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) {
             "auto-update: apply warning"
         );
     }
+    true
 }
 
 /// Poll due auto-update subscriptions for the app lifetime (independent of
-/// frontend tab visibility).
+/// frontend tab visibility). The first pass runs shortly after launch (after a
+/// startup grace period) so subscriptions that went stale while the app was
+/// closed refresh promptly instead of waiting for the first hourly tick.
 pub fn spawn_subscription_watchdog(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(AUTO_UPDATE_TICK);
-        let Some(state) = app.try_state::<AppState>() else {
-            break;
-        };
-        auto_update_due(state.inner(), &app);
+    std::thread::spawn(move || {
+        std::thread::sleep(STARTUP_GRACE);
+        for _ in 0..STARTUP_RETRIES {
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            if auto_update_due(state.inner(), &app) {
+                break;
+            }
+            std::thread::sleep(STARTUP_RETRY_DELAY);
+        }
+        loop {
+            std::thread::sleep(AUTO_UPDATE_TICK);
+            let Some(state) = app.try_state::<AppState>() else {
+                break;
+            };
+            auto_update_due(state.inner(), &app);
+        }
     });
 }
 
