@@ -71,6 +71,23 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
     }
 }
 
+/// While TUN capture is active, self-heal a drifted system DNS after wake /
+/// network change: the interface and routes are intact but name resolution is
+/// broken (the classic "TUN is on but nothing resolves" after sleep). Uses
+/// `try_lock` so a mutation in flight is skipped and retried on the next tick.
+fn heal_tun_dns(state: &AppState) {
+    if state.capture.active_backend() != TrafficCapture::Tun {
+        return;
+    }
+    let Ok(_orch) = state.orchestrate.try_lock() else {
+        return;
+    };
+    let warning = state.capture.heal_tun_dns();
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        *slot = warning;
+    }
+}
+
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
 pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
@@ -79,6 +96,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
             break;
         };
         reconcile_unexpected_core_exit(state.inner());
+        heal_tun_dns(state.inner());
     });
 }
 
@@ -172,6 +190,10 @@ mod tests {
 
         fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
             Err(CoreError::invalid_state("mock adopt unsupported"))
+        }
+
+        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+            Ok(())
         }
     }
 

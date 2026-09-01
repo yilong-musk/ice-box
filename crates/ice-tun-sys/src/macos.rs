@@ -1047,6 +1047,31 @@ impl TunBackend for MacosTunBackend {
         }
     }
 
+    fn stop_elevated_core(&mut self) -> Result<(), TunError> {
+        // The coordinator is the only component allowed to signal the
+        // root-owned core; after a helper restart its Stop reclaims the core
+        // recorded in the app's pid file instead of no-op'ing.
+        self.coordinator.stop()
+    }
+
+    fn reapply_dns_if_stale(&mut self, applied: &AppliedTun) -> Result<bool, TunError> {
+        let Some(after) = &applied.dns_after else {
+            return Ok(false);
+        };
+        let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+        let current = self.host.dns_servers(&service)?;
+        if current == expected {
+            return Ok(false);
+        }
+        self.coordinator.set_dns(&service, &expected)?;
+        tracing::info!(
+            service,
+            ?expected,
+            "re-applied TUN DNS after wake / network change"
+        );
+        Ok(true)
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

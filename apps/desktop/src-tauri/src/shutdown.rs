@@ -286,6 +286,10 @@ mod tests {
         fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
             Err(CoreError::invalid_state("mock adopt unsupported"))
         }
+
+        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+            Ok(())
+        }
     }
 
     use std::sync::Mutex;

@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ice_config::{
-    save_settings, write_json_atomic, AppError, AppPaths, AppSettings, CaptureIntent, ErrorCode,
-    TunSettings,
+    read_pid, save_settings, write_json_atomic, AppError, AppPaths, AppSettings, CaptureIntent,
+    ErrorCode, TunSettings,
 };
 use ice_core::{CoreHandle, CoreStatus};
 use ice_proxy_sys::{is_proxy_applied_on_disk, SystemProxy};
@@ -1166,6 +1166,75 @@ impl CaptureController {
         }
     }
 
+    /// Reclaim a leftover root-owned core from a previous session. The pid
+    /// file may point at a live sing-box the unprivileged process cannot
+    /// signal (helper-started); stop it through the elevated coordinator so a
+    /// later start / re-enable never hits `bind: address already in use`.
+    /// No-op when the pid file is empty. Must only run while no TUN capture is
+    /// active (startup, before any capture claims the backend).
+    pub fn reclaim_orphan_elevated_core(&self, core: &mut dyn CoreHandle) -> Result<(), AppError> {
+        let _pid = match read_pid(&self.paths.pid()) {
+            Ok(Some(pid)) => pid,
+            // No pid file / unreadable: nothing identifiable to reclaim.
+            Ok(None) | Err(_) => return Ok(()),
+        };
+        {
+            let mut backend = self
+                .backend
+                .lock()
+                .map_err(|_| lock_poisoned("capture backend"))?;
+            // The coordinator's Stop is idempotent and helper-side now reclaims
+            // a leftover core recorded in the pid file even after a helper
+            // restart; a non-orphan pid is left untouched there.
+            backend.stop_elevated_core().map_err(map_tun)?;
+        }
+        // The leftover is gone; let the normal reclamation converge state and
+        // clear the pid file.
+        core.reclaim_orphan_pid(&self.paths.pid())
+            .map_err(AppError::from)
+    }
+
+    /// Self-heal after wake / network change: while TUN capture is active, if
+    /// the interface and routes are intact but the platform DNS drifted from
+    /// the journaled snapshot (the classic "TUN is on but nothing resolves"
+    /// after sleep), re-apply the DNS snapshot through the elevated
+    /// coordinator. Returns a UI warning when a repair fails.
+    pub fn heal_tun_dns(&self) -> Option<String> {
+        if self.active_backend() != TrafficCapture::Tun {
+            return None;
+        }
+        let journal = match TunJournal::load(&self.paths.tun_state()) {
+            Ok(Some(journal)) => journal,
+            _ => return None,
+        };
+        let applied = AppliedTun::from_journal(&journal);
+        let mut backend = match self.backend.lock() {
+            Ok(backend) => backend,
+            Err(_) => return Some("capture controller unavailable; TUN DNS not re-applied".into()),
+        };
+        let health = match backend.verify(&applied) {
+            Ok(health) => health,
+            Err(_) => return None, // verify errors are owned by the core-exit watchdog
+        };
+        if !health.interface_up || !health.addresses_present || !health.routes_owned {
+            return None; // the TUN itself is gone; the unexpected-exit watchdog owns it
+        }
+        if health.dns_consistent {
+            return None;
+        }
+        match backend.reapply_dns_if_stale(&applied) {
+            Ok(true) => {
+                tracing::info!("TUN DNS re-applied after wake / network change");
+                None
+            }
+            Ok(false) => None,
+            Err(err) => {
+                tracing::error!(error = %err, "TUN DNS re-apply failed");
+                Some(format!("TUN DNS recovery failed: {}", err.message))
+            }
+        }
+    }
+
     /// Recovery (inside the orchestration lock, plan §4.4): discard an
     /// interrupted settings transaction, then run the journal recovery
     /// driver. Never enables capture. Returns a UI warning when anything
@@ -1656,6 +1725,11 @@ mod tests {
             }
             self.adopt_pids.borrow_mut().push(pid);
             self.status.set(CoreStatus::Running);
+            Ok(())
+        }
+
+        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+            self.status.set(CoreStatus::Stopped);
             Ok(())
         }
     }

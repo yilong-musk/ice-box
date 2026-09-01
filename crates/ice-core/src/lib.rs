@@ -671,6 +671,9 @@ pub trait CoreHandle: Send {
     fn reap_exited_child(&mut self, pid_file: &Path) -> bool;
     /// Adopt an externally started sing-box (TUN slice; see `CoreController::adopt_external`).
     fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError>;
+    /// Reclaim an orphan sing-box left by a previous session (startup; see
+    /// `CoreController::reclaim_orphan_pid`).
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError>;
 }
 
 impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreController<S, H> {
@@ -704,6 +707,10 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
 
     fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError> {
         CoreController::adopt_external(self, pid, paths)
+    }
+
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
+        CoreController::reclaim_orphan_pid(self, pid_file)
     }
 }
 

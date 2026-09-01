@@ -324,19 +324,36 @@ mod imp {
     /// TERM→KILL grace. Mirrors `SudoCoreCoordinator`'s bounded waits. Keeps
     /// the `Child` handle so the process is reaped (a zombie would otherwise
     /// stay "alive" for `kill(pid, 0)`).
+    ///
+    /// A daemon restart loses the `Child` handle while the spawned core keeps
+    /// running (the core is not a child of launchd), so `stop` also reclaims a
+    /// leftover core the app recorded in its pid file (`sing-box.pid`): the
+    /// helper is the only component allowed to terminate a root-owned core, and
+    /// without this fallback an orphan would hold the inbound/Clash API ports
+    /// and make the next Start fail with `bind: address already in use`.
     pub struct ProcessCoreRunner {
         child: Option<std::process::Child>,
+        /// App data dir; contains the `sing-box.pid` file the app writes.
+        data_dir: PathBuf,
+        /// The bundled core binary path (fixed at install). Used to confirm a
+        /// pid-file pid belongs to this installation's core before killing it,
+        /// so an unrelated process is never terminated.
+        core_bin: PathBuf,
     }
 
     impl ProcessCoreRunner {
-        pub fn new() -> Self {
-            Self { child: None }
+        pub fn new(data_dir: PathBuf, core_bin: PathBuf) -> Self {
+            Self {
+                child: None,
+                data_dir,
+                core_bin,
+            }
         }
     }
 
     impl Default for ProcessCoreRunner {
         fn default() -> Self {
-            Self::new()
+            Self::new(PathBuf::new(), PathBuf::new())
         }
     }
 
@@ -431,7 +448,11 @@ mod imp {
 
         fn stop(&mut self) -> Result<(), TunError> {
             if self.child.is_none() {
-                return Ok(());
+                // No live handle: either nothing was ever started, or the
+                // daemon restarted and the core outlived it. Reclaim the
+                // leftover core from the app's pid file so an orphan cannot
+                // hold the ports for the next Start.
+                return self.stop_orphan_from_pid_file();
             }
             let result: Result<(), TunError> = (|| {
                 let child = self.child.as_mut().expect("child checked above");
@@ -533,6 +554,113 @@ mod imp {
         }
     }
 
+    impl ProcessCoreRunner {
+        /// Reclaim a leftover core the app recorded in `<data_dir>/sing-box.pid`.
+        /// Confirms the pid is still alive and matches this installation's core
+        /// binary before terminating it (TERM→KILL with bounded grace). No-op
+        /// when there is no pid file, the process is gone, or the pid is an
+        /// unrelated process.
+        fn stop_orphan_from_pid_file(&self) -> Result<(), TunError> {
+            let pid_file = self.data_dir.join("sing-box.pid");
+            let raw = match std::fs::read_to_string(&pid_file) {
+                Ok(raw) => raw,
+                Err(_) => return Ok(()),
+            };
+            let Ok(pid) = raw.trim().parse::<u32>() else {
+                return Ok(());
+            };
+            if !pid_alive(pid) {
+                // The core already exited; nothing to reclaim.
+                return Ok(());
+            }
+            if !pid_matches_core(pid, &self.core_bin) {
+                // Unrelated process; never terminate it.
+                tracing::warn!(
+                    pid,
+                    path = %pid_file.display(),
+                    "pid file points at a process that is not this install's core; leaving it alone"
+                );
+                return Ok(());
+            }
+            tracing::info!(
+                pid,
+                path = %pid_file.display(),
+                "reclaiming leftover core recorded in the pid file"
+            );
+            terminate_pid(pid, &self.core_bin.to_string_lossy())
+        }
+    }
+
+    /// Unix liveness probe: `kill(pid, 0)` — 0 / EPERM mean alive (possibly
+    /// root-owned), ESRCH means gone.
+    fn pid_alive(pid: u32) -> bool {
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    /// Whether `pid` is *running* (not a zombie). `kill(pid, 0)` stays 0 for a
+    /// reaped-but-not-waited zombie, so termination must treat a zombie as gone
+    /// or it would look like the core survived TERM/KILL forever.
+    fn pid_running(pid: u32) -> bool {
+        if !pid_alive(pid) {
+            return false;
+        }
+        let output = match Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+        {
+            Ok(output) if output.status.success() => output,
+            _ => return true, // cannot determine; assume still running
+        };
+        !String::from_utf8_lossy(&output.stdout).trim().contains('Z')
+    }
+
+    /// Whether `pid`'s command line carries `core_bin`'s path — i.e. it is
+    /// this installation's bundled core (the installer pins the location).
+    fn pid_matches_core(pid: u32, core_bin: &std::path::Path) -> bool {
+        let output = match Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return false,
+        };
+        if !output.status.success() {
+            return false;
+        }
+        String::from_utf8_lossy(&output.stdout).contains(core_bin.to_string_lossy().as_ref())
+    }
+
+    /// TERM→KILL a pid with bounded grace, probing liveness via `kill(pid, 0)`.
+    /// Used to reclaim a leftover core when no `Child` handle is available
+    /// (the daemon restarted and lost it).
+    fn terminate_pid(pid: u32, desc: &str) -> Result<(), TunError> {
+        let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline {
+            if !pid_running(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        let deadline = Instant::now() + KILL_GRACE;
+        while Instant::now() < deadline {
+            if !pid_running(pid) {
+                return Ok(());
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        if pid_running(pid) {
+            Err(TunError::new(
+                TunErrorCode::RecoveryRequired,
+                format!("orphan core (pid {pid}, {desc}) survived TERM and KILL"),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Unix liveness probe: `kill(pid, 0)`.
     #[cfg(test)]
     mod tests {
@@ -558,6 +686,11 @@ mod imp {
                 core_log: std::env::temp_dir().join("ice-helper-test.log"),
                 allowed_uid: Some(42),
             }
+        }
+
+        /// Build a runner scoped to a fixture config's data dir / core binary.
+        fn runner_for(config: &ServerConfig) -> ProcessCoreRunner {
+            ProcessCoreRunner::new(config.data_dir.clone(), config.core_bin.clone())
         }
 
         /// Write an executable fixture "core" that ignores arguments, traps
@@ -615,7 +748,7 @@ mod imp {
         fn wrong_uid_is_rejected_before_dispatch() {
             let dir = std::env::temp_dir();
             let config = fixture_config("tok", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let response = roundtrip(&config, &PEER7, runner, &status_request("tok")).unwrap();
             assert!(!response.ok);
             assert_eq!(response.code.as_deref(), Some("tun.permission_required"));
@@ -625,7 +758,7 @@ mod imp {
         fn wrong_token_is_rejected() {
             let dir = std::env::temp_dir();
             let config = fixture_config("right-token", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let response =
                 roundtrip(&config, &PEER42, runner, &status_request("wrong-token")).unwrap();
             assert!(!response.ok);
@@ -636,7 +769,7 @@ mod imp {
         fn wrong_version_is_rejected() {
             let dir = std::env::temp_dir();
             let config = fixture_config("tok", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let mut req = status_request("tok");
             req.v = 999;
             let response = roundtrip(&config, &PEER42, runner, &req).unwrap();
@@ -648,7 +781,7 @@ mod imp {
         fn status_ok_reports_no_running_core() {
             let dir = std::env::temp_dir();
             let config = fixture_config("tok", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let response = roundtrip(&config, &PEER42, runner, &status_request("tok")).unwrap();
             assert!(response.ok);
             assert_eq!(response.pid, None);
@@ -665,7 +798,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config = fixture_config("tok", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let mut req = status_request("tok");
             req.command = HelperCommand::Start {
                 config: "/etc/hosts".into(),
@@ -692,7 +825,7 @@ mod imp {
             // The fixture "core" ignores args and sleeps so liveness holds.
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
 
             let mut req = status_request("tok");
             req.command = HelperCommand::Start {
@@ -734,7 +867,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config = fixture_config("tok", &dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let (mut client, server) = UnixStream::pair().expect("socketpair");
 
             let config = config.clone();
@@ -785,7 +918,7 @@ mod imp {
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
 
             let mut req = status_request("tok");
             req.command = HelperCommand::Start {
@@ -827,7 +960,7 @@ mod imp {
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
-            let runner = Arc::new(std::sync::Mutex::new(ProcessCoreRunner::new()));
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
 
             let mut start_req = status_request("tok");
             start_req.command = HelperCommand::Start {
@@ -866,6 +999,70 @@ mod imp {
             };
             let resp = roundtrip(&config, &PEER42, runner, &stop_req).unwrap();
             assert!(resp.ok, "stop failed: {:?}", resp.message);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn stop_with_lost_handle_reclaims_pid_file_core() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-orphan-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let fake_bin = fixture_core_bin(&dir);
+            let mut config = fixture_config("tok", &dir);
+            config.core_bin = fake_bin.clone();
+
+            // Simulate a leftover core from a previous daemon session: it runs
+            // as a detached process whose handle is gone (daemon restarted).
+            let child = std::process::Command::new(&fake_bin).spawn().unwrap();
+            let pid = child.id();
+            drop(child);
+            std::fs::write(dir.join("sing-box.pid"), pid.to_string()).unwrap();
+
+            // A fresh runner holds no handle; Stop must reclaim via the pid file.
+            let mut runner = runner_for(&config);
+            runner.stop().unwrap();
+            assert!(
+                !pid_running(pid),
+                "orphan core must be reclaimed via the pid file"
+            );
+
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn stop_leaves_unrelated_pid_file_process_alone() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-unrelated-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let config = fixture_config("tok", &dir);
+
+            // A live process that is NOT this install's core binary.
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            std::fs::write(dir.join("sing-box.pid"), pid.to_string()).unwrap();
+
+            let mut runner = runner_for(&config);
+            runner.stop().unwrap();
+            assert!(
+                pid_alive(pid),
+                "stop must not terminate a pid that is not the core binary"
+            );
+
+            let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            let _ = child.wait();
             std::fs::remove_dir_all(&dir).unwrap();
         }
     }

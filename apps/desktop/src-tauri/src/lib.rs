@@ -209,7 +209,6 @@ pub fn run() {
                 let _orch = state.orchestrate.lock().ok();
                 let mut core = state.core.lock().ok();
                 if let Some(core) = core.as_deref_mut() {
-                    let recovery = state.capture.recover(&mut **core);
                     let append_warning = |warning: String| {
                         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                             let existing = slot.take().unwrap_or_default();
@@ -220,6 +219,19 @@ pub fn run() {
                             });
                         }
                     };
+                    // A leftover root-owned core from a previous session (the
+                    // unprivileged bootstrap could not signal it) still holds
+                    // the ports; reclaim it through the elevated coordinator
+                    // before journal recovery so a later start / re-enable
+                    // never hits `bind: address already in use`.
+                    if let Err(err) = state
+                        .capture
+                        .reclaim_orphan_elevated_core(&mut **core)
+                    {
+                        tracing::warn!(error = %err, "failed to reclaim orphaned elevated core");
+                        append_warning(format!("残留内核清理未确认 ({err})"));
+                    }
+                    let recovery = state.capture.recover(&mut **core);
                     match recovery {
                         Ok(Some(warning)) => append_warning(warning),
                         Ok(None) => {}

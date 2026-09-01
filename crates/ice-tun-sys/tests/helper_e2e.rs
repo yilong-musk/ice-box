@@ -55,7 +55,10 @@ fn spawn_server(config: Arc<ServerConfig>, socket_path: &std::path::Path) -> Ser
     let join = std::thread::spawn(move || {
         let listener = UnixListener::bind(&bind_path).expect("bind");
         let auth = Arc::new(FixedPeerAuth(42));
-        let runner = Arc::new(Mutex::new(ProcessCoreRunner::new()));
+        let runner = Arc::new(Mutex::new(ProcessCoreRunner::new(
+            config.data_dir.clone(),
+            config.core_bin.clone(),
+        )));
         // Accept connections until the test signals shutdown; the client
         // reconnects per command.
         while !stop_flag.load(std::sync::atomic::Ordering::SeqCst) {

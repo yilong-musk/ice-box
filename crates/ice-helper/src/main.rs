@@ -136,7 +136,12 @@ mod unix_main {
             std::process::id()
         );
 
-        let runner = Arc::new(Mutex::new(ProcessCoreRunner::new()));
+        // The runner remembers the data dir / core binary so a Stop after a
+        // daemon restart can reclaim a leftover core recorded in the pid file.
+        let runner = Arc::new(Mutex::new(ProcessCoreRunner::new(
+            config.data_dir.clone(),
+            config.core_bin.clone(),
+        )));
         // The accept loop never blocks on a peer: each connection is served
         // on its own thread (commands serialize on the runner mutex), so a
         // stalled or unauthenticated connection cannot stall the daemon. The
