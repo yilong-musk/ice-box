@@ -46,6 +46,7 @@ export function Subscriptions() {
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
+  const [autoUpdate, setAutoUpdate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
@@ -140,9 +141,14 @@ export function Subscriptions() {
               const u = url.trim();
               if (!u) return;
               void run(async () => {
-                await api.addSubscription(u, name.trim() || undefined);
+                await api.addSubscription(
+                  u,
+                  name.trim() || undefined,
+                  autoUpdate,
+                );
                 setUrl("");
                 setName("");
+                setAutoUpdate(false);
               });
             }}
           >
@@ -180,6 +186,22 @@ export function Subscriptions() {
                 </Button>
               </div>
             </FieldGroup>
+            <Field orientation="horizontal" className="gap-1.5">
+              <Switch
+                id="sub-auto-update"
+                size="sm"
+                checked={autoUpdate}
+                disabled={busy}
+                aria-label={t("subs.autoUpdate")}
+                onCheckedChange={setAutoUpdate}
+              />
+              <FieldLabel
+                htmlFor="sub-auto-update"
+                className="text-muted-foreground"
+              >
+                {t("subs.autoUpdate")}
+              </FieldLabel>
+            </Field>
           </form>
           {httpWarn ? (
             <WarnAlert>{t("subs.httpWarn")}</WarnAlert>
@@ -278,6 +300,26 @@ export function Subscriptions() {
                               className="text-muted-foreground"
                             >
                               {t("common.activate")}
+                            </FieldLabel>
+                          </Field>
+                          <Field orientation="horizontal" className="w-auto gap-1.5">
+                            <Switch
+                              id={`sub-auto-${s.id}`}
+                              size="sm"
+                              checked={!!s.auto_update}
+                              disabled={busy}
+                              aria-label={t("subs.autoUpdate")}
+                              onCheckedChange={(checked) =>
+                                void run(() =>
+                                  api.setSubscriptionAutoUpdate(s.id, checked),
+                                )
+                              }
+                            />
+                            <FieldLabel
+                              htmlFor={`sub-auto-${s.id}`}
+                              className="text-muted-foreground"
+                            >
+                              {t("subs.autoUpdate")}
                             </FieldLabel>
                           </Field>
                           <Button

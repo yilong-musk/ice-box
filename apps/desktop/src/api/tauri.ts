@@ -107,6 +107,7 @@ export type SubscriptionMeta = {
   last_error: string | null;
   etag: string | null;
   last_modified: string | null;
+  auto_update: boolean;
 };
 
 export type NodeInfo = {
@@ -234,9 +235,9 @@ export const api = {
     invoke<void>("set_tray_language", { language }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
-  addSubscription: (url: string, name?: string) =>
+  addSubscription: (url: string, name?: string, autoUpdate = false) =>
     invoke<SubscriptionMeta>("add_subscription", {
-      req: { url, name: name ?? null },
+      req: { url, name: name ?? null, auto_update: autoUpdate },
     }),
   removeSubscription: (id: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>(
@@ -250,6 +251,10 @@ export const api = {
   setSubscriptionActive: (id: string, active: boolean) =>
     invoke<SubscriptionMeta>("set_active_subscription", {
       req: { id, active },
+    }),
+  setSubscriptionAutoUpdate: (id: string, autoUpdate: boolean) =>
+    invoke<SubscriptionMeta>("set_auto_update_subscription", {
+      req: { id, auto_update: autoUpdate },
     }),
   applySubscriptions: () => invoke<void>("apply_subscriptions"),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),

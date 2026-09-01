@@ -1792,6 +1792,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let nodes = vec![ice_config::NormalizedOutbound {
             tag: "n1".into(),

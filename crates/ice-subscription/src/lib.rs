@@ -22,8 +22,8 @@ mod tests_g5 {
         normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_uri_list_profile,
         resolve_selected_tag, set_active, write_subscription_error, DirectFetcher, FetchResponse,
         FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, SubscriptionError,
-        SubscriptionFormat, SubscriptionManager, SubscriptionPaths, CLASH_SUPPORTED_TYPES,
-        MAX_CLASH_PROXIES, MAX_URI_LINES,
+        SubscriptionFormat, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
+        CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
     };
     use base64::Engine;
     use ice_config::{
@@ -142,7 +142,9 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let err = mgr.add("https://example.com/sub", None).expect_err("add");
+        let err = mgr
+            .add("https://example.com/sub", None, false)
+            .expect_err("add");
         assert!(matches!(err, SubscriptionError::EmptyNodes));
         assert!(!paths.index().exists() || load_index(&paths).unwrap().items.is_empty());
         let _ = fs::remove_dir_all(paths.root());
@@ -166,7 +168,9 @@ mod tests_g5 {
             mode: MockFetchMode::TooLarge,
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let err = mgr.add("https://example.com/big", None).expect_err("big");
+        let err = mgr
+            .add("https://example.com/big", None, false)
+            .expect_err("big");
         assert_eq!(err.code().as_str(), "sub.fetch_failed");
         assert!(err.to_string().contains("exceeds"));
         assert!(!paths.index().exists());
@@ -181,7 +185,9 @@ mod tests_g5 {
             mode: MockFetchMode::Timeout,
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let err = mgr.add("https://example.com/t", None).expect_err("t");
+        let err = mgr
+            .add("https://example.com/t", None, false)
+            .expect_err("t");
         assert_eq!(err.code().as_str(), "sub.fetch_failed");
         assert!(!paths.root().join("index.json").exists());
         let _ = fs::remove_dir_all(paths.root());
@@ -203,7 +209,7 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
-        let meta = mgr.add("https://example.com/s", Some("t1")).unwrap();
+        let meta = mgr.add("https://example.com/s", Some("t1"), false).unwrap();
         let raw_before = fs::read(paths.raw(meta.id)).unwrap();
         let profile_before = fs::read(paths.profile(meta.id)).unwrap();
         assert!(
@@ -242,8 +248,8 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
-        let a = mgr.add("https://example.com/a", Some("a")).unwrap();
-        let b = mgr.add("https://example.com/b", Some("b")).unwrap();
+        let a = mgr.add("https://example.com/a", Some("a"), false).unwrap();
+        let b = mgr.add("https://example.com/b", Some("b"), false).unwrap();
         // Simulate a previously failed fetch on b.
         write_subscription_error(&paths, b.id, "previous failure".into()).unwrap();
 
@@ -323,7 +329,7 @@ mod tests_g5 {
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
         let count = super::MAX_FETCH_CONCURRENCY + 4;
         for index in 0..count {
-            mgr.add(&format!("https://example.com/{index}"), None)
+            mgr.add(&format!("https://example.com/{index}"), None, false)
                 .expect("add subscription");
         }
 
@@ -337,6 +343,96 @@ mod tests_g5 {
             max_active.load(Ordering::SeqCst) <= super::MAX_FETCH_CONCURRENCY,
             "fetch_all exceeded its worker limit"
         );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn auto_update_flag_roundtrips_through_add_and_set() {
+        let paths = temp_subs("auto-flag");
+        let body =
+            r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#;
+        let fetcher = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: body.into(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+        let meta = mgr.add("https://example.com/a", Some("a"), true).unwrap();
+        assert!(meta.auto_update, "add must persist the requested flag");
+
+        let off = mgr.set_auto_update(meta.id, false).unwrap();
+        assert!(!off.auto_update);
+        let on = mgr.set_auto_update(meta.id, true).unwrap();
+        assert!(on.auto_update);
+
+        let index = load_index(&paths).unwrap();
+        assert!(
+            index
+                .items
+                .iter()
+                .find(|m| m.id == meta.id)
+                .unwrap()
+                .auto_update
+        );
+        let disk_meta: SubscriptionMeta =
+            serde_json::from_str(&fs::read_to_string(paths.meta(meta.id)).unwrap()).unwrap();
+        assert!(disk_meta.auto_update, "flag must persist to meta.json");
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn auto_update_flag_survives_an_update() {
+        let paths = temp_subs("auto-update");
+        let body =
+            r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#;
+        let ok = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: body.into(),
+                not_modified: false,
+                etag: Some("v1".into()),
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
+        let meta = mgr.add("https://example.com/s", Some("t1"), true).unwrap();
+        let updated = mgr.update(meta.id).unwrap();
+        assert!(updated.auto_update, "refresh must preserve the flag");
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn fetch_auto_only_fetches_flagged_subscriptions() {
+        let paths = temp_subs("auto-fetch");
+        let ok = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#
+                    .into(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
+        let a = mgr.add("https://example.com/a", Some("a"), true).unwrap();
+        let b = mgr.add("https://example.com/b", Some("b"), false).unwrap();
+
+        let auto = mgr.fetch_auto();
+        assert_eq!(auto.len(), 1, "only the flagged subscription is fetched");
+        assert_eq!(auto[0].0, a.id);
+        assert!(auto[0].1.is_ok());
+        assert_ne!(b.id, a.id);
+
+        let all = mgr.fetch_all();
+        assert_eq!(all.len(), 2);
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -361,7 +457,7 @@ mod tests_g5 {
             };
             let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
             ids.push(
-                mgr.add(&format!("https://example.com/{name}"), Some(name))
+                mgr.add(&format!("https://example.com/{name}"), Some(name), false)
                     .unwrap()
                     .id,
             );
@@ -426,7 +522,7 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
-        let meta = mgr.add("https://example.com/s", Some("t1")).unwrap();
+        let meta = mgr.add("https://example.com/s", Some("t1"), false).unwrap();
         let raw_before = fs::read(paths.raw(meta.id)).unwrap();
         let profile_before = fs::read(paths.profile(meta.id)).unwrap();
 
@@ -462,7 +558,7 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), ok);
-        let meta = mgr.add("https://example.com/s", Some("t1")).unwrap();
+        let meta = mgr.add("https://example.com/s", Some("t1"), false).unwrap();
 
         let fail = MockFetcher {
             bypasses_proxy: true,
@@ -509,7 +605,9 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let meta = mgr.add("https://example.com/path/sub.json", None).unwrap();
+        let meta = mgr
+            .add("https://example.com/path/sub.json", None, false)
+            .unwrap();
         assert_eq!(meta.name, "my.json");
         assert!(paths.raw(meta.id).is_file());
         assert!(
@@ -532,7 +630,7 @@ mod tests_g5 {
         };
         assert!(fetcher.bypasses_system_proxy());
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let _ = mgr.add("https://example.com", None);
+        let _ = mgr.add("https://example.com", None, false);
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -690,7 +788,9 @@ mod tests_g5 {
             }),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-        let err = mgr.add("http://127.0.0.1/sub", None).expect_err("blocked");
+        let err = mgr
+            .add("http://127.0.0.1/sub", None, false)
+            .expect_err("blocked");
         assert_eq!(err.code().as_str(), "sub.fetch_failed");
         assert!(err.to_string().contains("not allowed"));
         assert!(!paths.index().exists());
@@ -814,7 +914,7 @@ mod tests_g5 {
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
         let meta = mgr
-            .add("https://example.com/sub", Some("liangxin"))
+            .add("https://example.com/sub", Some("liangxin"), false)
             .unwrap();
         assert_eq!(meta.name, "liangxin");
         assert_eq!(meta.format, SubscriptionFormat::UriList);
@@ -881,8 +981,8 @@ pub use merge::{
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
     commit_subscription_success, load_index, read_nodes, read_profile, remove_subscription,
-    save_index, set_active, set_enabled, write_subscription_error, write_subscription_success,
-    SubscriptionPaths,
+    save_index, set_active, set_auto_update, set_enabled, write_subscription_error,
+    write_subscription_success, SubscriptionPaths,
 };
 pub use uri::{
     apply_builtin_default_rules, looks_like_uri_list, parse_uri_list_profile, MAX_URI_LINES,
@@ -932,6 +1032,9 @@ pub struct SubscriptionMeta {
     pub etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
+    /// Refresh this subscription on a fixed background schedule when enabled.
+    #[serde(default)]
+    pub auto_update: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1027,6 +1130,7 @@ fn meta_from_profile(
     active: bool,
     etag: Option<String>,
     last_modified: Option<String>,
+    auto_update: bool,
 ) -> SubscriptionMeta {
     SubscriptionMeta {
         id,
@@ -1043,6 +1147,7 @@ fn meta_from_profile(
         last_error: None,
         etag,
         last_modified,
+        auto_update,
     }
 }
 
@@ -1197,6 +1302,7 @@ pub struct FetchedAdd {
     pub id: Uuid,
     pub url: String,
     pub name: Option<String>,
+    pub auto_update: bool,
     pub fetched: FetchResponse,
 }
 
@@ -1227,8 +1333,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         &self,
         url: &str,
         name: Option<&str>,
+        auto_update: bool,
     ) -> Result<SubscriptionMeta, SubscriptionError> {
-        self.apply_add(self.fetch_add(url, name)?)
+        self.apply_add(self.fetch_add(url, name, auto_update)?)
     }
 
     /// Network fetch phase of an add: validate URL, GET (no disk writes).
@@ -1236,6 +1343,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         &self,
         url: &str,
         name: Option<&str>,
+        auto_update: bool,
     ) -> Result<FetchedAdd, SubscriptionError> {
         assert!(
             self.fetcher.bypasses_system_proxy(),
@@ -1250,6 +1358,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             id,
             url: url.to_string(),
             name: name.map(str::to_string),
+            auto_update,
             fetched,
         })
     }
@@ -1260,6 +1369,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             id,
             url,
             name,
+            auto_update,
             fetched,
         } = add;
         match normalize_raw_body(&fetched.body) {
@@ -1280,6 +1390,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     make_active,
                     fetched.etag,
                     fetched.last_modified,
+                    auto_update,
                 );
                 write_subscription_success(&self.paths, &meta, &fetched.body, &profile)?;
                 Ok(meta)
@@ -1353,6 +1464,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     upd.meta.active,
                     upd.fetched.etag.or(upd.meta.etag),
                     upd.fetched.last_modified.or(upd.meta.last_modified),
+                    upd.meta.auto_update,
                 );
                 write_subscription_success(&self.paths, &updated, &upd.fetched.body, &profile)?;
                 Ok(updated)
@@ -1374,6 +1486,35 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         let ids: Vec<Uuid> = load_index(&self.paths)
             .map(|i| i.items.into_iter().map(|m| m.id).collect())
             .unwrap_or_default();
+        self.fetch_ids(ids)
+    }
+
+    /// Network phase of updating the subscriptions with `auto_update` enabled. Same parallel
+    /// fetch as [`SubscriptionManager::fetch_all`], but only touches the flagged entries so a
+    /// background refresh never re-fetches subscriptions the user did not opt into.
+    pub fn fetch_auto(&self) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
+    where
+        F: Sync,
+    {
+        let ids: Vec<Uuid> = load_index(&self.paths)
+            .map(|i| {
+                i.items
+                    .into_iter()
+                    .filter(|m| m.auto_update)
+                    .map(|m| m.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.fetch_ids(ids)
+    }
+
+    /// Parallel network phase for an explicit id list. Writes nothing to disk, so callers
+    /// can run it without holding the orchestrate lock; [`SubscriptionManager::apply_all`]
+    /// persists the results serially.
+    pub fn fetch_ids(&self, ids: Vec<Uuid>) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
+    where
+        F: Sync,
+    {
         if ids.is_empty() {
             return Vec::new();
         }
@@ -1469,6 +1610,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                                 upd.meta.active,
                                 upd.fetched.etag.or(upd.meta.etag),
                                 upd.fetched.last_modified.or(upd.meta.last_modified),
+                                upd.meta.auto_update,
                             );
                             if let Err(err) = commit_subscription_success(
                                 &self.paths,
@@ -1523,6 +1665,14 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         set_active(&self.paths, id, active)
     }
 
+    pub fn set_auto_update(
+        &self,
+        id: Uuid,
+        auto_update: bool,
+    ) -> Result<SubscriptionMeta, SubscriptionError> {
+        set_auto_update(&self.paths, id, auto_update)
+    }
+
     pub fn active_profile(&self) -> Result<NormalizedProfile, SubscriptionError> {
         let index = load_index(&self.paths)?;
         load_active_profile(&self.paths, &index)
@@ -1560,6 +1710,7 @@ impl MemorySubscriptionManager {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         self.index.items.push(meta.clone());
         meta

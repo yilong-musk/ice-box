@@ -16,6 +16,7 @@ vi.mock("../api/tauri", () => ({
       updateAllSubscriptions(...args),
     updateSubscription: vi.fn(),
     setSubscriptionActive: vi.fn(),
+    setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
     applySubscriptions: (...args: unknown[]) => applySubscriptions(...args),
   },
@@ -38,6 +39,7 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
     last_error: null,
     etag: null,
     last_modified: null,
+    auto_update: false,
     ...overrides,
   };
 }
@@ -228,6 +230,72 @@ describe("Subscriptions", () => {
       expect(view.getByText("legacy")).toBeInTheDocument();
     });
     expect(view.getByText(/5 节点/)).toBeInTheDocument();
+  });
+
+  it("imports with auto-update when the import switch is on", async () => {
+    listSubscriptions.mockResolvedValue([]);
+    const add = vi.mocked(api.addSubscription).mockResolvedValue({
+      ...sampleMeta(),
+      auto_update: true,
+    });
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("自动更新")).toBeInTheDocument();
+    });
+    const importSwitch = view.getByLabelText("自动更新");
+    expect(importSwitch).not.toBeChecked();
+    fireEvent.click(importSwitch);
+    expect(importSwitch).toBeChecked();
+
+    fireEvent.change(
+      view.getByPlaceholderText("订阅 URL（https 优先）"),
+      { target: { value: "https://example.com/new" } },
+    );
+    fireEvent.click(view.getByRole("button", { name: "导入" }));
+
+    await waitFor(() => {
+      expect(add).toHaveBeenCalledWith(
+        "https://example.com/new",
+        undefined,
+        true,
+      );
+    });
+    await waitFor(() => {
+      expect(importSwitch).not.toBeChecked();
+    });
+  });
+
+  it("toggles auto-update per subscription via setSubscriptionAutoUpdate", async () => {
+    const setAutoUpdate = vi.fn().mockResolvedValue({});
+    vi.mocked(api.setSubscriptionAutoUpdate).mockImplementation(setAutoUpdate);
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "a", auto_update: true, id: "11111111-1111-1111-1111-111111111111" }),
+      sampleMeta({ name: "b", auto_update: false, id: "22222222-2222-2222-2222-222222222222" }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("b")).toBeInTheDocument();
+    });
+    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
+    const switches = within(rowB).getAllByRole("switch", {
+      name: "自动更新",
+    });
+    expect(switches).toHaveLength(1);
+    expect(switches[0]).not.toBeChecked();
+    fireEvent.click(switches[0]);
+    await waitFor(() => {
+      expect(setAutoUpdate).toHaveBeenCalledWith(
+        "22222222-2222-2222-2222-222222222222",
+        true,
+      );
+    });
+
+    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
+    expect(within(rowA).getAllByRole("switch", { name: "自动更新" })[0]).toBeChecked();
   });
 
   it("marks active subscription and switches via setSubscriptionActive", async () => {

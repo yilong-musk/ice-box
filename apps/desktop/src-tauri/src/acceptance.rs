@@ -175,7 +175,7 @@ mod tests {
         );
 
         let meta = mgr
-            .add("https://example.com/clash-mixed", Some("G9 clash"))
+            .add("https://example.com/clash-mixed", Some("G9 clash"), false)
             .expect("import clash fixture");
         assert_eq!(meta.format, SubscriptionFormat::Clash);
         assert!(meta.node_count >= 5, "expected known types from fixture");
@@ -312,8 +312,12 @@ mod live {
                 }),
             },
         );
-        mgr.add("https://example.com/singbox-fixture", Some("G9 live"))
-            .expect("seed subscription");
+        mgr.add(
+            "https://example.com/singbox-fixture",
+            Some("G9 live"),
+            false,
+        )
+        .expect("seed subscription");
     }
 
     fn cleanup(paths: &AppPaths, core: &mut CoreController, proxy: &dyn SystemProxy) {
@@ -542,7 +546,11 @@ mod live {
             },
         );
         let meta = mgr
-            .add("https://example.com/clash-full", Some("G9 clash full"))
+            .add(
+                "https://example.com/clash-full",
+                Some("G9 clash full"),
+                false,
+            )
             .expect("import full clash fixture");
         assert_eq!(meta.node_count, 90);
         assert_eq!(meta.group_count, 21);
@@ -613,7 +621,7 @@ mod live {
                 }),
             },
         );
-        mgr.add("https://example.com/clash-groups", Some("G9 groups"))
+        mgr.add("https://example.com/clash-groups", Some("G9 groups"), false)
             .expect("import");
 
         let settings = settings();

@@ -8,6 +8,7 @@ mod log_tail;
 mod log_view;
 mod orchestrate;
 mod shutdown;
+mod subscription_watch;
 mod tray;
 
 use crate::capture::CaptureController;
@@ -238,6 +239,7 @@ pub fn run() {
             };
             tray::setup_tray(app.handle(), tray_language)?;
             core_watch::spawn_core_watchdog(app.handle().clone());
+            subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             // Product: opening the app starts the core only; system proxy is
             // toggled from the home page. Quit still restores an applied proxy.
             let handle = app.handle().clone();
@@ -286,6 +288,7 @@ pub fn run() {
             commands::update_subscription,
             commands::update_all_subscriptions,
             commands::set_active_subscription,
+            commands::set_auto_update_subscription,
             commands::apply_subscriptions,
             commands::list_nodes,
             commands::set_selected_node,

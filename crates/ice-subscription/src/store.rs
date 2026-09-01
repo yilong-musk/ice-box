@@ -330,6 +330,25 @@ pub fn set_enabled(
     set_active(paths, id, enabled)
 }
 
+/// Flip the background auto-update flag for a subscription, persisting it to
+/// both `index.json` and the on-disk `meta.json`.
+pub fn set_auto_update(
+    paths: &SubscriptionPaths,
+    id: Uuid,
+    auto_update: bool,
+) -> Result<SubscriptionMeta, SubscriptionError> {
+    let mut index = load_index(paths)?;
+    let meta =
+        index.items.iter_mut().find(|m| m.id == id).ok_or_else(|| {
+            SubscriptionError::ParseFailed(format!("subscription {id} not found"))
+        })?;
+    meta.auto_update = auto_update;
+    let updated = index.items.iter().find(|m| m.id == id).unwrap().clone();
+    write_json_atomic(&paths.meta(id), &updated).map_err(map_cfg)?;
+    save_index(paths, &index)?;
+    Ok(updated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +415,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),

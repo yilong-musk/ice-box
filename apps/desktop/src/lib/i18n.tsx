@@ -160,6 +160,8 @@ const zh = {
   "subs.name": "名称",
   "subs.namePlaceholder": "名称（可选）",
   "subs.importAction": "导入",
+  "subs.autoUpdate": "自动更新",
+  "subs.autoUpdateDesc": "定期自动刷新节点列表，无需手动更新",
   "subs.httpWarn": "当前为 http://，传输未加密，建议改用 https。",
   "subs.title": "订阅",
   "subs.emptyHint": "尚未导入订阅",
@@ -436,6 +438,8 @@ const en: Record<MessageKey, string> = {
   "subs.name": "Name",
   "subs.namePlaceholder": "Name (optional)",
   "subs.importAction": "Import",
+  "subs.autoUpdate": "Auto update",
+  "subs.autoUpdateDesc": "Refreshes the node list periodically; no manual updates needed",
   "subs.httpWarn":
     "This uses http://, which is unencrypted; https is recommended.",
   "subs.title": "Subscriptions",

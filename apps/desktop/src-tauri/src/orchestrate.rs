@@ -772,6 +772,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let nodes = vec![NO {
             tag: "n1".into(),
@@ -1324,6 +1325,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let nodes = vec![NO {
             tag: "n1".into(),
@@ -1628,6 +1630,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let profile = ice_config::NormalizedProfile {
             nodes: vec![
@@ -1698,6 +1701,7 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
         };
         let profile = ice_config::NormalizedProfile {
             nodes: vec![],
