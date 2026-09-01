@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
-import { LANGUAGE_STORAGE_KEY } from "../lib/i18n";
+import { applyLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
 
 function ensureLocalStorage() {
   try {
@@ -86,6 +86,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+  applyLanguage("zh");
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
 });

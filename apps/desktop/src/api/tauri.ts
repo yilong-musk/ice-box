@@ -230,6 +230,8 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
+  setTrayLanguage: (language: "zh" | "en") =>
+    invoke<void>("set_tray_language", { language }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
   addSubscription: (url: string, name?: string) =>

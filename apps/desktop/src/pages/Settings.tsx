@@ -109,19 +109,28 @@ export function Settings({ active = true }: { active?: boolean }) {
   const { preference: themePreference, setPreference: setThemePreference } =
     useThemePreference();
   const saveTimerRef = useRef<number | null>(null);
+  const scheduledSaveRef = useRef<AppSettings | null>(null);
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<AppSettings | null>(null);
+  const saveIdleWaitersRef = useRef<Array<() => void>>([]);
   /// Skip the first post-load snapshot so opening the page never persists
   /// the just-read settings; re-armed on every reload cycle.
   const skipInitialSaveRef = useRef(true);
 
   useEffect(() => {
+    if (!active) {
+      flushScheduledSave();
+      setLoaded(false);
+      skipInitialSaveRef.current = true;
+      return;
+    }
     setLoaded(false);
     skipInitialSaveRef.current = true;
-    if (!active) return;
     let cancelled = false;
     void (async () => {
       try {
+        await waitForSaveIdle();
+        if (cancelled) return;
         const [settings, s] = await Promise.all([
           api.getSettings(),
           api.getStatus(),
@@ -279,17 +288,46 @@ export function Settings({ active = true }: { active?: boolean }) {
       saveInFlightRef.current = false;
       const next = pendingSaveRef.current;
       pendingSaveRef.current = null;
-      if (next) void flushSave(next);
+      if (next) {
+        void flushSave(next);
+      } else {
+        const waiters = saveIdleWaitersRef.current.splice(0);
+        for (const resolve of waiters) resolve();
+      }
     }
   }
 
-  function scheduleAutoSave(next: AppSettings) {
+  function waitForSaveIdle(): Promise<void> {
+    if (!saveInFlightRef.current && pendingSaveRef.current === null) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      saveIdleWaitersRef.current.push(resolve);
+    });
+  }
+
+  function cancelScheduledSave() {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
-    }
-    saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      void flushSave(next);
+    }
+    scheduledSaveRef.current = null;
+  }
+
+  function flushScheduledSave() {
+    const candidate = scheduledSaveRef.current;
+    cancelScheduledSave();
+    if (candidate) void flushSave(candidate);
+  }
+
+  function scheduleAutoSave(next: AppSettings) {
+    cancelScheduledSave();
+    scheduledSaveRef.current = next;
+    saveTimerRef.current = window.setTimeout(() => {
+      const candidate = scheduledSaveRef.current;
+      saveTimerRef.current = null;
+      scheduledSaveRef.current = null;
+      if (candidate) void flushSave(candidate);
     }, SAVE_DEBOUNCE_MS);
   }
 
@@ -302,12 +340,7 @@ export function Settings({ active = true }: { active?: boolean }) {
       return;
     }
     scheduleAutoSave(form);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
+    return cancelScheduledSave;
   }, [form, loaded]);
 
   /** Windows hides the TUN controls entirely (gate blocked upstream). */
@@ -370,6 +403,7 @@ export function Settings({ active = true }: { active?: boolean }) {
               size="sm"
               className="w-full max-w-60"
               value={form.language}
+              disabled={busy || !loaded}
               onChange={(e) => {
                 const value = e.target.value;
                 if (value === "system" || value === "zh" || value === "en") {

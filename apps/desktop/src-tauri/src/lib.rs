@@ -11,6 +11,7 @@ mod shutdown;
 mod tray;
 
 use crate::capture::CaptureController;
+use crate::orchestrate::current_settings;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle, TrafficMonitor};
@@ -229,7 +230,13 @@ pub fn run() {
                 }
             }
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
-            tray::setup_tray(app.handle())?;
+            let tray_language = {
+                let state = app.state::<AppState>();
+                current_settings(&state.paths)
+                    .map(|settings| tray::TrayLanguage::from(settings.language))
+                    .unwrap_or(tray::TrayLanguage::En)
+            };
+            tray::setup_tray(app.handle(), tray_language)?;
             core_watch::spawn_core_watchdog(app.handle().clone());
             // Product: opening the app starts the core only; system proxy is
             // toggled from the home page. Quit still restores an applied proxy.
@@ -272,6 +279,7 @@ pub fn run() {
             commands::reveal_data_dir,
             commands::get_settings,
             commands::save_settings,
+            commands::set_tray_language,
             commands::set_proxy_mode,
             commands::add_subscription,
             commands::remove_subscription,

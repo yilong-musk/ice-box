@@ -2,10 +2,37 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
+import { LANGUAGE_STORAGE_KEY } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
 const getStatus = vi.fn();
+const getSettings = vi.fn();
 const listNodes = vi.fn();
+const setTrayLanguage = vi.fn();
+
+const defaultSettings = {
+  mixed_listen: "127.0.0.1",
+  mixed_port: 17890,
+  clash_api_listen: "127.0.0.1",
+  clash_api_port: 19090,
+  selected_tag: null,
+  auto_set_system_proxy: false,
+  allow_lan: false,
+  proxy_mode: "rule",
+  auto_default_rules: true,
+  tun: {
+    enabled: false,
+    interface_name: null,
+    ipv4_address: "10.0.0.1/30",
+    ipv6_address: "fdfe:dcba:9876::1/126",
+    mtu: 9000,
+    auto_route: true,
+    strict_route: true,
+    stack: "gvisor",
+    dns_hijack: false,
+  },
+  language: "system",
+} as const;
 
 const tunStatus = {
   traffic_capture: "inactive",
@@ -25,28 +52,8 @@ vi.mock("./api/tauri", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
-    getSettings: vi.fn().mockResolvedValue({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: null,
-      auto_set_system_proxy: false,
-      allow_lan: false,
-      proxy_mode: "rule",
-      tun: {
-        enabled: false,
-        interface_name: null,
-        ipv4_address: "10.0.0.1/30",
-        ipv6_address: "fdfe:dcba:9876::1/126",
-        mtu: 9000,
-        auto_route: true,
-        strict_route: true,
-        stack: "gvisor",
-        dns_hijack: false,
-      },
-      language: "system",
-    }),
+    getSettings: (...args: unknown[]) => getSettings(...args),
+    setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
     getTrafficSnapshot: vi
       .fn()
       .mockResolvedValue({ points: [], latest: null, peak: null }),
@@ -62,6 +69,8 @@ describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearNodesSnapshot();
+    getSettings.mockResolvedValue(defaultSettings);
+    setTrayLanguage.mockResolvedValue(undefined);
     listNodes.mockResolvedValue([]);
     getStatus.mockResolvedValue({
       core: {
@@ -77,6 +86,20 @@ describe("App", () => {
       system_proxy_available: true,
       ...tunStatus,
     });
+  });
+
+  it("reconciles the startup cache with settings and updates the tray", async () => {
+    getSettings.mockResolvedValue({ ...defaultSettings, language: "en" });
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "Home" })).toBeInTheDocument();
+    });
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(setTrayLanguage).toHaveBeenCalledWith("en");
   });
 
   it("shows proxy recovery warning globally on any tab", async () => {

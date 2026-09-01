@@ -1,16 +1,51 @@
 //! System tray: close → hide; Quit → Stop then exit.
 
 use crate::shutdown::{request_tray_quit, QuitOutcome};
+use ice_config::{AppError, ErrorCode, LanguagePreference};
+use serde::Deserialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
 
-pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayLanguage {
+    Zh,
+    En,
+}
+
+impl From<LanguagePreference> for TrayLanguage {
+    fn from(preference: LanguagePreference) -> Self {
+        match preference {
+            LanguagePreference::Zh => Self::Zh,
+            LanguagePreference::System | LanguagePreference::En => Self::En,
+        }
+    }
+}
+
+fn labels(language: TrayLanguage) -> (&'static str, &'static str) {
+    match language {
+        TrayLanguage::Zh => ("显示", "退出"),
+        TrayLanguage::En => ("Show", "Quit"),
+    }
+}
+
+struct TrayMenuState<R: Runtime> {
+    show: MenuItem<R>,
+    quit: MenuItem<R>,
+}
+
+pub fn setup_tray<R: Runtime>(app: &AppHandle<R>, language: TrayLanguage) -> tauri::Result<()> {
+    let (show_label, quit_label) = labels(language);
+    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
+    app.manage(TrayMenuState {
+        show: show.clone(),
+        quit: quit.clone(),
+    });
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -57,4 +92,48 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let _tray = builder.build(app)?;
     Ok(())
+}
+
+pub fn set_language<R: Runtime>(
+    app: &AppHandle<R>,
+    language: TrayLanguage,
+) -> Result<(), AppError> {
+    let state = app
+        .try_state::<TrayMenuState<R>>()
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable"))?;
+    let (show, quit) = labels(language);
+    state.show.set_text(show).map_err(|err| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("update tray Show label: {err}"),
+        )
+    })?;
+    state.quit.set_text(quit).map_err(|err| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("update tray Quit label: {err}"),
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_labels_cover_supported_languages() {
+        assert_eq!(labels(TrayLanguage::Zh), ("显示", "退出"));
+        assert_eq!(labels(TrayLanguage::En), ("Show", "Quit"));
+    }
+
+    #[test]
+    fn explicit_preferences_select_initial_tray_language() {
+        assert_eq!(TrayLanguage::from(LanguagePreference::Zh), TrayLanguage::Zh);
+        assert_eq!(TrayLanguage::from(LanguagePreference::En), TrayLanguage::En);
+        assert_eq!(
+            TrayLanguage::from(LanguagePreference::System),
+            TrayLanguage::En
+        );
+    }
 }

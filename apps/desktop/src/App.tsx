@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type CSSProperties,
@@ -37,7 +38,12 @@ import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
-import { t, useLanguagePreference, type MessageKey } from "./lib/i18n";
+import {
+  readLanguagePreference,
+  t,
+  useLanguagePreference,
+  type MessageKey,
+} from "./lib/i18n";
 import { useThemePreference } from "./lib/theme";
 import logo from "./assets/logo.png";
 
@@ -116,8 +122,44 @@ function App() {
     () => new Set<Tab>(["home"]),
   );
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
+  const [languageReady, setLanguageReady] = useState(false);
   useThemePreference();
-  useLanguagePreference();
+  const { preference, resolved, setPreference } = useLanguagePreference();
+  const bootLanguageRef = useRef(preference);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getSettings()
+      .then((settings) => {
+        // localStorage paints the first frame quickly. Reconcile it with the
+        // authoritative settings file unless the user changed language while
+        // this startup read was in flight.
+        if (
+          !cancelled &&
+          readLanguagePreference() === bootLanguageRef.current &&
+          settings.language !== readLanguagePreference()
+        ) {
+          setPreference(settings.language);
+        }
+      })
+      .catch(() => {
+        // Settings surfaces load errors when the user opens that page.
+      })
+      .finally(() => {
+        if (!cancelled) setLanguageReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!languageReady) return;
+    void api.setTrayLanguage(resolved).catch(() => {
+      // The web UI remains usable if the native tray is unavailable.
+    });
+  }, [languageReady, resolved]);
 
   function selectTab(id: Tab) {
     setTab(id);

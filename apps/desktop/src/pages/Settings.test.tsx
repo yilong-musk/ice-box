@@ -67,6 +67,7 @@ const defaultStatus = {
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
     getSettings.mockResolvedValue({
@@ -221,7 +222,9 @@ describe("Settings", () => {
     const view = within(container);
 
     const mixedInput = await view.findByLabelText("Mixed 监听");
+    const language = view.getByLabelText("语言");
     expect(mixedInput).toBeDisabled();
+    expect(language).toBeDisabled();
 
     resolveSettings({
       mixed_listen: "127.0.0.1",
@@ -232,12 +235,15 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       allow_lan: false,
       proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
       tun: tunSettings,
     });
 
     await waitFor(() => {
       expect(mixedInput).not.toBeDisabled();
     });
+    expect(language).not.toBeDisabled();
     // Opening the page never writes the just-loaded snapshot back.
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(saveSettings).not.toHaveBeenCalled();
@@ -255,6 +261,7 @@ describe("Settings", () => {
 
     const mixedInput = view.getByLabelText("Mixed 监听");
     expect(mixedInput).toBeDisabled();
+    expect(view.getByLabelText("语言")).toBeDisabled();
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
@@ -349,6 +356,22 @@ describe("Settings", () => {
     expect(language).toHaveValue("zh");
     expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh");
     expect(document.documentElement.lang).toBe("zh");
+  });
+
+  it("flushes a pending language save before the panel becomes inactive", async () => {
+    const { container, rerender } = render(<Settings active />);
+    const view = within(container);
+
+    const language = await view.findByLabelText("语言");
+    await waitFor(() => expect(language).not.toBeDisabled());
+    fireEvent.change(language, { target: { value: "en" } });
+    rerender(<Settings active={false} />);
+
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ language: "en" }),
+      );
+    });
   });
 
   it("applies the stored settings language after load", async () => {
