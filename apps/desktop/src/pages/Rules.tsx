@@ -17,7 +17,6 @@ import {
   CardAction,
   CardContent,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -246,7 +245,6 @@ export function Rules({ onNavigate, active = true }: Props) {
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>{t("rules.title")}</CardTitle>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"

@@ -132,7 +132,6 @@ const zh = {
   "nodes.currentExit": "当前出口",
   "nodes.setExit": "设为出口",
   "nodes.setExitAfterStart": "设为出口（保存后启动生效）",
-  "nodes.current": "当前",
   "nodes.inUse": "选用中",
   "nodes.collapseMembers": "收起成员",
   "nodes.expandMembers": "展开成员",
@@ -143,9 +142,6 @@ const zh = {
   "nodes.select": "选用",
   "nodes.notRunningWarn":
     "代理服务未运行：测延迟不可用；切换出口会保存，启动后生效。",
-  "nodes.title": "节点",
-  "nodes.testingProgress": "正在测延迟 {progress}",
-  "nodes.testAndSwitch": "测延迟并切换出口",
   "nodes.batchTest": "批量测延迟",
   "nodes.loading": "加载节点列表…",
   "nodes.emptyTitle": "暂无节点",
@@ -184,7 +180,6 @@ const zh = {
 
   // --- rules page ---
   "rules.savedButApplyFailed": "已保存，但应用失败：{detail}",
-  "rules.title": "规则",
   "rules.addCustom": "+ 自定义规则",
   "rules.searchPlaceholder": "搜索域名 / 出口 / 规则集…",
   "rules.searchAria": "搜索规则",
@@ -413,7 +408,6 @@ const en: Record<MessageKey, string> = {
   "nodes.currentExit": "Current exit",
   "nodes.setExit": "Set as exit",
   "nodes.setExitAfterStart": "Set as exit (applied after start)",
-  "nodes.current": "Current",
   "nodes.inUse": "In use",
   "nodes.collapseMembers": "Collapse members",
   "nodes.expandMembers": "Expand members",
@@ -424,9 +418,6 @@ const en: Record<MessageKey, string> = {
   "nodes.select": "Select",
   "nodes.notRunningWarn":
     "Proxy service not running: delay tests are unavailable; switching exits is saved and applies after start.",
-  "nodes.title": "Nodes",
-  "nodes.testingProgress": "Testing delay {progress}",
-  "nodes.testAndSwitch": "Test delay and switch exit",
   "nodes.batchTest": "Batch Test",
   "nodes.loading": "Loading node list…",
   "nodes.emptyTitle": "No nodes",
@@ -466,7 +457,6 @@ const en: Record<MessageKey, string> = {
 
   // --- rules page ---
   "rules.savedButApplyFailed": "Saved, but applying failed: {detail}",
-  "rules.title": "Rules",
   "rules.addCustom": "+ Add Custom Rule",
   "rules.searchPlaceholder": "Search domain / outbound / rule set…",
   "rules.searchAria": "Search rules",

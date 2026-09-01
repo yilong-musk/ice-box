@@ -13,9 +13,7 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Item,
@@ -205,7 +203,9 @@ const GroupMembers = memo(function GroupMembers({
                 {member}
               </span>
             )}
-            {isExit ? <span className={badgeVariants()}>{t("nodes.current")}</span> : null}
+            {isExit ? (
+              <Label className="shrink-0 text-ok">{t("nodes.inUse")}</Label>
+            ) : null}
             {delayBadge(delays[member] ?? null)}
           </div>
         );
@@ -670,12 +670,6 @@ export function Nodes({ onNavigate, active = true }: Props) {
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>{t("nodes.title")}</CardTitle>
-          <CardDescription>
-            {batchProgress
-              ? t("nodes.testingProgress", { progress: batchProgress })
-              : t("nodes.testAndSwitch")}
-          </CardDescription>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
