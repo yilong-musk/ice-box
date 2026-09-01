@@ -33,7 +33,9 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
+  ItemFooter,
   ItemGroup,
+  ItemHeader,
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
@@ -187,7 +189,7 @@ export function Subscriptions() {
                 />
               </Field>
               <div className="flex flex-wrap items-end gap-2">
-                <Field className="min-w-48 flex-1">
+                <Field className="w-48">
                   <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
                   <Input
                     id="sub-name"
@@ -198,6 +200,40 @@ export function Subscriptions() {
                     disabled={busy}
                   />
                 </Field>
+                <Field orientation="horizontal" className="w-auto gap-1.5">
+                  <Switch
+                    id="sub-auto-update"
+                    size="sm"
+                    checked={autoUpdate}
+                    disabled={busy}
+                    aria-label={t("subs.autoUpdate")}
+                    onCheckedChange={setAutoUpdate}
+                  />
+                  <FieldLabel
+                    htmlFor="sub-auto-update"
+                    className="text-muted-foreground"
+                  >
+                    {t("subs.autoUpdate")}
+                  </FieldLabel>
+                  <NativeSelect
+                    size="sm"
+                    className="w-auto"
+                    aria-label={t("subs.interval")}
+                    value={autoUpdateInterval}
+                    disabled={busy || !autoUpdate}
+                    onChange={(e) =>
+                      setAutoUpdateInterval(
+                        e.target.value as SubscriptionAutoUpdateInterval,
+                      )
+                    }
+                  >
+                    {AUTO_UPDATE_INTERVALS.map((interval) => (
+                      <NativeSelectOption key={interval} value={interval}>
+                        {intervalLabel(interval)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
                 <Button
                   type="submit"
                   size="sm"
@@ -207,40 +243,6 @@ export function Subscriptions() {
                 </Button>
               </div>
             </FieldGroup>
-            <Field orientation="horizontal" className="gap-1.5">
-              <Switch
-                id="sub-auto-update"
-                size="sm"
-                checked={autoUpdate}
-                disabled={busy}
-                aria-label={t("subs.autoUpdate")}
-                onCheckedChange={setAutoUpdate}
-              />
-              <FieldLabel
-                htmlFor="sub-auto-update"
-                className="text-muted-foreground"
-              >
-                {t("subs.autoUpdate")}
-              </FieldLabel>
-              <NativeSelect
-                size="sm"
-                className="w-auto"
-                aria-label={t("subs.interval")}
-                value={autoUpdateInterval}
-                disabled={busy || !autoUpdate}
-                onChange={(e) =>
-                  setAutoUpdateInterval(
-                    e.target.value as SubscriptionAutoUpdateInterval,
-                  )
-                }
-              >
-                {AUTO_UPDATE_INTERVALS.map((interval) => (
-                  <NativeSelectOption key={interval} value={interval}>
-                    {intervalLabel(interval)}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
           </form>
           {httpWarn ? (
             <WarnAlert>{t("subs.httpWarn")}</WarnAlert>
@@ -301,11 +303,34 @@ export function Subscriptions() {
                         size="sm"
                         variant={s.active ? "muted" : "default"}
                       >
-                        <ItemContent className="min-w-0">
+                        <ItemHeader>
                           <ItemTitle title={s.name}>
                             <span className="truncate">{s.name}</span>
                             {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                           </ItemTitle>
+                          <ItemActions className="flex-nowrap">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void run(() => api.updateSubscription(s.id), true)
+                              }
+                            >
+                              {updating ? t("common.updating") : t("common.update")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => setPendingDelete(s)}
+                            >
+                              {t("common.delete")}
+                            </Button>
+                          </ItemActions>
+                        </ItemHeader>
+                        <ItemContent className="min-w-0">
                           <ItemDescription>
                             {subscriptionSummary(s)}
                           </ItemDescription>
@@ -320,7 +345,7 @@ export function Subscriptions() {
                             </ItemDescription>
                           ) : null}
                         </ItemContent>
-                        <ItemActions className="flex-wrap">
+                        <ItemFooter>
                           <Field orientation="horizontal" className="w-auto gap-1.5">
                             <Switch
                               id={`sub-active-${s.id}`}
@@ -391,27 +416,7 @@ export function Subscriptions() {
                               ))}
                             </NativeSelect>
                           </Field>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              void run(() => api.updateSubscription(s.id), true)
-                            }
-                          >
-                            {updating ? t("common.updating") : t("common.update")}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="destructive"
-                            disabled={busy}
-                            onClick={() => setPendingDelete(s)}
-                          >
-                            {t("common.delete")}
-                          </Button>
-                        </ItemActions>
+                        </ItemFooter>
                       </Item>
                     </div>
                   );
