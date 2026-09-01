@@ -330,12 +330,13 @@ pub fn set_enabled(
     set_active(paths, id, enabled)
 }
 
-/// Flip the background auto-update flag for a subscription, persisting it to
-/// both `index.json` and the on-disk `meta.json`.
+/// Flip the background auto-update flag and its refresh cadence for a
+/// subscription, persisting both to `index.json` and the on-disk `meta.json`.
 pub fn set_auto_update(
     paths: &SubscriptionPaths,
     id: Uuid,
     auto_update: bool,
+    auto_update_interval: Option<crate::AutoUpdateInterval>,
 ) -> Result<SubscriptionMeta, SubscriptionError> {
     let mut index = load_index(paths)?;
     let meta =
@@ -343,6 +344,9 @@ pub fn set_auto_update(
             SubscriptionError::ParseFailed(format!("subscription {id} not found"))
         })?;
     meta.auto_update = auto_update;
+    if auto_update_interval.is_some() {
+        meta.auto_update_interval = auto_update_interval;
+    }
     let updated = index.items.iter().find(|m| m.id == id).unwrap().clone();
     write_json_atomic(&paths.meta(id), &updated).map_err(map_cfg)?;
     save_index(paths, &index)?;
@@ -416,6 +420,7 @@ mod tests {
             etag: None,
             last_modified: None,
             auto_update: false,
+            auto_update_interval: None,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),

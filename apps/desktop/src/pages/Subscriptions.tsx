@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api,
   formatInvokeError,
+  type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -37,8 +38,24 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { t, useLanguagePreference } from "../lib/i18n";
+
+const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
+  "one_hour",
+  "three_hours",
+  "six_hours",
+  "twelve_hours",
+  "twenty_four_hours",
+];
+
+function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
+  return t(`subs.interval.${interval}`);
+}
 
 export function Subscriptions() {
   useLanguagePreference();
@@ -47,6 +64,8 @@ export function Subscriptions() {
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdateInterval, setAutoUpdateInterval] =
+    useState<SubscriptionAutoUpdateInterval>("one_hour");
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
@@ -145,10 +164,12 @@ export function Subscriptions() {
                   u,
                   name.trim() || undefined,
                   autoUpdate,
+                  autoUpdateInterval,
                 );
                 setUrl("");
                 setName("");
                 setAutoUpdate(false);
+                setAutoUpdateInterval("one_hour");
               });
             }}
           >
@@ -201,6 +222,24 @@ export function Subscriptions() {
               >
                 {t("subs.autoUpdate")}
               </FieldLabel>
+              <NativeSelect
+                size="sm"
+                className="w-auto"
+                aria-label={t("subs.interval")}
+                value={autoUpdateInterval}
+                disabled={busy || !autoUpdate}
+                onChange={(e) =>
+                  setAutoUpdateInterval(
+                    e.target.value as SubscriptionAutoUpdateInterval,
+                  )
+                }
+              >
+                {AUTO_UPDATE_INTERVALS.map((interval) => (
+                  <NativeSelectOption key={interval} value={interval}>
+                    {intervalLabel(interval)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
             </Field>
           </form>
           {httpWarn ? (
@@ -311,7 +350,11 @@ export function Subscriptions() {
                               aria-label={t("subs.autoUpdate")}
                               onCheckedChange={(checked) =>
                                 void run(() =>
-                                  api.setSubscriptionAutoUpdate(s.id, checked),
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    checked,
+                                    s.auto_update_interval ?? "one_hour",
+                                  ),
                                 )
                               }
                             />
@@ -321,6 +364,32 @@ export function Subscriptions() {
                             >
                               {t("subs.autoUpdate")}
                             </FieldLabel>
+                            <NativeSelect
+                              size="sm"
+                              className="w-auto"
+                              aria-label={t("subs.interval")}
+                              value={s.auto_update_interval ?? "one_hour"}
+                              disabled={busy || !s.auto_update}
+                              onChange={(e) =>
+                                void run(() =>
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    s.auto_update,
+                                    e.target
+                                      .value as SubscriptionAutoUpdateInterval,
+                                  ),
+                                )
+                              }
+                            >
+                              {AUTO_UPDATE_INTERVALS.map((interval) => (
+                                <NativeSelectOption
+                                  key={interval}
+                                  value={interval}
+                                >
+                                  {intervalLabel(interval)}
+                                </NativeSelectOption>
+                              ))}
+                            </NativeSelect>
                           </Field>
                           <Button
                             type="button"

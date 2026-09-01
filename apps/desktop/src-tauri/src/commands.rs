@@ -976,6 +976,8 @@ pub struct AddSubscriptionRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub auto_update: bool,
+    #[serde(default)]
+    pub auto_update_interval: Option<ice_subscription::AutoUpdateInterval>,
 }
 
 #[tauri::command]
@@ -986,13 +988,18 @@ pub async fn add_subscription(
     run_blocking("add_subscription", move || {
         let state = app.state::<AppState>();
         let redacted = redact_subscription_url_for_log(&req.url);
-        tracing::info!(url = %redacted, name = ?req.name, auto_update = req.auto_update, "add_subscription: start");
+        tracing::info!(url = %redacted, name = ?req.name, auto_update = req.auto_update, interval = ?req.auto_update_interval, "add_subscription: start");
         // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
         // save_settings are not queued behind it; the lock is taken for the disk write + Apply.
         let paths = SubscriptionPaths::from_app(&state.paths);
         let mgr = SubscriptionManager::open(paths);
         let fetched = mgr
-            .fetch_add(&req.url, req.name.as_deref(), req.auto_update)
+            .fetch_add(
+                &req.url,
+                req.name.as_deref(),
+                req.auto_update,
+                req.auto_update_interval,
+            )
             .map_err(|e| {
                 tracing::warn!(url = %redacted, error = %e.redacted_display(), code = %e.code().as_str(), "add_subscription: fetch/parse failed");
                 AppError::from(e)
@@ -1144,6 +1151,8 @@ pub async fn set_active_subscription(
 pub struct SetAutoUpdateRequest {
     pub id: Uuid,
     pub auto_update: bool,
+    #[serde(default)]
+    pub auto_update_interval: Option<ice_subscription::AutoUpdateInterval>,
 }
 
 #[tauri::command]
@@ -1155,9 +1164,19 @@ pub async fn set_auto_update_subscription(
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let paths = SubscriptionPaths::from_app(&state.paths);
-        let meta = ice_subscription::set_auto_update(&paths, req.id, req.auto_update)
-            .map_err(AppError::from)?;
-        tracing::info!(id = %req.id, auto_update = req.auto_update, "set_auto_update_subscription");
+        let meta = ice_subscription::set_auto_update(
+            &paths,
+            req.id,
+            req.auto_update,
+            req.auto_update_interval,
+        )
+        .map_err(AppError::from)?;
+        tracing::info!(
+            id = %req.id,
+            auto_update = req.auto_update,
+            interval = ?req.auto_update_interval,
+            "set_auto_update_subscription"
+        );
         serde_json::to_value(meta)
             .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))
     })
@@ -2066,6 +2085,7 @@ mod tests {
             etag: None,
             last_modified: None,
             auto_update: false,
+            auto_update_interval: None,
         };
         let nodes = vec![NormalizedOutbound {
             tag: "n1".into(),
@@ -2128,6 +2148,7 @@ mod tests {
             etag: None,
             last_modified: None,
             auto_update: false,
+            auto_update_interval: None,
         };
         let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![
             NormalizedOutbound {

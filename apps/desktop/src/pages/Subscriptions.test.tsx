@@ -40,6 +40,7 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
     etag: null,
     last_modified: null,
     auto_update: false,
+    auto_update_interval: null,
     ...overrides,
   };
 }
@@ -249,6 +250,10 @@ describe("Subscriptions", () => {
     fireEvent.click(importSwitch);
     expect(importSwitch).toBeChecked();
 
+    const interval = view.getByLabelText("更新间隔");
+    expect(interval).toBeEnabled();
+    fireEvent.change(interval, { target: { value: "six_hours" } });
+
     fireEvent.change(
       view.getByPlaceholderText("订阅 URL（https 优先）"),
       { target: { value: "https://example.com/new" } },
@@ -260,10 +265,12 @@ describe("Subscriptions", () => {
         "https://example.com/new",
         undefined,
         true,
+        "six_hours",
       );
     });
     await waitFor(() => {
       expect(importSwitch).not.toBeChecked();
+      expect(interval).toBeDisabled();
     });
   });
 
@@ -291,11 +298,37 @@ describe("Subscriptions", () => {
       expect(setAutoUpdate).toHaveBeenCalledWith(
         "22222222-2222-2222-2222-222222222222",
         true,
+        "one_hour",
       );
     });
 
     const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
     expect(within(rowA).getAllByRole("switch", { name: "自动更新" })[0]).toBeChecked();
+  });
+
+  it("changes the auto-update interval from a subscription row", async () => {
+    const setAutoUpdate = vi.fn().mockResolvedValue({});
+    vi.mocked(api.setSubscriptionAutoUpdate).mockImplementation(setAutoUpdate);
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "a", auto_update: true, id: "11111111-1111-1111-1111-111111111111" }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
+    const interval = within(rowA).getByLabelText("更新间隔");
+    expect(interval).toHaveValue("one_hour");
+    fireEvent.change(interval, { target: { value: "twelve_hours" } });
+    await waitFor(() => {
+      expect(setAutoUpdate).toHaveBeenCalledWith(
+        "11111111-1111-1111-1111-111111111111",
+        true,
+        "twelve_hours",
+      );
+    });
   });
 
   it("marks active subscription and switches via setSubscriptionActive", async () => {

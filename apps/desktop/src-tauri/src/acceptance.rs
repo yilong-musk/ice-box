@@ -175,7 +175,12 @@ mod tests {
         );
 
         let meta = mgr
-            .add("https://example.com/clash-mixed", Some("G9 clash"), false)
+            .add(
+                "https://example.com/clash-mixed",
+                Some("G9 clash"),
+                false,
+                None,
+            )
             .expect("import clash fixture");
         assert_eq!(meta.format, SubscriptionFormat::Clash);
         assert!(meta.node_count >= 5, "expected known types from fixture");
@@ -316,6 +321,7 @@ mod live {
             "https://example.com/singbox-fixture",
             Some("G9 live"),
             false,
+            None,
         )
         .expect("seed subscription");
     }
@@ -550,6 +556,7 @@ mod live {
                 "https://example.com/clash-full",
                 Some("G9 clash full"),
                 false,
+                None,
             )
             .expect("import full clash fixture");
         assert_eq!(meta.node_count, 90);
@@ -621,8 +628,13 @@ mod live {
                 }),
             },
         );
-        mgr.add("https://example.com/clash-groups", Some("G9 groups"), false)
-            .expect("import");
+        mgr.add(
+            "https://example.com/clash-groups",
+            Some("G9 groups"),
+            false,
+            None,
+        )
+        .expect("import");
 
         let settings = settings();
         let mut core = CoreController::new();

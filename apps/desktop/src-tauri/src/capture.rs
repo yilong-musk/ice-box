@@ -1793,6 +1793,7 @@ mod tests {
             etag: None,
             last_modified: None,
             auto_update: false,
+            auto_update_interval: None,
         };
         let nodes = vec![ice_config::NormalizedOutbound {
             tag: "n1".into(),

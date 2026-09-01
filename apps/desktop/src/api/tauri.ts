@@ -92,6 +92,13 @@ export type AppSettings = {
   language: "system" | "zh" | "en";
 };
 
+export type SubscriptionAutoUpdateInterval =
+  | "one_hour"
+  | "three_hours"
+  | "six_hours"
+  | "twelve_hours"
+  | "twenty_four_hours";
+
 export type SubscriptionMeta = {
   id: string;
   name: string;
@@ -108,6 +115,7 @@ export type SubscriptionMeta = {
   etag: string | null;
   last_modified: string | null;
   auto_update: boolean;
+  auto_update_interval: SubscriptionAutoUpdateInterval | null;
 };
 
 export type NodeInfo = {
@@ -235,9 +243,19 @@ export const api = {
     invoke<void>("set_tray_language", { language }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
-  addSubscription: (url: string, name?: string, autoUpdate = false) =>
+  addSubscription: (
+    url: string,
+    name?: string,
+    autoUpdate = false,
+    interval: SubscriptionAutoUpdateInterval = "one_hour",
+  ) =>
     invoke<SubscriptionMeta>("add_subscription", {
-      req: { url, name: name ?? null, auto_update: autoUpdate },
+      req: {
+        url,
+        name: name ?? null,
+        auto_update: autoUpdate,
+        auto_update_interval: autoUpdate ? interval : null,
+      },
     }),
   removeSubscription: (id: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>(
@@ -252,9 +270,13 @@ export const api = {
     invoke<SubscriptionMeta>("set_active_subscription", {
       req: { id, active },
     }),
-  setSubscriptionAutoUpdate: (id: string, autoUpdate: boolean) =>
+  setSubscriptionAutoUpdate: (
+    id: string,
+    autoUpdate: boolean,
+    interval: SubscriptionAutoUpdateInterval,
+  ) =>
     invoke<SubscriptionMeta>("set_auto_update_subscription", {
-      req: { id, auto_update: autoUpdate },
+      req: { id, auto_update: autoUpdate, auto_update_interval: interval },
     }),
   applySubscriptions: () => invoke<void>("apply_subscriptions"),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
