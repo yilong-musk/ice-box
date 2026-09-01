@@ -31,9 +31,19 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  t,
+  useLanguagePreference,
+  type LanguagePreference,
+  type MessageKey,
+} from "../lib/i18n";
 import { useThemePreference, type ThemePreference } from "../lib/theme";
 
 const defaults: AppSettings = {
@@ -46,6 +56,7 @@ const defaults: AppSettings = {
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,
+  language: "system",
   tun: {
     enabled: false,
     interface_name: null,
@@ -60,15 +71,25 @@ const defaults: AppSettings = {
 };
 
 const APPEARANCE_OPTIONS = [
-  ["system", "跟随系统"],
-  ["light", "浅色"],
-  ["dark", "深色"],
-] as const satisfies ReadonlyArray<readonly [ThemePreference, string]>;
+  ["system", "settings.appearance.system"],
+  ["light", "settings.appearance.light"],
+  ["dark", "settings.appearance.dark"],
+] as const satisfies ReadonlyArray<
+  readonly [ThemePreference, MessageKey]
+>;
+
+const LANGUAGE_OPTIONS = [
+  ["system", "settings.language.system"],
+  ["zh", "settings.language.zh"],
+  ["en", "settings.language.en"],
+] as const satisfies ReadonlyArray<
+  readonly [LanguagePreference, MessageKey]
+>;
 
 /** TUN lifecycle labels shown in the settings card while a transition runs. */
-const TUN_TRANSITION_LABELS: Record<string, string> = {
-  preparing: "正在启用 TUN…",
-  stopping: "正在关闭 TUN…",
+const TUN_TRANSITION_KEYS: Record<string, MessageKey> = {
+  preparing: "settings.tunTransition.preparing",
+  stopping: "settings.tunTransition.stopping",
 };
 
 /// Debounce before persisting a changed setting (typing coalesces; switches
@@ -84,7 +105,9 @@ export function Settings({ active = true }: { active?: boolean }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const tunInstall = useTunInstallDialog(installHelperThenEnableTun);
-  const { preference, setPreference } = useThemePreference();
+  const { preference, setPreference } = useLanguagePreference();
+  const { preference: themePreference, setPreference: setThemePreference } =
+    useThemePreference();
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<AppSettings | null>(null);
@@ -107,6 +130,12 @@ export function Settings({ active = true }: { active?: boolean }) {
           setForm(settings);
           setStatus(s);
           setLoaded(true);
+          // settings.json is the authoritative language preference; re-apply
+          // it when it differs from the cached one (e.g. first launch after a
+          // storage reset, or a manual edit of the settings file).
+          if (settings.language !== preference) {
+            setPreference(settings.language);
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -117,6 +146,8 @@ export function Settings({ active = true }: { active?: boolean }) {
     return () => {
       cancelled = true;
     };
+    // Only consulted when settings are (re)loaded, so `preference` is
+    // intentionally not a dependency.
   }, [active]);
 
   function clearFieldError(key: string) {
@@ -154,7 +185,7 @@ export function Settings({ active = true }: { active?: boolean }) {
       }
       setStatus(s);
       if (s.helper_installed !== expectedInstalled) {
-        setError("辅助组件状态未确认，未更改 TUN 设置；请稍后重试");
+        setError(t("settings.helperStatusUnconfirmed"));
         return;
       }
       await afterReady?.();
@@ -177,7 +208,7 @@ export function Settings({ active = true }: { active?: boolean }) {
     const errs = validateForm(candidate);
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
-      throw new Error("TUN 设置未保存：请先修正上方表单中的错误后重试");
+      throw new Error(t("settings.tunNotSaved"));
     }
     await api.saveSettings(candidate);
     setForm(candidate);
@@ -197,16 +228,18 @@ export function Settings({ active = true }: { active?: boolean }) {
   function validateForm(next: AppSettings): Record<string, string> {
     const errs: Record<string, string> = {};
     if (!next.allow_lan && !isLoopbackListenHost(next.mixed_listen)) {
-      errs.mixed_listen = formatListenValidationError("Mixed 监听");
+      errs.mixed_listen = formatListenValidationError(t("settings.mixedListen"));
     }
     if (!isLoopbackListenHost(next.clash_api_listen)) {
-      errs.clash_api_listen = formatListenValidationError("Clash API 监听");
+      errs.clash_api_listen = formatListenValidationError(
+        t("settings.clashListen"),
+      );
     }
     if (parsePortInput(String(next.mixed_port)) === undefined) {
-      errs.mixed_port = formatPortValidationError("Mixed 端口");
+      errs.mixed_port = formatPortValidationError(t("settings.mixedPort"));
     }
     if (parsePortInput(String(next.clash_api_port)) === undefined) {
-      errs.clash_api_port = formatPortValidationError("Clash API 端口");
+      errs.clash_api_port = formatPortValidationError(t("settings.clashPort"));
     }
     if (
       parsePortInput(String(next.mixed_port)) !== undefined &&
@@ -283,7 +316,7 @@ export function Settings({ active = true }: { active?: boolean }) {
   return (
     <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
-      {saved && <OkAlert className="shrink-0">已保存</OkAlert>}
+      {saved && <OkAlert className="shrink-0">{t("common.saved")}</OkAlert>}
 
       <ScrollArea
         type="scroll"
@@ -293,10 +326,8 @@ export function Settings({ active = true }: { active?: boolean }) {
         <div className="flex w-full flex-col gap-3">
           <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
         <CardHeader>
-          <CardTitle>外观</CardTitle>
-          <CardDescription>
-            默认跟随系统深浅色。切换后立即生效，不必点保存。
-          </CardDescription>
+          <CardTitle>{t("settings.appearance")}</CardTitle>
+          <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <ToggleGroup
@@ -304,31 +335,69 @@ export function Settings({ active = true }: { active?: boolean }) {
             variant="outline"
             size="sm"
             spacing={2}
-            value={preference}
+            value={themePreference}
             onValueChange={(value) => {
-              if (value === "system" || value === "light" || value === "dark") {
-                setPreference(value);
+              if (
+                value === "system" ||
+                value === "light" ||
+                value === "dark"
+              ) {
+                setThemePreference(value);
               }
             }}
             className="w-full"
-            aria-label="外观"
+            aria-label={t("settings.appearance")}
           >
-            {APPEARANCE_OPTIONS.map(([value, label]) => (
+            {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
               <ToggleGroupItem key={value} value={value} className="flex-1">
-                {label}
+                {t(labelKey)}
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
         </CardContent>
       </Card>
 
+          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+        <CardHeader>
+          <CardTitle>{t("settings.language")}</CardTitle>
+          <CardDescription>{t("settings.languageDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Field>
+            <FieldLabel htmlFor="settings-language">
+              {t("settings.language")}
+            </FieldLabel>
+            <NativeSelect
+              id="settings-language"
+              aria-label={t("settings.language")}
+              size="sm"
+              className="w-full max-w-60"
+              value={form.language}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === "system" || value === "zh" || value === "en") {
+                  // Apply immediately (localStorage cache + live re-render);
+                  // the auto-save pipeline persists it in settings.json.
+                  setPreference(value);
+                  setForm({ ...form, language: value });
+                }
+              }}
+            >
+              {LANGUAGE_OPTIONS.map(([value, labelKey]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {t(labelKey)}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+        </CardContent>
+      </Card>
+
       {tunUiHidden ? null : (
         <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
-            <CardTitle>TUN 模式</CardTitle>
-            <CardDescription>
-              开启后，主页的代理服务将使用透明代理接管应用流量（替代系统代理接管）
-            </CardDescription>
+            <CardTitle>{t("settings.tun")}</CardTitle>
+            <CardDescription>{t("settings.tunDesc")}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3">
@@ -345,7 +414,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                   status?.tun_status === "stopping" ||
                   status?.helper_stale === true
                 }
-                aria-label="启用 TUN 模式"
+                aria-label={t("settings.tunEnable")}
                 onCheckedChange={(checked) => {
                   if (checked === true && status?.helper_installed !== true) {
                     // No authorized helper: guide the user to install it first;
@@ -360,36 +429,40 @@ export function Settings({ active = true }: { active?: boolean }) {
                   });
                 }}
               />
-              <FieldLabel htmlFor="settings-tun-enabled">启用 TUN 模式</FieldLabel>
+              <FieldLabel htmlFor="settings-tun-enabled">
+                {t("settings.tunEnable")}
+              </FieldLabel>
             </Field>
-            {TUN_TRANSITION_LABELS[status?.tun_status ?? ""] ? (
+            {TUN_TRANSITION_KEYS[status?.tun_status ?? ""] ? (
               <FieldDescription>
-                {TUN_TRANSITION_LABELS[status?.tun_status ?? ""]}
+                {t(TUN_TRANSITION_KEYS[status?.tun_status ?? ""])}
               </FieldDescription>
             ) : status?.tun_status === "recovery_required" ? (
               <FieldDescription>
-                TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换
+                {t("settings.tunRecoveryRequired")}
               </FieldDescription>
             ) : status?.tun_available === false ? (
               <FieldDescription>
                 {status?.tun_unavailable_reason ??
-                  "当前平台暂不支持 TUN 模式"}
+                  t("settings.tunNotSupported")}
               </FieldDescription>
             ) : status?.traffic_capture === "tun" ? (
               <FieldDescription>
-                当前通过 TUN 接管流量
-                {status.tun_interface ? `（接口 ${status.tun_interface}）` : ""}；
-                关闭后立即切回系统代理接管
+                {t("settings.tunActiveWithIface", {
+                  interface: status.tun_interface
+                    ? `（${t("common.withIfaceLabel", {
+                        iface: status.tun_interface,
+                      })}）`
+                    : "",
+                })}
               </FieldDescription>
             ) : status?.helper_stale === true ? (
-              <FieldDescription>
-                应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN
-              </FieldDescription>
+              <FieldDescription>{t("settings.helperStale")}</FieldDescription>
             ) : (
               <FieldDescription>
                 {status?.helper_installed
-                  ? "辅助组件已安装并授权，可直接启用 TUN；切换后自动保存并生效"
-                  : "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查"}
+                  ? t("settings.helperReady")
+                  : t("settings.helperNeeded")}
               </FieldDescription>
             )}
             <div className="flex flex-wrap gap-2">
@@ -407,8 +480,8 @@ export function Settings({ active = true }: { active?: boolean }) {
                 }
               >
                 {status?.helper_stale === true
-                  ? "更新辅助组件"
-                  : "安装辅助组件"}
+                  ? t("settings.updateHelper")
+                  : t("settings.installHelper")}
               </Button>
               <Button
                 type="button"
@@ -430,7 +503,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                   status?.traffic_capture === "tun"
                 }
               >
-                卸载辅助组件
+                {t("settings.uninstallHelper")}
               </Button>
             </div>
             </div>
@@ -440,17 +513,15 @@ export function Settings({ active = true }: { active?: boolean }) {
 
       <Card size="sm" className="w-full">
         <CardHeader className="shrink-0">
-          <CardTitle>入站</CardTitle>
-          <CardDescription>
-            Mixed 与 Clash API 监听地址（更改后自动保存）
-          </CardDescription>
+          <CardTitle>{t("settings.inbound")}</CardTitle>
+          <CardDescription>{t("settings.inboundDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-3">
             <FieldGroup className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-2">
               <Field data-invalid={!!fieldErrors.mixed_listen || undefined}>
                 <FieldLabel htmlFor="settings-mixed-listen">
-                  Mixed 监听
+                  {t("settings.mixedListen")}
                 </FieldLabel>
                 <Input
                   id="settings-mixed-listen"
@@ -467,7 +538,9 @@ export function Settings({ active = true }: { active?: boolean }) {
                 ) : null}
               </Field>
               <Field data-invalid={!!fieldErrors.mixed_port || undefined}>
-                <FieldLabel htmlFor="settings-mixed-port">Mixed 端口</FieldLabel>
+                <FieldLabel htmlFor="settings-mixed-port">
+                  {t("settings.mixedPort")}
+                </FieldLabel>
                 <Input
                   id="settings-mixed-port"
                   type="number"
@@ -481,7 +554,9 @@ export function Settings({ active = true }: { active?: boolean }) {
                     if (raw.trim() === "") {
                       setFieldErrors((prev) => ({
                         ...prev,
-                        mixed_port: formatPortValidationError("Mixed 端口"),
+                        mixed_port: formatPortValidationError(
+                          t("settings.mixedPort"),
+                        ),
                       }));
                       setForm({ ...form, mixed_port: Number.NaN });
                       return;
@@ -499,7 +574,7 @@ export function Settings({ active = true }: { active?: boolean }) {
               </Field>
               <Field data-invalid={!!fieldErrors.clash_api_listen || undefined}>
                 <FieldLabel htmlFor="settings-clash-listen">
-                  Clash API 监听
+                  {t("settings.clashListen")}
                 </FieldLabel>
                 <Input
                   id="settings-clash-listen"
@@ -517,7 +592,7 @@ export function Settings({ active = true }: { active?: boolean }) {
               </Field>
               <Field data-invalid={!!fieldErrors.clash_api_port || undefined}>
                 <FieldLabel htmlFor="settings-clash-port">
-                  Clash API 端口
+                  {t("settings.clashPort")}
                 </FieldLabel>
                 <Input
                   id="settings-clash-port"
@@ -536,8 +611,9 @@ export function Settings({ active = true }: { active?: boolean }) {
                     if (raw.trim() === "") {
                       setFieldErrors((prev) => ({
                         ...prev,
-                        clash_api_port:
-                          formatPortValidationError("Clash API 端口"),
+                        clash_api_port: formatPortValidationError(
+                          t("settings.clashPort"),
+                        ),
                       }));
                       setForm({ ...form, clash_api_port: Number.NaN });
                       return;
@@ -560,20 +636,19 @@ export function Settings({ active = true }: { active?: boolean }) {
                 size="sm"
                 checked={form.allow_lan}
                 disabled={busy || !loaded}
-                aria-label="允许局域网共享（Allow LAN）"
+                aria-label={t("settings.allowLan")}
                 onCheckedChange={(checked) => {
                   clearFieldError("mixed_listen");
                   setForm({ ...form, allow_lan: checked === true });
                 }}
               />
               <FieldLabel htmlFor="settings-allow-lan">
-                允许局域网共享（Allow LAN）
+                {t("settings.allowLan")}
               </FieldLabel>
             </Field>
             {form.allow_lan ? (
               <FieldDescription>
-                局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP
-                连接；Clash API 仍仅限本机
+                {t("settings.allowLanDesc")}
               </FieldDescription>
             ) : null}
             <Field orientation="horizontal" className="w-auto gap-2">
@@ -582,7 +657,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                 size="sm"
                 checked={form.auto_default_rules}
                 disabled={busy || !loaded}
-                aria-label="为无规则的订阅附加默认分流规则"
+                aria-label={t("settings.autoDefaultRules")}
                 onCheckedChange={(checked) => {
                   setForm({
                     ...form,
@@ -591,14 +666,12 @@ export function Settings({ active = true }: { active?: boolean }) {
                 }}
               />
               <FieldLabel htmlFor="settings-auto-default-rules">
-                为无规则的订阅附加默认分流规则
+                {t("settings.autoDefaultRules")}
               </FieldLabel>
             </Field>
             {form.auto_default_rules ? (
               <FieldDescription>
-                订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP /
-                国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS
-                分流
+                {t("settings.autoDefaultRulesDesc")}
               </FieldDescription>
             ) : null}
             <div className="flex flex-wrap gap-2">
@@ -613,7 +686,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                     .catch((err) => setError(formatInvokeError(err)))
                 }
               >
-                打开数据目录
+                {t("settings.openDataDir")}
               </Button>
             </div>
           </div>

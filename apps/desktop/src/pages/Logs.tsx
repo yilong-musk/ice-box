@@ -2,12 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, formatInvokeError } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { ErrorAlert } from "../components/StatusAlert";
+import { t, useLanguagePreference } from "../lib/i18n";
 
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
 
 export function Logs({ active = true }: { active?: boolean }) {
+  useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +69,7 @@ export function Logs({ active = true }: { active?: boolean }) {
         onScroll={handleScroll}
         aria-live="polite"
       >
-        {lines.length === 0 ? "（空）" : lines.join("\n")}
+        {lines.length === 0 ? t("logs.empty") : lines.join("\n")}
       </pre>
     </div>
   );

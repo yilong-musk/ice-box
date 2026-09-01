@@ -23,6 +23,20 @@ pub enum ProxyMode {
     Direct,
 }
 
+/// UI language preference. `System` follows the OS locale; the frontend
+/// resolves it to the closest supported language (`zh` / `en`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguagePreference {
+    /// Follow the system locale (default).
+    #[default]
+    System,
+    /// Simplified Chinese.
+    Zh,
+    /// English.
+    En,
+}
+
 /// Capitalized Clash runtime mode, matching sing-box's case-sensitive `mode-list`
 /// membership checks (the pinned 1.13.19 does not accept an emitted `mode_list`).
 ///
@@ -284,6 +298,10 @@ pub struct AppSettings {
     /// existing `settings.json` files.
     #[serde(default = "default_auto_default_rules")]
     pub auto_default_rules: bool,
+    /// UI language; `system` (follow OS locale) for existing `settings.json`
+    /// files.
+    #[serde(default)]
+    pub language: LanguagePreference,
 }
 
 fn default_auto_default_rules() -> bool {
@@ -303,6 +321,7 @@ impl Default for AppSettings {
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
             auto_default_rules: true,
+            language: LanguagePreference::System,
         }
     }
 }
@@ -504,6 +523,45 @@ mod tests {
         .expect("save direct");
         assert_eq!(load_settings(&path).unwrap().proxy_mode, ProxyMode::Direct);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_settings_without_language_loads_as_system() {
+        let path = temp_settings_path("legacy-language");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without language");
+        assert_eq!(s.language, LanguagePreference::System);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn language_round_trips_through_save_and_load() {
+        let path = temp_settings_path("language-roundtrip");
+        for language in [LanguagePreference::Zh, LanguagePreference::En] {
+            save_settings(
+                &path,
+                &AppSettings {
+                    language,
+                    ..AppSettings::default()
+                },
+            )
+            .expect("save language");
+            assert_eq!(load_settings(&path).unwrap().language, language);
+        }
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn language_default_is_system() {
+        assert_eq!(AppSettings::default().language, LanguagePreference::System);
     }
 
     #[test]

@@ -8,6 +8,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import { t, useLanguagePreference } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** Visible window; matches the backend ring buffer (`TRAFFIC_WINDOW_MS`). */
@@ -24,18 +25,18 @@ type Props = {
   className?: string;
 };
 
-const chartConfig = {
-  down: {
-    label: "下行",
-    color: "var(--ok)",
-  },
-  up: {
-    label: "上行",
-    color: "var(--primary)",
-  },
-} satisfies ChartConfig;
-
 export function TrafficChart({ running, paused = false, className }: Props) {
+  useLanguagePreference();
+  const chartConfig: ChartConfig = {
+    down: {
+      label: t("traffic.down"),
+      color: "var(--ok)",
+    },
+    up: {
+      label: t("traffic.up"),
+      color: "var(--primary)",
+    },
+  };
   const [points, setPoints] = useState<Point[]>([]);
   const [latest, setLatest] = useState<TrafficSample | null>(null);
   const [peak, setPeak] = useState<TrafficSample | null>(null);
@@ -115,7 +116,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     return (
       <div className={cn("flex min-h-0 flex-1 flex-col justify-center", className)}>
         <p className="muted text-sm">
-          启动代理服务后显示实时上下行曲线（最近 {WINDOW_SECONDS} 秒）。
+          {t("traffic.idleHint", { n: WINDOW_SECONDS })}
         </p>
       </div>
     );
@@ -131,11 +132,15 @@ export function TrafficChart({ running, paused = false, className }: Props) {
           ↑ {latest ? formatRate(latest.up) : "—"}
         </span>
       </div>
-      {error && <p className="error shrink-0 text-sm">采样中断：{error}</p>}
+      {error && (
+        <p className="error shrink-0 text-sm">
+          {t("traffic.samplingInterrupted", { error })}
+        </p>
+      )}
       <ChartContainer
         config={chartConfig}
         className="aspect-auto min-h-24 w-full flex-1"
-        aria-label="上下行流量曲线"
+        aria-label={t("traffic.chartAria")}
       >
         <AreaChart
           accessibilityLayer
@@ -218,7 +223,10 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         </AreaChart>
       </ChartContainer>
       <p className="muted shrink-0 text-xs">
-        峰值刻度 {formatRate(maxVal)} · 最近 {WINDOW_SECONDS} 秒（后台持续采样）
+        {t("traffic.peak", {
+          rate: formatRate(maxVal),
+          n: WINDOW_SECONDS,
+        })}
       </p>
     </div>
   );

@@ -33,6 +33,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Toggle } from "@/components/ui/toggle";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
+import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -46,11 +47,11 @@ type Props = {
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
-const PROXY_MODES = [
-  ["rule", "规则"],
-  ["global", "全局"],
-  ["direct", "直连"],
-] as const;
+const PROXY_MODE_KEYS = [
+  ["rule", "home.mode.rule"],
+  ["global", "home.mode.global"],
+  ["direct", "home.mode.direct"],
+] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
 
 function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   const node = nodes.find((n) => n.tag === tag);
@@ -64,6 +65,7 @@ function formatOutbound(tag: string, nodes: NodeInfo[]): string {
 }
 
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
+  useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -230,7 +232,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const outboundLabel =
     nodes.length === 0
       ? running
-        ? "直连"
+        ? t("home.outboundDirect")
         : "—"
       : selectedTag
         ? formatOutbound(selectedTag, nodes)
@@ -303,46 +305,56 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
       : "—";
-  const emptyTitle = running ? "仅直连模式运行中" : "还没有可用节点";
+  const emptyTitle = running
+    ? t("home.empty.runningTitle")
+    : t("home.empty.idleTitle");
   const emptyDescription = running
-    ? "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管流量（系统代理或 TUN）。"
-    : "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。";
+    ? t("home.empty.runningDesc")
+    : t("home.empty.idleDesc");
   const captureLabel =
     status?.traffic_capture === "tun"
-      ? `TUN${status.tun_interface ? `（${status.tun_interface}）` : ""}`
+      ? t("home.capture.tun", {
+          iface: status.tun_interface
+            ? t("common.withIface", { iface: status.tun_interface })
+            : "",
+        })
       : status?.traffic_capture === "system_proxy"
-        ? "系统代理"
-        : "未接管";
+        ? t("home.capture.systemProxy")
+        : t("home.capture.none");
   const infoRows: { label: string; value: string; valueClassName?: string }[] = [
     {
-      label: "内核",
+      label: t("home.info.core"),
       value: core?.status ?? "—",
       valueClassName: `status status-${core?.status ?? "unknown"}`,
     },
-    { label: "捕获", value: captureLabel },
-    { label: "当前出站", value: outboundLabel },
+    { label: t("home.info.capture"), value: captureLabel },
+    { label: t("home.info.outbound"), value: outboundLabel },
     {
-      label: "入站",
+      label: t("home.info.inbound"),
       value: inboundLabel,
       valueClassName: "font-mono tabular-nums",
     },
   ];
   if (core?.message) {
-    infoRows.push({ label: "消息", value: core.message });
+    infoRows.push({ label: t("home.info.message"), value: core.message });
   }
 
-  const powerTitle = proxyOn ? "停止代理服务" : "启动代理服务";
+  const powerTitle = proxyOn ? t("home.power.stop") : t("home.power.start");
   const powerSubtitle = busy
-    ? "处理中…"
+    ? t("home.power.busy")
     : tunActive
-      ? `TUN 已接管${status?.tun_interface ? `（${status.tun_interface}）` : ""}`
+      ? t("home.power.tunActive", {
+          iface: status?.tun_interface
+            ? t("common.withIface", { iface: status.tun_interface })
+            : "",
+        })
       : proxyLive
-        ? "系统代理已接管"
+        ? t("home.power.proxyLive")
         : proxyOn
-          ? "已记录，可恢复系统代理"
+          ? t("home.power.recorded")
           : configuredTun
-            ? "将启用 TUN 模式接管流量"
-            : "点击接管系统代理";
+            ? t("home.power.tunReady")
+            : t("home.power.clickToCapture");
 
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
@@ -353,11 +365,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         running &&
         proxyRecorded &&
         status?.system_proxy_applied === false && (
-          <WarnAlert className="shrink-0">系统代理未接管或已不同步</WarnAlert>
+          <WarnAlert className="shrink-0">
+            {t("home.warn.proxyOutOfSync")}
+          </WarnAlert>
         )}
       {permissionRequired && (
         <WarnAlert className="shrink-0">
-          启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。
+          {t("home.warn.permissionRequired")}
           <span className="mt-2 flex flex-wrap gap-2">
             <Button
               type="button"
@@ -365,7 +379,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               onClick={onInstallHelper}
               disabled={busy || status?.helper_installed === true}
             >
-              安装辅助组件
+              {t("home.installHelper")}
             </Button>
             <Button
               type="button"
@@ -374,14 +388,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               onClick={onFallbackToSystemProxy}
               disabled={busy}
             >
-              停用 TUN，改用系统代理
+              {t("home.fallbackToSystemProxy")}
             </Button>
           </span>
         </WarnAlert>
       )}
       {recoveryRequired && (
         <ErrorAlert className="shrink-0">
-          TUN 清理未确认，已阻止新的 TUN 激活。清理不确定时不会启用系统代理回退；请先重试恢复。
+          {t("home.warn.recoveryRequired")}
           <span className="mt-2 flex flex-wrap gap-2">
             <Button
               type="button"
@@ -390,7 +404,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               onClick={onRecoverTun}
               disabled={busy}
             >
-              重试恢复
+              {t("home.retryRecovery")}
             </Button>
           </span>
         </ErrorAlert>
@@ -400,7 +414,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       <div className="grid shrink-0 grid-cols-2 items-stretch gap-3">
         <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
-            <CardTitle>代理状态</CardTitle>
+            <CardTitle>{t("home.proxyStatus")}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
             {proxyAvailable || configuredTun || tunActive ? (
@@ -432,13 +446,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 </Button>
                 {configuredTun && !tunActive && !tunAvailable && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {status?.tun_unavailable_reason ?? "TUN 暂不可用"}
+                    {status?.tun_unavailable_reason ??
+                      t("home.tunUnavailable")}
                   </p>
                 )}
               </>
             ) : (
               <p className="muted text-sm">
-                当前平台不支持系统代理或 TUN 接管
+                {t("home.unsupported")}
               </p>
             )}
             <ToggleGroup
@@ -455,11 +470,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               }}
               disabled={modeBusy || busy}
               className="mt-3 w-full"
-              aria-label="模式"
+              aria-label={t("home.modeAria")}
             >
-              {PROXY_MODES.map(([mode, label]) => (
+              {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
                 <ToggleGroupItem key={mode} value={mode} className="flex-1">
-                  {label}
+                  {t(labelKey)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -489,9 +504,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   status?.helper_stale === true
                 }
                 className="mt-3 w-full"
-                aria-label="TUN 模式"
+                aria-label={t("home.tunMode")}
               >
-                TUN 模式
+                {t("home.tunMode")}
               </Toggle>
             )}
           </CardContent>
@@ -499,7 +514,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
         <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
-            <CardTitle>信息</CardTitle>
+            <CardTitle>{t("home.infoTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             <ItemGroup className="gap-0">
@@ -521,8 +536,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>流量</CardTitle>
-          <CardDescription>最近 60 秒上下行</CardDescription>
+          <CardTitle>{t("home.trafficTitle")}</CardTitle>
+          <CardDescription>{t("home.trafficDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
           {nodes.length === 0 && !running ? (
@@ -531,7 +546,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               className="my-auto"
               title={emptyTitle}
               description={emptyDescription}
-              actionLabel="前往订阅页导入"
+              actionLabel={t("home.goToSubs")}
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
@@ -541,7 +556,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{emptyTitle}</p>
                     <p className="text-xs text-muted-foreground">
-                      导入订阅后会自动切换到节点分流。
+                      {t("home.autoSwitchHint")}
                     </p>
                   </div>
                   <Button
@@ -549,7 +564,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     size="sm"
                     onClick={() => onNavigate?.("subs")}
                   >
-                    前往订阅页导入
+                    {t("home.goToSubs")}
                   </Button>
                 </div>
               ) : null}

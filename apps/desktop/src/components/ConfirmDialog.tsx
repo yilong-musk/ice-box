@@ -1,6 +1,7 @@
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
+import { t, useLanguagePreference } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type ConfirmDialogProps = {
@@ -22,12 +23,15 @@ function ConfirmDialog({
   className,
   title,
   description,
-  confirmLabel = "确认",
-  cancelLabel = "取消",
+  confirmLabel,
+  cancelLabel,
   busy = false,
   onConfirm,
   ...props
 }: ConfirmDialogProps & { className?: string }) {
+  useLanguagePreference();
+  const resolvedConfirm = confirmLabel ?? t("common.confirm");
+  const resolvedCancel = cancelLabel ?? t("common.cancel");
   return (
     <AlertDialogPrimitive.Root
       open={props.open}
@@ -69,7 +73,7 @@ function ConfirmDialog({
               disabled={busy}
               onClick={() => props.onOpenChange(false)}
             >
-              {cancelLabel}
+              {resolvedCancel}
             </Button>
             <Button
               type="button"
@@ -78,7 +82,7 @@ function ConfirmDialog({
               disabled={busy}
               onClick={onConfirm}
             >
-              {confirmLabel}
+              {resolvedConfirm}
             </Button>
           </div>
         </AlertDialogPrimitive.Content>

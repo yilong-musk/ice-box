@@ -62,7 +62,7 @@ fn refuse_while_tun_active(state: &AppState) -> Result<(), AppError> {
     {
         return Err(AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            "TUN 捕获仍处于激活状态：请先关闭 TUN 再操作辅助组件",
+            "TUN capture is still active: disable TUN before managing the helper",
         ));
     }
     Ok(())
@@ -91,11 +91,11 @@ fn run_elevated(tool: &Path, args: &[&str]) -> Result<ElevateOutcome, AppError> 
         Ok(outcome) => Ok(outcome),
         Err(ElevateError::Cancelled) => Err(AppError::with_code(
             ERR_HELPER_INSTALL_CANCELLED,
-            "用户取消了系统授权",
+            "system authorization cancelled by the user",
         )),
         Err(err) => Err(AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            format!("提权执行失败：{err}"),
+            format!("privileged execution failed: {err}"),
         )),
     }
 }
@@ -109,7 +109,7 @@ fn parse_outcome(outcome: ElevateOutcome) -> Result<(), AppError> {
         let detail = line.strip_prefix("ERROR: ").unwrap_or(line);
         Err(AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            format!("辅助组件操作失败：{detail}"),
+            format!("helper operation failed: {detail}"),
         ))
     }
 }
@@ -120,11 +120,14 @@ fn resolve_install_inputs(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), 
     let helper = helper_binary(resource_dir.as_deref()).ok_or_else(|| {
         AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            "未找到辅助组件资源（ice-helper）；请重新构建应用后重试",
+            "helper resource (ice-helper) not found; rebuild the app and retry",
         )
     })?;
     let core = crate::orchestrate::resolve_binary(resource_dir.as_deref()).map_err(|err| {
-        AppError::with_code(ERR_HELPER_INSTALL_FAILED, format!("未找到内核资源：{err}"))
+        AppError::with_code(
+            ERR_HELPER_INSTALL_FAILED,
+            format!("core resource not found: {err}"),
+        )
     })?;
     Ok((helper, core))
 }
@@ -176,7 +179,7 @@ fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
     let token = ice_tun_sys::helper::helper_token(data_dir).map_err(|err| {
         AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            format!("辅助组件未授权：{}", err.message),
+            format!("helper not authorized: {}", err.message),
         )
     })?;
     for _ in 0..ATTEMPTS {
@@ -187,7 +190,7 @@ fn wait_for_helper_ready(data_dir: &Path) -> Result<(), AppError> {
     }
     Err(AppError::with_code(
         ERR_HELPER_NOT_READY,
-        "辅助组件已安装但守护进程尚未就绪，请稍后重试",
+        "helper installed, but its daemon is not ready yet; try again later",
     ))
 }
 
@@ -282,7 +285,7 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     if !cfg!(target_os = "macos") {
         return Err(AppError::with_code(
             "tun.not_supported",
-            "辅助组件安装仅支持 macOS",
+            "helper install is only supported on macOS",
         ));
     }
     let state = app.state::<AppState>();
@@ -292,7 +295,7 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     if !data_dir.is_dir() {
         return Err(AppError::with_code(
             ERR_HELPER_INSTALL_FAILED,
-            format!("数据目录不存在：{}", data_dir.display()),
+            format!("data directory does not exist: {}", data_dir.display()),
         ));
     }
     let args = [
@@ -321,7 +324,7 @@ pub fn uninstall_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     if !cfg!(target_os = "macos") {
         return Err(AppError::with_code(
             "tun.not_supported",
-            "辅助组件卸载仅支持 macOS",
+            "helper uninstall is only supported on macOS",
         ));
     }
     let state = app.state::<AppState>();
@@ -331,7 +334,10 @@ pub fn uninstall_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
         .filter(|p| p.is_file())
         .or_else(|| helper_binary(app.path().resource_dir().ok().as_deref()))
         .ok_or_else(|| {
-            AppError::with_code(ERR_HELPER_INSTALL_FAILED, "未找到辅助组件二进制；无法卸载")
+            AppError::with_code(
+                ERR_HELPER_INSTALL_FAILED,
+                "helper binary not found; cannot uninstall",
+            )
         })?;
     let data_dir = state.paths.root();
     let args = ["uninstall", data_dir.to_str().unwrap_or_default()];

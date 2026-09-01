@@ -38,8 +38,10 @@ import {
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import { t, useLanguagePreference } from "../lib/i18n";
 
 export function Subscriptions() {
+  useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
   const [url, setUrl] = useState("");
@@ -104,9 +106,9 @@ export function Subscriptions() {
   function subscriptionSummary(s: SubscriptionMeta): string {
     const parts = [
       s.format,
-      `${s.node_count} 节点`,
-      `${s.group_count ?? 0} 策略组`,
-      `${s.rule_count ?? 0} 规则`,
+      t("subs.summaryNodes", { n: s.node_count }),
+      t("subs.summaryGroups", { n: s.group_count ?? 0 }),
+      t("subs.summaryRules", { n: s.rule_count ?? 0 }),
     ];
     if (s.has_dns) parts.push("DNS");
     if (s.last_updated) {
@@ -121,14 +123,14 @@ export function Subscriptions() {
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
       {updateFailures && (
         <ErrorAlert className="shrink-0">
-          部分订阅更新失败：{updateFailures}
+          {t("subs.partialUpdateFailed", { details: updateFailures })}
         </ErrorAlert>
       )}
 
       <Card size="sm" className="shrink-0">
         <CardHeader>
-          <CardTitle>导入</CardTitle>
-          <CardDescription>粘贴订阅 URL，可选填写名称</CardDescription>
+          <CardTitle>{t("subs.import")}</CardTitle>
+          <CardDescription>{t("subs.importDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <form
@@ -146,11 +148,11 @@ export function Subscriptions() {
           >
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="sub-url">订阅 URL</FieldLabel>
+                <FieldLabel htmlFor="sub-url">{t("subs.url")}</FieldLabel>
                 <Input
                   id="sub-url"
                   type="url"
-                  placeholder="订阅 URL（https 优先）"
+                  placeholder={t("subs.urlPlaceholder")}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   disabled={busy}
@@ -159,11 +161,11 @@ export function Subscriptions() {
               </Field>
               <div className="flex flex-wrap items-end gap-2">
                 <Field className="min-w-48 flex-1">
-                  <FieldLabel htmlFor="sub-name">名称</FieldLabel>
+                  <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
                   <Input
                     id="sub-name"
                     type="text"
-                    placeholder="名称（可选）"
+                    placeholder={t("subs.namePlaceholder")}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     disabled={busy}
@@ -174,26 +176,24 @@ export function Subscriptions() {
                   size="sm"
                   disabled={busy || !url.trim()}
                 >
-                  导入
+                  {t("subs.importAction")}
                 </Button>
               </div>
             </FieldGroup>
           </form>
           {httpWarn ? (
-            <WarnAlert>
-              当前为 http://，传输未加密，建议改用 https。
-            </WarnAlert>
+            <WarnAlert>{t("subs.httpWarn")}</WarnAlert>
           ) : null}
         </CardContent>
       </Card>
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>订阅</CardTitle>
+          <CardTitle>{t("subs.title")}</CardTitle>
           <CardDescription>
             {items.length === 0
-              ? "尚未导入订阅"
-              : `${items.length} 条`}
+              ? t("subs.emptyHint")
+              : t("subs.count", { n: items.length })}
           </CardDescription>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
@@ -205,7 +205,7 @@ export function Subscriptions() {
                 void run(() => api.updateAllSubscriptions(), true)
               }
             >
-              {updating ? "更新中" : "全部更新"}
+              {updating ? t("common.updating") : t("subs.updateAll")}
             </Button>
             <Button
               type="button"
@@ -214,17 +214,15 @@ export function Subscriptions() {
               disabled={busy || items.length === 0}
               onClick={() => void run(() => api.applySubscriptions())}
             >
-              应用配置
+              {t("subs.apply")}
             </Button>
           </CardAction>
         </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-1">
-              <CardTitle>暂无订阅</CardTitle>
-              <CardDescription>
-                打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。
-              </CardDescription>
+              <CardTitle>{t("subs.emptyTitle")}</CardTitle>
+              <CardDescription>{t("subs.emptyDesc")}</CardDescription>
             </div>
           ) : (
             <ScrollArea
@@ -232,7 +230,7 @@ export function Subscriptions() {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label="订阅列表" className="gap-0">
+              <ItemGroup aria-label={t("subs.listAria")} className="gap-0">
                 {items.map((s, index) => {
                   const warnings = s.parse_warnings ?? [];
                   return (
@@ -245,7 +243,7 @@ export function Subscriptions() {
                         <ItemContent className="min-w-0">
                           <ItemTitle title={s.name}>
                             <span className="truncate">{s.name}</span>
-                            {s.active ? <Label className="shrink-0 text-ok">已激活</Label> : null}
+                            {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                           </ItemTitle>
                           <ItemDescription>
                             {subscriptionSummary(s)}
@@ -268,7 +266,7 @@ export function Subscriptions() {
                               size="sm"
                               checked={!!s.active}
                               disabled={busy}
-                              aria-label="激活"
+                              aria-label={t("common.activate")}
                               onCheckedChange={(checked) =>
                                 void run(() =>
                                   api.setSubscriptionActive(s.id, checked),
@@ -279,7 +277,7 @@ export function Subscriptions() {
                               htmlFor={`sub-active-${s.id}`}
                               className="text-muted-foreground"
                             >
-                              激活
+                              {t("common.activate")}
                             </FieldLabel>
                           </Field>
                           <Button
@@ -291,7 +289,7 @@ export function Subscriptions() {
                               void run(() => api.updateSubscription(s.id), true)
                             }
                           >
-                            {updating ? "更新中" : "更新"}
+                            {updating ? t("common.updating") : t("common.update")}
                           </Button>
                           <Button
                             type="button"
@@ -300,7 +298,7 @@ export function Subscriptions() {
                             disabled={busy}
                             onClick={() => setPendingDelete(s)}
                           >
-                            删除
+                            {t("common.delete")}
                           </Button>
                         </ItemActions>
                       </Item>
@@ -314,11 +312,13 @@ export function Subscriptions() {
       </Card>
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除订阅"
+        title={t("subs.deleteTitle")}
         description={
-          pendingDelete ? `确认删除订阅「${pendingDelete.name}」？` : undefined
+          pendingDelete
+            ? t("subs.deleteConfirm", { name: pendingDelete.name })
+            : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={t("common.delete")}
         busy={busy}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);

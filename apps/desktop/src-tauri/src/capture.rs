@@ -432,7 +432,7 @@ impl CaptureController {
                 TrafficCapture::Tun => {
                     return Err(AppError::with_code(
                         "proxy.apply_failed",
-                        "TUN 捕获仍处于激活状态，请先停止 TUN 再启用系统代理",
+                        "TUN capture is still active; stop TUN before enabling the system proxy",
                     ));
                 }
                 TrafficCapture::Inactive => {}
@@ -441,7 +441,10 @@ impl CaptureController {
                 TunStatus::Preparing | TunStatus::Stopping | TunStatus::RecoveryRequired => {
                     return Err(AppError::with_code(
                         "proxy.apply_failed",
-                        format!("系统代理暂不可用（TUN 状态 {:?}）", inner.tun_status),
+                        format!(
+                            "system proxy unavailable (TUN status {:?})",
+                            inner.tun_status
+                        ),
                     ));
                 }
                 _ => {}
@@ -627,7 +630,7 @@ impl CaptureController {
         {
             let app_err = AppError::with_code(
                 "tun.helper_stale",
-                "辅助组件仍在使用旧版内核：请先在设置中点击「更新辅助组件」",
+                "the helper still runs the old core: update the helper in Settings first",
             );
             let _ = self.fail_transition(TunStatus::Error, &app_err);
             return Err(app_err);
@@ -711,7 +714,7 @@ impl CaptureController {
             self.journal_clean("core not running; nothing was mutated")?;
             return Err(AppError::new(
                 ErrorCode::CoreInvalidState,
-                "核心未运行，无法启用 TUN 捕获",
+                "core is not running; cannot enable TUN capture",
             ));
         }
 
@@ -784,7 +787,7 @@ impl CaptureController {
             self.journal_error("tun readiness checks disagreed")?;
             return Err(AppError::with_code(
                 "tun.healthcheck_failed",
-                "TUN 就绪检查未通过，已释放捕获",
+                "TUN readiness check failed; capture released",
             ));
         }
 
@@ -845,7 +848,7 @@ impl CaptureController {
                     &AppError::with_code(
                         "tun.recovery_required",
                         format!(
-                            "接管 elevated core 失败（{err}）且清理未确认（{}）",
+                            "failed to take over the elevated core ({err}) and cleanup is unconfirmed ({})",
                             release_app_err.message
                         ),
                     ),
@@ -853,7 +856,7 @@ impl CaptureController {
                 Err(AppError::with_code(
                     "tun.recovery_required",
                     format!(
-                        "接管 elevated core 失败且 TUN 清理未确认（{}），已 fail-closed",
+                        "failed to take over the elevated core and TUN cleanup is unconfirmed ({}); fail-closed",
                         release_app_err.message
                     ),
                 ))
@@ -991,7 +994,7 @@ impl CaptureController {
                 let _ = self.fail_transition(TunStatus::RecoveryRequired, &app_err);
                 return Err(AppError::with_code(
                     "tun.recovery_required",
-                    format!("TUN 清理未确认，已 fail-closed（{}）", app_err.message),
+                    format!("TUN cleanup unconfirmed; fail-closed ({})", app_err.message),
                 ));
             }
             (Ok(()), Err(stop_err)) => {
@@ -1011,7 +1014,7 @@ impl CaptureController {
                 return Err(AppError::with_code(
                     "tun.recovery_required",
                     format!(
-                        "TUN 资源已释放但核心停止未确认，已 fail-closed（{}）",
+                        "TUN resources released but core stop unconfirmed; fail-closed ({})",
                         app_err.message
                     ),
                 ));
@@ -1069,7 +1072,7 @@ impl CaptureController {
         }
         let mut backend = match self.backend.lock() {
             Ok(backend) => backend,
-            Err(_) => return Some("捕获控制器不可用，TUN 状态未恢复".into()),
+            Err(_) => return Some("capture controller unavailable; TUN state not restored".into()),
         };
         let _ = self.begin_transition(TunStatus::Stopping, Uuid::new_v4().to_string());
         let mut journal = match TunJournal::load(&self.paths.tun_state()) {
@@ -1086,7 +1089,9 @@ impl CaptureController {
                         "journal missing while TUN capture was active",
                     ),
                 );
-                return Some("sing-box 意外退出后 TUN journal 缺失，已 fail-closed".into());
+                return Some(
+                    "TUN journal missing after sing-box exited unexpectedly; fail-closed".into(),
+                );
             }
         };
         let applied = AppliedTun::from_journal(&journal);
@@ -1151,10 +1156,12 @@ impl CaptureController {
                     TunStatus::RecoveryRequired,
                     &AppError::with_code(
                         "tun.recovery_required",
-                        format!("TUN 清理未确认（{err}）"),
+                        format!("TUN cleanup unconfirmed ({err})"),
                     ),
                 );
-                Some(format!("sing-box 意外退出后 TUN 清理未确认: {err}"))
+                Some(format!(
+                    "TUN cleanup unconfirmed after sing-box exited unexpectedly: {err}"
+                ))
             }
         }
     }
@@ -1172,7 +1179,9 @@ impl CaptureController {
                 "interrupted settings transaction; committed settings are the old state"
             );
             let _ = fs::remove_file(self.paths.pending_settings());
-            warnings.push("检测到未完成的后端切换，已恢复切换前的设置".into());
+            warnings.push(
+                "an incomplete backend switch was detected; restored the previous settings".into(),
+            );
         }
 
         let mut backend = self
@@ -1236,10 +1245,10 @@ impl CaptureController {
                     TunStatus::RecoveryRequired,
                     &AppError::with_code(
                         "tun.recovery_required",
-                        "TUN 清理未确认，已阻止新的 TUN 激活",
+                        "TUN cleanup unconfirmed; new TUN activation is blocked",
                     ),
                 );
-                warnings.push("TUN 清理未确认，已 fail-closed，可重试恢复".into());
+                warnings.push("TUN cleanup unconfirmed; fail-closed. Retry recovery".into());
             }
         }
         let _ = core;
@@ -1349,13 +1358,13 @@ impl CaptureController {
                                     &AppError::with_code(
                                         "tun.recovery_required",
                                         format!(
-                                            "设置提交失败（{commit_err}）且后端回滚未确认（{rollback_err}）"
+                                            "settings commit failed ({commit_err}) and backend rollback is unconfirmed ({rollback_err})"
                                         ),
                                     ),
                                 );
                                 Err(AppError::with_code(
                                     "tun.recovery_required",
-                                    "设置提交失败且后端回滚未确认，两个后端均已禁用，请重试恢复",
+                                    "settings commit failed and backend rollback is unconfirmed; both backends are disabled. Retry recovery",
                                 ))
                             }
                         }
@@ -1372,12 +1381,12 @@ impl CaptureController {
                             TunStatus::RecoveryRequired,
                             &AppError::with_code(
                                 "tun.recovery_required",
-                                format!("切换失败（{err}）且回滚未确认（{rollback_err}）"),
+                                format!("switch failed ({err}) and rollback is unconfirmed ({rollback_err})"),
                             ),
                         );
                         Err(AppError::with_code(
                             "tun.recovery_required",
-                            "后端切换失败且回滚未确认，两个后端均已禁用，请重试恢复",
+                            "backend switch failed and rollback is unconfirmed; both backends are disabled. Retry recovery",
                         ))
                     }
                 }
@@ -1479,12 +1488,12 @@ impl CaptureController {
                             TunStatus::RecoveryRequired,
                             &AppError::with_code(
                                 "tun.recovery_required",
-                                format!("应用失败（{err}）且 TUN 回滚未确认（{rollback_err}）"),
+                                format!("apply failed ({err}) and TUN rollback is unconfirmed ({rollback_err})"),
                             ),
                         );
                         Err(AppError::with_code(
                             "tun.recovery_required",
-                            "TUN 配置应用失败且回滚未确认，已 fail-closed，请重试恢复",
+                            "TUN config apply failed and rollback is unconfirmed; fail-closed. Retry recovery",
                         ))
                     }
                 }

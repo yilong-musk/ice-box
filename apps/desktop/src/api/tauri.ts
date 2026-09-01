@@ -88,6 +88,8 @@ export type AppSettings = {
   proxy_mode: ProxyMode;
   tun: TunSettings;
   auto_default_rules: boolean;
+  /** "system" follows the OS locale; otherwise an explicit UI language. */
+  language: "system" | "zh" | "en";
 };
 
 export type SubscriptionMeta = {
@@ -184,36 +186,16 @@ export type ListRulesResponse = {
 };
 
 /**
- * Error codes whose raw message is technical / English and confusing in the UI;
- * display the friendly text instead. Codes not listed keep `${code}: ${message}`.
+ * Rust-side errors, warnings, and diagnostics stay in English and pass through
+ * verbatim (see `FRIENDLY_ERROR_CODES` history): kernel messages are displayed
+ * as-is, and Rust-generated text is authored in English, so no frontend
+ * mapping is needed.
  */
-const FRIENDLY_ERROR_CODES: Record<string, string> = {
-  "config.empty_outbounds":
-    "没有可用的订阅节点，请先在「订阅」页导入订阅，或保持仅直连模式运行",
-  // TUN error codes (plan §5 T2 / §4.3): the raw messages can be English /
-  // technical; surface actionable Chinese text instead.
-  "tun.not_supported": "当前平台暂不支持 TUN 模式",
-  "tun.permission_required":
-    "启用 TUN 需要系统权限：请先安装并授权受信任的辅助组件（点击下方按钮，将弹出系统授权密码框），当前未修改任何系统配置",
-  "tun.helper_install_cancelled":
-    "已取消系统授权，未修改任何系统配置。可在需要时重新点击「安装辅助组件」",
-  "tun.helper_install_failed": "辅助组件安装失败，未修改任何系统配置",
-  "tun.helper_not_ready":
-    "辅助组件已安装，但守护进程尚未就绪，请稍后重试",
-  "tun.helper_stale":
-    "辅助组件仍在使用旧版内核：应用已更新内核版本，请先在设置中点击「更新辅助组件」（将弹出系统授权密码框）",
-  "tun.apply_failed": "TUN 启动失败，已回滚到切换前的状态",
-  "tun.restore_failed": "TUN 清理未确认，已停止内核以保持系统一致",
-  "tun.healthcheck_failed": "TUN 就绪检查未通过，已释放捕获",
-  "tun.recovery_required":
-    "TUN 清理未确认，已阻止新的 TUN 激活；请先执行「重试恢复」",
-};
-
 export function formatInvokeError(err: unknown): string {
   if (err && typeof err === "object") {
     const o = err as Record<string, unknown>;
     if (typeof o.code === "string" && typeof o.message === "string") {
-      return FRIENDLY_ERROR_CODES[o.code] ?? `${o.code}: ${o.message}`;
+      return `${o.code}: ${o.message}`;
     }
     if (typeof o.message === "string") return o.message;
   }

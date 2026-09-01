@@ -1173,7 +1173,7 @@ pub fn resolve_subscription_name(
     if let Some(n) = name_from_url(url) {
         return n;
     }
-    format!("订阅-{}", short_id(&id))
+    format!("Subscription-{}", short_id(&id))
 }
 
 /// Disk-backed subscription manager.

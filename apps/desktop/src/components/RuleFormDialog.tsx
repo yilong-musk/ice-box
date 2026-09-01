@@ -21,6 +21,7 @@ import {
   RULE_MATCHER_DEFS,
   STRATEGY_GROUP_TYPES,
 } from "../lib/rules";
+import { t, useLanguagePreference } from "../lib/i18n";
 
 type RuleFormDialogProps = {
   open: boolean;
@@ -37,6 +38,7 @@ function RuleFormDialog({
   busy,
   onAdd,
 }: RuleFormDialogProps) {
+  useLanguagePreference();
   const [matcherKey, setMatcherKey] = useState("domain_suffix");
   const [matcherValue, setMatcherValue] = useState("");
   const [matcherBool, setMatcherBool] = useState(true);
@@ -97,22 +99,23 @@ function RuleFormDialog({
               data-slot="dialog-title"
               className="font-heading text-sm font-medium"
             >
-              添加自定义规则
+              {t("ruleForm.title")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description
               data-slot="dialog-description"
               className="break-all text-sm text-muted-foreground"
             >
-              自定义规则优先于订阅规则生效，出口需为 direct / block
-              或现有节点 / 策略组标签。
+              {t("ruleForm.desc")}
             </DialogPrimitive.Description>
           </div>
           <FieldGroup className="flex flex-col gap-2.5">
             <Field>
-              <FieldLabel htmlFor="rule-matcher-type">匹配类型</FieldLabel>
+              <FieldLabel htmlFor="rule-matcher-type">
+                {t("ruleForm.matcherType")}
+              </FieldLabel>
               <NativeSelect
                 id="rule-matcher-type"
-                aria-label="匹配类型"
+                aria-label={t("ruleForm.matcherType")}
                 value={matcherKey}
                 onChange={(e) => {
                   setMatcherKey(e.target.value);
@@ -122,7 +125,7 @@ function RuleFormDialog({
               >
                 {RULE_MATCHER_DEFS.map((d) => (
                   <NativeSelectOption key={d.key} value={d.key}>
-                    {d.label}
+                    {t(d.label)}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
@@ -130,7 +133,7 @@ function RuleFormDialog({
             {previewDef?.kind === "boolean" ? (
               <Field>
                 <FieldLabel htmlFor="rule-matcher-bool">
-                  {previewDef.label}
+                  {t(previewDef.label)}
                 </FieldLabel>
                 <Field orientation="horizontal">
                   <Checkbox
@@ -139,20 +142,22 @@ function RuleFormDialog({
                     onCheckedChange={(checked) =>
                       setMatcherBool(checked === true)
                     }
-                    aria-label={previewDef.label}
+                    aria-label={t(previewDef.label)}
                   />
                   <FieldDescription>
-                    匹配{previewDef.label}
+                    {t("ruleForm.matchBool", { label: t(previewDef.label) })}
                   </FieldDescription>
                 </Field>
               </Field>
             ) : (
               <Field>
-                <FieldLabel htmlFor="rule-match-value">匹配值</FieldLabel>
+                <FieldLabel htmlFor="rule-match-value">
+                  {t("ruleForm.matchValue")}
+                </FieldLabel>
                 <Input
                   id="rule-match-value"
                   type="text"
-                  aria-label="匹配值"
+                  aria-label={t("ruleForm.matchValue")}
                   placeholder={previewDef?.placeholder}
                   value={matcherValue}
                   onChange={(e) => {
@@ -163,24 +168,26 @@ function RuleFormDialog({
               </Field>
             )}
             <Field>
-              <FieldLabel htmlFor="rule-outbound">出口</FieldLabel>
+              <FieldLabel htmlFor="rule-outbound">
+                {t("ruleForm.outbound")}
+              </FieldLabel>
               <NativeSelect
                 id="rule-outbound"
-                aria-label="出口"
+                aria-label={t("ruleForm.outbound")}
                 value={outbound}
                 onChange={(e) => setOutbound(e.target.value)}
               >
                 <NativeSelectOption value="direct">
-                  direct（直连）
+                  {t("ruleForm.directOption")}
                 </NativeSelectOption>
                 <NativeSelectOption value="block">
-                  block（拦截）
+                  {t("ruleForm.blockOption")}
                 </NativeSelectOption>
                 {nodeOptions.map((n) => (
                   <NativeSelectOption key={n.tag} value={n.tag}>
                     {n.tag}
                     {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
-                      ? "（策略组）"
+                      ? t("ruleForm.strategyGroupSuffix")
                       : ""}
                   </NativeSelectOption>
                 ))}
@@ -190,7 +197,8 @@ function RuleFormDialog({
           {customError ? <FieldError>{customError}</FieldError> : null}
           {previewRule ? (
             <FieldDescription className="break-all">
-              预览：<code>{JSON.stringify(previewRule)}</code>
+              {t("ruleForm.preview")}
+              <code>{JSON.stringify(previewRule)}</code>
             </FieldDescription>
           ) : null}
           <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row sm:justify-end">
@@ -201,7 +209,7 @@ function RuleFormDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -209,7 +217,7 @@ function RuleFormDialog({
               disabled={busy || !previewRule}
               onClick={() => void handleAdd()}
             >
-              添加
+              {t("ruleForm.add")}
             </Button>
           </div>
         </DialogPrimitive.Content>

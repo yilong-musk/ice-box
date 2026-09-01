@@ -143,7 +143,7 @@ fn bootstrap_data_dir(
         }
         Err(err) => {
             tracing::error!(error = %err, "system proxy crash recovery failed");
-            Some(format!("系统代理恢复失败: {err}"))
+            Some(format!("system proxy recovery failed: {err}"))
         }
     };
 
@@ -223,7 +223,7 @@ pub fn run() {
                         Ok(None) => {}
                         Err(err) => {
                             tracing::error!(error = %err, "startup tun recovery failed");
-                            append_warning(format!("TUN 状态恢复未确认（{err}）"));
+                            append_warning(format!("TUN state recovery unconfirmed ({err})"));
                         }
                     }
                 }
@@ -246,7 +246,7 @@ pub fn run() {
                     }
                     tracing::error!(error = %err, "auto-start core failed");
                     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                        *slot = Some(format!("内核自动启动失败（{err}）"));
+                        *slot = Some(format!("core auto-start failed ({err})"));
                     }
                 }
             });

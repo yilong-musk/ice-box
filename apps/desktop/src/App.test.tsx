@@ -45,6 +45,7 @@ vi.mock("./api/tauri", () => ({
         stack: "gvisor",
         dns_hijack: false,
       },
+      language: "system",
     }),
     getTrafficSnapshot: vi
       .fn()
@@ -87,7 +88,7 @@ describe("App", () => {
         inbound_port: null,
       },
       subscription_count: 1,
-      proxy_recovery_warning: "sing-box 意外退出后系统代理恢复失败: mock",
+      proxy_recovery_warning: "system proxy recovery failed after sing-box exited unexpectedly: mock",
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: true,
@@ -99,7 +100,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(view.getByRole("alert")).toHaveTextContent(
-        "sing-box 意外退出后系统代理恢复失败",
+        "system proxy recovery failed after sing-box exited unexpectedly",
       );
     });
   });
@@ -176,18 +177,20 @@ describe("App", () => {
     fireEvent.click(view.getByRole("button", { name: "设置" }));
 
     await waitFor(() => {
-      expect(view.getByRole("radio", { name: "跟随系统" })).toBeInTheDocument();
+      expect(view.getByLabelText("外观")).toBeInTheDocument();
     });
+    const appearance = view.getByLabelText("外观");
 
-    fireEvent.click(view.getByRole("radio", { name: "深色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: "深色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    fireEvent.click(view.getByRole("radio", { name: "浅色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: "浅色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(false);
-    fireEvent.click(view.getByRole("radio", { name: "跟随系统" }));
-    expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
-      "data-state",
-      "on",
+    fireEvent.click(
+      within(appearance).getByRole("radio", { name: "跟随系统" }),
     );
+    expect(
+      within(appearance).getByRole("radio", { name: "跟随系统" }),
+    ).toHaveAttribute("data-state", "on");
   });
 
   it("places the app brand at the bottom of the sidebar", () => {
