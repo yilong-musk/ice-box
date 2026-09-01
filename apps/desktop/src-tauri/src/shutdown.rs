@@ -56,7 +56,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             Err(err) => {
                 // Fail closed: keep stopping the core; the journal stays for
                 // startup recovery, and the warning is surfaced.
-                tun_warning = Some(format!("TUN 捕获关闭未确认（{err}）"));
+                tun_warning = Some(format!("TUN capture shutdown unconfirmed ({err})"));
             }
         }
     }
@@ -341,7 +341,7 @@ mod tests {
 
         let warning = state.proxy_recovery_warning.lock().unwrap().clone();
         assert!(warning.is_some());
-        assert!(warning.unwrap().contains("系统代理恢复失败"));
+        assert!(warning.unwrap().contains("system proxy recovery failed"));
 
         let _ = std::fs::remove_dir_all(state.paths.root());
     }

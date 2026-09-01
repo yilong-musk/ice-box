@@ -1,4 +1,5 @@
 import type { NodeInfo } from "../api/tauri";
+import { t } from "./i18n";
 
 export type DelayCell = number | "error" | "testing" | null;
 
@@ -63,7 +64,7 @@ export function isGroupType(outboundType: string): boolean {
 export function formatDelay(v: DelayCell): string {
   if (v === null) return "—";
   if (v === "testing") return "…";
-  if (v === "error") return "失败";
+  if (v === "error") return t("delay.failed");
   return `${v} ms`;
 }
 

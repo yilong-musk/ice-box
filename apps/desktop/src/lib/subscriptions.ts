@@ -1,4 +1,5 @@
 import type { SubscriptionMeta } from "../api/tauri";
+import { t } from "./i18n";
 
 export type ApplyWarning = {
   code: string;
@@ -47,7 +48,7 @@ export function formatUpdateFailures(
   const failed = results.filter((r) => !r.ok);
   if (failed.length === 0) return null;
   return failed
-    .map((r) => `${r.id.slice(0, 8)}…: ${r.error ?? "未知错误"}`)
+    .map((r) => `${r.id.slice(0, 8)}…: ${r.error ?? t("subs.unknownError")}`)
     .join("; ");
 }
 

@@ -13,9 +13,7 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Item,
@@ -27,6 +25,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   delayTestTagsForGroup,
@@ -54,7 +53,7 @@ function groupMembersDomId(tag: string): string {
 
 function nodeTypeLabel(n: NodeInfo): string {
   return isGroupType(n.outbound_type)
-    ? `策略组 · ${n.outbound_type}`
+    ? t("nodes.groupType", { type: n.outbound_type })
     : n.outbound_type;
 }
 
@@ -112,6 +111,7 @@ type GroupMembersProps = {
   busy: boolean;
   delays: Record<string, DelayCell>;
   onGroupSelect: (group: string, member: string) => void;
+  lang: ResolvedLanguage;
 };
 
 const GroupMembers = memo(function GroupMembers({
@@ -123,6 +123,7 @@ const GroupMembers = memo(function GroupMembers({
   busy,
   delays,
   onGroupSelect,
+  lang,
 }: GroupMembersProps) {
   const [shown, setShown] = useState(() =>
     Math.min(MEMBER_FIRST_PAINT, members.length),
@@ -158,7 +159,8 @@ const GroupMembers = memo(function GroupMembers({
   return (
     <div
       id={groupMembersDomId(groupTag)}
-      aria-label={`${groupTag} 成员`}
+      lang={lang}
+      aria-label={t("nodes.membersAria", { group: groupTag })}
       className="flex flex-col pl-6"
     >
       {members.slice(0, shown).map((member) => {
@@ -182,15 +184,15 @@ const GroupMembers = memo(function GroupMembers({
                 aria-current={isExit ? "true" : undefined}
                 aria-label={
                   isExit
-                    ? `${member}（当前出口）`
-                    : `将 ${member} 设为 ${groupTag} 出口`
+                    ? t("nodes.memberCurrentAria", { member })
+                    : t("nodes.setMemberAria", { member, group: groupTag })
                 }
                 title={
                   isExit
-                    ? "当前出口"
+                    ? t("nodes.currentExit")
                     : running
-                      ? "设为出口"
-                      : "设为出口（保存后启动生效）"
+                      ? t("nodes.setExit")
+                      : t("nodes.setExitAfterStart")
                 }
                 onClick={() => onGroupSelect(groupTag, member)}
               >
@@ -201,7 +203,9 @@ const GroupMembers = memo(function GroupMembers({
                 {member}
               </span>
             )}
-            {isExit ? <span className={badgeVariants()}>当前</span> : null}
+            {isExit ? (
+              <Label className="shrink-0 text-ok">{t("nodes.inUse")}</Label>
+            ) : null}
             {delayBadge(delays[member] ?? null)}
           </div>
         );
@@ -222,6 +226,7 @@ type NodeRowProps = {
   onTest: (node: NodeInfo) => void;
   onSelect: (tag: string) => void;
   onGroupSelect: (group: string, member: string) => void;
+  lang: ResolvedLanguage;
 };
 
 const NodeRow = memo(function NodeRow({
@@ -236,6 +241,7 @@ const NodeRow = memo(function NodeRow({
   onTest,
   onSelect,
   onGroupSelect,
+  lang,
 }: NodeRowProps) {
   const expandable =
     isGroupType(node.outbound_type) && (node.group_all?.length ?? 0) > 0;
@@ -243,7 +249,7 @@ const NodeRow = memo(function NodeRow({
   const typeLabel = nodeTypeLabel(node);
 
   return (
-    <div>
+    <div lang={lang}>
       <Item
         size="sm"
         variant={selected ? "muted" : "default"}
@@ -260,7 +266,7 @@ const NodeRow = memo(function NodeRow({
               aria-label={node.tag}
               aria-expanded={expanded}
               aria-controls={membersId}
-              title={expanded ? "收起成员" : "展开成员"}
+              title={expanded ? t("nodes.collapseMembers") : t("nodes.expandMembers")}
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
               onClick={() => onToggleGroup(node.tag, !expanded)}
               onKeyDown={(event) => {
@@ -283,7 +289,7 @@ const NodeRow = memo(function NodeRow({
                   </span>
                   {selected ? (
                     <Label className="shrink-0 text-ok">
-                      选用中
+                      {t("nodes.inUse")}
                     </Label>
                   ) : null}
                 </ItemTitle>
@@ -300,7 +306,7 @@ const NodeRow = memo(function NodeRow({
                     "text-muted-foreground",
                   )}
                 >
-                  代理服务未运行
+                  {t("nodes.notRunning")}
                 </span>
               )}
               {delayBadge(delay)}
@@ -310,10 +316,14 @@ const NodeRow = memo(function NodeRow({
                 type="button"
                 className={buttonVariants({ size: "sm", variant: "outline" })}
                 disabled={!running || busy}
-                title={expanded ? "测全部成员延迟" : "测当前出口延迟"}
+                title={
+                  expanded
+                    ? t("nodes.testAllMembers")
+                    : t("nodes.testCurrent")
+                }
                 onClick={() => onTest(node)}
               >
-                测速
+                {t("nodes.test")}
               </button>
               <button
                 type="button"
@@ -321,7 +331,7 @@ const NodeRow = memo(function NodeRow({
                 disabled={busy || selected}
                 onClick={() => onSelect(node.tag)}
               >
-                选用
+                {t("nodes.select")}
               </button>
             </ItemActions>
           </>
@@ -332,7 +342,7 @@ const NodeRow = memo(function NodeRow({
                 <span className="truncate">{node.tag}</span>
                 {selected ? (
                   <Label className="shrink-0 text-ok">
-                    选用中
+                    {t("nodes.inUse")}
                   </Label>
                 ) : null}
               </ItemTitle>
@@ -346,7 +356,7 @@ const NodeRow = memo(function NodeRow({
                 disabled={!running || busy}
                 onClick={() => onTest(node)}
               >
-                测速
+                {t("nodes.test")}
               </button>
               <button
                 type="button"
@@ -354,7 +364,7 @@ const NodeRow = memo(function NodeRow({
                 disabled={busy || selected}
                 onClick={() => onSelect(node.tag)}
               >
-                选用
+                {t("nodes.select")}
               </button>
             </ItemActions>
           </>
@@ -370,6 +380,7 @@ const NodeRow = memo(function NodeRow({
           busy={busy}
           delays={delays}
           onGroupSelect={onGroupSelect}
+          lang={lang}
         />
       ) : null}
     </div>
@@ -377,6 +388,7 @@ const NodeRow = memo(function NodeRow({
 });
 
 export function Nodes({ onNavigate, active = true }: Props) {
+  const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [nodes, setNodes] = useState<NodeInfo[]>(
     () => readNodesSnapshot()?.nodes ?? [],
@@ -577,7 +589,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
         groupAll: node.group_all,
       });
       if (tags.length === 0) {
-        setError("当前策略组没有可测的出口");
+        setError(t("nodes.noTestableGroup"));
         return;
       }
       await testTags(tags);
@@ -596,7 +608,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
     if (!running || nodes.length === 0) return;
     const tags = delayTestTagsForList(nodes, expandedGroups);
     if (tags.length === 0) {
-      setError("当前没有可测的出口");
+      setError(t("nodes.noTestable"));
       return;
     }
     await testTags(tags);
@@ -652,18 +664,12 @@ export function Nodes({ onNavigate, active = true }: Props) {
 
       {!running && nodes.length > 0 && (
         <WarnAlert className="shrink-0">
-          代理服务未运行：测延迟不可用；切换出口会保存，启动后生效。
+          {t("nodes.notRunningWarn")}
         </WarnAlert>
       )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>节点</CardTitle>
-          <CardDescription>
-            {batchProgress
-              ? `正在测延迟 ${batchProgress}`
-              : "测延迟并切换出口"}
-          </CardDescription>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
@@ -671,7 +677,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
               disabled={!running || busy || nodes.length === 0}
               onClick={() => void onBatchTest()}
             >
-              批量测延迟
+              {t("nodes.batchTest")}
             </Button>
             {busy && batchProgress ? (
               <Button
@@ -680,21 +686,23 @@ export function Nodes({ onNavigate, active = true }: Props) {
                 variant="outline"
                 onClick={onCancelBatch}
               >
-                取消
+                {t("common.cancel")}
               </Button>
             ) : null}
           </CardAction>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!listReady ? (
-            <p className="my-auto text-sm text-muted-foreground">加载节点列表…</p>
+            <p className="my-auto text-sm text-muted-foreground">
+              {t("nodes.loading")}
+            </p>
           ) : nodes.length === 0 ? (
             <EmptyState
               framed={false}
               className="my-auto"
-              title="暂无节点"
-              description="未导入任何订阅节点。导入订阅后即可在此查看节点、测速并切换出口。"
-              actionLabel="前往订阅页导入"
+              title={t("nodes.emptyTitle")}
+              description={t("nodes.emptyDesc")}
+              actionLabel={t("home.goToSubs")}
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
@@ -703,7 +711,11 @@ export function Nodes({ onNavigate, active = true }: Props) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <div role="list" aria-label="节点列表" className="flex w-full flex-col">
+              <div
+                role="list"
+                aria-label={t("nodes.listAria")}
+                className="flex w-full flex-col"
+              >
                 {visibleNodes.map((n) => {
                   const expanded =
                     isGroupType(n.outbound_type) &&
@@ -723,6 +735,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
                       onTest={onTest}
                       onSelect={handleSelect}
                       onGroupSelect={handleGroupSelect}
+                      lang={lang}
                     />
                   );
                 })}

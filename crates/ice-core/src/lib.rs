@@ -541,7 +541,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             Ok(Some(code)) => {
                 let excerpt = singbox_log_failure_excerpt(&paths.log_file);
                 Some(CoreError::HealthcheckFailed(format!(
-                    "sing-box 启动后立即退出 (code {code}){}",
+                    "sing-box exited immediately after start (code {code}){}",
                     if excerpt.is_empty() {
                         String::new()
                     } else {
@@ -747,7 +747,7 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
     for (label, host, port) in checks {
         if tcp_port_is_in_use(host, port) {
             return Err(CoreError::SpawnFailed(format!(
-                "{label} 端口 {host}:{port} 已被占用，请关闭占用该端口的程序（如其他代理软件）或在设置中更换端口"
+                "{label} port {host}:{port} is already in use; quit the program holding it (e.g. another proxy app) or change the port in Settings"
             )));
         }
     }
@@ -756,7 +756,7 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
     // non-probe address (e.g. another loopback alias or a LAN NIC).
     if paths.allow_lan && !tcp_bind_available("0.0.0.0", paths.inbound_port) {
         return Err(CoreError::SpawnFailed(format!(
-            "mixed 端口 {}:{} 无法绑定（可能已被占用），请关闭占用程序或在设置中更换端口",
+            "mixed port {}:{} could not be bound (likely in use); quit the program holding it or change the port in Settings",
             "0.0.0.0", paths.inbound_port
         )));
     }
@@ -1306,7 +1306,7 @@ mod tests {
         let err = core.start(&paths).expect_err("port busy");
         assert_eq!(err.code().as_str(), "core.spawn_failed");
         assert!(
-            err.to_string().contains("已被占用"),
+            err.to_string().contains("already in use"),
             "message should mention port conflict: {err}"
         );
         drop(listener);

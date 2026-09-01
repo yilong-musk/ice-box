@@ -1,31 +1,36 @@
 import type { RuleRow } from "../api/tauri";
+import { t, type MessageKey } from "./i18n";
 
-export const RULE_TYPE_LABELS: Record<string, string> = {
-  domain: "域名",
-  domain_suffix: "域名后缀",
-  domain_keyword: "域名关键词",
-  domain_regex: "域名正则",
-  ip_cidr: "IP 段",
-  ip_is_private: "私网 IP",
-  source_ip_cidr: "源 IP 段",
-  source_ip_is_private: "源私网 IP",
-  rule_set: "规则集",
-  geoip: "GEOIP",
-  geosite: "GEOSITE",
-  port: "端口",
-  source_port: "源端口",
-  network: "网络",
-  protocol: "协议",
-  process_name: "进程名",
-  process_path: "进程路径",
-  package_name: "应用包名",
-  inbound: "入站",
-  wifi_ssid: "WiFi SSID",
-  wifi_bssid: "WiFi BSSID",
-  clash_mode: "Clash 模式",
-  user: "用户",
-  other: "其他",
+export const RULE_TYPE_LABEL_KEYS: Record<string, MessageKey> = {
+  domain: "ruleType.domain",
+  domain_suffix: "ruleType.domainSuffix",
+  domain_keyword: "ruleType.domainKeyword",
+  domain_regex: "ruleType.domainRegex",
+  ip_cidr: "ruleType.ipCidr",
+  ip_is_private: "ruleType.ipIsPrivate",
+  source_ip_cidr: "ruleType.sourceIpCidr",
+  source_ip_is_private: "ruleType.sourceIpIsPrivate",
+  rule_set: "ruleType.ruleSet",
+  geoip: "ruleType.geoip",
+  geosite: "ruleType.geosite",
+  port: "ruleType.port",
+  source_port: "ruleType.sourcePort",
+  network: "ruleType.network",
+  protocol: "ruleType.protocol",
+  process_name: "ruleType.processName",
+  process_path: "ruleType.processPath",
+  package_name: "ruleType.packageName",
+  inbound: "ruleType.inbound",
+  wifi_ssid: "ruleType.wifiSsid",
+  wifi_bssid: "ruleType.wifiBssid",
+  clash_mode: "ruleType.clashMode",
+  user: "ruleType.user",
+  other: "ruleType.other",
 };
+
+/** Backwards-compatible alias kept for callers/tests that import the old map. */
+export const RULE_TYPE_LABELS: Record<string, string> =
+  RULE_TYPE_LABEL_KEYS as Record<string, string>;
 
 /** Matcher key priority, mirrored from the backend classifier. */
 export const MATCH_KEY_ORDER = [
@@ -55,7 +60,8 @@ export const MATCH_KEY_ORDER = [
 ];
 
 export function ruleTypeLabel(ruleType: string): string {
-  return RULE_TYPE_LABELS[ruleType] ?? ruleType;
+  const key = RULE_TYPE_LABEL_KEYS[ruleType];
+  return key ? t(key) : ruleType;
 }
 
 /** Human-readable match payload of a rule, e.g. `youtube.com, google.com`. */
@@ -89,7 +95,8 @@ export const STRATEGY_GROUP_TYPES = [
 
 export type RuleMatcherDef = {
   key: string;
-  label: string;
+  /** i18n message key; resolve the display label with `t(def.label)`. */
+  label: MessageKey;
   kind: "array" | "boolean";
   placeholder: string;
 };
@@ -100,23 +107,23 @@ export type RuleMatcherDef = {
  * geoip → rule-set expansion at build time. Use `rule_set` instead.
  */
 export const RULE_MATCHER_DEFS: RuleMatcherDef[] = [
-  { key: "domain", label: "域名", kind: "array", placeholder: "example.com" },
-  { key: "domain_suffix", label: "域名后缀", kind: "array", placeholder: "google.com" },
-  { key: "domain_keyword", label: "域名关键词", kind: "array", placeholder: "youtube" },
-  { key: "domain_regex", label: "域名正则", kind: "array", placeholder: ".*\\.cn$" },
-  { key: "ip_cidr", label: "IP 段", kind: "array", placeholder: "10.0.0.0/8" },
-  { key: "ip_is_private", label: "私网 IP", kind: "boolean", placeholder: "" },
-  { key: "source_ip_cidr", label: "源 IP 段", kind: "array", placeholder: "192.168.1.0/24" },
-  { key: "source_ip_is_private", label: "源私网 IP", kind: "boolean", placeholder: "" },
-  { key: "rule_set", label: "规则集", kind: "array", placeholder: "geoip-cn" },
-  { key: "port", label: "端口", kind: "array", placeholder: "443, 8443" },
-  { key: "source_port", label: "源端口", kind: "array", placeholder: "53" },
-  { key: "network", label: "网络", kind: "array", placeholder: "tcp" },
-  { key: "protocol", label: "协议", kind: "array", placeholder: "http" },
-  { key: "process_name", label: "进程名", kind: "array", placeholder: "curl" },
-  { key: "process_path", label: "进程路径", kind: "array", placeholder: "/usr/bin/curl" },
-  { key: "package_name", label: "应用包名", kind: "array", placeholder: "com.example.app" },
-  { key: "inbound", label: "入站", kind: "array", placeholder: "mixed-in" },
+  { key: "domain", label: "ruleType.domain", kind: "array", placeholder: "example.com" },
+  { key: "domain_suffix", label: "ruleType.domainSuffix", kind: "array", placeholder: "google.com" },
+  { key: "domain_keyword", label: "ruleType.domainKeyword", kind: "array", placeholder: "youtube" },
+  { key: "domain_regex", label: "ruleType.domainRegex", kind: "array", placeholder: ".*\\.cn$" },
+  { key: "ip_cidr", label: "ruleType.ipCidr", kind: "array", placeholder: "10.0.0.0/8" },
+  { key: "ip_is_private", label: "ruleType.ipIsPrivate", kind: "boolean", placeholder: "" },
+  { key: "source_ip_cidr", label: "ruleType.sourceIpCidr", kind: "array", placeholder: "192.168.1.0/24" },
+  { key: "source_ip_is_private", label: "ruleType.sourceIpIsPrivate", kind: "boolean", placeholder: "" },
+  { key: "rule_set", label: "ruleType.ruleSet", kind: "array", placeholder: "geoip-cn" },
+  { key: "port", label: "ruleType.port", kind: "array", placeholder: "443, 8443" },
+  { key: "source_port", label: "ruleType.sourcePort", kind: "array", placeholder: "53" },
+  { key: "network", label: "ruleType.network", kind: "array", placeholder: "tcp" },
+  { key: "protocol", label: "ruleType.protocol", kind: "array", placeholder: "http" },
+  { key: "process_name", label: "ruleType.processName", kind: "array", placeholder: "curl" },
+  { key: "process_path", label: "ruleType.processPath", kind: "array", placeholder: "/usr/bin/curl" },
+  { key: "package_name", label: "ruleType.packageName", kind: "array", placeholder: "com.example.app" },
+  { key: "inbound", label: "ruleType.inbound", kind: "array", placeholder: "mixed-in" },
 ];
 
 /**

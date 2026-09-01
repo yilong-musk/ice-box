@@ -311,13 +311,13 @@ pub fn orchestrate_enable_system_proxy(
     if core.state().status != CoreStatus::Running {
         return Err(AppError::new(
             ErrorCode::CoreInvalidState,
-            "内核未运行，无法启动系统代理",
+            "core is not running; cannot start the system proxy",
         ));
     }
     if !proxy.is_available() {
         return Err(AppError::new(
             ErrorCode::ProxyApplyFailed,
-            "当前平台不支持系统代理",
+            "system proxy is not supported on this platform",
         ));
     }
     let endpoints = endpoints_from_settings(settings);
@@ -356,7 +356,7 @@ pub fn orchestrate_stop(
     if let Some(err) = restore_err {
         return Err(AppError::new(
             ErrorCode::ProxyRestoreFailed,
-            format!("内核已停止，但系统代理恢复失败: {err}"),
+            format!("core stopped, but system proxy recovery failed: {err}"),
         ));
     }
     Ok(())
@@ -376,7 +376,9 @@ pub fn restore_proxy_after_unexpected_core_exit(
         Ok(false) => None,
         Err(err) => {
             tracing::error!(error = %err, "proxy restore after unexpected core exit");
-            Some(format!("sing-box 意外退出后系统代理恢复失败: {err}"))
+            Some(format!(
+                "system proxy recovery failed after sing-box exited unexpectedly: {err}"
+            ))
         }
     }
 }
@@ -465,7 +467,9 @@ fn sync_system_proxy_after_reload(
     if let Err(err) = restore_and_clear_flag(&app_paths.proxy_backup(), proxy) {
         return Err(AppError::new(
             ErrorCode::ProxyRestoreFailed,
-            format!("内核已重载，但在同步系统代理前无法恢复旧设置，已中止以免覆盖备份（{err}）"),
+            format!(
+            "core reloaded, but the previous system proxy settings could not be restored before syncing; aborted to avoid overwriting the backup ({err})"
+        ),
         ));
     }
     // Single attempt: a retry would mutate the OS proxy a second time while the
@@ -475,7 +479,7 @@ fn sync_system_proxy_after_reload(
         AppError::new(
             ErrorCode::ProxyApplyFailedCoreReloaded,
             format!(
-                "内核已在新端口 {}:{} 运行，但系统代理未能同步，请检查权限或手动设置系统代理（{}）",
+                "core is running on the new port {}:{}, but the system proxy could not be synced; check permissions or set the system proxy manually ({})",
                 new_endpoints.http_host, new_endpoints.http_port, err
             ),
         )
@@ -990,7 +994,7 @@ mod tests {
         let err = orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy)
             .expect_err("noop unavailable");
         assert_eq!(err.code, "proxy.apply_failed");
-        assert!(err.message.contains("不支持"));
+        assert!(err.message.contains("not supported"));
         assert!(!paths.proxy_backup().exists());
         let _ = fs::remove_dir_all(paths.root());
     }

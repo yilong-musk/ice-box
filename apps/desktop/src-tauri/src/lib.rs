@@ -11,6 +11,7 @@ mod shutdown;
 mod tray;
 
 use crate::capture::CaptureController;
+use crate::orchestrate::current_settings;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle, TrafficMonitor};
@@ -143,7 +144,7 @@ fn bootstrap_data_dir(
         }
         Err(err) => {
             tracing::error!(error = %err, "system proxy crash recovery failed");
-            Some(format!("系统代理恢复失败: {err}"))
+            Some(format!("system proxy recovery failed: {err}"))
         }
     };
 
@@ -223,13 +224,19 @@ pub fn run() {
                         Ok(None) => {}
                         Err(err) => {
                             tracing::error!(error = %err, "startup tun recovery failed");
-                            append_warning(format!("TUN 状态恢复未确认（{err}）"));
+                            append_warning(format!("TUN state recovery unconfirmed ({err})"));
                         }
                     }
                 }
             }
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
-            tray::setup_tray(app.handle())?;
+            let tray_language = {
+                let state = app.state::<AppState>();
+                current_settings(&state.paths)
+                    .map(|settings| tray::TrayLanguage::from(settings.language))
+                    .unwrap_or(tray::TrayLanguage::En)
+            };
+            tray::setup_tray(app.handle(), tray_language)?;
             core_watch::spawn_core_watchdog(app.handle().clone());
             // Product: opening the app starts the core only; system proxy is
             // toggled from the home page. Quit still restores an applied proxy.
@@ -246,7 +253,7 @@ pub fn run() {
                     }
                     tracing::error!(error = %err, "auto-start core failed");
                     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                        *slot = Some(format!("内核自动启动失败（{err}）"));
+                        *slot = Some(format!("core auto-start failed ({err})"));
                     }
                 }
             });
@@ -272,6 +279,7 @@ pub fn run() {
             commands::reveal_data_dir,
             commands::get_settings,
             commands::save_settings,
+            commands::set_tray_language,
             commands::set_proxy_mode,
             commands::add_subscription,
             commands::remove_subscription,

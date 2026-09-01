@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type CSSProperties,
@@ -37,6 +38,12 @@ import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
+import {
+  readLanguagePreference,
+  t,
+  useLanguagePreference,
+  type MessageKey,
+} from "./lib/i18n";
 import { useThemePreference } from "./lib/theme";
 import logo from "./assets/logo.png";
 
@@ -67,13 +74,17 @@ function TabPane({
   );
 }
 
-const NAV_ITEMS: { id: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { id: "home", label: "主页", icon: House },
-  { id: "nodes", label: "节点", icon: Waypoints },
-  { id: "rules", label: "规则", icon: ListFilter },
-  { id: "subs", label: "订阅", icon: Rss },
-  { id: "logs", label: "日志", icon: ScrollText },
-  { id: "settings", label: "设置", icon: SettingsIcon },
+const NAV_ITEMS: {
+  id: Tab;
+  labelKey: MessageKey;
+  icon: ComponentType<{ className?: string }>;
+}[] = [
+  { id: "home", labelKey: "app.nav.home", icon: House },
+  { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
+  { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
+  { id: "subs", labelKey: "app.nav.subs", icon: Rss },
+  { id: "logs", labelKey: "app.nav.logs", icon: ScrollText },
+  { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
 ];
 
 function TitleBar({ label }: { label: string }) {
@@ -111,7 +122,44 @@ function App() {
     () => new Set<Tab>(["home"]),
   );
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
+  const [languageReady, setLanguageReady] = useState(false);
   useThemePreference();
+  const { preference, resolved, setPreference } = useLanguagePreference();
+  const bootLanguageRef = useRef(preference);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getSettings()
+      .then((settings) => {
+        // localStorage paints the first frame quickly. Reconcile it with the
+        // authoritative settings file unless the user changed language while
+        // this startup read was in flight.
+        if (
+          !cancelled &&
+          readLanguagePreference() === bootLanguageRef.current &&
+          settings.language !== readLanguagePreference()
+        ) {
+          setPreference(settings.language);
+        }
+      })
+      .catch(() => {
+        // Settings surfaces load errors when the user opens that page.
+      })
+      .finally(() => {
+        if (!cancelled) setLanguageReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!languageReady) return;
+    void api.setTrayLanguage(resolved).catch(() => {
+      // The web UI remains usable if the native tray is unavailable.
+    });
+  }, [languageReady, resolved]);
 
   function selectTab(id: Tab) {
     setTab(id);
@@ -158,7 +206,7 @@ function App() {
         className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
         style={SIDEBAR_PROVIDER_STYLE}
       >
-        <TitleBar label={current?.label ?? ""} />
+        <TitleBar label={current ? t(current.labelKey) : ""} />
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
@@ -168,8 +216,8 @@ function App() {
           >
             <SidebarContent>
               <SidebarGroup>
-                <SidebarMenu aria-label="主导航">
-                  {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+                <SidebarMenu aria-label={t("app.nav.aria")}>
+                  {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
                     <SidebarMenuItem key={id}>
                       <SidebarMenuButton
                         type="button"
@@ -179,7 +227,7 @@ function App() {
                         onClick={() => selectTab(id)}
                       >
                         <Icon className="size-4" />
-                        <span>{label}</span>
+                        <span>{t(labelKey)}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
@@ -204,7 +252,7 @@ function App() {
                 </div>
                 <p
                   className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums"
-                  aria-label={`版本 ${APP_VERSION}`}
+                  aria-label={t("app.versionAria", { version: APP_VERSION })}
                 >
                   {APP_VERSION}
                 </p>

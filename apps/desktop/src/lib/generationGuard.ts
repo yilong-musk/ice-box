@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { t } from "./i18n";
 
 /** Invalidates in-flight async work when generation changes (mutations / tab switches). */
 export function useGenerationGuard() {
@@ -37,11 +38,11 @@ export function isLoopbackListenHost(raw: string): boolean {
 }
 
 export function formatListenValidationError(field: string): string {
-  return `${field} 必须是 loopback 地址（127.0.0.1、localhost 或 ::1）`;
+  return `${field} ${t("validation.listen")}`;
 }
 
 export function formatPortValidationError(field: string): string {
-  return `${field} 必须是 1024–65535 之间的整数`;
+  return `${field} ${t("validation.port")}`;
 }
 
 /** True when mixed and Clash API ports would conflict (matches backend validation). */
@@ -50,5 +51,5 @@ export function portsConflict(mixedPort: number, clashApiPort: number): boolean 
 }
 
 export function formatPortsConflictError(): string {
-  return "Mixed 端口与 Clash API 端口不能相同";
+  return t("validation.portsConflict");
 }

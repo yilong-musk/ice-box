@@ -8,6 +8,7 @@ use crate::orchestrate::{
     resolve_binary,
 };
 use crate::shutdown::graceful_stop;
+use crate::tray::{self, TrayLanguage};
 use crate::AppState;
 use ice_config::NormalizedOutbound;
 use ice_config::{
@@ -795,6 +796,11 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
         }
     })
     .await
+}
+
+#[tauri::command]
+pub fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), AppError> {
+    tray::set_language(&app, language)
 }
 
 #[derive(Deserialize)]

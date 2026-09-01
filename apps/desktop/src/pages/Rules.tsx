@@ -17,7 +17,6 @@ import {
   CardAction,
   CardContent,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -37,6 +36,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   pageCount,
@@ -74,6 +74,7 @@ const EMPTY_OVERVIEW: RuleOverview = {
 };
 
 export function Rules({ onNavigate, active = true }: Props) {
+  useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
   const [rows, setRows] = useState<RuleRow[]>([]);
@@ -238,13 +239,12 @@ export function Rules({ onNavigate, active = true }: Props) {
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {applyWarning && (
         <WarnAlert className="shrink-0" role="alert">
-          已保存，但应用失败：{applyWarning}
+          {t("rules.savedButApplyFailed", { detail: applyWarning })}
         </WarnAlert>
       )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardTitle>规则</CardTitle>
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
@@ -253,7 +253,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               onClick={() => void load()}
               disabled={busy}
             >
-              刷新
+              {t("common.refresh")}
             </Button>
             <Button
               type="button"
@@ -261,7 +261,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               variant="outline"
               onClick={() => setShowCustomForm(true)}
             >
-              + 自定义规则
+              {t("rules.addCustom")}
             </Button>
           </CardAction>
         </CardHeader>
@@ -270,13 +270,13 @@ export function Rules({ onNavigate, active = true }: Props) {
             <Input
               type="search"
               className="min-w-48 flex-1"
-              placeholder="搜索域名 / 出口 / 规则集…"
-              aria-label="搜索规则"
+              placeholder={t("rules.searchPlaceholder")}
+              aria-label={t("rules.searchAria")}
               value={filters.keyword}
               onChange={(e) => changeFilters({ keyword: e.target.value })}
             />
             <NativeSelect
-              aria-label="禁用状态筛选"
+              aria-label={t("rules.statusFilterAria")}
               className="w-auto"
               size="sm"
               value={filters.status}
@@ -284,12 +284,18 @@ export function Rules({ onNavigate, active = true }: Props) {
                 changeFilters({ status: e.target.value as StatusFilter })
               }
             >
-              <NativeSelectOption value="all">全部状态</NativeSelectOption>
-              <NativeSelectOption value="enabled">仅启用</NativeSelectOption>
-              <NativeSelectOption value="disabled">仅禁用</NativeSelectOption>
+              <NativeSelectOption value="all">
+                {t("rules.statusAll")}
+              </NativeSelectOption>
+              <NativeSelectOption value="enabled">
+                {t("rules.statusEnabled")}
+              </NativeSelectOption>
+              <NativeSelectOption value="disabled">
+                {t("rules.statusDisabled")}
+              </NativeSelectOption>
             </NativeSelect>
             <NativeSelect
-              aria-label="每页条数"
+              aria-label={t("rules.pageSizeAria")}
               className="w-auto"
               size="sm"
               value={limit}
@@ -300,70 +306,67 @@ export function Rules({ onNavigate, active = true }: Props) {
             >
               {PAGE_SIZES.map((n) => (
                 <NativeSelectOption key={n} value={n}>
-                  每页 {n}
+                  {t("rules.pageSize", { n })}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
           </div>
 
-          <div
-            className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
-            aria-label="规则筛选"
-          >
-            {overview.types.length > 0 ? (
-              <ToggleGroup
-                type="single"
+          <div className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={2}
+              value={filters.type || "all"}
+              onValueChange={(value) => {
+                changeFilters({
+                  type: !value || value === "all" ? "" : value,
+                });
+              }}
+              className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
+              aria-label={t("rules.filtersAria")}
+            >
+              {overview.types.length > 0 ? (
+                <ToggleGroupItem value="all">{t("rules.typeAll")}</ToggleGroupItem>
+              ) : null}
+              {overview.types.map((t) => (
+                <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
+                  {ruleTypeLabel(t.rule_type)} {t.count}
+                </ToggleGroupItem>
+              ))}
+              <Toggle
                 variant="outline"
                 size="sm"
-                spacing={2}
-                value={filters.type || "all"}
-                onValueChange={(value) => {
-                  changeFilters({
-                    type: !value || value === "all" ? "" : value,
-                  });
-                }}
-                className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
-                aria-label="规则类型筛选"
+                pressed={filters.custom}
+                onPressedChange={(pressed) =>
+                  changeFilters({ custom: pressed })
+                }
               >
-                <ToggleGroupItem value="all">全部</ToggleGroupItem>
-                {overview.types.map((t) => (
-                  <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
-                    {ruleTypeLabel(t.rule_type)} {t.count}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            ) : null}
-            <Toggle
-              variant="outline"
-              size="sm"
-              pressed={filters.custom}
-              onPressedChange={(pressed) =>
-                changeFilters({ custom: pressed })
-              }
-            >
-              自定义 {overview.custom}
-            </Toggle>
-            <Toggle
-              variant="outline"
-              size="sm"
-              pressed={filters.status === "disabled"}
-              onPressedChange={(pressed) =>
-                changeFilters({
-                  status: pressed ? "disabled" : "all",
-                })
-              }
-            >
-              已禁用 {overview.disabled}
-            </Toggle>
+                {t("rules.customCount", { count: overview.custom })}
+              </Toggle>
+              <Toggle
+                variant="outline"
+                size="sm"
+                pressed={filters.status === "disabled"}
+                onPressedChange={(pressed) =>
+                  changeFilters({
+                    status: pressed ? "disabled" : "all",
+                  })
+                }
+              >
+                {t("rules.disabledCount", { count: overview.disabled })}
+              </Toggle>
+            </ToggleGroup>
           </div>
 
           {!showList ? (
             <EmptyState
               framed={false}
               className="my-auto"
-              title="暂无规则"
-              description="当前没有订阅规则，也没有自定义规则。导入含规则的订阅后可在此查询、禁用规则或添加自定义规则。"
-              actionLabel="前往订阅页导入"
+              title={t("rules.emptyTitle")}
+              description={t("rules.emptyDesc")}
+              actionLabel={t("home.goToSubs")}
               onAction={() => onNavigate?.("subs")}
             />
           ) : (
@@ -374,7 +377,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               viewportRef={listRef}
               onViewportScroll={onListScroll}
             >
-              <ItemGroup aria-label="规则列表" className="gap-0 pb-14">
+              <ItemGroup aria-label={t("rules.listAria")} className="gap-0 pb-14">
                 {rows.map((row, index) => {
                   const summary = ruleMatchSummary(row);
                   const outboundLabel = ruleOutbound(row) || "—";
@@ -398,7 +401,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                             </span>
                             {row.custom ? (
                               <span className="shrink-0 text-xs font-normal text-muted-foreground">
-                                自定义
+                                {t("rules.custom")}
                               </span>
                             ) : (
                               <Badge variant="outline" className="font-mono">
@@ -421,7 +424,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                             disabled={busy}
                             onClick={() => void onToggleDisabled(row)}
                           >
-                            {row.disabled ? "启用" : "禁用"}
+                            {row.disabled ? t("common.enable") : t("common.disable")}
                           </Button>
                           {row.custom ? (
                             <Button
@@ -431,7 +434,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                               disabled={busy}
                               onClick={() => setPendingDelete(row)}
                             >
-                              删除
+                              {t("common.delete")}
                             </Button>
                           ) : null}
                         </ItemActions>
@@ -458,10 +461,10 @@ export function Rules({ onNavigate, active = true }: Props) {
                 disabled={busy || offset === 0}
                 onClick={() => setOffset((o) => Math.max(0, o - limit))}
               >
-                上一页
+                {t("rules.prevPage")}
               </Button>
               <span className="text-sm text-muted-foreground">
-                第 {page} / {pages} 页 · 共 {total} 条
+                {t("rules.pageInfo", { page, pages, total })}
               </span>
               <Button
                 type="button"
@@ -470,7 +473,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                 disabled={busy || offset + limit >= total}
                 onClick={() => setOffset((o) => o + limit)}
               >
-                下一页
+                {t("rules.nextPage")}
               </Button>
             </div>
           ) : null}
@@ -484,13 +487,15 @@ export function Rules({ onNavigate, active = true }: Props) {
       />
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除自定义规则"
+        title={t("rules.deleteCustomTitle")}
         description={
           pendingDelete
-            ? `确认删除规则：${ruleMatchSummary(pendingDelete)}？`
+            ? t("rules.deleteCustomConfirm", {
+                summary: ruleMatchSummary(pendingDelete),
+              })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={t("common.delete")}
         busy={busy}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);

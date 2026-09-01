@@ -8,34 +8,25 @@ describe("formatInvokeError", () => {
     ).toBe("core.not_found: missing binary");
   });
 
-  it("translates known friendly codes", () => {
+  it("passes Rust-side error codes and messages through verbatim", () => {
     expect(
       formatInvokeError({
         code: "config.empty_outbounds",
         message: "no active subscription",
       }),
-    ).toBe("没有可用的订阅节点，请先在「订阅」页导入订阅，或保持仅直连模式运行");
-  });
-
-  it("translates TUN error codes to actionable text", () => {
+    ).toBe("config.empty_outbounds: no active subscription");
     expect(
       formatInvokeError({
         code: "tun.not_supported",
         message: "Windows TUN gate pending",
       }),
-    ).toBe("当前平台暂不支持 TUN 模式");
-    expect(
-      formatInvokeError({
-        code: "tun.permission_required",
-        message: "sudo -n failed",
-      }),
-    ).toContain("需要系统权限");
+    ).toBe("tun.not_supported: Windows TUN gate pending");
     expect(
       formatInvokeError({
         code: "tun.recovery_required",
         message: "cleanup unverified",
       }),
-    ).toContain("重试恢复");
+    ).toContain("tun.recovery_required: cleanup unverified");
   });
 
   it("falls back to message field", () => {

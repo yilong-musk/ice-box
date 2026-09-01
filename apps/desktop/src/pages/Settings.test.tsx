@@ -8,6 +8,10 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
+import {
+  LANGUAGE_STORAGE_KEY,
+  persistLanguagePreference,
+} from "../lib/i18n";
 import { Settings } from "./Settings";
 
 const getSettings = vi.fn();
@@ -63,6 +67,7 @@ const defaultStatus = {
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
     getSettings.mockResolvedValue({
@@ -75,6 +80,7 @@ describe("Settings", () => {
       allow_lan: false,
       proxy_mode: "rule",
       auto_default_rules: true,
+      language: "system",
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -216,7 +222,9 @@ describe("Settings", () => {
     const view = within(container);
 
     const mixedInput = await view.findByLabelText("Mixed 监听");
+    const language = view.getByLabelText("语言");
     expect(mixedInput).toBeDisabled();
+    expect(language).toBeDisabled();
 
     resolveSettings({
       mixed_listen: "127.0.0.1",
@@ -227,12 +235,15 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       allow_lan: false,
       proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
       tun: tunSettings,
     });
 
     await waitFor(() => {
       expect(mixedInput).not.toBeDisabled();
     });
+    expect(language).not.toBeDisabled();
     // Opening the page never writes the just-loaded snapshot back.
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(saveSettings).not.toHaveBeenCalled();
@@ -250,6 +261,7 @@ describe("Settings", () => {
 
     const mixedInput = view.getByLabelText("Mixed 监听");
     expect(mixedInput).toBeDisabled();
+    expect(view.getByLabelText("语言")).toBeDisabled();
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
@@ -263,6 +275,7 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       allow_lan: false,
       proxy_mode: "rule" as const,
+      language: "system" as const,
       tun: tunSettings,
     };
     const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
@@ -289,33 +302,104 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
-        "data-state",
-        "on",
-      );
+      const appearance = view.getByLabelText("外观");
+      expect(
+        within(appearance).getByRole("radio", { name: "跟随系统" }),
+      ).toHaveAttribute("data-state", "on");
     });
+    const appearance = view.getByLabelText("外观");
 
-    fireEvent.click(view.getByRole("radio", { name: "浅色" }));
-    expect(view.getByRole("radio", { name: "浅色" })).toHaveAttribute(
-      "data-state",
-      "on",
-    );
+    fireEvent.click(within(appearance).getByRole("radio", { name: "浅色" }));
+    expect(
+      within(appearance).getByRole("radio", { name: "浅色" }),
+    ).toHaveAttribute("data-state", "on");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(view.getByRole("radio", { name: "深色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: "深色" }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(view.getByRole("radio", { name: "跟随系统" }));
-    expect(view.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
-      "data-state",
-      "on",
+    fireEvent.click(
+      within(appearance).getByRole("radio", { name: "跟随系统" }),
     );
+    expect(
+      within(appearance).getByRole("radio", { name: "跟随系统" }),
+    ).toHaveAttribute("data-state", "on");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("defaults language to the system locale and persists changes", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByLabelText("语言")).toBeInTheDocument();
+    });
+    const language = view.getByLabelText("语言");
+    expect(language).toHaveValue("system");
+
+    fireEvent.change(language, { target: { value: "en" } });
+    expect(language).toHaveValue("en");
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ language: "en" }),
+      );
+    });
+
+    fireEvent.change(language, { target: { value: "zh" } });
+    expect(language).toHaveValue("zh");
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh");
+    expect(document.documentElement.lang).toBe("zh");
+  });
+
+  it("flushes a pending language save before the panel becomes inactive", async () => {
+    const { container, rerender } = render(<Settings active />);
+    const view = within(container);
+
+    const language = await view.findByLabelText("语言");
+    await waitFor(() => expect(language).not.toBeDisabled());
+    fireEvent.change(language, { target: { value: "en" } });
+    rerender(<Settings active={false} />);
+
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ language: "en" }),
+      );
+    });
+  });
+
+  it("applies the stored settings language after load", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "en",
+      tun: tunSettings,
+    });
+    render(<Settings />);
+    await waitFor(() => {
+      expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
+    });
+    expect(document.documentElement.lang).toBe("en");
+    // Rendering stays Chinese-free: the nav/labels resolve through the
+    // current language, so the settings panel shows English text.
+    expect(document.body.textContent).toContain("Appearance");
+    expect(document.body.textContent).toContain("Language");
+
+    // Reset the module-level language so later tests in this file render zh.
+    persistLanguagePreference("system");
   });
 
   it("lets the settings panel fill the content pane", () => {
