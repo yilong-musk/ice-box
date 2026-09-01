@@ -203,6 +203,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
                   });
                 }}
                 indicator="dot"
+                formatter={(value) => formatRate(Number(value))}
               />
             }
           />
