@@ -15,7 +15,6 @@ import {
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -26,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
   Item,
@@ -245,7 +245,7 @@ export function Subscriptions() {
                         <ItemContent className="min-w-0">
                           <ItemTitle title={s.name}>
                             <span className="truncate">{s.name}</span>
-                            {s.active ? <Badge>已激活</Badge> : null}
+                            {s.active ? <Label className="shrink-0 text-ok">已激活</Label> : null}
                           </ItemTitle>
                           <ItemDescription>
                             {subscriptionSummary(s)}
