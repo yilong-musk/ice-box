@@ -420,6 +420,39 @@ impl MacosTunBackend {
         }
     }
 
+    /// Restore DNS before stopping the core when a DNS mutation was followed
+    /// by an apply or journal failure. Either cleanup failure leaves ownership
+    /// uncertain, so the caller must keep the system fail-closed.
+    fn rollback_dns_after_apply_failure(
+        &mut self,
+        service: &str,
+        before: &[String],
+        apply_err: TunError,
+    ) -> TunError {
+        let dns_result = self.coordinator.set_dns(service, before);
+        let core_result = self.coordinator.stop();
+        match (dns_result, core_result) {
+            (Ok(()), Ok(())) => apply_err,
+            (dns_result, core_result) => {
+                let dns_error = dns_result
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "unknown DNS cleanup failure".into());
+                let core_error = core_result
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "unknown core cleanup failure".into());
+                TunError::new(
+                    TunErrorCode::RecoveryRequired,
+                    format!(
+                        "apply failed ({}); DNS cleanup: {}; elevated core cleanup: {}",
+                        apply_err.message, dns_error, core_error
+                    ),
+                )
+            }
+        }
+    }
+
     /// Probe the lowest free `utun<N>` index at or above `from`. Read-only.
     fn probe_free_utun(&self, from: u32) -> Result<String, TunError> {
         let existing = self.host.list_interface_names()?;
@@ -710,13 +743,20 @@ impl TunBackend for MacosTunBackend {
         let mut dns_before = None;
         let mut dns_after = None;
         if config.dns_hijack {
-            let service = self.host.dns_service()?.ok_or_else(|| {
-                TunError::new(
-                    TunErrorCode::ApplyFailed,
-                    "no network service found to point DNS at public resolvers",
-                )
-            })?;
-            let before = self.host.dns_servers(&service)?;
+            let service = match self.host.dns_service() {
+                Ok(Some(service)) => service,
+                Ok(None) => {
+                    return Err(self.rollback_after_apply_failure(TunError::new(
+                        TunErrorCode::ApplyFailed,
+                        "no network service found to point DNS at public resolvers",
+                    )))
+                }
+                Err(err) => return Err(self.rollback_after_apply_failure(err)),
+            };
+            let before = match self.host.dns_servers(&service) {
+                Ok(servers) => servers,
+                Err(err) => return Err(self.rollback_after_apply_failure(err)),
+            };
             dns_before = Some(DnsSnapshot {
                 platform_snapshot: dns_snapshot(&service, &before),
             });
@@ -724,7 +764,9 @@ impl TunBackend for MacosTunBackend {
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            self.coordinator.set_dns(&service, &target)?;
+            if let Err(err) = self.coordinator.set_dns(&service, &target) {
+                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+            }
             dns_after = Some(DnsSnapshot {
                 platform_snapshot: dns_snapshot(&service, &target),
             });
@@ -732,8 +774,7 @@ impl TunBackend for MacosTunBackend {
                 journal.dns_before = dns_before.clone();
                 journal.dns_after = dns_after.clone();
             }) {
-                let _ = self.coordinator.set_dns(&service, &before);
-                return Err(self.rollback_after_apply_failure(err));
+                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
             }
         }
 
@@ -865,7 +906,13 @@ impl TunBackend for MacosTunBackend {
             )
         })?;
 
-        self.journal_record(steps::RESTORE_STARTED, |_| {})?;
+        // Journal writes are recovery metadata, not a prerequisite for OS
+        // cleanup. Keep going when persistence is unavailable and report the
+        // failure after all independently safe cleanup has been attempted.
+        let mut restore_error = None;
+        if let Err(err) = self.journal_record(steps::RESTORE_STARTED, |_| {}) {
+            restore_error = Some(err);
+        }
 
         let name = applied.interface_name.as_deref();
         let mut interface_gone = false;
@@ -905,16 +952,24 @@ impl TunBackend for MacosTunBackend {
 
         // The kernel flushed the interface and its routes; journal the
         // observed removal boundaries.
-        self.journal_record(steps::ROUTES_REMOVED, |journal| {
+        if let Err(err) = self.journal_record(steps::ROUTES_REMOVED, |journal| {
             journal.routes.clear();
             journal.expected_routes.clear();
-        })?;
-        self.journal_record(steps::INTERFACE_REMOVED, |journal| {
+        }) {
+            if restore_error.is_none() {
+                restore_error = Some(err);
+            }
+        }
+        if let Err(err) = self.journal_record(steps::INTERFACE_REMOVED, |journal| {
             journal.interface_name = None;
             journal.interface_id = None;
             journal.addresses.clear();
             journal.expected_addresses.clear();
-        })?;
+        }) {
+            if restore_error.is_none() {
+                restore_error = Some(err);
+            }
+        }
 
         // DNS restore (compare-before-restore): only when the platform still
         // carries the applied resolvers; an external DNS change is preserved
@@ -930,19 +985,38 @@ impl TunBackend for MacosTunBackend {
                         .map(|b| b.platform_snapshot.as_str())
                         .unwrap_or(""),
                 );
-                self.coordinator.set_dns(&service, &before)?;
-                self.journal_record(steps::DNS_RESTORED, |journal| {
+                if let Err(err) = self.coordinator.set_dns(&service, &before) {
+                    if restore_error.is_none() {
+                        restore_error = Some(err);
+                    }
+                } else if let Err(err) = self.journal_record(steps::DNS_RESTORED, |journal| {
                     journal.dns_before = None;
                     journal.dns_after = None;
-                })?;
+                }) {
+                    if restore_error.is_none() {
+                        restore_error = Some(err);
+                    }
+                }
             } else {
-                return Err(TunError::new(
+                let err = TunError::new(
                     TunErrorCode::RecoveryRequired,
                     "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
-                ));
+                );
+                if restore_error.is_none() {
+                    restore_error = Some(err);
+                }
             }
         }
-        Ok(())
+        match restore_error {
+            Some(err) => Err(TunError::new(
+                TunErrorCode::RecoveryRequired,
+                format!(
+                    "restore cleanup completed with unrecoverable state: {}",
+                    err.message
+                ),
+            )),
+            None => Ok(()),
+        }
     }
 
     fn recover(&mut self, journal: &TunJournal) -> Result<RecoveryOutcome, TunError> {

@@ -237,6 +237,7 @@ struct FakeCoreCoordinator {
     host: FakeHost,
     start_failure: Option<TunErrorCode>,
     stop_failure: Option<TunErrorCode>,
+    dns_failure: Option<TunErrorCode>,
     remove_on_stop: bool,
     /// When false, the adapter is created without its routes (a core that
     /// never converged): apply must fail closed.
@@ -250,6 +251,7 @@ impl FakeCoreCoordinator {
             host,
             start_failure: None,
             stop_failure: None,
+            dns_failure: None,
             remove_on_stop: true,
             install_routes: true,
             started: false,
@@ -326,6 +328,9 @@ impl CoreCoordinator for FakeCoreCoordinator {
     }
 
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+        if let Some(code) = self.dns_failure {
+            return Err(TunError::new(code, "injected DNS failure"));
+        }
         self.host.set_dns(service, servers.to_vec());
         Ok(())
     }
@@ -619,6 +624,28 @@ fn dns_restore_preserves_external_change_as_recovery_required() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn dns_apply_failure_rolls_back_the_core() {
+    let dir = temp_dir("dns-apply-failure");
+    let host = FakeHost::default();
+    host.set_dns("Wi-Fi", vec!["192.168.5.1".into()]);
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+
+    let mut coordinator = FakeCoreCoordinator::new(host.clone());
+    coordinator.dns_failure = Some(TunErrorCode::PermissionRequired);
+    let mut bk = backend(&dir, host.clone(), coordinator);
+    let mut config = mac_config();
+    config.dns_hijack = true;
+    let prepared = bk.prepare(&config).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("DNS failure");
+
+    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert!(!host.has_utun("utun420"), "DNS failure must stop the core");
+    assert_eq!(host.dns("Wi-Fi"), vec!["192.168.5.1".to_string()]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 fn dns_parts(applied: &AppliedTun) -> (Vec<String>, Vec<String>) {
     let parse = |snap: &Option<DnsSnapshot>| -> Vec<String> {
         snap.as_ref()
@@ -670,6 +697,33 @@ fn recovery_without_interface_still_restores_applied_dns() {
         vec!["192.168.5.1".to_string()],
         "the DHCP resolver must be back"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restore_restores_dns_when_journal_writes_fail() {
+    let dir = temp_dir("restore-dns-nojournal");
+    let host = FakeHost::default();
+    host.set_dns("Wi-Fi", vec!["192.168.5.1".into()]);
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+
+    let mut bk = backend(&dir, host.clone(), FakeCoreCoordinator::new(host.clone()));
+    let mut config = mac_config();
+    config.dns_hijack = true;
+    let prepared = bk.prepare(&config).expect("prepare");
+    let applied = bk.apply(&prepared).expect("apply");
+    assert_eq!(host.dns("Wi-Fi"), vec!["223.5.5.5", "119.29.29.29"]);
+
+    // Make the existing journal unreadable after DNS has been applied. The
+    // restore path must still release the core and restore the user's DNS.
+    let journal = journal_path(&dir);
+    fs::remove_file(&journal).unwrap();
+    fs::create_dir(&journal).unwrap();
+    let err = bk.restore(&applied).expect_err("journal writes fail");
+    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert!(!host.has_utun("utun420"));
+    assert_eq!(host.dns("Wi-Fi"), vec!["192.168.5.1".to_string()]);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -910,7 +964,7 @@ fn restore_stops_core_even_when_journal_writes_fail() {
     .with_journal(broken_journal);
 
     let err = bk.restore(&applied).expect_err("journal write fails");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
     assert!(
         !host.has_utun("utun420"),
         "the core must be stopped even when the journal cannot be written"

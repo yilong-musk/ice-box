@@ -12,6 +12,9 @@ mod tls_fetch;
 mod uri;
 mod url;
 
+/// Upper bound for simultaneous subscription network fetches.
+const MAX_FETCH_CONCURRENCY: usize = 8;
+
 #[cfg(test)]
 mod tests_g5 {
     use super::{
@@ -28,7 +31,12 @@ mod tests_g5 {
     };
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use uuid::Uuid;
 
     fn fixtures_dir() -> PathBuf {
@@ -49,6 +57,47 @@ mod tests_g5 {
 
     fn clone_paths(paths: &SubscriptionPaths) -> SubscriptionPaths {
         SubscriptionPaths::from_root(paths.root().to_path_buf())
+    }
+
+    #[derive(Clone)]
+    struct ConcurrencyFetcher {
+        active: Arc<AtomicUsize>,
+        max_active: Arc<AtomicUsize>,
+    }
+
+    impl HttpFetcher for ConcurrencyFetcher {
+        fn bypasses_system_proxy(&self) -> bool {
+            true
+        }
+
+        fn get(
+            &self,
+            _url: &str,
+            _etag: Option<&str>,
+            _last_modified: Option<&str>,
+        ) -> Result<FetchResponse, SubscriptionError> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            loop {
+                let previous = self.max_active.load(Ordering::SeqCst);
+                if active <= previous
+                    || self
+                        .max_active
+                        .compare_exchange(previous, active, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(FetchResponse {
+                body: r#"{"outbounds":[{"type":"socks","tag":"node","server":"1.1.1.1","server_port":1}]}"#.into(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            })
+        }
     }
 
     #[test]
@@ -259,6 +308,34 @@ mod tests_g5 {
             index.items.len(),
             2,
             "a fetch for a removed/unknown id must not resurrect it"
+        );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn fetch_all_caps_network_concurrency() {
+        let paths = temp_subs("fetch-pool");
+        let fetcher = ConcurrencyFetcher {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_active: Arc::new(AtomicUsize::new(0)),
+        };
+        let max_active = Arc::clone(&fetcher.max_active);
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+        let count = super::MAX_FETCH_CONCURRENCY + 4;
+        for index in 0..count {
+            mgr.add(&format!("https://example.com/{index}"), None)
+                .expect("add subscription");
+        }
+
+        let updates = mgr.fetch_all();
+        assert_eq!(updates.len(), count);
+        assert!(
+            max_active.load(Ordering::SeqCst) > 1,
+            "fetch_all should retain useful parallelism"
+        );
+        assert!(
+            max_active.load(Ordering::SeqCst) <= super::MAX_FETCH_CONCURRENCY,
+            "fetch_all exceeded its worker limit"
         );
         let _ = fs::remove_dir_all(paths.root());
     }
@@ -1297,13 +1374,45 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         let ids: Vec<Uuid> = load_index(&self.paths)
             .map(|i| i.items.into_iter().map(|m| m.id).collect())
             .unwrap_or_default();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+
+        let worker_count = ids.len().min(MAX_FETCH_CONCURRENCY);
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            ids.into_iter()
+                .enumerate()
+                .collect::<std::collections::VecDeque<_>>(),
+        ));
+        let (sender, receiver) = std::sync::mpsc::channel();
+
         std::thread::scope(|scope| {
-            let handles: Vec<_> = ids
-                .iter()
-                .map(|id| scope.spawn(move || (*id, self.fetch_update(*id))))
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        })
+            for _ in 0..worker_count {
+                let queue = std::sync::Arc::clone(&queue);
+                let sender = sender.clone();
+                scope.spawn(move || loop {
+                    let job = queue
+                        .lock()
+                        .expect("subscription fetch queue poisoned")
+                        .pop_front();
+                    let Some((index, id)) = job else {
+                        break;
+                    };
+                    let result = self.fetch_update(id);
+                    sender
+                        .send((index, id, result))
+                        .expect("subscription fetch receiver dropped");
+                });
+            }
+            drop(sender);
+        });
+
+        let mut completed: Vec<_> = receiver.into_iter().collect();
+        completed.sort_unstable_by_key(|(index, _, _)| *index);
+        completed
+            .into_iter()
+            .map(|(_, id, result)| (id, result))
+            .collect()
     }
 
     /// Disk phase of [`SubscriptionManager::fetch_all`]: persists each fetched update
