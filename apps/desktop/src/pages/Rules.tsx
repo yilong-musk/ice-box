@@ -314,55 +314,52 @@ export function Rules({ onNavigate, active = true }: Props) {
             </NativeSelect>
           </div>
 
-          <div
-            className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
-            aria-label={t("rules.filtersAria")}
-          >
-            {overview.types.length > 0 ? (
-              <ToggleGroup
-                type="single"
+          <div className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={2}
+              value={filters.type || "all"}
+              onValueChange={(value) => {
+                changeFilters({
+                  type: !value || value === "all" ? "" : value,
+                });
+              }}
+              className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
+              aria-label={t("rules.filtersAria")}
+            >
+              {overview.types.length > 0 ? (
+                <ToggleGroupItem value="all">{t("rules.typeAll")}</ToggleGroupItem>
+              ) : null}
+              {overview.types.map((t) => (
+                <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
+                  {ruleTypeLabel(t.rule_type)} {t.count}
+                </ToggleGroupItem>
+              ))}
+              <Toggle
                 variant="outline"
                 size="sm"
-                spacing={2}
-                value={filters.type || "all"}
-                onValueChange={(value) => {
-                  changeFilters({
-                    type: !value || value === "all" ? "" : value,
-                  });
-                }}
-                className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
-                aria-label={t("rules.typeFilterAria")}
+                pressed={filters.custom}
+                onPressedChange={(pressed) =>
+                  changeFilters({ custom: pressed })
+                }
               >
-                <ToggleGroupItem value="all">{t("rules.typeAll")}</ToggleGroupItem>
-                {overview.types.map((t) => (
-                  <ToggleGroupItem key={t.rule_type} value={t.rule_type}>
-                    {ruleTypeLabel(t.rule_type)} {t.count}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            ) : null}
-            <Toggle
-              variant="outline"
-              size="sm"
-              pressed={filters.custom}
-              onPressedChange={(pressed) =>
-                changeFilters({ custom: pressed })
-              }
-            >
-              {t("rules.customCount", { count: overview.custom })}
-            </Toggle>
-            <Toggle
-              variant="outline"
-              size="sm"
-              pressed={filters.status === "disabled"}
-              onPressedChange={(pressed) =>
-                changeFilters({
-                  status: pressed ? "disabled" : "all",
-                })
-              }
-            >
-              {t("rules.disabledCount", { count: overview.disabled })}
-            </Toggle>
+                {t("rules.customCount", { count: overview.custom })}
+              </Toggle>
+              <Toggle
+                variant="outline"
+                size="sm"
+                pressed={filters.status === "disabled"}
+                onPressedChange={(pressed) =>
+                  changeFilters({
+                    status: pressed ? "disabled" : "all",
+                  })
+                }
+              >
+                {t("rules.disabledCount", { count: overview.disabled })}
+              </Toggle>
+            </ToggleGroup>
           </div>
 
           {!showList ? (

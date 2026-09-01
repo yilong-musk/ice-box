@@ -195,7 +195,6 @@ const zh = {
   "rules.pageSizeAria": "每页条数",
   "rules.pageSize": "每页 {n}",
   "rules.filtersAria": "规则筛选",
-  "rules.typeFilterAria": "规则类型筛选",
   "rules.typeAll": "全部",
   "rules.customCount": "自定义 {count}",
   "rules.disabledCount": "已禁用 {count}",
@@ -216,12 +215,12 @@ const zh = {
 
   // --- settings page ---
   "settings.appearance": "外观",
-  "settings.appearanceDesc": "默认跟随系统深浅色。切换后立即生效，不必点保存。",
+  "settings.appearanceDesc": "默认跟随系统深浅色。",
   "settings.appearance.system": "跟随系统",
   "settings.appearance.light": "浅色",
   "settings.appearance.dark": "深色",
   "settings.language": "语言",
-  "settings.languageDesc": "默认跟随系统语言。切换后立即生效，不必点保存。",
+  "settings.languageDesc": "默认跟随系统语言。",
   "settings.language.system": "跟随系统",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
@@ -239,14 +238,14 @@ const zh = {
   "settings.helperStale":
     "应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN",
   "settings.helperReady":
-    "辅助组件已安装并授权，可直接启用 TUN；切换后自动保存并生效",
+    "辅助组件已安装并授权，可直接启用 TUN",
   "settings.helperNeeded":
-    "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；切换后自动保存并生效，服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查",
+    "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查",
   "settings.updateHelper": "更新辅助组件",
   "settings.installHelper": "安装辅助组件",
   "settings.uninstallHelper": "卸载辅助组件",
   "settings.inbound": "入站",
-  "settings.inboundDesc": "Mixed 与 Clash API 监听地址（更改后自动保存）",
+  "settings.inboundDesc": "Mixed 与 Clash API 监听地址",
   "settings.mixedListen": "Mixed 监听",
   "settings.mixedPort": "Mixed 端口",
   "settings.clashListen": "Clash API 监听",
@@ -478,7 +477,6 @@ const en: Record<MessageKey, string> = {
   "rules.pageSizeAria": "Page size",
   "rules.pageSize": "{n} per page",
   "rules.filtersAria": "Rule filters",
-  "rules.typeFilterAria": "Rule type filter",
   "rules.typeAll": "All",
   "rules.customCount": "Custom {count}",
   "rules.disabledCount": "Disabled {count}",
@@ -499,14 +497,12 @@ const en: Record<MessageKey, string> = {
 
   // --- settings page ---
   "settings.appearance": "Appearance",
-  "settings.appearanceDesc":
-    "Follows the system by default. Applies immediately; no save needed.",
+  "settings.appearanceDesc": "Follows the system by default.",
   "settings.appearance.system": "System",
   "settings.appearance.light": "Light",
   "settings.appearance.dark": "Dark",
   "settings.language": "Language",
-  "settings.languageDesc":
-    "Follows the system language by default. Applies immediately; no save needed.",
+  "settings.languageDesc": "Follows the system language by default.",
   "settings.language.system": "System",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
@@ -524,14 +520,14 @@ const en: Record<MessageKey, string> = {
   "settings.helperStale":
     "The app updated its core, but the helper still runs the old core. Click “Update Helper” below to replace it (a system authorization prompt will appear); TUN stays disabled until then",
   "settings.helperReady":
-    "The helper is installed and authorized; TUN can be enabled directly. Changes auto-save and apply",
+    "The helper is installed and authorized; TUN can be enabled directly",
   "settings.helperNeeded":
-    "System permission required: install and authorize the helper first (a system authorization prompt will appear). Changes auto-save and apply; while the service is running, the old backend is stopped, the new one enabled, and readiness checked in order",
+    "System permission required: install and authorize the helper first (a system authorization prompt will appear). While the service is running, the old backend is stopped, the new one enabled, and readiness checked in order",
   "settings.updateHelper": "Update Helper",
   "settings.installHelper": "Install Helper",
   "settings.uninstallHelper": "Uninstall Helper",
   "settings.inbound": "Inbound",
-  "settings.inboundDesc": "Mixed and Clash API listen addresses (auto-saved)",
+  "settings.inboundDesc": "Mixed and Clash API listen addresses",
   "settings.mixedListen": "Mixed Listen",
   "settings.mixedPort": "Mixed Port",
   "settings.clashListen": "Clash API Listen",

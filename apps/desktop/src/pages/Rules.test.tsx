@@ -94,16 +94,14 @@ describe("Rules", () => {
     expect(view.getByRole("radio", { name: "全部" })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: "GEOIP 1" })).toBeInTheDocument();
     const chips = view.getByLabelText("规则筛选");
-    const typeFilters = view.getByLabelText("规则类型筛选");
     const customFilter = view.getByRole("button", { name: "自定义 1" });
     const disabledFilter = view.getByRole("button", { name: "已禁用 1" });
-    expect(chips).toContainElement(typeFilters);
     expect(chips).toContainElement(customFilter);
     expect(chips).toContainElement(disabledFilter);
-    expect(typeFilters.className.split(/\s+/)).toEqual(
+    expect(chips.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["flex-wrap", "shrink-0", "h-auto"]),
     );
-    expect(typeFilters.className.split(/\s+/)).not.toContain("max-h-16");
+    expect(chips.className.split(/\s+/)).not.toContain("max-h-16");
     expect(view.getByText("example.com")).toBeInTheDocument();
     const customRow = view
       .getByText("example.com")

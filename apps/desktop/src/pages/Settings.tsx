@@ -364,9 +364,6 @@ export function Settings({ active = true }: { active?: boolean }) {
         </CardHeader>
         <CardContent>
           <Field>
-            <FieldLabel htmlFor="settings-language">
-              {t("settings.language")}
-            </FieldLabel>
             <NativeSelect
               id="settings-language"
               aria-label={t("settings.language")}

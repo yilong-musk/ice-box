@@ -27,7 +27,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { t, useLanguagePreference } from "../lib/i18n";
+import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   delayTestTagsForGroup,
@@ -113,6 +113,7 @@ type GroupMembersProps = {
   busy: boolean;
   delays: Record<string, DelayCell>;
   onGroupSelect: (group: string, member: string) => void;
+  lang: ResolvedLanguage;
 };
 
 const GroupMembers = memo(function GroupMembers({
@@ -124,6 +125,7 @@ const GroupMembers = memo(function GroupMembers({
   busy,
   delays,
   onGroupSelect,
+  lang,
 }: GroupMembersProps) {
   const [shown, setShown] = useState(() =>
     Math.min(MEMBER_FIRST_PAINT, members.length),
@@ -159,6 +161,7 @@ const GroupMembers = memo(function GroupMembers({
   return (
     <div
       id={groupMembersDomId(groupTag)}
+      lang={lang}
       aria-label={t("nodes.membersAria", { group: groupTag })}
       className="flex flex-col pl-6"
     >
@@ -223,6 +226,7 @@ type NodeRowProps = {
   onTest: (node: NodeInfo) => void;
   onSelect: (tag: string) => void;
   onGroupSelect: (group: string, member: string) => void;
+  lang: ResolvedLanguage;
 };
 
 const NodeRow = memo(function NodeRow({
@@ -237,6 +241,7 @@ const NodeRow = memo(function NodeRow({
   onTest,
   onSelect,
   onGroupSelect,
+  lang,
 }: NodeRowProps) {
   const expandable =
     isGroupType(node.outbound_type) && (node.group_all?.length ?? 0) > 0;
@@ -244,7 +249,7 @@ const NodeRow = memo(function NodeRow({
   const typeLabel = nodeTypeLabel(node);
 
   return (
-    <div>
+    <div lang={lang}>
       <Item
         size="sm"
         variant={selected ? "muted" : "default"}
@@ -375,6 +380,7 @@ const NodeRow = memo(function NodeRow({
           busy={busy}
           delays={delays}
           onGroupSelect={onGroupSelect}
+          lang={lang}
         />
       ) : null}
     </div>
@@ -382,7 +388,7 @@ const NodeRow = memo(function NodeRow({
 });
 
 export function Nodes({ onNavigate, active = true }: Props) {
-  useLanguagePreference();
+  const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [nodes, setNodes] = useState<NodeInfo[]>(
     () => readNodesSnapshot()?.nodes ?? [],
@@ -735,6 +741,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
                       onTest={onTest}
                       onSelect={handleSelect}
                       onGroupSelect={handleGroupSelect}
+                      lang={lang}
                     />
                   );
                 })}
