@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ice_config::{
-    read_pid, save_settings, write_json_atomic, AppError, AppPaths, AppSettings, CaptureIntent,
-    ErrorCode, TunSettings,
+    save_settings, write_json_atomic, AppError, AppPaths, AppSettings, CaptureIntent, ErrorCode,
+    TunSettings,
 };
 use ice_core::{CoreHandle, CoreStatus};
 use ice_proxy_sys::{is_proxy_applied_on_disk, SystemProxy};
@@ -636,6 +636,14 @@ impl CaptureController {
             return Err(app_err);
         }
 
+        // Reclaim any leftover core before starting a new capture (idempotent
+        // through the elevated coordinator): a previous session may have left
+        // a root-owned core holding the inbound/Clash API ports, which would
+        // otherwise fail the next Start with `bind: address already in use`.
+        // Runs after the active-backend checks above, so a running TUN is
+        // never stopped here.
+        backend.stop_elevated_core().map_err(map_tun)?;
+
         let transition_id = Uuid::new_v4().to_string();
         self.begin_transition(TunStatus::Preparing, transition_id)?;
 
@@ -1166,30 +1174,25 @@ impl CaptureController {
         }
     }
 
-    /// Reclaim a leftover root-owned core from a previous session. The pid
-    /// file may point at a live sing-box the unprivileged process cannot
-    /// signal (helper-started); stop it through the elevated coordinator so a
-    /// later start / re-enable never hits `bind: address already in use`.
-    /// No-op when the pid file is empty. Must only run while no TUN capture is
-    /// active (startup, before any capture claims the backend).
+    /// Reclaim a leftover root-owned core from a previous session. The
+    /// unprivileged process cannot signal a helper-started core, so stop it
+    /// through the elevated coordinator unconditionally (idempotent: a healthy
+    /// session with no leftover core is a no-op) — this guarantees a later
+    /// start / re-enable never hits `bind: address already in use` even when
+    /// the pid file was cleared. Must only run while no TUN capture is active
+    /// (startup, before any capture claims the backend).
     pub fn reclaim_orphan_elevated_core(&self, core: &mut dyn CoreHandle) -> Result<(), AppError> {
-        let _pid = match read_pid(&self.paths.pid()) {
-            Ok(Some(pid)) => pid,
-            // No pid file / unreadable: nothing identifiable to reclaim.
-            Ok(None) | Err(_) => return Ok(()),
-        };
         {
             let mut backend = self
                 .backend
                 .lock()
                 .map_err(|_| lock_poisoned("capture backend"))?;
-            // The coordinator's Stop is idempotent and helper-side now reclaims
-            // a leftover core recorded in the pid file even after a helper
-            // restart; a non-orphan pid is left untouched there.
+            // The coordinator's Stop is idempotent and helper-side reclaims a
+            // leftover core recorded in the pid file even after a helper
+            // restart; a non-orphan / absent core is left untouched there.
             backend.stop_elevated_core().map_err(map_tun)?;
         }
-        // The leftover is gone; let the normal reclamation converge state and
-        // clear the pid file.
+        // Converge the app-side state and clear any stale pid file.
         core.reclaim_orphan_pid(&self.paths.pid())
             .map_err(AppError::from)
     }
