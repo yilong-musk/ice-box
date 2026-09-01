@@ -102,7 +102,8 @@ fn commit_staged_subscription(
     }
     fs::create_dir_all(&staging)?;
     write_bytes_atomic(&staging.join("raw"), raw_body.as_bytes()).map_err(map_cfg)?;
-    write_json_atomic(&staging.join("nodes.json"), &profile.nodes).map_err(map_cfg)?;
+    // `nodes.json` is a legacy duplicate of `profile.nodes`; it is no longer
+    // written. `read_profile` still falls back to it for pre-split dirs.
     write_json_atomic(&staging.join("profile.json"), profile).map_err(map_cfg)?;
     write_json_atomic(&staging.join("meta.json"), meta).map_err(map_cfg)?;
 
@@ -114,16 +115,10 @@ fn commit_staged_subscription(
     Ok(())
 }
 
-/// Success path: stage raw + profile + meta atomically, then update `index.json`.
-pub fn write_subscription_success(
-    paths: &SubscriptionPaths,
-    meta: &SubscriptionMeta,
-    raw_body: &str,
-    profile: &NormalizedProfile,
-) -> Result<(), SubscriptionError> {
-    commit_staged_subscription(paths, meta.id, raw_body, profile, meta)?;
-
-    let mut index = load_index(paths)?;
+/// Index mutation half of [`write_subscription_success`] (no `index.json`
+/// write): deactivates other subscriptions when `meta.active`, then upserts
+/// `meta`. Callers batching multiple updates must [`save_index`] once after.
+pub fn apply_success_to_index(index: &mut SubscriptionIndex, meta: &SubscriptionMeta) {
     if meta.active {
         for item in &mut index.items {
             if item.id != meta.id {
@@ -141,8 +136,32 @@ pub fn write_subscription_success(
         }
         index.items.push(meta.clone());
     }
+}
+
+/// Success path: stage raw + profile + meta atomically, then update `index.json`.
+pub fn write_subscription_success(
+    paths: &SubscriptionPaths,
+    meta: &SubscriptionMeta,
+    raw_body: &str,
+    profile: &NormalizedProfile,
+) -> Result<(), SubscriptionError> {
+    commit_staged_subscription(paths, meta.id, raw_body, profile, meta)?;
+    let mut index = load_index(paths)?;
+    apply_success_to_index(&mut index, meta);
     save_index(paths, &index)?;
     Ok(())
+}
+
+/// Stage + commit the subscription files without touching `index.json`.
+/// Batch callers (e.g. `apply_all`) update the index once afterwards with
+/// [`apply_success_to_index`] + a single [`save_index`].
+pub fn commit_subscription_success(
+    paths: &SubscriptionPaths,
+    meta: &SubscriptionMeta,
+    raw_body: &str,
+    profile: &NormalizedProfile,
+) -> Result<(), SubscriptionError> {
+    commit_staged_subscription(paths, meta.id, raw_body, profile, meta)
 }
 
 pub fn save_index(
@@ -158,6 +177,50 @@ fn map_cfg(err: ConfigError) -> SubscriptionError {
     SubscriptionError::Io(std::io::Error::other(err.to_string()))
 }
 
+/// Error half of [`write_subscription_error`] (no `index.json` write): records
+/// `last_error` on the in-memory index entry and refreshes the on-disk
+/// `meta.json` best-effort. Returns whether the id existed in the index.
+pub fn apply_error_to_index(
+    paths: &SubscriptionPaths,
+    index: &mut SubscriptionIndex,
+    id: Uuid,
+    last_error: String,
+) -> bool {
+    let Some(meta) = index.items.iter_mut().find(|m| m.id == id) else {
+        return false;
+    };
+    meta.last_error = Some(last_error);
+    let updated = meta.clone();
+    if (paths.meta(id).exists() || paths.sub_dir(id).exists())
+        && fs::create_dir_all(paths.sub_dir(id)).is_ok()
+    {
+        let _ = write_json_atomic(&paths.meta(id), &updated);
+    }
+    true
+}
+
+/// Clear a recorded error in an in-memory index + on-disk `meta.json`
+/// (no `index.json` write). Returns the updated meta when an error was
+/// actually cleared; `None` when there was nothing to clear or the id is
+/// missing from the index.
+pub fn clear_error_in_index(
+    paths: &SubscriptionPaths,
+    index: &mut SubscriptionIndex,
+    id: Uuid,
+) -> Option<SubscriptionMeta> {
+    let meta = index.items.iter().find(|m| m.id == id)?.clone();
+    meta.last_error.as_ref()?;
+    let mut updated = meta;
+    updated.last_error = None;
+    if let Some(slot) = index.items.iter_mut().find(|m| m.id == id) {
+        *slot = updated.clone();
+    }
+    if paths.meta(id).exists() {
+        let _ = write_json_atomic(&paths.meta(id), &updated);
+    }
+    Some(updated)
+}
+
 /// Update failure: keep raw/nodes, only refresh `last_error` in meta + index.
 pub fn write_subscription_error(
     paths: &SubscriptionPaths,
@@ -165,14 +228,8 @@ pub fn write_subscription_error(
     last_error: String,
 ) -> Result<(), SubscriptionError> {
     let mut index = load_index(paths)?;
-    let Some(meta) = index.items.iter_mut().find(|m| m.id == id) else {
+    if !apply_error_to_index(paths, &mut index, id, last_error) {
         return Ok(());
-    };
-    meta.last_error = Some(last_error);
-    let updated = meta.clone();
-    if paths.meta(id).exists() || paths.sub_dir(id).exists() {
-        fs::create_dir_all(paths.sub_dir(id))?;
-        write_json_atomic(&paths.meta(id), &updated).map_err(map_cfg)?;
     }
     save_index(paths, &index)?;
     Ok(())
@@ -184,26 +241,14 @@ pub fn clear_subscription_error(
     paths: &SubscriptionPaths,
     id: Uuid,
 ) -> Result<SubscriptionMeta, SubscriptionError> {
-    let index = load_index(paths)?;
+    let mut index = load_index(paths)?;
     let meta = index
         .items
         .iter()
         .find(|m| m.id == id)
         .cloned()
         .ok_or_else(|| SubscriptionError::ParseFailed(format!("subscription {id} not found")))?;
-    if meta.last_error.is_none() {
-        return Ok(meta);
-    }
-    let mut updated = meta;
-    updated.last_error = None;
-    let mut index = index;
-    if let Some(slot) = index.items.iter_mut().find(|m| m.id == id) {
-        *slot = updated.clone();
-    }
-    if paths.meta(id).exists() {
-        fs::create_dir_all(paths.sub_dir(id))?;
-        write_json_atomic(&paths.meta(id), &updated).map_err(map_cfg)?;
-    }
+    let updated = clear_error_in_index(paths, &mut index, id).unwrap_or(meta);
     save_index(paths, &index)?;
     Ok(updated)
 }
@@ -358,7 +403,10 @@ mod tests {
         }]);
         write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
         assert!(paths.raw(id).is_file());
-        assert!(paths.nodes(id).is_file());
+        assert!(
+            !paths.nodes(id).exists(),
+            "nodes.json is a legacy duplicate and is no longer written"
+        );
         assert!(paths.profile(id).is_file());
         assert!(paths.meta(id).is_file());
         assert!(!paths.staging_dir(id).exists());

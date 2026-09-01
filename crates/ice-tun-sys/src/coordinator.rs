@@ -29,6 +29,12 @@ pub trait CoreCoordinator {
     /// Stop the core (SIGTERM; sing-box removes its routes and interface).
     /// Idempotent: OK when the core is already stopped.
     fn stop(&mut self) -> Result<(), TunError>;
+
+    /// Set the DNS servers of one named network service (elevated; macOS
+    /// `networksetup`). An empty `servers` list clears the override so the
+    /// service falls back to its DHCP resolvers. Implementations must run
+    /// the command with an argv list — never a shell.
+    fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError>;
 }
 
 /// T2 placeholder: the real privileged runner (helper IPC or the dev `sudo`
@@ -48,6 +54,13 @@ impl CoreCoordinator for DeferredCoreCoordinator {
 
     fn stop(&mut self) -> Result<(), TunError> {
         Ok(())
+    }
+
+    fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            TunErrorCode::PermissionRequired,
+            "privileged DNS mutation is not wired yet (no elevated runner): install and authorize the helper, or use the dev sudo path",
+        ))
     }
 }
 
@@ -312,6 +325,35 @@ impl CoreCoordinator for SudoCoreCoordinator {
             TunErrorCode::RecoveryRequired,
             format!("elevated sing-box (pid {pid}) survived TERM and KILL"),
         ))
+    }
+    fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+        self.check_permission()?;
+        let mut args = vec!["-n", "networksetup", "-setdnsservers", service];
+        if servers.is_empty() {
+            // `networksetup` treats the literal "Empty" as "no DNS servers".
+            args.push("Empty");
+        } else {
+            for server in servers {
+                args.push(server);
+            }
+        }
+        let status = Command::new("sudo")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(status) if status.success() => Ok(()),
+            Ok(_) => Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("sudo networksetup -setdnsservers {service} failed (exit {status:?})"),
+            )),
+            Err(err) => Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("run sudo networksetup -setdnsservers {service}: {err}"),
+            )),
+        }
     }
 }
 
@@ -600,6 +642,13 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
         Err(TunError::new(
             TunErrorCode::RecoveryRequired,
             format!("elevated sing-box (pid {pid}) survived taskkill /T /F"),
+        ))
+    }
+
+    fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            "system DNS mutation is not supported on the Windows dev runner",
         ))
     }
 }

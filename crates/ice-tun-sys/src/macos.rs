@@ -5,9 +5,14 @@
 //! the routes. This backend records every observable mutation boundary in the
 //! journal, verifies host state, and never deletes an unverified resource.
 //!
-//! macOS DNS (T0 lock): sing-box never mutates OS DNS (`scutil --dns` is
-//! unchanged at start/stop), so `dns_hijack` is a no-op and the DNS journal
-//! fields stay absent.
+//! macOS DNS: sing-box never mutates OS DNS (`scutil --dns` shape is owned
+//! by the kernel, not the core). When `dns_hijack` is enabled the backend
+//! points the primary network service's DNS at public resolvers so port-53
+//! traffic enters the TUN and the config's `hijack-dns` route rule answers
+//! from the sing-box DNS engine — a LAN resolver would otherwise bypass the
+//! TUN (connected-subnet route) and answers stay GFW-poisoned. The mutation
+//! runs through the elevated coordinator and is journaled
+//! (`dns_before` / `dns_after`, compare-before-restore).
 //!
 //! Identity (T0 lock): recovery verifies by the exact interface name *and*
 //! the utun numeric index (the kernel's unit number) recorded in the journal
@@ -26,9 +31,16 @@ use crate::backend::{
 };
 use crate::coordinator::CoreCoordinator;
 use crate::error::{TunError, TunErrorCode};
-use crate::journal::{steps, CidrRecord, JournalState, RouteRecord, TunJournal};
+use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 use crate::routes::netmask_to_prefix;
+
+/// Public resolvers the backend points the primary service's DNS at while
+/// TUN capture is active with `dns_hijack`: they are not on the LAN, so
+/// their port-53 traffic enters the TUN and the `hijack-dns` route rule
+/// answers from the sing-box DNS engine. AliDNS + DNSPod are reachable from
+/// mainland networks.
+const MACOS_TUN_DNS_SERVERS: [&str; 2] = ["223.5.5.5", "119.29.29.29"];
 
 /// Probe floor for a free utun index (T0 spike: keep `utun0..5` used by
 /// other software untouched; probe a higher index, else fail closed).
@@ -70,6 +82,11 @@ pub trait MacOsHost {
     /// (`route -n get`). `None` when no route exists (or the command
     /// reports no gateway).
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError>;
+    /// The network service owning the default route — the service whose DNS
+    /// `dns_hijack` mutates. `None` when it cannot be determined.
+    fn dns_service(&self) -> Result<Option<String>, TunError>;
+    /// Current DNS server list configured for one network service.
+    fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError>;
 }
 
 /// The utun numeric index, or `None` when the name is not `utun<N>`.
@@ -146,6 +163,29 @@ impl MacOsHost for ProcessMacOsHost {
         }
         Ok(parse_route_interface(&out.stdout))
     }
+
+    fn dns_service(&self) -> Result<Option<String>, TunError> {
+        // Default-route interface (e.g. `en0`).
+        let Some(interface) = self.route_interface("0.0.0.0")? else {
+            return Ok(None);
+        };
+        // Hardware port behind the interface (e.g. `Wi-Fi`).
+        let ports = run_command("networksetup", &["-listallhardwareports"])?;
+        let Some(port) = parse_hardware_port(&ports.stdout, &interface) else {
+            return Ok(None);
+        };
+        // Network service that uses the hardware port (e.g. `Wi-Fi`).
+        let order = run_command("networksetup", &["-listnetworkserviceorder"])?;
+        Ok(parse_service_order(&order.stdout, &port))
+    }
+
+    fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError> {
+        let out = run_command("networksetup", &["-getdnsservers", service])?;
+        if out.status != Some(0) {
+            return Ok(Vec::new());
+        }
+        Ok(parse_dns_servers(&out.stdout))
+    }
 }
 
 /// `ifconfig -l` → space-separated interface names.
@@ -200,6 +240,79 @@ pub fn parse_route_interface(output: &str) -> Option<String> {
     output
         .lines()
         .find_map(|line| line.trim().strip_prefix("interface: ").map(str::to_string))
+}
+
+/// `networksetup -listallhardwareports` → the hardware port name behind
+/// `device` (e.g. `Wi-Fi` behind `en0`).
+pub fn parse_hardware_port(output: &str, device: &str) -> Option<String> {
+    let mut port: Option<String> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Hardware Port: ") {
+            port = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("Device: ") {
+            if rest.trim() == device {
+                return port;
+            }
+        }
+    }
+    None
+}
+
+/// `networksetup -listnetworkserviceorder` → the network service name that
+/// uses `hardware_port` (the `(N) Name` line preceding its hardware-port
+/// line).
+pub fn parse_service_order(output: &str, hardware_port: &str) -> Option<String> {
+    let mut previous: Option<String> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.contains(&format!("Hardware Port: {hardware_port}")) {
+            return previous;
+        }
+        // A service name line is `(N) Name` or `(*) Name`. The hardware-port
+        // line above also starts with `(`, so it must be matched first.
+        if let Some(rest) = line.strip_prefix('(') {
+            if let Some(name) = rest.split_once(')') {
+                let label = name.0.trim();
+                if label == "*" || label.chars().all(|c| c.is_ascii_digit()) {
+                    previous = Some(name.1.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `networksetup -getdnsservers <service>` → the configured DNS servers.
+/// The output is the bare IP list (one per line, no header);
+/// "There aren't any DNS Servers set on <service>." parses as empty.
+pub fn parse_dns_servers(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("There aren't"))
+        .filter(|line| line.parse::<std::net::IpAddr>().is_ok())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Journal snapshot encoding: `"{service}\n{servers joined by ','}"`. The
+/// service name is needed to restore / verify; the newline separator cannot
+/// appear in a macOS service name.
+fn dns_snapshot(service: &str, servers: &[String]) -> String {
+    format!("{service}\n{}", servers.join(","))
+}
+
+fn dns_snapshot_parts(snapshot: &str) -> (String, Vec<String>) {
+    let (service, servers) = snapshot.split_once('\n').unwrap_or((snapshot, ""));
+    (
+        service.to_string(),
+        servers
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
@@ -304,6 +417,39 @@ impl MacosTunBackend {
                     apply_err.message, stop_err.message
                 ),
             ),
+        }
+    }
+
+    /// Restore DNS before stopping the core when a DNS mutation was followed
+    /// by an apply or journal failure. Either cleanup failure leaves ownership
+    /// uncertain, so the caller must keep the system fail-closed.
+    fn rollback_dns_after_apply_failure(
+        &mut self,
+        service: &str,
+        before: &[String],
+        apply_err: TunError,
+    ) -> TunError {
+        let dns_result = self.coordinator.set_dns(service, before);
+        let core_result = self.coordinator.stop();
+        match (dns_result, core_result) {
+            (Ok(()), Ok(())) => apply_err,
+            (dns_result, core_result) => {
+                let dns_error = dns_result
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "unknown DNS cleanup failure".into());
+                let core_error = core_result
+                    .err()
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "unknown core cleanup failure".into());
+                TunError::new(
+                    TunErrorCode::RecoveryRequired,
+                    format!(
+                        "apply failed ({}); DNS cleanup: {}; elevated core cleanup: {}",
+                        apply_err.message, dns_error, core_error
+                    ),
+                )
+            }
         }
     }
 
@@ -466,8 +612,9 @@ impl TunBackend for MacosTunBackend {
             reason: None,
             ipv4: true,
             ipv6: true,
-            // T0 lock: the macOS native path never mutates OS DNS.
-            dns_hijack: false,
+            // The elevated coordinator can run `networksetup`; `dns_hijack`
+            // routes DNS through the sing-box engine (see the module docs).
+            dns_hijack: true,
         }
     }
 
@@ -589,6 +736,48 @@ impl TunBackend for MacosTunBackend {
             return Err(self.rollback_after_apply_failure(err));
         }
 
+        // DNS interception (last mutation): point the primary service's DNS
+        // at public resolvers so queries enter the TUN and the config's
+        // `hijack-dns` rule answers from the DNS engine. Journal the
+        // snapshot; a failed journal write restores the previous resolvers.
+        let mut dns_before = None;
+        let mut dns_after = None;
+        if config.dns_hijack {
+            let service = match self.host.dns_service() {
+                Ok(Some(service)) => service,
+                Ok(None) => {
+                    return Err(self.rollback_after_apply_failure(TunError::new(
+                        TunErrorCode::ApplyFailed,
+                        "no network service found to point DNS at public resolvers",
+                    )))
+                }
+                Err(err) => return Err(self.rollback_after_apply_failure(err)),
+            };
+            let before = match self.host.dns_servers(&service) {
+                Ok(servers) => servers,
+                Err(err) => return Err(self.rollback_after_apply_failure(err)),
+            };
+            dns_before = Some(DnsSnapshot {
+                platform_snapshot: dns_snapshot(&service, &before),
+            });
+            let target: Vec<String> = MACOS_TUN_DNS_SERVERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            if let Err(err) = self.coordinator.set_dns(&service, &target) {
+                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+            }
+            dns_after = Some(DnsSnapshot {
+                platform_snapshot: dns_snapshot(&service, &target),
+            });
+            if let Err(err) = self.journal_record(steps::DNS_APPLIED, |journal| {
+                journal.dns_before = dns_before.clone();
+                journal.dns_after = dns_after.clone();
+            }) {
+                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+            }
+        }
+
         Ok(AppliedTun {
             interface_name: Some(name.to_string()),
             interface_id,
@@ -596,9 +785,8 @@ impl TunBackend for MacosTunBackend {
             routes: observed.routes,
             expected_addresses,
             expected_routes,
-            // T0 lock: no OS DNS mutation on macOS; journal fields stay absent.
-            dns_before: None,
-            dns_after: None,
+            dns_before,
+            dns_after,
             core_pid: Some(core_pid),
         })
     }
@@ -606,14 +794,27 @@ impl TunBackend for MacosTunBackend {
     fn verify(&self, applied: &AppliedTun) -> Result<TunHealth, TunError> {
         let name = applied.interface_name.as_deref();
         let Some(name) = name else {
-            // No interface was ever claimed: nothing owned.
+            // No interface was ever claimed: nothing owned — unless DNS is
+            // still applied (recovery must restore it before reporting
+            // clean, so `nothing_owned` must be false while the platform
+            // still carries the applied `after` snapshot).
+            let dns_owned = match &applied.dns_after {
+                Some(after) => {
+                    let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+                    self.host
+                        .dns_servers(&service)
+                        .map(|current| current == expected)
+                        .unwrap_or(false)
+                }
+                None => false,
+            };
             return Ok(TunHealth {
                 interface_up: false,
                 addresses_present: false,
                 routes_owned: false,
-                dns_consistent: true,
+                dns_consistent: !dns_owned,
                 control_path_reachable: true,
-                nothing_owned: true,
+                nothing_owned: !dns_owned,
             });
         };
         let expected_id = applied.interface_id.as_deref();
@@ -642,18 +843,52 @@ impl TunBackend for MacosTunBackend {
         }
         let control_path = self.host.route_interface("127.0.0.1")?;
         let control_path_reachable = control_path.as_deref().is_some_and(|iface| iface != name);
+        // DNS consistency: the primary service must still carry the resolvers
+        // the apply recorded (compare against the *after* snapshot; an
+        // external DNS change is never silently overwritten by restore).
+        let dns_consistent = match &applied.dns_after {
+            Some(after) => {
+                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+                self.host
+                    .dns_servers(&service)
+                    .map(|current| current == expected)
+                    .unwrap_or(true)
+            }
+            None => true,
+        };
         let interface_gone = state.is_none();
         let owned_routes_remain = self.owned_routes_remain(applied, name)?;
-        let nothing_owned = interface_gone && !owned_routes_remain;
-        Ok(TunHealth {
+        // DNS is still "owned" only while the platform carries the applied
+        // `after` snapshot; after a restore (or an external change) it is not.
+        let dns_owned = match &applied.dns_after {
+            Some(after) => {
+                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+                self.host
+                    .dns_servers(&service)
+                    .map(|current| current == expected)
+                    .unwrap_or(false)
+            }
+            None => false,
+        };
+        let nothing_owned = interface_gone && !owned_routes_remain && !dns_owned;
+        let health = TunHealth {
             interface_up,
             addresses_present,
             routes_owned,
-            // T0 lock: macOS never mutates DNS, so it is always consistent.
-            dns_consistent: true,
+            dns_consistent,
             control_path_reachable,
             nothing_owned,
-        })
+        };
+        if !health.all_ok() {
+            tracing::warn!(
+                ?health,
+                name,
+                "macos tun verify disagrees; expected addresses {:?}, routes {:?}",
+                applied.expected_addresses,
+                applied.expected_routes
+            );
+        }
+        Ok(health)
     }
 
     fn restore(&mut self, applied: &AppliedTun) -> Result<(), TunError> {
@@ -671,7 +906,13 @@ impl TunBackend for MacosTunBackend {
             )
         })?;
 
-        self.journal_record(steps::RESTORE_STARTED, |_| {})?;
+        // Journal writes are recovery metadata, not a prerequisite for OS
+        // cleanup. Keep going when persistence is unavailable and report the
+        // failure after all independently safe cleanup has been attempted.
+        let mut restore_error = None;
+        if let Err(err) = self.journal_record(steps::RESTORE_STARTED, |_| {}) {
+            restore_error = Some(err);
+        }
 
         let name = applied.interface_name.as_deref();
         let mut interface_gone = false;
@@ -711,17 +952,71 @@ impl TunBackend for MacosTunBackend {
 
         // The kernel flushed the interface and its routes; journal the
         // observed removal boundaries.
-        self.journal_record(steps::ROUTES_REMOVED, |journal| {
+        if let Err(err) = self.journal_record(steps::ROUTES_REMOVED, |journal| {
             journal.routes.clear();
             journal.expected_routes.clear();
-        })?;
-        self.journal_record(steps::INTERFACE_REMOVED, |journal| {
+        }) {
+            if restore_error.is_none() {
+                restore_error = Some(err);
+            }
+        }
+        if let Err(err) = self.journal_record(steps::INTERFACE_REMOVED, |journal| {
             journal.interface_name = None;
             journal.interface_id = None;
             journal.addresses.clear();
             journal.expected_addresses.clear();
-        })?;
-        Ok(())
+        }) {
+            if restore_error.is_none() {
+                restore_error = Some(err);
+            }
+        }
+
+        // DNS restore (compare-before-restore): only when the platform still
+        // carries the applied resolvers; an external DNS change is preserved
+        // and surfaces as recovery_required instead of being overwritten.
+        if let Some(after) = &applied.dns_after {
+            let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+            let current = self.host.dns_servers(&service)?;
+            if current == expected {
+                let (_, before) = dns_snapshot_parts(
+                    applied
+                        .dns_before
+                        .as_ref()
+                        .map(|b| b.platform_snapshot.as_str())
+                        .unwrap_or(""),
+                );
+                if let Err(err) = self.coordinator.set_dns(&service, &before) {
+                    if restore_error.is_none() {
+                        restore_error = Some(err);
+                    }
+                } else if let Err(err) = self.journal_record(steps::DNS_RESTORED, |journal| {
+                    journal.dns_before = None;
+                    journal.dns_after = None;
+                }) {
+                    if restore_error.is_none() {
+                        restore_error = Some(err);
+                    }
+                }
+            } else {
+                let err = TunError::new(
+                    TunErrorCode::RecoveryRequired,
+                    "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
+                );
+                if restore_error.is_none() {
+                    restore_error = Some(err);
+                }
+            }
+        }
+        match restore_error {
+            Some(err) => Err(TunError::new(
+                TunErrorCode::RecoveryRequired,
+                format!(
+                    "restore cleanup completed with unrecoverable state: {}",
+                    err.message
+                ),
+            )),
+            None => Ok(()),
+        }
     }
 
     fn recover(&mut self, journal: &TunJournal) -> Result<RecoveryOutcome, TunError> {
@@ -824,5 +1119,69 @@ mod parsing_tests {
         assert_eq!(utun_index("utun"), None);
         assert_eq!(utun_index("tun0"), None);
         assert_eq!(utun_index("utunx"), None);
+    }
+
+    #[test]
+    fn hardware_port_parser_maps_device_to_port() {
+        let output = "Hardware Port: Wi-Fi\n\
+            Device: en0\n\
+            Ethernet Address: aa:bb\n\
+            \n\
+            Hardware Port: USB 10/100/1000 LAN\n\
+            Device: en7\n\
+            Ethernet Address: cc:dd\n";
+        assert_eq!(parse_hardware_port(output, "en0").as_deref(), Some("Wi-Fi"));
+        assert_eq!(
+            parse_hardware_port(output, "en7").as_deref(),
+            Some("USB 10/100/1000 LAN")
+        );
+        assert_eq!(parse_hardware_port(output, "en9"), None);
+        assert_eq!(parse_hardware_port("no ports", "en0"), None);
+    }
+
+    #[test]
+    fn service_order_parser_maps_hardware_port_to_service() {
+        let output = "An asterisk (*) denotes that a network service is disabled.\n\
+            (1) Wi-Fi\n\
+            (Hardware Port: Wi-Fi, Device: en0)\n\
+            \n\
+            (2) USB 10/100/1000 LAN\n\
+            (Hardware Port: USB 10/100/1000 LAN, Device: en7)\n";
+        assert_eq!(
+            parse_service_order(output, "Wi-Fi").as_deref(),
+            Some("Wi-Fi")
+        );
+        assert_eq!(
+            parse_service_order(output, "USB 10/100/1000 LAN").as_deref(),
+            Some("USB 10/100/1000 LAN")
+        );
+        assert_eq!(parse_service_order(output, "Thunderbolt"), None);
+    }
+
+    #[test]
+    fn dns_servers_parser_reads_configured_list_and_empty_state() {
+        // Real `networksetup -getdnsservers` output: bare IP list, no header.
+        let output = "223.5.5.5\n119.29.29.29\n";
+        assert_eq!(parse_dns_servers(output), ["223.5.5.5", "119.29.29.29"]);
+        let single = "119.29.29.29\n";
+        assert_eq!(parse_dns_servers(single), ["119.29.29.29"]);
+        let empty = "There aren't any DNS Servers set on Wi-Fi.\n";
+        assert!(parse_dns_servers(empty).is_empty());
+        assert!(parse_dns_servers("garbage\nnot-an-ip\n").is_empty());
+    }
+
+    #[test]
+    fn dns_snapshot_roundtrips_service_and_servers() {
+        let servers: Vec<String> = ["223.5.5.5", "119.29.29.29"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let snap = dns_snapshot("Wi-Fi", &servers);
+        assert_eq!(
+            dns_snapshot_parts(&snap),
+            ("Wi-Fi".to_string(), servers.clone())
+        );
+        let empty = dns_snapshot("Wi-Fi", &[]);
+        assert_eq!(dns_snapshot_parts(&empty), ("Wi-Fi".to_string(), vec![]));
     }
 }

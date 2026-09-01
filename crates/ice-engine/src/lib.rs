@@ -233,6 +233,7 @@ proxies:
         assert_eq!(value["inbounds"][1]["type"], "tun");
         assert_eq!(value["inbounds"][1]["tag"], "tun-in");
         assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
+        assert_eq!(value["route"]["rules"][1]["action"], "hijack-dns");
     }
 
     #[cfg(not(target_os = "macos"))]

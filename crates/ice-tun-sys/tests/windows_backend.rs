@@ -319,6 +319,13 @@ impl CoreCoordinator for FakeCoreCoordinator {
         self.started = false;
         Ok(())
     }
+
+    fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            "dns not supported by the windows fake coordinator",
+        ))
+    }
 }
 
 fn backend(

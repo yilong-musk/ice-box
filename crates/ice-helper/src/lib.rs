@@ -261,6 +261,43 @@ mod imp {
                 let pid = runner.start(&config.core_bin, &canonical, &config.core_log)?;
                 Ok(Some(pid))
             }
+            HelperCommand::SetDns { service, servers } => {
+                set_system_dns(service, servers)?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
+    /// empty `servers` list clears the override ("Empty" = DHCP fallback).
+    /// The service name and server values were validated by the protocol
+    /// layer; the command runs with an argv list, never a shell.
+    fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
+        let mut args = vec!["-setdnsservers", service];
+        if servers.is_empty() {
+            args.push("Empty");
+        } else {
+            args.extend(servers.iter().map(String::as_str));
+        }
+        let status = Command::new("networksetup")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|err| {
+                TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!("run networksetup {args:?}: {err}"),
+                )
+            })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("networksetup -setdnsservers {service} failed (exit {status:?})"),
+            ))
         }
     }
 

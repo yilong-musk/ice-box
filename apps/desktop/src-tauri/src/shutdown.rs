@@ -240,6 +240,10 @@ mod tests {
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
+            profile_cache: Mutex::new(None),
+            log_view_cache: Mutex::new(None),
+            helper_probe_cache: Mutex::new(None),
+            clash_live_mode_cache: Mutex::new(true),
         }
     }
 

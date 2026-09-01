@@ -55,7 +55,7 @@ const defaults: AppSettings = {
     auto_route: true,
     strict_route: true,
     stack: "gvisor",
-    dns_hijack: false,
+    dns_hijack: true,
   },
 };
 

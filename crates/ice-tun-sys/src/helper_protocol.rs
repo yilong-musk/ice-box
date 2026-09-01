@@ -11,12 +11,13 @@
 //! line capped at [`MAX_FRAME_BYTES`]. The daemon rejects anything else
 //! without reading unbounded input.
 //!
-//! Security model (plan §7): the helper accepts exactly three commands and
+//! Security model (plan §7): the helper accepts exactly four commands and
 //! never accepts a binary path, route target, interface name, or arbitrary
 //! shell input from the client. The `config` path must canonicalize into the
-//! app data directory the daemon was installed with. Peer identity is
-//! verified by the daemon from the socket credentials; possession of the
-//! per-installation token is the application-level gate.
+//! app data directory the daemon was installed with; the `SetDns` service
+//! name is restricted to `[A-Za-z0-9 ._-]` and server values to IP literals.
+//! Peer identity is verified by the daemon from the socket credentials;
+//! possession of the per-installation token is the application-level gate.
 
 use std::path::Path;
 
@@ -24,8 +25,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{TunError, TunErrorCode};
 
-/// Protocol version; the daemon rejects mismatched `v` values.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Protocol version; the daemon rejects mismatched `v` values. Bumped when
+/// a command is added so an older installed daemon fails with a clear
+/// version mismatch instead of a decode error.
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Hard cap for one request or response line (16 KiB).
 pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 /// Socket path constants used by the daemon and the client. The daemon owns
@@ -44,6 +47,43 @@ pub enum HelperCommand {
     Start { config: String },
     /// Stop the core (TERM→KILL grace), idempotent.
     Stop,
+    /// Set the system DNS servers of one named network service. An empty
+    /// `servers` list clears the per-service DNS override ("Empty"), which
+    /// restores the DHCP-assigned resolvers.
+    SetDns {
+        service: String,
+        servers: Vec<String>,
+    },
+}
+
+/// Validate the service name the `SetDns` command may target. The daemon
+/// passes argv elements directly (never a shell), so the hard constraints
+/// are protocol framing (`\n` would corrupt the line-based wire format) and
+/// `\0`; everything else is printable ASCII.
+pub fn validate_dns_service(service: &str) -> Result<(), TunError> {
+    if service.is_empty()
+        || service.len() > 128
+        || service
+            .chars()
+            .any(|c| !c.is_ascii() || c == '\n' || c == '\0')
+    {
+        return Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            format!("invalid dns service name: {service:?}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a DNS server value: must be an IPv4 or IPv6 literal.
+pub fn validate_dns_server(server: &str) -> Result<(), TunError> {
+    if server.parse::<std::net::IpAddr>().is_err() {
+        return Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            format!("invalid dns server: {server:?}"),
+        ));
+    }
+    Ok(())
 }
 
 /// One client request frame.
@@ -261,6 +301,43 @@ mod tests {
             },
         };
         assert!(encode_request(&req).is_err());
+    }
+
+    #[test]
+    fn set_dns_command_roundtrips_and_validates() {
+        let req = HelperRequest {
+            v: PROTOCOL_VERSION,
+            token: "secret".into(),
+            command: HelperCommand::SetDns {
+                service: "Wi-Fi".into(),
+                servers: vec!["223.5.5.5".into(), "119.29.29.29".into()],
+            },
+        };
+        let bytes = encode_request(&req).unwrap();
+        let parsed: HelperRequest =
+            serde_json::from_str(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(parsed, req);
+
+        let clear = HelperRequest {
+            v: PROTOCOL_VERSION,
+            token: "secret".into(),
+            command: HelperCommand::SetDns {
+                service: "Wi-Fi".into(),
+                servers: vec![],
+            },
+        };
+        let parsed: HelperRequest =
+            serde_json::from_str(&String::from_utf8(encode_request(&clear).unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(parsed, clear);
+
+        validate_dns_service("Wi-Fi").expect("service name ok");
+        validate_dns_service("USB 10/100/1000 LAN").expect("argv quoting keeps spaces safe");
+        validate_dns_service("").expect_err("empty rejected");
+        validate_dns_service("a\nb").expect_err("newline breaks the frame protocol");
+        validate_dns_server("223.5.5.5").expect("ipv4 ok");
+        validate_dns_server("2001:db8::1").expect("ipv6 ok");
+        validate_dns_server("not-an-ip").expect_err("hostname rejected");
     }
 
     #[test]

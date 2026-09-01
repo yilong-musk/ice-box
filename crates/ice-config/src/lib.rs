@@ -226,7 +226,7 @@ pub fn build_direct_only_config(
     // direct-only fallback.
     let mut rules = Vec::new();
     if capture_intent == CaptureIntent::Tun {
-        rules.extend(tun_reserved_rules());
+        rules.extend(tun_reserved_rules(template.tun.dns_hijack));
     }
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -456,10 +456,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         if capture_intent == CaptureIntent::Tun {
-            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6): the control
-            // path, private/loopback/link-local/multicast destinations, and the TUN
-            // endpoint are never captured or sniffed, even in Global/Direct mode.
-            final_rules.extend(tun_reserved_rules());
+            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6):
+            // the control path, private/loopback/link-local/multicast
+            // destinations, and the TUN endpoint are never captured or
+            // sniffed, even in Global/Direct mode.
+            final_rules.extend(tun_reserved_rules(input.template.tun.dns_hijack));
         }
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -622,25 +623,45 @@ fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// DNS hijack rule for a `Tun` config: port-53 traffic is diverted into the
+/// sing-box DNS engine so answers come from the subscription's resolvers
+/// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver.
+///
+/// This replaces the TUN inbound `dns_hijack` field, which the pinned
+/// sing-box 1.13.19 rejects as an unknown field (the feature moved to route
+/// rule actions in sing-box 1.9).
+pub fn tun_dns_hijack_rule() -> Value {
+    json!({ "port": [53], "action": "hijack-dns" })
+}
+
 /// Reserved bypass route rules for a `Tun` config (T0 spike §5, locked in
 /// architecture §24.5.6). Order is fixed: control path and local traffic are
 /// never captured or sniffed.
-pub fn tun_reserved_rules() -> Vec<Value> {
-    vec![
-        json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }),
-        json!({ "ip_is_private": true, "outbound": "direct" }),
-        json!({
-            "ip_cidr": [
-                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
-                "224.0.0.0/4", "ff00::/8"
-            ],
-            "outbound": "direct"
-        }),
-        // The sniff action at this pin never rewrites destinations; the sniffed
-        // domain lands in `metadata.Domain`, so sniff must precede every
-        // domain-matching rule (T0 spike §1.1).
-        json!({ "action": "sniff" }),
-    ]
+///
+/// When `dns_hijack` is set, the `hijack-dns` rule is inserted directly
+/// after the `process_name` rule: the elevated core's *own* DNS dials
+/// (outbound server hostnames, DoH host resolution) match `process_name`
+/// and stay direct, so they never re-enter the DNS engine and receive
+/// fake-ip answers; client DNS queries (browser etc.) fall through to the
+/// hijack rule and are answered by the engine.
+pub fn tun_reserved_rules(dns_hijack: bool) -> Vec<Value> {
+    let mut rules = vec![json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" })];
+    if dns_hijack {
+        rules.push(tun_dns_hijack_rule());
+    }
+    rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
+    rules.push(json!({
+        "ip_cidr": [
+            "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+            "224.0.0.0/4", "ff00::/8"
+        ],
+        "outbound": "direct"
+    }));
+    // The sniff action at this pin never rewrites destinations; the sniffed
+    // domain lands in `metadata.Domain`, so sniff must precede every
+    // domain-matching rule (T0 spike §1.1).
+    rules.push(json!({ "action": "sniff" }));
+    rules
 }
 
 /// The locked TUN inbound shape for the bundled sing-box 1.13.19 (T0 spike §5):
@@ -908,14 +929,25 @@ pub fn write_runtime_config_file(
     bak_path: &Path,
     config: &Value,
 ) -> Result<(), ConfigError> {
+    let rendered = config_to_pretty_json(config)?;
+    write_runtime_config_bytes(config_path, bak_path, &rendered)
+}
+
+/// Write pre-rendered config text to `config.json`, moving any previous file
+/// to `config.json.bak`. Callers that already serialized for change detection
+/// skip a second serialization.
+pub fn write_runtime_config_bytes(
+    config_path: &Path,
+    bak_path: &Path,
+    rendered: &str,
+) -> Result<(), ConfigError> {
     if config_path.exists() {
         if let Some(parent) = bak_path.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(config_path, bak_path)?;
     }
-    write_json_atomic(config_path, config)?;
-    Ok(())
+    write_bytes_atomic(config_path, rendered.as_bytes())
 }
 
 /// Restore `config.json` from `config.json.bak` after a failed reload (architecture §8.3).
@@ -1859,24 +1891,26 @@ mod build_tests {
         let rules = cfg["route"]["rules"].as_array().unwrap();
         assert_eq!(
             rules.len(),
-            8,
-            "4 reserved + 2 clash_mode + 2 subscription rules"
+            9,
+            "4 reserved + 1 dns hijack + 2 clash_mode + 2 subscription rules"
         );
 
         assert_eq!(rules[0]["process_name"][0], "ice-box");
         assert_eq!(rules[0]["outbound"], "direct");
-        assert_eq!(rules[1]["ip_is_private"], true);
-        assert_eq!(rules[1]["outbound"], "direct");
-        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
-        assert_eq!(rules[3]["action"], "sniff");
-        assert_eq!(rules[4]["clash_mode"], "global");
-        assert_eq!(rules[5]["clash_mode"], "direct");
-        assert_eq!(rules[6]["domain_suffix"][0], "keep.com");
-        assert_eq!(rules[7]["domain_suffix"][0], "proxy.com");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[1]["port"][0], 53);
+        assert_eq!(rules[2]["ip_is_private"], true);
+        assert_eq!(rules[2]["outbound"], "direct");
+        assert_eq!(rules[3]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[4]["action"], "sniff");
+        assert_eq!(rules[5]["clash_mode"], "global");
+        assert_eq!(rules[6]["clash_mode"], "direct");
+        assert_eq!(rules[7]["domain_suffix"][0], "keep.com");
+        assert_eq!(rules[8]["domain_suffix"][0], "proxy.com");
 
         // Global mode must never bypass the reserved rules: the clash_mode rule
         // still targets the proxy while the control path stays direct.
-        assert_eq!(rules[4]["outbound"], "proxy");
+        assert_eq!(rules[5]["outbound"], "proxy");
     }
 
     #[cfg(target_os = "macos")]
@@ -1909,6 +1943,7 @@ mod build_tests {
                 .expect("direct-only Tun keeps the tun inbound");
             let rules = direct["route"]["rules"].as_array().unwrap();
             assert_eq!(rules[0]["process_name"][0], "ice-box");
+            assert_eq!(rules[1]["action"], "hijack-dns");
             assert_eq!(
                 clash_rules(&direct),
                 [("global", "direct"), ("direct", "direct")]

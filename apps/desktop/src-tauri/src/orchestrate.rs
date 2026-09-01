@@ -1,10 +1,10 @@
 //! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
 
 use ice_config::{
-    build_direct_only_config, build_runtime_config, clash_mode_name, load_group_selections,
-    load_rule_overrides, load_settings, restore_runtime_config_from_bak, save_settings,
-    write_runtime_config_file, AppError, AppPaths, AppSettings, BuildInput, CaptureIntent,
-    ErrorCode, NormalizedProfile,
+    build_direct_only_config, build_runtime_config, clash_mode_name, config_to_pretty_json,
+    load_group_selections, load_rule_overrides, load_settings, restore_runtime_config_from_bak,
+    save_settings, write_runtime_config_bytes, AppError, AppPaths, AppSettings, BuildInput,
+    CaptureIntent, ErrorCode, NormalizedProfile,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
@@ -30,10 +30,20 @@ pub fn repo_geoip_rule_sets() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-geoip/rule-set")
 }
 
+/// Geoip rule-sets are copied into the app data dir only by the app itself and
+/// only change across app updates (a process restart), so each target directory
+/// is scanned at most once per process lifetime.
+static ENSURED_GEOIP_DIRS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 /// Ensure `geoip-{code}.srs` rule-sets exist in the app data dir (copied from bundled
 /// resources, falling back to the repo copy for dev/tests). Returns the directory.
 pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>) -> PathBuf {
     let target = app_paths.geoip_dir();
+    if let Ok(ensured) = ENSURED_GEOIP_DIRS.lock() {
+        if ensured.contains(&target) {
+            return target;
+        }
+    }
     let mut sources: Vec<PathBuf> = Vec::new();
     if let Some(dir) = resource_dir {
         sources.push(dir.join("geoip"));
@@ -62,6 +72,9 @@ pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>)
         }
         tracing::info!(dir = %target.display(), copied, "geoip rule-sets ensured");
         break;
+    }
+    if let Ok(mut ensured) = ENSURED_GEOIP_DIRS.lock() {
+        ensured.push(target.clone());
     }
     target
 }
@@ -138,8 +151,74 @@ pub fn reconcile_selected_tag(settings: &AppSettings, profile: &NormalizedProfil
     }
 }
 
-/// Rebuild `config.json` from the single active subscription profile. Returns whether inbound
-/// listen changed vs previous on-disk settings snapshot (caller compares ports).
+/// Write `config` only when it differs from the current `config.json`, so
+/// no-op applies skip the full copy + fsync churn. Returns whether the file
+/// was rewritten. The .bak only advances on real changes, which is exactly
+/// when the reload-failure rollback path can need it.
+fn write_config_if_changed(
+    config_path: &Path,
+    bak_path: &Path,
+    config: &serde_json::Value,
+) -> Result<bool, AppError> {
+    let rendered = config_to_pretty_json(config)?;
+    let unchanged = std::fs::read_to_string(config_path)
+        .map(|existing| existing == rendered)
+        .unwrap_or(false);
+    if unchanged {
+        return Ok(false);
+    }
+    // Reuse the already-rendered text (no second serialization).
+    write_runtime_config_bytes(config_path, bak_path, &rendered)?;
+    Ok(true)
+}
+
+/// Persist a node / group-member selection into the existing runtime config by
+/// patching the target selector's `default` — the live switch already happened
+/// via the Clash API, so a full rebuild would only re-bake the same default for
+/// restarts. `Ok(false)` when the target selector cannot be located (caller
+/// falls back to a full [`generate_config`]); mirrors `build_runtime_config`'s
+/// member check (a selector default must be one of its members).
+pub fn patch_selected_tag_default(
+    app_paths: &AppPaths,
+    selector_tag: &str,
+    tag: &str,
+) -> Result<bool, AppError> {
+    let config_path = app_paths.config();
+    let raw = match std::fs::read_to_string(&config_path) {
+        Ok(raw) => raw,
+        Err(_) => return Ok(false),
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Ok(false);
+    };
+    let Some(outbounds) = config.get_mut("outbounds").and_then(|v| v.as_array_mut()) else {
+        return Ok(false);
+    };
+    let Some(selector) = outbounds.iter_mut().find(|ob| {
+        ob.get("tag").and_then(|v| v.as_str()) == Some(selector_tag)
+            && ob.get("type").and_then(|v| v.as_str()) == Some("selector")
+    }) else {
+        return Ok(false);
+    };
+    let is_member = selector
+        .get("outbounds")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).any(|m| m == tag))
+        .unwrap_or(false);
+    if !is_member {
+        return Ok(false);
+    }
+    selector
+        .as_object_mut()
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "config outbounds not objects"))?
+        .insert("default".into(), serde_json::Value::String(tag.to_string()));
+    let _ = write_config_if_changed(&config_path, &app_paths.config_bak(), &config)?;
+    Ok(true)
+}
+
+/// Rebuild `config.json` from the single active subscription profile. Returns
+/// whether the config changed on disk (no-op applies are detected and skip the
+/// write, the .bak rotation, and — in [`orchestrate_apply`] — the reload).
 ///
 /// `capture_intent` is supplied explicitly by the caller (plan §4.1): automatic core start
 /// and every pre-T3 path pass [`CaptureIntent::Diagnostic`]; the TUN controller (slice T3)
@@ -149,7 +228,7 @@ pub fn generate_config(
     settings: &AppSettings,
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
     let profile = match load_active_profile_with_default_rules(
@@ -163,8 +242,7 @@ pub fn generate_config(
             // config so Start keeps working (system proxy + inbound, all traffic
             // direct) until a subscription is imported.
             let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
-            write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
-            return Ok(());
+            return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
         }
         Err(err) => return Err(AppError::from(err)),
     };
@@ -173,8 +251,7 @@ pub fn generate_config(
         // hand-edited profile): nothing usable to route through — direct-only fallback so
         // Start/Apply keep working (build_runtime_config errors on empty nodes).
         let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
-        write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
-        return Ok(());
+        return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
     }
     let settings = reconcile_selected_tag_in_settings(app_paths, settings, &profile)?;
     let selected = resolve_selected_tag(settings.selected_tag.as_deref(), &profile);
@@ -190,8 +267,7 @@ pub fn generate_config(
         rule_overrides,
         capture_intent,
     })?;
-    write_runtime_config_file(&app_paths.config(), &app_paths.config_bak(), &config)?;
-    Ok(())
+    write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config)
 }
 
 pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> {
@@ -320,10 +396,18 @@ pub fn orchestrate_apply(
 ) -> Result<(), AppError> {
     // generate_config falls back to a direct-only config when no subscription /
     // no usable nodes exist, so Apply always writes a valid config.json.
-    generate_config(app_paths, settings, resource_dir, capture_intent)?;
+    let config_changed = generate_config(app_paths, settings, resource_dir, capture_intent)?;
 
     let status = core.state().status;
     if status != CoreStatus::Running {
+        return Ok(());
+    }
+
+    // No-op apply: the runtime config is byte-identical, so nothing the core
+    // runs could have changed (endpoints, mode, rules are all baked into it).
+    // Skip the reload and the proxy re-sync entirely.
+    if !config_changed {
+        tracing::debug!("apply: config unchanged, skipping reload");
         return Ok(());
     }
 
@@ -384,18 +468,18 @@ fn sync_system_proxy_after_reload(
             format!("内核已重载，但在同步系统代理前无法恢复旧设置，已中止以免覆盖备份（{err}）"),
         ));
     }
-    if let Err(err) = apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints) {
-        if apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints).is_err() {
-            return Err(AppError::new(
-                ErrorCode::ProxyApplyFailedCoreReloaded,
-                format!(
-                    "内核已在新端口 {}:{} 运行，但系统代理未能同步，请检查权限或手动设置系统代理（{}）",
-                    new_endpoints.http_host, new_endpoints.http_port, err
-                ),
-            ));
-        }
-    }
-    Ok(())
+    // Single attempt: a retry would mutate the OS proxy a second time while the
+    // first attempt may already have partially applied, and the reported error
+    // must come from the attempt that actually failed.
+    apply_and_record(&app_paths.proxy_backup(), proxy, new_endpoints).map_err(|err| {
+        AppError::new(
+            ErrorCode::ProxyApplyFailedCoreReloaded,
+            format!(
+                "内核已在新端口 {}:{} 运行，但系统代理未能同步，请检查权限或手动设置系统代理（{}）",
+                new_endpoints.http_host, new_endpoints.http_port, err
+            ),
+        )
+    })
 }
 
 pub fn current_settings(app_paths: &AppPaths) -> Result<AppSettings, AppError> {
@@ -450,6 +534,7 @@ pub fn orchestrate_set_proxy_mode(
     binary: PathBuf,
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
+    live_mode_ok: &mut bool,
 ) -> Result<(), AppError> {
     orchestrate_set_proxy_mode_with_apply(
         app_paths,
@@ -460,6 +545,7 @@ pub fn orchestrate_set_proxy_mode(
         binary,
         resource_dir,
         capture_intent,
+        live_mode_ok,
         |app_paths, settings, previous_settings, core, proxy, binary, resource_dir, intent| {
             orchestrate_apply(
                 app_paths,
@@ -477,6 +563,12 @@ pub fn orchestrate_set_proxy_mode(
 
 /// [`orchestrate_set_proxy_mode`] with an injectable rebuild + reload step;
 /// the shell passes a TUN-aware apply while TUN capture is active.
+///
+/// `live_mode_ok` is the caller's probe result cache (starts `true`): the
+/// `PATCH /configs` attempt is made once per process and, when the runtime does
+/// not honor it, the caller's cache is flipped to `false` so later switches
+/// skip the two wasted HTTP roundtrips. Forward-compatible — a core that does
+/// honor live mode switches keeps the fast path forever.
 #[allow(clippy::too_many_arguments)]
 pub fn orchestrate_set_proxy_mode_with_apply(
     app_paths: &AppPaths,
@@ -487,6 +579,7 @@ pub fn orchestrate_set_proxy_mode_with_apply(
     binary: PathBuf,
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
+    live_mode_ok: &mut bool,
     apply: impl FnOnce(
         &AppPaths,
         &AppSettings,
@@ -501,7 +594,7 @@ pub fn orchestrate_set_proxy_mode_with_apply(
     if core.state().status != CoreStatus::Running {
         return Ok(());
     }
-    if running_config_supports_clash_mode(app_paths) {
+    if *live_mode_ok && running_config_supports_clash_mode(app_paths) {
         let endpoints = HealthEndpoints {
             host: settings.clash_api_listen.clone(),
             port: settings.clash_api_port,
@@ -515,16 +608,17 @@ pub fn orchestrate_set_proxy_mode_with_apply(
             Ok(()) => {
                 tracing::warn!(
                     mode = %mode_name,
-                    "clash PATCH /configs accepted but runtime mode did not change; falling back to rebuild + reload"
+                    "clash PATCH /configs accepted but runtime mode did not change; disabling live mode switch and falling back to rebuild + reload"
                 );
             }
             Err(err) => {
                 tracing::warn!(
                     error = %err,
-                    "clash PATCH /configs failed; falling back to rebuild + reload"
+                    "clash PATCH /configs failed; disabling live mode switch and falling back to rebuild + reload"
                 );
             }
         }
+        *live_mode_ok = false;
     }
     apply(
         app_paths,
@@ -1457,6 +1551,130 @@ mod tests {
     }
 
     #[test]
+    fn generate_config_skips_write_when_config_is_unchanged() {
+        let paths = temp_app("noop-write");
+        seed_one_node(&paths);
+        let settings = AppSettings::default();
+
+        assert!(
+            generate_config(&paths, &settings, None, CaptureIntent::Diagnostic).unwrap(),
+            "first build must write"
+        );
+        assert!(
+            !paths.config_bak().exists(),
+            "first write has no previous config to back up"
+        );
+
+        assert!(
+            !generate_config(&paths, &settings, None, CaptureIntent::Diagnostic).unwrap(),
+            "identical rebuild must be detected as a no-op"
+        );
+        assert!(
+            !paths.config_bak().exists(),
+            "no-op must not rotate config.json.bak"
+        );
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn patch_selected_tag_default_updates_flat_proxy_selector() {
+        let paths = temp_app("patch-flat");
+        seed_one_node(&paths);
+        let settings = AppSettings::default();
+        generate_config(&paths, &settings, None, CaptureIntent::Diagnostic).unwrap();
+
+        // Flat profile: the injected `proxy` selector carries the default.
+        assert!(
+            patch_selected_tag_default(&paths, "proxy", "n1").unwrap(),
+            "flat selector must be patchable"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
+        let proxy = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == "proxy")
+            .unwrap();
+        assert_eq!(proxy["default"], "n1");
+
+        // Unknown selector / non-member tag signal a rebuild fallback.
+        assert!(!patch_selected_tag_default(&paths, "missing", "n1").unwrap());
+        assert!(!patch_selected_tag_default(&paths, "proxy", "not-a-member").unwrap());
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn patch_selected_tag_default_updates_group_selector() {
+        let paths = temp_app("patch-group");
+        let sub = SubscriptionPaths::from_app(&paths);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "g".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 2,
+            group_count: 1,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+        };
+        let profile = ice_config::NormalizedProfile {
+            nodes: vec![
+                NO {
+                    tag: "n1".into(),
+                    outbound: serde_json::json!({"type":"socks","tag":"n1"}),
+                },
+                NO {
+                    tag: "n2".into(),
+                    outbound: serde_json::json!({"type":"socks","tag":"n2"}),
+                },
+            ],
+            groups: vec![NO {
+                tag: "Proxies".into(),
+                outbound: serde_json::json!({
+                    "type": "selector",
+                    "tag": "Proxies",
+                    "outbounds": ["n1", "n2"],
+                }),
+            }],
+            route: Default::default(),
+            dns: None,
+            default_outbound: Some("Proxies".into()),
+            parse_stats: Default::default(),
+        };
+        write_subscription_success(&sub, &meta, "{}", &profile).unwrap();
+        generate_config(
+            &paths,
+            &AppSettings::default(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
+
+        assert!(
+            patch_selected_tag_default(&paths, "Proxies", "n2").unwrap(),
+            "group selector must be patchable"
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
+        let group = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == "Proxies")
+            .unwrap();
+        assert_eq!(group["default"], "n2");
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
     fn generate_config_groups_only_profile_falls_back_to_direct_only() {
         let paths = temp_app("groups-only");
         let sub = SubscriptionPaths::from_app(&paths);
@@ -1573,6 +1791,7 @@ mod tests {
             bin,
             None,
             CaptureIntent::Diagnostic,
+            &mut true,
         )
         .unwrap();
 
@@ -1623,6 +1842,7 @@ mod tests {
             bin,
             None,
             CaptureIntent::Diagnostic,
+            &mut true,
         )
         .unwrap();
 
@@ -1661,6 +1881,7 @@ mod tests {
             bin,
             None,
             CaptureIntent::Diagnostic,
+            &mut true,
         )
         .unwrap();
 
@@ -1670,6 +1891,68 @@ mod tests {
             "a 2xx PATCH that does not change the mode must fall back to the rebuild + reload path"
         );
         assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn g7_16c_failed_probe_is_remembered_and_skips_future_patches() {
+        let paths = temp_app("mode-probe-once");
+        seed_one_node(&paths);
+        let reloader = MockReloader::default();
+        let mut core = start_running(&paths, &reloader);
+
+        let server = MockClashApi::start(400, "Rule");
+        let previous = AppSettings::default();
+        let settings = AppSettings {
+            clash_api_port: server.addr.port(),
+            proxy_mode: ProxyMode::Global,
+            ..previous.clone()
+        };
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        let mut live_mode_ok = true;
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+            &mut live_mode_ok,
+        )
+        .unwrap();
+        assert!(
+            !live_mode_ok,
+            "a failed probe must flip the caller's capability cache"
+        );
+        let after_first = server.requests.lock().unwrap().len();
+        assert_eq!(after_first, 1, "one PATCH attempt on the first switch");
+
+        // Second switch with the remembered negative: no further HTTP roundtrips.
+        orchestrate_set_proxy_mode(
+            &paths,
+            &settings,
+            &previous,
+            &mut core,
+            &proxy,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+            &mut live_mode_ok,
+        )
+        .unwrap();
+        assert_eq!(
+            server.requests.lock().unwrap().len(),
+            after_first,
+            "remembered failure must skip the PATCH probe entirely"
+        );
+        assert_eq!(
+            reloader.call_count(),
+            1,
+            "first switch reloads; the second is config-identical and skipped (no-op apply)"
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 
@@ -1709,6 +1992,7 @@ mod tests {
             bin,
             None,
             CaptureIntent::Diagnostic,
+            &mut true,
         )
         .unwrap();
 
@@ -1749,6 +2033,7 @@ mod tests {
             bin,
             None,
             CaptureIntent::Diagnostic,
+            &mut true,
         )
         .unwrap();
 

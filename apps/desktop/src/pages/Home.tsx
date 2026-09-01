@@ -39,6 +39,9 @@ type Props = {
   onNavigate?: (tab: "subs") => void;
   /** When false the page stays mounted but stops polling. */
   active?: boolean;
+  /** Reports fresh status up to App so the global poll can be skipped while
+   * this page is the active tab. */
+  onStatus?: (status: StatusResponse) => void;
 };
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
@@ -60,7 +63,7 @@ function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   return `${node.tag}（${node.outbound_type}）`;
 }
 
-export function Home({ onBusyChange, onNavigate, active = true }: Props) {
+export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -93,6 +96,7 @@ export function Home({ onBusyChange, onNavigate, active = true }: Props) {
 
       const selected = resolveSelectedTag(settings.selected_tag, n);
       setStatus(s);
+      onStatus?.(s);
       setNodes(n);
       setSettings(settings);
       setTunOverride(null);

@@ -50,13 +50,21 @@ pub trait HttpFetcher: Send {
     ) -> Result<FetchResponse, SubscriptionError>;
 }
 
+/// One process-wide direct agent (no system proxy, no auto-redirects; the
+/// redirect loop re-validates each hop). `Agent` is an `Arc` handle, so clones
+/// are cheap and thread-safe — `fetch_all` shares the pool across its threads.
 fn build_direct_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(FETCH_TIMEOUT)
-        .timeout_read(FETCH_TIMEOUT)
-        .timeout_write(FETCH_TIMEOUT)
-        .redirects(0)
-        .build()
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::AgentBuilder::new()
+                .timeout_connect(FETCH_TIMEOUT)
+                .timeout_read(FETCH_TIMEOUT)
+                .timeout_write(FETCH_TIMEOUT)
+                .redirects(0)
+                .build()
+        })
+        .clone()
 }
 
 fn resolve_redirect_url(base: &str, location: &str) -> Result<String, SubscriptionError> {

@@ -214,6 +214,10 @@ mod tests {
             _instance_lock: crate::test_instance_lock(&paths),
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
+            profile_cache: Mutex::new(None),
+            log_view_cache: Mutex::new(None),
+            helper_probe_cache: Mutex::new(None),
+            clash_live_mode_cache: Mutex::new(true),
         });
 
         let bg = state.clone();
@@ -749,6 +753,7 @@ mod live {
         assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
 
         let mut previous = settings.clone();
+        let mut live_mode_ok = true;
         for mode in [
             ice_config::ProxyMode::Global,
             ice_config::ProxyMode::Direct,
@@ -767,6 +772,7 @@ mod live {
                 bin.clone(),
                 None,
                 CaptureIntent::Diagnostic,
+                &mut live_mode_ok,
             )
             .expect("set mode");
             assert_eq!(
