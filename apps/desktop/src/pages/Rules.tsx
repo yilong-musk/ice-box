@@ -28,10 +28,6 @@ import {
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -45,7 +41,6 @@ import {
   ruleTypeLabel,
 } from "../lib/rules";
 
-const PAGE_SIZES = [50, 100, 200];
 const MAX_KEYWORD_DEBOUNCE_MS = 300;
 /** Distance from the list bottom within which the pager stays visible. */
 const PAGER_BOTTOM_THRESHOLD_PX = 32;
@@ -80,7 +75,7 @@ export function Rules({ onNavigate, active = true }: Props) {
   const [rows, setRows] = useState<RuleRow[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
-  const [limit, setLimit] = useState(50);
+  const [limit] = useState(100);
   const [filters, setFilters] = useState<Filters>({
     keyword: "",
     type: "",
@@ -246,6 +241,14 @@ export function Rules({ onNavigate, active = true }: Props) {
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
           <CardAction className="flex flex-wrap items-center justify-end gap-2">
+            <Input
+              type="search"
+              className="min-w-48 flex-1"
+              placeholder={t("rules.searchPlaceholder")}
+              aria-label={t("rules.searchAria")}
+              value={filters.keyword}
+              onChange={(e) => changeFilters({ keyword: e.target.value })}
+            />
             <Button
               type="button"
               size="sm"
@@ -266,52 +269,6 @@ export function Rules({ onNavigate, active = true }: Props) {
           </CardAction>
         </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Input
-              type="search"
-              className="min-w-48 flex-1"
-              placeholder={t("rules.searchPlaceholder")}
-              aria-label={t("rules.searchAria")}
-              value={filters.keyword}
-              onChange={(e) => changeFilters({ keyword: e.target.value })}
-            />
-            <NativeSelect
-              aria-label={t("rules.statusFilterAria")}
-              className="w-auto"
-              size="sm"
-              value={filters.status}
-              onChange={(e) =>
-                changeFilters({ status: e.target.value as StatusFilter })
-              }
-            >
-              <NativeSelectOption value="all">
-                {t("rules.statusAll")}
-              </NativeSelectOption>
-              <NativeSelectOption value="enabled">
-                {t("rules.statusEnabled")}
-              </NativeSelectOption>
-              <NativeSelectOption value="disabled">
-                {t("rules.statusDisabled")}
-              </NativeSelectOption>
-            </NativeSelect>
-            <NativeSelect
-              aria-label={t("rules.pageSizeAria")}
-              className="w-auto"
-              size="sm"
-              value={limit}
-              onChange={(e) => {
-                setLimit(Number(e.target.value));
-                setOffset(0);
-              }}
-            >
-              {PAGE_SIZES.map((n) => (
-                <NativeSelectOption key={n} value={n}>
-                  {t("rules.pageSize", { n })}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-
           <div className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2">
             <ToggleGroup
               type="single"
