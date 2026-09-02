@@ -406,14 +406,14 @@ describe("Rules", () => {
 
   it("paginates with server-side offset", async () => {
     listRules.mockResolvedValue(
-      sampleList({ offset: 0, limit: 50, total: 120 }),
+      sampleList({ offset: 0, limit: 100, total: 120 }),
     );
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    const pagerText = view.getByText(/第 1 \/ 3 页 · 共 120 条/);
+    const pagerText = view.getByText(/第 1 \/ 2 页 · 共 120 条/);
     const pager = pagerText.parentElement as HTMLElement;
     expect(pagerText).toBeInTheDocument();
 
@@ -432,7 +432,7 @@ describe("Rules", () => {
     await waitFor(() => {
       const calls = listRules.mock.calls;
       const call = calls[calls.length - 1]?.[0] as { offset: number };
-      expect(call.offset).toBe(50);
+      expect(call.offset).toBe(100);
     });
   });
 });

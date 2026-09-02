@@ -696,7 +696,6 @@ Conventions:
 | `update_subscription` | `{ id }` |
 | `update_all_subscriptions` | |
 | `set_active_subscription` | `{ id, active }` (activating A automatically deactivates the others) |
-| `apply_subscriptions` | explicitly rebuild the config (normally auto-Applied internally) |
 
 `add` / `update` / `set_active_subscription` / `remove` **auto-Apply** after the data change succeeds (hot reload if Running). No second "Apply" click required unless Apply itself failed.
 

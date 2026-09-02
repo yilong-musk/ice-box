@@ -153,9 +153,7 @@ const zh = {
 
   // --- subscriptions page ---
   "subs.partialUpdateFailed": "部分订阅更新失败：{details}",
-  "subs.import": "导入",
-  "subs.importDesc": "粘贴订阅 URL，可选填写名称",
-  "subs.url": "订阅 URL",
+  "subs.url": "导入订阅",
   "subs.urlPlaceholder": "订阅 URL（https 优先）",
   "subs.name": "名称",
   "subs.namePlaceholder": "名称（可选）",
@@ -172,7 +170,6 @@ const zh = {
   "subs.emptyHint": "尚未导入订阅",
   "subs.count": "{n} 条",
   "subs.updateAll": "全部更新",
-  "subs.apply": "应用配置",
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。",
@@ -190,12 +187,6 @@ const zh = {
   "rules.addCustom": "+ 自定义规则",
   "rules.searchPlaceholder": "搜索域名 / 出口 / 规则集…",
   "rules.searchAria": "搜索规则",
-  "rules.statusFilterAria": "禁用状态筛选",
-  "rules.statusAll": "全部状态",
-  "rules.statusEnabled": "仅启用",
-  "rules.statusDisabled": "仅禁用",
-  "rules.pageSizeAria": "每页条数",
-  "rules.pageSize": "每页 {n}",
   "rules.filtersAria": "规则筛选",
   "rules.typeAll": "全部",
   "rules.customCount": "自定义 {count}",
@@ -436,9 +427,7 @@ const en: Record<MessageKey, string> = {
 
   // --- subscriptions page ---
   "subs.partialUpdateFailed": "Some subscriptions failed to update: {details}",
-  "subs.import": "Import",
-  "subs.importDesc": "Paste a subscription URL; name is optional",
-  "subs.url": "Subscription URL",
+  "subs.url": "Import Subscription",
   "subs.urlPlaceholder": "Subscription URL (https preferred)",
   "subs.name": "Name",
   "subs.namePlaceholder": "Name (optional)",
@@ -456,7 +445,6 @@ const en: Record<MessageKey, string> = {
   "subs.emptyHint": "No subscriptions yet",
   "subs.count": "{n} items",
   "subs.updateAll": "Update All",
-  "subs.apply": "Apply Config",
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL.",
@@ -474,12 +462,6 @@ const en: Record<MessageKey, string> = {
   "rules.addCustom": "+ Add Custom Rule",
   "rules.searchPlaceholder": "Search domain / outbound / rule set…",
   "rules.searchAria": "Search rules",
-  "rules.statusFilterAria": "Status filter",
-  "rules.statusAll": "All statuses",
-  "rules.statusEnabled": "Enabled only",
-  "rules.statusDisabled": "Disabled only",
-  "rules.pageSizeAria": "Page size",
-  "rules.pageSize": "{n} per page",
   "rules.filtersAria": "Rule filters",
   "rules.typeAll": "All",
   "rules.customCount": "Custom {count}",

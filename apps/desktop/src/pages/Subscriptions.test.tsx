@@ -6,7 +6,6 @@ import { Subscriptions } from "./Subscriptions";
 const listSubscriptions = vi.fn();
 const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
-const applySubscriptions = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -18,7 +17,6 @@ vi.mock("../api/tauri", () => ({
     setSubscriptionActive: vi.fn(),
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
-    applySubscriptions: (...args: unknown[]) => applySubscriptions(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -163,27 +161,6 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(removeSubscription).toHaveBeenCalled();
       expect(view.getByText(/系统代理未能恢复/)).toBeInTheDocument();
-    });
-  });
-
-  it("renders apply subscriptions button", async () => {
-    listSubscriptions.mockResolvedValue([sampleMeta()]);
-    applySubscriptions.mockResolvedValue(undefined);
-
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByRole("button", { name: "应用配置" })).toBeInTheDocument();
-    });
-    const row = view.getByText("sub-a").closest("[data-slot='item']");
-    expect(row?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["px-3", "py-2.5"]),
-    );
-    expect(row?.className.split(/\s+/)).not.toContain("px-0");
-
-    view.getByRole("button", { name: "应用配置" }).click();
-    await waitFor(() => {
-      expect(applySubscriptions).toHaveBeenCalled();
     });
   });
 

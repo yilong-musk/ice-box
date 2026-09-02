@@ -150,10 +150,6 @@ export function Subscriptions() {
       )}
 
       <Card size="sm" className="shrink-0">
-        <CardHeader>
-          <CardTitle>{t("subs.import")}</CardTitle>
-          <CardDescription>{t("subs.importDesc")}</CardDescription>
-        </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <form
             className="flex flex-col gap-3"
@@ -272,15 +268,6 @@ export function Subscriptions() {
               }
             >
               {updating ? t("common.updating") : t("subs.updateAll")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || items.length === 0}
-              onClick={() => void run(() => api.applySubscriptions())}
-            >
-              {t("subs.apply")}
             </Button>
           </CardAction>
         </CardHeader>
