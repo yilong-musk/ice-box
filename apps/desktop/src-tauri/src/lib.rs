@@ -301,7 +301,6 @@ pub fn run() {
             commands::update_all_subscriptions,
             commands::set_active_subscription,
             commands::set_auto_update_subscription,
-            commands::apply_subscriptions,
             commands::list_nodes,
             commands::set_selected_node,
             commands::set_group_selection,

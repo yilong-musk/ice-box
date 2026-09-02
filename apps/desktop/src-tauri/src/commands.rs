@@ -1183,17 +1183,6 @@ pub async fn set_auto_update_subscription(
     .await
 }
 
-#[tauri::command]
-pub async fn apply_subscriptions(app: AppHandle) -> Result<(), AppError> {
-    run_blocking("apply_subscriptions", move || {
-        let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        let settings = current_settings(&state.paths)?;
-        apply_after_change(&app, &state, &settings, &settings)
-    })
-    .await
-}
-
 #[derive(Serialize)]
 pub struct NodeInfo {
     pub tag: String,
