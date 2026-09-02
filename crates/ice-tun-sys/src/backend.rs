@@ -184,6 +184,23 @@ pub trait TunBackend {
     /// returns whether all owned resources are confirmed clean.
     fn recover(&mut self, journal: &TunJournal) -> Result<RecoveryOutcome, TunError>;
 
+    /// Best-effort stop of any elevated core the backend owns (native path).
+    /// Used to reclaim an orphaned root-owned core on startup / before a new
+    /// capture, so a leftover process cannot hold the inbound/Clash API ports
+    /// and make the next Start fail with `bind: address already in use`.
+    /// Default no-op; the native backend stops through its coordinator.
+    fn stop_elevated_core(&mut self) -> Result<(), TunError> {
+        Ok(())
+    }
+
+    /// Re-apply the journaled DNS snapshot when the platform no longer carries
+    /// it (self-heal after wake / network change): the TUN interface and routes
+    /// are intact but system DNS drifted, which leaves capture on yet breaks
+    /// name resolution. Returns whether a repair was performed. Default no-op.
+    fn reapply_dns_if_stale(&mut self, _applied: &AppliedTun) -> Result<bool, TunError> {
+        Ok(false)
+    }
+
     /// Downcast hook for tests and shells that need the concrete backend.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 

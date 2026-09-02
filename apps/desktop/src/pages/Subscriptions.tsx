@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api,
   formatInvokeError,
+  type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -32,13 +33,31 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
+  ItemFooter,
   ItemGroup,
+  ItemHeader,
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { t, useLanguagePreference } from "../lib/i18n";
+
+const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
+  "one_hour",
+  "three_hours",
+  "six_hours",
+  "twelve_hours",
+  "twenty_four_hours",
+];
+
+function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
+  return t(`subs.interval.${interval}`);
+}
 
 export function Subscriptions() {
   useLanguagePreference();
@@ -46,6 +65,9 @@ export function Subscriptions() {
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdateInterval, setAutoUpdateInterval] =
+    useState<SubscriptionAutoUpdateInterval>("one_hour");
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
@@ -140,9 +162,16 @@ export function Subscriptions() {
               const u = url.trim();
               if (!u) return;
               void run(async () => {
-                await api.addSubscription(u, name.trim() || undefined);
+                await api.addSubscription(
+                  u,
+                  name.trim() || undefined,
+                  autoUpdate,
+                  autoUpdateInterval,
+                );
                 setUrl("");
                 setName("");
+                setAutoUpdate(false);
+                setAutoUpdateInterval("one_hour");
               });
             }}
           >
@@ -160,20 +189,57 @@ export function Subscriptions() {
                 />
               </Field>
               <div className="flex flex-wrap items-end gap-2">
-                <Field className="min-w-48 flex-1">
-                  <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
-                  <Input
-                    id="sub-name"
-                    type="text"
-                    placeholder={t("subs.namePlaceholder")}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={busy}
-                  />
-                </Field>
+                <div className="flex flex-wrap items-end gap-4">
+                  <Field className="w-48">
+                    <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
+                    <Input
+                      id="sub-name"
+                      type="text"
+                      placeholder={t("subs.namePlaceholder")}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      disabled={busy}
+                    />
+                  </Field>
+                  <Field orientation="horizontal" className="w-auto gap-1.5">
+                    <Switch
+                      id="sub-auto-update"
+                      size="sm"
+                      checked={autoUpdate}
+                      disabled={busy}
+                      aria-label={t("subs.autoUpdate")}
+                      onCheckedChange={setAutoUpdate}
+                    />
+                    <FieldLabel
+                      htmlFor="sub-auto-update"
+                      className="text-muted-foreground"
+                    >
+                      {t("subs.autoUpdate")}
+                    </FieldLabel>
+                    <NativeSelect
+                      size="sm"
+                      className="w-auto"
+                      aria-label={t("subs.interval")}
+                      value={autoUpdateInterval}
+                      disabled={busy || !autoUpdate}
+                      onChange={(e) =>
+                        setAutoUpdateInterval(
+                          e.target.value as SubscriptionAutoUpdateInterval,
+                        )
+                      }
+                    >
+                      {AUTO_UPDATE_INTERVALS.map((interval) => (
+                        <NativeSelectOption key={interval} value={interval}>
+                          {intervalLabel(interval)}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                </div>
                 <Button
                   type="submit"
                   size="sm"
+                  className="ml-auto"
                   disabled={busy || !url.trim()}
                 >
                   {t("subs.importAction")}
@@ -240,11 +306,34 @@ export function Subscriptions() {
                         size="sm"
                         variant={s.active ? "muted" : "default"}
                       >
-                        <ItemContent className="min-w-0">
+                        <ItemHeader>
                           <ItemTitle title={s.name}>
                             <span className="truncate">{s.name}</span>
                             {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                           </ItemTitle>
+                          <ItemActions className="flex-nowrap">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void run(() => api.updateSubscription(s.id), true)
+                              }
+                            >
+                              {updating ? t("common.updating") : t("common.update")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => setPendingDelete(s)}
+                            >
+                              {t("common.delete")}
+                            </Button>
+                          </ItemActions>
+                        </ItemHeader>
+                        <ItemContent className="min-w-0">
                           <ItemDescription>
                             {subscriptionSummary(s)}
                           </ItemDescription>
@@ -259,7 +348,7 @@ export function Subscriptions() {
                             </ItemDescription>
                           ) : null}
                         </ItemContent>
-                        <ItemActions className="flex-wrap">
+                        <ItemFooter>
                           <Field orientation="horizontal" className="w-auto gap-1.5">
                             <Switch
                               id={`sub-active-${s.id}`}
@@ -280,27 +369,57 @@ export function Subscriptions() {
                               {t("common.activate")}
                             </FieldLabel>
                           </Field>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              void run(() => api.updateSubscription(s.id), true)
-                            }
-                          >
-                            {updating ? t("common.updating") : t("common.update")}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="destructive"
-                            disabled={busy}
-                            onClick={() => setPendingDelete(s)}
-                          >
-                            {t("common.delete")}
-                          </Button>
-                        </ItemActions>
+                          <Field orientation="horizontal" className="w-auto gap-1.5">
+                            <Switch
+                              id={`sub-auto-${s.id}`}
+                              size="sm"
+                              checked={!!s.auto_update}
+                              disabled={busy}
+                              aria-label={t("subs.autoUpdate")}
+                              onCheckedChange={(checked) =>
+                                void run(() =>
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    checked,
+                                    s.auto_update_interval ?? "one_hour",
+                                  ),
+                                )
+                              }
+                            />
+                            <FieldLabel
+                              htmlFor={`sub-auto-${s.id}`}
+                              className="text-muted-foreground"
+                            >
+                              {t("subs.autoUpdate")}
+                            </FieldLabel>
+                            <NativeSelect
+                              size="sm"
+                              className="w-auto"
+                              aria-label={t("subs.interval")}
+                              value={s.auto_update_interval ?? "one_hour"}
+                              disabled={busy || !s.auto_update}
+                              onChange={(e) =>
+                                void run(() =>
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    s.auto_update,
+                                    e.target
+                                      .value as SubscriptionAutoUpdateInterval,
+                                  ),
+                                )
+                              }
+                            >
+                              {AUTO_UPDATE_INTERVALS.map((interval) => (
+                                <NativeSelectOption
+                                  key={interval}
+                                  value={interval}
+                                >
+                                  {intervalLabel(interval)}
+                                </NativeSelectOption>
+                              ))}
+                            </NativeSelect>
+                          </Field>
+                        </ItemFooter>
                       </Item>
                     </div>
                   );

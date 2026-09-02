@@ -8,6 +8,7 @@ mod log_tail;
 mod log_view;
 mod orchestrate;
 mod shutdown;
+mod subscription_watch;
 mod tray;
 
 use crate::capture::CaptureController;
@@ -208,7 +209,6 @@ pub fn run() {
                 let _orch = state.orchestrate.lock().ok();
                 let mut core = state.core.lock().ok();
                 if let Some(core) = core.as_deref_mut() {
-                    let recovery = state.capture.recover(&mut **core);
                     let append_warning = |warning: String| {
                         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                             let existing = slot.take().unwrap_or_default();
@@ -219,6 +219,19 @@ pub fn run() {
                             });
                         }
                     };
+                    // A leftover root-owned core from a previous session (the
+                    // unprivileged bootstrap could not signal it) still holds
+                    // the ports; reclaim it through the elevated coordinator
+                    // before journal recovery so a later start / re-enable
+                    // never hits `bind: address already in use`.
+                    if let Err(err) = state
+                        .capture
+                        .reclaim_orphan_elevated_core(&mut **core)
+                    {
+                        tracing::warn!(error = %err, "failed to reclaim orphaned elevated core");
+                        append_warning(format!("残留内核清理未确认 ({err})"));
+                    }
+                    let recovery = state.capture.recover(&mut **core);
                     match recovery {
                         Ok(Some(warning)) => append_warning(warning),
                         Ok(None) => {}
@@ -238,6 +251,7 @@ pub fn run() {
             };
             tray::setup_tray(app.handle(), tray_language)?;
             core_watch::spawn_core_watchdog(app.handle().clone());
+            subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             // Product: opening the app starts the core only; system proxy is
             // toggled from the home page. Quit still restores an applied proxy.
             let handle = app.handle().clone();
@@ -286,6 +300,7 @@ pub fn run() {
             commands::update_subscription,
             commands::update_all_subscriptions,
             commands::set_active_subscription,
+            commands::set_auto_update_subscription,
             commands::apply_subscriptions,
             commands::list_nodes,
             commands::set_selected_node,

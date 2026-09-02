@@ -636,6 +636,14 @@ impl CaptureController {
             return Err(app_err);
         }
 
+        // Reclaim any leftover core before starting a new capture (idempotent
+        // through the elevated coordinator): a previous session may have left
+        // a root-owned core holding the inbound/Clash API ports, which would
+        // otherwise fail the next Start with `bind: address already in use`.
+        // Runs after the active-backend checks above, so a running TUN is
+        // never stopped here.
+        backend.stop_elevated_core().map_err(map_tun)?;
+
         let transition_id = Uuid::new_v4().to_string();
         self.begin_transition(TunStatus::Preparing, transition_id)?;
 
@@ -1166,6 +1174,70 @@ impl CaptureController {
         }
     }
 
+    /// Reclaim a leftover root-owned core from a previous session. The
+    /// unprivileged process cannot signal a helper-started core, so stop it
+    /// through the elevated coordinator unconditionally (idempotent: a healthy
+    /// session with no leftover core is a no-op) — this guarantees a later
+    /// start / re-enable never hits `bind: address already in use` even when
+    /// the pid file was cleared. Must only run while no TUN capture is active
+    /// (startup, before any capture claims the backend).
+    pub fn reclaim_orphan_elevated_core(&self, core: &mut dyn CoreHandle) -> Result<(), AppError> {
+        {
+            let mut backend = self
+                .backend
+                .lock()
+                .map_err(|_| lock_poisoned("capture backend"))?;
+            // The coordinator's Stop is idempotent and helper-side reclaims a
+            // leftover core recorded in the pid file even after a helper
+            // restart; a non-orphan / absent core is left untouched there.
+            backend.stop_elevated_core().map_err(map_tun)?;
+        }
+        // Converge the app-side state and clear any stale pid file.
+        core.reclaim_orphan_pid(&self.paths.pid())
+            .map_err(AppError::from)
+    }
+
+    /// Self-heal after wake / network change: while TUN capture is active, if
+    /// the interface and routes are intact but the platform DNS drifted from
+    /// the journaled snapshot (the classic "TUN is on but nothing resolves"
+    /// after sleep), re-apply the DNS snapshot through the elevated
+    /// coordinator. Returns a UI warning when a repair fails.
+    pub fn heal_tun_dns(&self) -> Option<String> {
+        if self.active_backend() != TrafficCapture::Tun {
+            return None;
+        }
+        let journal = match TunJournal::load(&self.paths.tun_state()) {
+            Ok(Some(journal)) => journal,
+            _ => return None,
+        };
+        let applied = AppliedTun::from_journal(&journal);
+        let mut backend = match self.backend.lock() {
+            Ok(backend) => backend,
+            Err(_) => return Some("capture controller unavailable; TUN DNS not re-applied".into()),
+        };
+        let health = match backend.verify(&applied) {
+            Ok(health) => health,
+            Err(_) => return None, // verify errors are owned by the core-exit watchdog
+        };
+        if !health.interface_up || !health.addresses_present || !health.routes_owned {
+            return None; // the TUN itself is gone; the unexpected-exit watchdog owns it
+        }
+        if health.dns_consistent {
+            return None;
+        }
+        match backend.reapply_dns_if_stale(&applied) {
+            Ok(true) => {
+                tracing::info!("TUN DNS re-applied after wake / network change");
+                None
+            }
+            Ok(false) => None,
+            Err(err) => {
+                tracing::error!(error = %err, "TUN DNS re-apply failed");
+                Some(format!("TUN DNS recovery failed: {}", err.message))
+            }
+        }
+    }
+
     /// Recovery (inside the orchestration lock, plan §4.4): discard an
     /// interrupted settings transaction, then run the journal recovery
     /// driver. Never enables capture. Returns a UI warning when anything
@@ -1658,6 +1730,11 @@ mod tests {
             self.status.set(CoreStatus::Running);
             Ok(())
         }
+
+        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+            self.status.set(CoreStatus::Stopped);
+            Ok(())
+        }
     }
 
     /// Fake backend wrapper for native-path simulations: can report an
@@ -1792,6 +1869,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            auto_update: false,
+            auto_update_interval: None,
         };
         let nodes = vec![ice_config::NormalizedOutbound {
             tag: "n1".into(),
