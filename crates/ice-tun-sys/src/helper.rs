@@ -36,6 +36,15 @@ pub const HELPER_TOKEN_FILE: &str = "helper-token";
 /// Bounded connect / read / write timeouts so a dead helper fails fast
 /// instead of hanging a capture transition.
 const IPC_TIMEOUT: Duration = Duration::from_secs(3);
+/// Read bound for `Stop` roundtrips only. The daemon replies to a Stop only
+/// after its own TERM→KILL grace has finished (5 s TERM + 2 s KILL in
+/// `ice-helper`), so the generic 3 s IPC timeout would abort the roundtrip
+/// while the daemon is still killing the core — falsely failing a TUN
+/// disable / reclaim and forcing a fail-closed RecoveryRequired on a stop
+/// that actually succeeds moments later. The whole disable / recovery path is
+/// serialized under the orchestration lock, so waiting for the daemon's full
+/// grace is safe and bounded.
+const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Short read bound for UI status probes: a dead-but-present daemon must
 /// never stall a 2 s status poll.
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
@@ -160,13 +169,22 @@ impl HelperCoreCoordinator {
     }
 
     fn request(&self, command: HelperCommand) -> Result<HelperResponse, TunError> {
-        roundtrip(
+        self.request_with_timeout(command, IPC_TIMEOUT)
+    }
+
+    fn request_with_timeout(
+        &self,
+        command: HelperCommand,
+        timeout: Duration,
+    ) -> Result<HelperResponse, TunError> {
+        roundtrip_with_timeout(
             &self.socket,
             &HelperRequest {
                 v: crate::helper_protocol::PROTOCOL_VERSION,
                 token: self.token.clone(),
                 command,
             },
+            timeout,
         )
     }
 }
@@ -200,7 +218,7 @@ impl CoreCoordinator for HelperCoreCoordinator {
     }
 
     fn stop(&mut self) -> Result<(), TunError> {
-        let response = self.request(HelperCommand::Stop)?;
+        let response = self.request_with_timeout(HelperCommand::Stop, STOP_TIMEOUT)?;
         match response.into_error() {
             Some(err) => Err(err),
             None => Ok(()),

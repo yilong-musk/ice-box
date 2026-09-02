@@ -905,6 +905,7 @@ impl TunBackend for MacosTunBackend {
                 format!("stop core during restore: {}", err.message),
             )
         })?;
+        tracing::info!("macos restore: elevated core stopped");
 
         // Journal writes are recovery metadata, not a prerequisite for OS
         // cleanup. Keep going when persistence is unavailable and report the
@@ -941,6 +942,7 @@ impl TunBackend for MacosTunBackend {
                 ),
             ));
         }
+        tracing::info!("macos restore: interface teardown verified");
         if let Some(name) = name {
             if self.owned_routes_remain(applied, name)? {
                 return Err(TunError::new(

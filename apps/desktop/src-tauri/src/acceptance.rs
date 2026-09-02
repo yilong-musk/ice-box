@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::orchestrate::{generate_config, orchestrate_start};
+    use crate::test_settings;
     use ice_config::{write_json_atomic, AppPaths, AppSettings, CaptureIntent};
     use ice_core::{CoreController, CoreStatus, ImmediateHealthProbe, MockReloader, MockSpawner};
     use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
@@ -84,7 +85,7 @@ mod tests {
     #[test]
     fn g9_1_empty_start_runs_direct_only_no_proxy() {
         let paths = temp_app("empty-start");
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -280,6 +281,46 @@ mod live {
         paths
     }
 
+    /// The helper-path tests run against the *installed* app data dir and
+    /// share its journal / pid file / config with the real app. Refuse to run
+    /// while an app instance is active, so the test can never clobber a live
+    /// session's state mid-transition. A live instance holds the data-dir
+    /// instance lock even when its core is stopped (in which case it owns no
+    /// ports), so the lock probe below catches it; the port probe additionally
+    /// catches any other holder of the configured ports.
+    fn assert_app_not_running(paths: &AppPaths) {
+        use fs2::FileExt;
+        let lock_path = paths.root().join("instance.lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path);
+        if let Ok(lock) = lock {
+            if lock.try_lock_exclusive().is_err() {
+                panic!(
+                    "the app appears to be running (another instance holds the data-dir lock); quit it before running the helper-path live tests"
+                );
+            }
+            drop(lock);
+        }
+        let settings = ice_config::load_settings(&paths.settings())
+            .unwrap_or_else(|_| ice_config::AppSettings::default());
+        let occupied = [
+            (settings.mixed_listen.as_str(), settings.mixed_port),
+            (settings.clash_api_listen.as_str(), settings.clash_api_port),
+        ]
+        .iter()
+        .filter(|(host, port)| ice_core::tcp_port_is_in_use(host, *port))
+        .map(|(host, port)| format!("{host}:{port}"))
+        .collect::<Vec<_>>();
+        assert!(
+            occupied.is_empty(),
+            "the app appears to be running (ports {} in use); quit it before running the helper-path live tests",
+            occupied.join(", ")
+        );
+    }
+
     fn repo_fixture(name: &str) -> String {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../configs/examples")
@@ -326,9 +367,19 @@ mod live {
         .expect("seed subscription");
     }
 
+    /// Stop the core and remove the data dir. Only safe for temp dirs created
+    /// by [`temp_app`]; the helper-path tests run against the *installed* data
+    /// dir and must never be cleaned this way.
     fn cleanup(paths: &AppPaths, core: &mut CoreController, proxy: &dyn SystemProxy) {
         let _ = orchestrate_stop(paths, core, proxy);
         let _ = fs::remove_dir_all(paths.root());
+    }
+
+    /// Stop the core without touching the data dir (helper-path tests that
+    /// run against the installed app data dir).
+    fn cleanup_keep_dir(paths: &AppPaths, core: &mut CoreController, proxy: &dyn SystemProxy) {
+        let _ = orchestrate_stop(paths, core, proxy);
+        let _ = paths.ensure_dirs();
     }
 
     fn curl_via_mixed(port: u16) -> bool {
@@ -928,6 +979,7 @@ mod live {
         );
         let paths = AppPaths::new(&data_dir);
         paths.ensure_dirs().expect("ensure dirs");
+        assert_app_not_running(&paths);
         seed_singbox_subscription(&paths);
         let settings = AppSettings {
             tun: TunSettings {
@@ -989,8 +1041,139 @@ mod live {
             "adapter {interface} must be removed after disable"
         );
 
-        cleanup(&paths, &mut core, proxy.as_ref());
+        cleanup_keep_dir(&paths, &mut core, proxy.as_ref());
         println!("G9.13 ok: TUN enable -> mixed curl -> disable via helper IPC ({interface})");
+    }
+
+    /// Reproduces the reported app cycle: enable TUN in one app session, let
+    /// the app "die" while TUN stays active (the elevated core survives under
+    /// the daemon), then simulate the relaunch — orphan reclaim + journal
+    /// recovery + diagnostic auto-start — and a second enable → disable
+    /// roundtrip. The regression this guards against: the relaunch leaves the
+    /// previous elevated core holding the ports, so the diagnostic auto-start
+    /// (or the post-disable restart) fails with `bind: address already in
+    /// use` on the clash API port.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "live: real sing-box + installed privileged helper (macOS TUN gate)"]
+    fn g9_15_live_restart_while_tun_active() {
+        use crate::capture::{CaptureController, TrafficCapture, TunStatus};
+        use ice_tun_sys::{JournalState, MacOsHost, ProcessMacOsHost, TunJournal};
+
+        let data_dir = std::env::var("ICE_BOX_TUN_LIVE_DATA_DIR").unwrap_or_else(|_| {
+            format!(
+                "{}/Library/Application Support/com.yilong-musk.icebox",
+                std::env::var("HOME").expect("HOME")
+            )
+        });
+        assert!(
+            !ice_tun_sys::dev_sudo_runner_enabled(),
+            "G9.15 exercises the helper path; run without ICE_BOX_TUN_DEV_SUDO"
+        );
+        let paths = AppPaths::new(&data_dir);
+        paths.ensure_dirs().expect("ensure dirs");
+        assert_app_not_running(&paths);
+        let bin = real_binary();
+        let proxy = create_system_proxy();
+        // Isolated ports: the test runs against the installed data dir, so it
+        // must never collide with a live app instance. The startup recovery
+        // driver regenerates config from `settings.json`, so the test swaps in
+        // its own settings (test ports) and restores the original afterwards.
+        let settings_path = paths.settings();
+        let saved_settings = fs::read(&settings_path).ok();
+        let restore_settings = || -> std::io::Result<()> {
+            match &saved_settings {
+                Some(bytes) => fs::write(&settings_path, bytes),
+                None => {
+                    let _ = fs::remove_file(&settings_path);
+                    Ok(())
+                }
+            }
+        };
+        // Restore the original settings even when the test panics mid-way.
+        // The guard is registered before the destructive write below, so a
+        // panic during serialize/write cannot leave the user's real settings
+        // permanently in the test's (ports + tun) state.
+        struct RestoreGuard<F: FnOnce() -> std::io::Result<()>>(Option<F>);
+        impl<F: FnOnce() -> std::io::Result<()>> Drop for RestoreGuard<F> {
+            fn drop(&mut self) {
+                if let Some(restore) = self.0.take() {
+                    let _ = restore();
+                }
+            }
+        }
+        let _guard = RestoreGuard(Some(restore_settings));
+
+        let mut settings = settings();
+        settings.tun = ice_config::load_settings(&settings_path)
+            .unwrap_or_else(|_| ice_config::AppSettings::default())
+            .tun;
+        settings.tun.enabled = true;
+        let settings_text = serde_json::to_string_pretty(&settings).expect("serialize");
+        fs::write(&settings_path, settings_text).expect("write test settings");
+
+        // Session A: diagnostic core + TUN enabled.
+        let mut core_a = CoreController::new();
+        let capture_a = CaptureController::new(paths.clone(), None);
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core_a,
+            bin.clone(),
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .expect("session A: start diagnostic core");
+        capture_a
+            .enable_tun(&settings, &mut core_a, bin.clone())
+            .expect("session A: enable tun");
+        assert_eq!(capture_a.tun_status(), TunStatus::Enabled);
+        // Simulate an abrupt app exit: drop the controllers without stopping
+        // anything; the elevated core keeps running under the daemon.
+        drop(capture_a);
+        drop(core_a);
+
+        // Session B: fresh controllers, the real app startup sequence.
+        let mut core_b = CoreController::new();
+        let capture_b = CaptureController::new(paths.clone(), None);
+        capture_b
+            .reclaim_orphan_elevated_core(&mut core_b)
+            .expect("session B: reclaim orphaned elevated core");
+        let warning = capture_b.recover(&mut core_b).expect("session B: recover");
+        assert!(warning.is_none(), "recovery warning: {warning:?}");
+        let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone());
+        core_b.start(&core_paths).expect("session B: auto-start");
+        assert_eq!(core_b.state().status, CoreStatus::Running);
+
+        // Second enable → disable roundtrip must stay healthy.
+        capture_b
+            .enable_tun(&settings, &mut core_b, bin.clone())
+            .expect("session B: re-enable tun");
+        assert_eq!(capture_b.tun_status(), TunStatus::Enabled);
+        let interface = capture_b
+            .status(&settings)
+            .tun_interface
+            .expect("tun_interface after re-enable");
+        capture_b
+            .disable_active_backend(&settings, &mut core_b, proxy.as_ref(), bin.clone(), true)
+            .expect("session B: disable tun");
+        assert_eq!(capture_b.active_backend(), TrafficCapture::Inactive);
+        assert_eq!(capture_b.tun_status(), TunStatus::Disabled);
+        let journal = TunJournal::load(&paths.tun_state())
+            .expect("journal")
+            .expect("journal file");
+        assert_eq!(journal.state, JournalState::Clean);
+        assert!(
+            ProcessMacOsHost
+                .interface_state(&interface)
+                .expect("host read")
+                .is_none(),
+            "adapter {interface} must be removed after the final disable"
+        );
+
+        cleanup_keep_dir(&paths, &mut core_b, proxy.as_ref());
+        let _ = restore_settings();
+        println!("G9.15 ok: TUN survived an app restart; reclaim + auto-start + re-enable + disable stayed healthy");
     }
 
     /// Windows TUN live gate (plan §6 live Windows acceptance; the

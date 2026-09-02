@@ -677,6 +677,7 @@ fn rollback_runtime_config_after_reload_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{free_loopback_port, test_settings};
     use ice_config::NormalizedOutbound as NO;
     use ice_config::ProxyMode;
     use ice_core::{
@@ -803,6 +804,16 @@ mod tests {
         )
     }
 
+    /// `base` with `mixed_port` moved to a different free port (port-change
+    /// scenarios; the new port must differ so rollback assertions hold).
+    fn settings_with_other_mixed_port(base: &AppSettings) -> AppSettings {
+        let mut changed = base.clone();
+        while changed.mixed_port == base.mixed_port {
+            changed.mixed_port = free_loopback_port();
+        }
+        changed
+    }
+
     fn mock_core_with_reloader(
         reloader: MockReloader,
     ) -> CoreController<MockSpawner, ImmediateHealthProbe> {
@@ -843,7 +854,7 @@ mod tests {
     #[test]
     fn g7_1_start_without_subscription_runs_direct_only() {
         let paths = temp_app("empty");
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -884,7 +895,7 @@ mod tests {
     fn g7_2_enable_system_proxy_after_start() {
         let paths = temp_app("start-ok");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -917,7 +928,7 @@ mod tests {
     fn g7_3_healthcheck_fail_no_applied() {
         let paths = temp_app("hc-fail");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_fail_health();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -944,7 +955,7 @@ mod tests {
     fn g7_4_enable_system_proxy_fail_keeps_core() {
         let paths = temp_app("apply-fail");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
             fail_apply: Cell::new(true),
@@ -978,7 +989,7 @@ mod tests {
     fn enable_system_proxy_with_noop_rejected_as_unavailable() {
         let paths = temp_app("noop-auto");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = NoopSystemProxy;
         let bin = marker_bin(&paths);
@@ -1004,7 +1015,7 @@ mod tests {
     #[test]
     fn default_start_never_applies_system_proxy() {
         let paths = temp_app("platform-default");
-        let settings = AppSettings::default();
+        let settings = test_settings();
         assert!(
             !settings.auto_set_system_proxy,
             "legacy auto_set flag defaults off; home button controls system proxy"
@@ -1041,7 +1052,7 @@ mod tests {
     fn g7_5_stop_restores_then_kills_idempotent() {
         let paths = temp_app("stop");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -1073,7 +1084,7 @@ mod tests {
     fn g7_5b_stop_restore_failure_still_stops_core() {
         let paths = temp_app("stop-restore-fail");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let start_proxy = TrackProxy::default();
         let stop_proxy = TrackProxy {
@@ -1129,7 +1140,7 @@ mod tests {
     fn g7_7_apply_running_same_inbound_reloads_no_proxy() {
         let paths = temp_app("apply-reload");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1167,7 +1178,7 @@ mod tests {
     fn g7_8_apply_running_port_change_restore_apply() {
         let paths = temp_app("apply-port");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut core = mock_core_ok();
         let proxy = TrackProxy {
@@ -1211,7 +1222,7 @@ mod tests {
     fn g7_10_disable_system_proxy_keeps_core_running() {
         let paths = temp_app("disable-proxy");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1246,7 +1257,7 @@ mod tests {
     fn g7_11_enable_system_proxy_while_running() {
         let paths = temp_app("enable-proxy");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1275,7 +1286,7 @@ mod tests {
     fn g7_11b_enable_restores_then_reapplies_when_disk_still_marked() {
         let paths = temp_app("enable-reapply");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1403,7 +1414,7 @@ mod tests {
     fn g7_12_proxy_apply_failed_after_reload_returns_core_reloaded_code() {
         let paths = temp_app("proxy-reload-fail");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_ok();
         let good = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1422,10 +1433,7 @@ mod tests {
             fail_apply: Cell::new(true),
             ..TrackProxy::default()
         };
-        let new_settings = AppSettings {
-            mixed_port: 17900,
-            ..settings.clone()
-        };
+        let new_settings = settings_with_other_mixed_port(&settings);
         let err = orchestrate_apply(
             &paths,
             &new_settings,
@@ -1438,7 +1446,7 @@ mod tests {
         )
         .expect_err("proxy apply after reload");
         assert_eq!(err.code, "proxy.apply_failed_core_reloaded");
-        assert!(err.message.contains("17900"));
+        assert!(err.message.contains(&new_settings.mixed_port.to_string()));
         assert_eq!(core.state().status, CoreStatus::Running);
         let _ = fs::remove_dir_all(paths.root());
     }
@@ -1447,7 +1455,7 @@ mod tests {
     fn g7_13_port_change_aborts_when_pre_restore_fails() {
         let paths = temp_app("restore-before-apply");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let start_proxy = TrackProxy::default();
         let mut core = mock_core_ok();
         let bin = marker_bin(&paths);
@@ -1467,10 +1475,7 @@ mod tests {
             fail_restore: Cell::new(true),
             ..TrackProxy::default()
         };
-        let new_settings = AppSettings {
-            mixed_port: 17900,
-            ..settings.clone()
-        };
+        let new_settings = settings_with_other_mixed_port(&settings);
         let err = orchestrate_apply(
             &paths,
             &new_settings,
@@ -1496,7 +1501,7 @@ mod tests {
     fn g7_14_reload_failure_restores_config_from_bak() {
         let paths = temp_app("config-bak-rollback");
         seed_one_node(&paths);
-        let settings = AppSettings::default();
+        let settings = test_settings();
         let mut core = mock_core_reload_restart_fail();
         let proxy = TrackProxy::default();
         let bin = marker_bin(&paths);
@@ -1512,12 +1517,9 @@ mod tests {
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
-        assert_eq!(before["inbounds"][0]["listen_port"], 17890);
+        assert_eq!(before["inbounds"][0]["listen_port"], settings.mixed_port);
 
-        let new_settings = AppSettings {
-            mixed_port: 17900,
-            ..settings.clone()
-        };
+        let new_settings = settings_with_other_mixed_port(&settings);
         let err = orchestrate_apply(
             &paths,
             &new_settings,
@@ -1534,7 +1536,7 @@ mod tests {
         let after: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(paths.config()).unwrap()).unwrap();
         assert_eq!(
-            after["inbounds"][0]["listen_port"], 17890,
+            after["inbounds"][0]["listen_port"], settings.mixed_port,
             "config.json should roll back to .bak after reload failure"
         );
         let _ = fs::remove_dir_all(paths.root());
@@ -1751,14 +1753,14 @@ mod tests {
 
     fn start_running(
         paths: &AppPaths,
+        settings: &AppSettings,
         reloader: &MockReloader,
     ) -> CoreController<MockSpawner, ImmediateHealthProbe> {
-        let settings = AppSettings::default();
         let mut core = mock_core_with_reloader(reloader.clone());
         let bin = marker_bin(paths);
         orchestrate_start(
             paths,
-            &settings,
+            settings,
             &mut core,
             bin,
             None,
@@ -1779,14 +1781,14 @@ mod tests {
         let paths = temp_app("mode-patch");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
-        let mut core = start_running(&paths, &reloader);
+        let previous = test_settings();
+        let mut core = start_running(&paths, &previous, &reloader);
         assert!(
             running_config_supports_clash_mode(&paths),
             "generated config must carry clash_mode rules"
         );
 
         let server = MockClashApi::start(204, "Rule");
-        let previous = AppSettings::default();
         let settings = AppSettings {
             clash_api_port: server.addr.port(),
             proxy_mode: ProxyMode::Global,
@@ -1834,10 +1836,10 @@ mod tests {
         let paths = temp_app("mode-patch-fail");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
-        let mut core = start_running(&paths, &reloader);
+        let previous = test_settings();
+        let mut core = start_running(&paths, &previous, &reloader);
 
         let server = MockClashApi::start(400, "Rule");
-        let previous = AppSettings::default();
         let settings = AppSettings {
             clash_api_port: server.addr.port(),
             proxy_mode: ProxyMode::Direct,
@@ -1872,11 +1874,11 @@ mod tests {
         let paths = temp_app("mode-patch-ignored");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
-        let mut core = start_running(&paths, &reloader);
+        let previous = test_settings();
+        let mut core = start_running(&paths, &previous, &reloader);
 
         // 2xx PATCH that the core silently ignores (mock never applies the mode).
         let server = MockClashApi::start_with_ignored_patch(204, "Rule");
-        let previous = AppSettings::default();
         let settings = AppSettings {
             clash_api_port: server.addr.port(),
             proxy_mode: ProxyMode::Global,
@@ -1911,10 +1913,10 @@ mod tests {
         let paths = temp_app("mode-probe-once");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
-        let mut core = start_running(&paths, &reloader);
+        let previous = test_settings();
+        let mut core = start_running(&paths, &previous, &reloader);
 
         let server = MockClashApi::start(400, "Rule");
-        let previous = AppSettings::default();
         let settings = AppSettings {
             clash_api_port: server.addr.port(),
             proxy_mode: ProxyMode::Global,
@@ -1973,7 +1975,8 @@ mod tests {
         let paths = temp_app("mode-old-config");
         seed_one_node(&paths);
         let reloader = MockReloader::default();
-        let mut core = start_running(&paths, &reloader);
+        let previous = test_settings();
+        let mut core = start_running(&paths, &previous, &reloader);
 
         // Simulate a pre-Slice 4c config: rules present but no clash_mode rule.
         ice_config::write_json_atomic(
@@ -1988,7 +1991,6 @@ mod tests {
         .unwrap();
         assert!(!running_config_supports_clash_mode(&paths));
 
-        let previous = AppSettings::default();
         let settings = AppSettings {
             proxy_mode: ProxyMode::Global,
             ..previous.clone()
@@ -2029,7 +2031,7 @@ mod tests {
         let mut core = mock_core_with_reloader(reloader.clone());
         assert_eq!(core.state().status, CoreStatus::Stopped);
 
-        let previous = AppSettings::default();
+        let previous = test_settings();
         let settings = AppSettings {
             proxy_mode: ProxyMode::Global,
             ..previous.clone()

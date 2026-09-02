@@ -123,7 +123,7 @@ pub fn tcp_bind_available(host: &str, port: u16) -> bool {
         return true;
     };
     for a in addrs {
-        match TcpListener::bind(a) {
+        match bind_like_core_listener(a) {
             Ok(listener) => {
                 drop(listener);
                 return true;
@@ -132,6 +132,30 @@ pub fn tcp_bind_available(host: &str, port: u16) -> bool {
         }
     }
     false
+}
+
+/// Bind probe that mirrors the core's own listener options. sing-box (Go)
+/// sets `SO_REUSEADDR` on its listeners; std's plain `TcpListener::bind`
+/// does not. On macOS a loopback port whose previous connection is still in
+/// `TIME_WAIT` (an old core's graceful close) is therefore bindable by the
+/// core but reported as blocked by a plain probe — which would make the
+/// port-release wait spin for the whole `TIME_WAIT` window even though the
+/// real bind would succeed. With the option set, the probe only reports the
+/// port blocked while a live holder exists (a live listener is not
+/// overridable by `SO_REUSEADDR` alone), matching the core's own bind.
+#[cfg(unix)]
+fn bind_like_core_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&addr.into())?;
+    Ok(socket.into())
+}
+
+#[cfg(not(unix))]
+fn bind_like_core_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    TcpListener::bind(addr)
 }
 
 /// Probe that never succeeds (for unit tests).
