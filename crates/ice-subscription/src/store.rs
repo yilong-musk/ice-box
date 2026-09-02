@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use ice_config::{
     write_bytes_atomic, write_json_atomic, AppPaths, ConfigError, NormalizedOutbound,
     NormalizedProfile,
@@ -235,20 +236,43 @@ pub fn write_subscription_error(
     Ok(())
 }
 
-/// Successful conditional update: clear a previously recorded `last_error` in both the
-/// index and the on-disk meta. No-op when there was nothing to clear.
+/// Backward-compatible alias for recording a successful conditional refresh.
 pub fn clear_subscription_error(
     paths: &SubscriptionPaths,
     id: Uuid,
 ) -> Result<SubscriptionMeta, SubscriptionError> {
+    mark_subscription_refreshed(paths, id)
+}
+
+/// Record a successful conditional refresh in an in-memory index and on-disk meta.
+/// The cached subscription content is unchanged, but the refresh timestamp and error state
+/// reflect the successful HTTP response.
+pub fn mark_refreshed_in_index(
+    paths: &SubscriptionPaths,
+    index: &mut SubscriptionIndex,
+    id: Uuid,
+) -> Option<SubscriptionMeta> {
+    let meta = index.items.iter().find(|m| m.id == id)?.clone();
+    let mut updated = meta;
+    updated.last_error = None;
+    updated.last_updated = Some(Utc::now());
+    if let Some(slot) = index.items.iter_mut().find(|m| m.id == id) {
+        *slot = updated.clone();
+    }
+    if paths.meta(id).exists() {
+        let _ = write_json_atomic(&paths.meta(id), &updated);
+    }
+    Some(updated)
+}
+
+/// Record a successful conditional refresh, updating its timestamp and clearing any error.
+pub fn mark_subscription_refreshed(
+    paths: &SubscriptionPaths,
+    id: Uuid,
+) -> Result<SubscriptionMeta, SubscriptionError> {
     let mut index = load_index(paths)?;
-    let meta = index
-        .items
-        .iter()
-        .find(|m| m.id == id)
-        .cloned()
+    let updated = mark_refreshed_in_index(paths, &mut index, id)
         .ok_or_else(|| SubscriptionError::ParseFailed(format!("subscription {id} not found")))?;
-    let updated = clear_error_in_index(paths, &mut index, id).unwrap_or(meta);
     save_index(paths, &index)?;
     Ok(updated)
 }
