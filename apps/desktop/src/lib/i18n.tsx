@@ -153,9 +153,7 @@ const zh = {
 
   // --- subscriptions page ---
   "subs.partialUpdateFailed": "部分订阅更新失败：{details}",
-  "subs.import": "导入",
-  "subs.importDesc": "粘贴订阅 URL，可选填写名称",
-  "subs.url": "订阅 URL",
+  "subs.url": "导入订阅",
   "subs.urlPlaceholder": "订阅 URL（https 优先）",
   "subs.name": "名称",
   "subs.namePlaceholder": "名称（可选）",
@@ -430,9 +428,7 @@ const en: Record<MessageKey, string> = {
 
   // --- subscriptions page ---
   "subs.partialUpdateFailed": "Some subscriptions failed to update: {details}",
-  "subs.import": "Import",
-  "subs.importDesc": "Paste a subscription URL; name is optional",
-  "subs.url": "Subscription URL",
+  "subs.url": "Import Subscription",
   "subs.urlPlaceholder": "Subscription URL (https preferred)",
   "subs.name": "Name",
   "subs.namePlaceholder": "Name (optional)",

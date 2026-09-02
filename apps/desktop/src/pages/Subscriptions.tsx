@@ -150,10 +150,6 @@ export function Subscriptions() {
       )}
 
       <Card size="sm" className="shrink-0">
-        <CardHeader>
-          <CardTitle>{t("subs.import")}</CardTitle>
-          <CardDescription>{t("subs.importDesc")}</CardDescription>
-        </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <form
             className="flex flex-col gap-3"
