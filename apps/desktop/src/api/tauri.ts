@@ -278,7 +278,6 @@ export const api = {
     invoke<SubscriptionMeta>("set_auto_update_subscription", {
       req: { id, auto_update: autoUpdate, auto_update_interval: interval },
     }),
-  applySubscriptions: () => invoke<void>("apply_subscriptions"),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) =>
     invoke<ListRulesResponse>("list_rules", { req }),

@@ -269,15 +269,6 @@ export function Subscriptions() {
             >
               {updating ? t("common.updating") : t("subs.updateAll")}
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || items.length === 0}
-              onClick={() => void run(() => api.applySubscriptions())}
-            >
-              {t("subs.apply")}
-            </Button>
           </CardAction>
         </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">

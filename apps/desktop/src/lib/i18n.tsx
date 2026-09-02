@@ -170,7 +170,6 @@ const zh = {
   "subs.emptyHint": "尚未导入订阅",
   "subs.count": "{n} 条",
   "subs.updateAll": "全部更新",
-  "subs.apply": "应用配置",
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。",
@@ -446,7 +445,6 @@ const en: Record<MessageKey, string> = {
   "subs.emptyHint": "No subscriptions yet",
   "subs.count": "{n} items",
   "subs.updateAll": "Update All",
-  "subs.apply": "Apply Config",
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL.",
