@@ -240,7 +240,7 @@ export function Rules({ onNavigate, active = true }: Props) {
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          <CardAction className="col-span-2 col-start-1 flex w-full flex-wrap items-center justify-end gap-2">
             <Input
               type="search"
               className="min-w-48 flex-1"
