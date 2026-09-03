@@ -113,9 +113,33 @@ export function Settings({ active = true }: { active?: boolean }) {
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<AppSettings | null>(null);
   const saveIdleWaitersRef = useRef<Array<() => void>>([]);
+  /// Reset timer for the "saved" flash; tracked so the pending reset is
+  /// cancelled on unmount (a stray fire into a torn-down test environment
+  /// crashes with `window is not defined`) and superseded on every new save.
+  const savedResetTimerRef = useRef<number | null>(null);
   /// Skip the first post-load snapshot so opening the page never persists
   /// the just-read settings; re-armed on every reload cycle.
   const skipInitialSaveRef = useRef(true);
+
+  /// Briefly show the "saved" confirmation; re-armed on each save.
+  function flashSaved() {
+    setSaved(true);
+    if (savedResetTimerRef.current !== null) {
+      window.clearTimeout(savedResetTimerRef.current);
+    }
+    savedResetTimerRef.current = window.setTimeout(() => {
+      savedResetTimerRef.current = null;
+      setSaved(false);
+    }, 2000);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (savedResetTimerRef.current !== null) {
+        window.clearTimeout(savedResetTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!active) {
@@ -198,8 +222,7 @@ export function Settings({ active = true }: { active?: boolean }) {
         return;
       }
       await afterReady?.();
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
+      flashSaved();
     } catch (e) {
       setError(formatInvokeError(e));
     } finally {
@@ -280,8 +303,7 @@ export function Settings({ active = true }: { active?: boolean }) {
       }
       setError(null);
       await api.saveSettings(candidate);
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
+      flashSaved();
     } catch (err) {
       setError(formatInvokeError(err));
     } finally {
