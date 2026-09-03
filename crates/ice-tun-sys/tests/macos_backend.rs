@@ -1136,7 +1136,18 @@ fn create_backend_capability_matches_the_platform_gate() {
             "the elevated coordinator can run networksetup for dns_hijack"
         );
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        assert!(
+            capability.supported,
+            "windows_tun_ready: gate green (pinned 1.13.19)"
+        );
+        assert!(
+            capability.dns_hijack,
+            "the elevated coordinator can run netsh for dns_hijack"
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         assert!(
             !capability.supported,
