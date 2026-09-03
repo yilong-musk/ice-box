@@ -242,7 +242,7 @@ impl WindowsHost for ProcessWindowsHost {
             .map(|(_, up)| *up)
             .unwrap_or(false);
         if !up {
-            tracing::debug!(
+            tracing::warn!(
                 interface = name,
                 raw = %up_out.stdout,
                 parsed = ?parse_netsh_interface_show(&up_out.stdout),
@@ -1147,7 +1147,7 @@ impl TunBackend for WindowsTunBackend {
         });
         let interface_up = state.as_ref().is_some_and(|state| state.up && id_matches);
         if !interface_up {
-            tracing::debug!(
+            tracing::warn!(
                 name,
                 expected_id = ?expected_id,
                 observed = ?state,
