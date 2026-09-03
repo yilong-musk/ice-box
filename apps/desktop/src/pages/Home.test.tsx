@@ -42,6 +42,7 @@ const tunStatus = {
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
   helper_installed: false,
+  helper_supported: true,
   helper_stale: false,
 } as const;
 
@@ -788,6 +789,56 @@ describe("Home", () => {
     // says TUN is not configured, so the toggle snaps back.
     await waitFor(() => {
       expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  it("enables TUN directly on the home page without a helper (helper_supported=false)", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+
+    // No helper platform: no dialog, no installHelper, the setting saves.
+    fireEvent.click(tunToggle);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(installHelper).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
     });
   });
 

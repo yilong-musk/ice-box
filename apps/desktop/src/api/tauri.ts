@@ -56,6 +56,10 @@ export type StatusResponse = {
   /** Privileged helper installed + authorized (read-only probe); drives the
    *「安装/卸载辅助组件」actions. */
   helper_installed: boolean;
+  /** Whether this platform has an installable privileged helper at all
+   * (macOS only in this release). When false, the helper actions and the
+   * install-before-enable guide are hidden. */
+  helper_supported: boolean;
   /** The helper's root-owned core differs from the app's bundled core (app
    * updated): only one core version may exist, so TUN stays blocked until
    * the helper is refreshed. */

@@ -371,16 +371,20 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         )}
       {permissionRequired && (
         <WarnAlert className="shrink-0">
-          {t("home.warn.permissionRequired")}
+          {status?.helper_supported
+            ? t("home.warn.permissionRequired")
+            : t("home.warn.permissionRequiredNoHelper")}
           <span className="mt-2 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={onInstallHelper}
-              disabled={busy || status?.helper_installed === true}
-            >
-              {t("home.installHelper")}
-            </Button>
+            {status?.helper_supported && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onInstallHelper}
+                disabled={busy || status?.helper_installed === true}
+              >
+                {t("home.installHelper")}
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"
@@ -485,10 +489,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 pressed={tunOverride ?? configuredTun}
                 onPressedChange={(pressed) => {
                   if (pressed) {
-                    if (status?.helper_installed !== true) {
-                      // No authorized helper: guide the user to install it
-                      // first; the TUN-on setting is persisted only after a
-                      // successful install (cancel leaves it off).
+                    if (
+                      status?.helper_supported === true &&
+                      status?.helper_installed !== true
+                    ) {
+                      // No authorized helper (macOS): guide the user to
+                      // install it first; the TUN-on setting is persisted only
+                      // after a successful install (cancel leaves it off). On
+                      // platforms without a helper the toggle proceeds
+                      // directly.
                       tunInstall.setOpen(true);
                       return;
                     }

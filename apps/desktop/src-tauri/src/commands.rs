@@ -128,6 +128,13 @@ pub struct StatusResponse {
     /// Privileged helper daemon installed + authorized (read-only probe).
     /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
     pub helper_installed: bool,
+    /// Whether this platform has an installable privileged helper at all.
+    /// macOS only in this release: Windows elevates the TUN core differently
+    /// (the app itself must run as administrator — the coordinator rejects
+    /// unelevated transitions with `tun.permission_required`). The frontend
+    /// hides the helper install/uninstall actions and the install-before-
+    /// enable guide when this is false.
+    pub helper_supported: bool,
     /// The installed helper's root-owned core differs from the app's bundled
     /// core (app updated): only one core version may exist, so TUN stays
     /// blocked until the helper is refreshed.
@@ -398,6 +405,7 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         tun_unavailable_reason: capture.tun_unavailable_reason,
         tun_ui_hidden: capture.tun_ui_hidden,
         helper_installed: cached_helper_installed(state),
+        helper_supported: cfg!(target_os = "macos"),
         helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
     })
 }

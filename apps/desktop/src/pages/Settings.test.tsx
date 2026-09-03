@@ -61,6 +61,7 @@ const defaultStatus = {
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
   helper_installed: false,
+  helper_supported: true,
   helper_stale: false,
 } as const;
 
@@ -487,6 +488,39 @@ describe("Settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+  });
+
+  it("enables TUN directly on platforms without a helper (helper_supported=false)", async () => {
+    // Windows has no installable helper: the toggle must not open the
+    // install dialog nor call installHelper; it saves the setting directly.
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(installHelper).not.toHaveBeenCalled();
+    await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tun: expect.objectContaining({ enabled: true }),

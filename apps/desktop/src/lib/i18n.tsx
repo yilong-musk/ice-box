@@ -108,6 +108,8 @@ const zh = {
   "home.warn.proxyOutOfSync": "系统代理未接管或已不同步",
   "home.warn.permissionRequired":
     "启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。",
+  "home.warn.permissionRequiredNoHelper":
+    "启用 TUN 需要管理员权限，未修改任何系统配置。请以管理员身份重新运行 ice-box 后再开启 TUN，或停用 TUN 改用系统代理。",
   "home.installHelper": "安装辅助组件",
   "home.fallbackToSystemProxy": "停用 TUN，改用系统代理",
   "home.warn.recoveryRequired":
@@ -234,6 +236,8 @@ const zh = {
     "辅助组件已安装并授权，可直接启用 TUN",
   "settings.helperNeeded":
     "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查",
+  "settings.tunElevationDesc":
+    "TUN 需要在管理员（提权）上下文中运行：请以管理员身份重新启动 ice-box 后再开启，Windows 将弹出系统授权提示（UAC）",
   "settings.updateHelper": "更新辅助组件",
   "settings.installHelper": "安装辅助组件",
   "settings.uninstallHelper": "卸载辅助组件",
@@ -381,6 +385,8 @@ const en: Record<MessageKey, string> = {
   "home.warn.proxyOutOfSync": "System proxy is not applied or out of sync",
   "home.warn.permissionRequired":
     "Enabling TUN requires system permission; no system configuration was changed. Clicking “Install Helper” opens the system authorization prompt; installation retries automatically, or disable TUN and use the system proxy.",
+  "home.warn.permissionRequiredNoHelper":
+    "Enabling TUN requires administrator privileges; no system configuration was changed. Restart ice-box as administrator before enabling TUN, or disable TUN and use the system proxy.",
   "home.installHelper": "Install Helper",
   "home.fallbackToSystemProxy": "Disable TUN, use system proxy",
   "home.warn.recoveryRequired":
@@ -509,6 +515,8 @@ const en: Record<MessageKey, string> = {
     "The helper is installed and authorized; TUN can be enabled directly",
   "settings.helperNeeded":
     "System permission required: install and authorize the helper first (a system authorization prompt will appear). While the service is running, the old backend is stopped, the new one enabled, and readiness checked in order",
+  "settings.tunElevationDesc":
+    "TUN must run in an elevated (administrator) context: restart ice-box as administrator before enabling it — Windows shows the system authorization prompt (UAC)",
   "settings.updateHelper": "Update Helper",
   "settings.installHelper": "Install Helper",
   "settings.uninstallHelper": "Uninstall Helper",

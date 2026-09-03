@@ -469,10 +469,15 @@ export function Settings({ active = true }: { active?: boolean }) {
                 }
                 aria-label={t("settings.tunEnable")}
                 onCheckedChange={(checked) => {
-                  if (checked === true && status?.helper_installed !== true) {
-                    // No authorized helper: guide the user to install it first;
-                    // the TUN-on setting is persisted only after a successful
-                    // install (cancel leaves the switch off).
+                  if (
+                    checked === true &&
+                    status?.helper_supported === true &&
+                    status?.helper_installed !== true
+                  ) {
+                    // No authorized helper (macOS): guide the user to install
+                    // it first; the TUN-on setting is persisted only after a
+                    // successful install (cancel leaves the switch off). On
+                    // platforms without a helper the toggle proceeds directly.
                     tunInstall.setOpen(true);
                     return;
                   }
@@ -511,13 +516,16 @@ export function Settings({ active = true }: { active?: boolean }) {
               </FieldDescription>
             ) : status?.helper_stale === true ? (
               <FieldDescription>{t("settings.helperStale")}</FieldDescription>
-            ) : (
+            ) : status?.helper_supported === true ? (
               <FieldDescription>
                 {status?.helper_installed
                   ? t("settings.helperReady")
                   : t("settings.helperNeeded")}
               </FieldDescription>
+            ) : (
+              <FieldDescription>{t("settings.tunElevationDesc")}</FieldDescription>
             )}
+            {status?.helper_supported === true && (
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -559,6 +567,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                 {t("settings.uninstallHelper")}
               </Button>
             </div>
+            )}
             </div>
           </CardContent>
         </Card>
