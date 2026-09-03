@@ -299,11 +299,18 @@ impl WindowsHost for ProcessWindowsHost {
             return Err(probe_error("netsh interface ipv6 show addresses", &v6_out));
         }
 
-        let names = self.list_interface_names()?;
-        let index = parse_netsh_interfaces_names(&names)
-            .into_iter()
-            .find(|(_, existing)| existing == name)
-            .map(|(index, _)| index);
+        // The adapter's interface index (identity lock for verify + the
+        // IPv6 route probe): re-run the listing probe and parse the index
+        // from the raw table — `list_interface_names` discards the indices.
+        let listing = run_command("netsh", &["interface", "ipv4", "show", "interfaces"])?;
+        let index = if listing.status == Some(0) {
+            parse_netsh_interfaces(&listing.stdout)
+                .into_iter()
+                .find(|(_, existing)| existing == name)
+                .map(|(index, _)| index)
+        } else {
+            None
+        };
         Ok(Some(WindowsInterfaceState {
             up,
             addresses,
@@ -1387,6 +1394,30 @@ Idx     Met         MTU          State          Name
                 (17, "Wintun".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn interface_index_requires_the_raw_table_not_the_name_list() {
+        // Regression: `interface_state` used to resolve the adapter index by
+        // re-parsing the output of `list_interface_names` (bare names) as if
+        // it were the raw listing table. No name line starts with a numeric
+        // index, so the parse always yielded nothing and `interface_up`
+        // failed its identity lock on every Windows host (up + addresses +
+        // routes + DNS all verified; only the index was missing).
+        let names_only = vec![
+            "Loopback Pseudo-Interface 1".to_string(),
+            "Wintun".to_string(),
+        ];
+        assert!(
+            parse_netsh_interfaces_names(&names_only).is_empty(),
+            "a bare name list must never parse as a listing table"
+        );
+        let table = "\
+Idx     Met         MTU          State          Name
+---------------------------------------------------------------------------
+ 17          25          9000  connected     Wintun
+";
+        assert_eq!(parse_netsh_interfaces(table), [(17, "Wintun".to_string())]);
     }
 
     #[test]
