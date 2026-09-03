@@ -1,6 +1,7 @@
 //! Clash YAML → full `NormalizedProfile`.
 
 mod dns;
+pub use dns::normalize_dns_on;
 mod groups;
 mod names;
 mod proxies;

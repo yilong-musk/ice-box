@@ -114,7 +114,17 @@ pub trait WindowsHost {
 pub struct ProcessWindowsHost;
 
 fn run_command(program: &str, args: &[&str]) -> Result<CommandOutput, TunError> {
-    let output = Command::new(program).args(args).output().map_err(|err| {
+    let mut command = Command::new(program);
+    command.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW: the netsh probes run from the GUI app; without it
+        // every probe flashes a console window (an infinite storm while the
+        // recovery watchdog retries).
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command.output().map_err(|err| {
         TunError::new(
             TunErrorCode::HealthcheckFailed,
             format!("run {program}: {err}"),
@@ -152,6 +162,27 @@ fn netsh_interface_missing(stderr: &str, stdout: &str) -> bool {
     ]
     .iter()
     .any(|marker| haystack.contains(marker))
+}
+
+/// Whether a failed probe should be read as "the interface is verified
+/// gone". The English error markers are locale-dependent — a zh-CN netsh
+/// reports `此名称的接口未与路由器一起注册` ("the interface with this name is
+/// not registered with the router"), which matches no marker and would fail
+/// closed forever. The authoritative, locale-proof cross-check is the
+/// `netsh interface ipv4 show interfaces` listing: the interface absent from
+/// the listing is verified gone regardless of the error text. `listing` is
+/// `None` when the listing probe itself failed → fail closed (not verified
+/// gone).
+fn probe_means_interface_gone(
+    stderr: &str,
+    stdout: &str,
+    listing: Option<Vec<String>>,
+    name: &str,
+) -> bool {
+    if netsh_interface_missing(stderr, stdout) {
+        return true;
+    }
+    listing.is_some_and(|names| !names.iter().any(|existing| existing == name))
 }
 
 /// A `HealthcheckFailed` error describing a failed `netsh` probe.
@@ -196,8 +227,11 @@ impl WindowsHost for ProcessWindowsHost {
             // other failure is a probe error and must fail closed:
             // misreading a transient netsh error as "interface gone" would
             // let restore / recovery journal a verified cleanup that never
-            // happened.
-            if netsh_interface_missing(&up_out.stderr, &up_out.stdout) {
+            // happened. The missing check is locale-proof: it cross-checks
+            // the interface listing (zh-CN error text matches no English
+            // marker).
+            let listing = self.list_interface_names().ok();
+            if probe_means_interface_gone(&up_out.stderr, &up_out.stdout, listing, name) {
                 return Ok(None);
             }
             return Err(probe_error("netsh interface show interface", &up_out));
@@ -220,7 +254,12 @@ impl WindowsHost for ProcessWindowsHost {
         )?;
         let mut addresses = if v4_out.status == Some(0) {
             parse_netsh_ipv4_addresses(&v4_out.stdout, name)
-        } else if netsh_interface_missing(&v4_out.stderr, &v4_out.stdout) {
+        } else if probe_means_interface_gone(
+            &v4_out.stderr,
+            &v4_out.stdout,
+            self.list_interface_names().ok(),
+            name,
+        ) {
             // The interface vanished between probes; report it as gone.
             return Ok(None);
         } else {
@@ -241,7 +280,12 @@ impl WindowsHost for ProcessWindowsHost {
         )?;
         if v6_out.status == Some(0) {
             addresses.extend(parse_netsh_ipv6_addresses(&v6_out.stdout, name));
-        } else if netsh_interface_missing(&v6_out.stderr, &v6_out.stdout) {
+        } else if probe_means_interface_gone(
+            &v6_out.stderr,
+            &v6_out.stdout,
+            self.list_interface_names().ok(),
+            name,
+        ) {
             return Ok(None);
         } else {
             return Err(probe_error("netsh interface ipv6 show addresses", &v6_out));
@@ -1458,6 +1502,37 @@ Persistent Routes:
         assert!(!netsh_interface_missing(
             "Access is denied.",
             "The RPC server is unavailable."
+        ));
+    }
+
+    #[test]
+    fn probe_means_interface_gone_is_locale_proof_via_the_listing() {
+        // zh-CN netsh: the localized error matches no English marker — the
+        // interface-listing cross-check is what proves the interface is gone.
+        let zh_cn = "此名称的接口未与路由器一起注册";
+        assert!(!netsh_interface_missing(zh_cn, ""));
+        assert!(probe_means_interface_gone(
+            zh_cn,
+            "",
+            Some(vec!["以太网".into(), "WLAN".into()]),
+            "Wintun"
+        ));
+        // The interface present in the listing → the probe failure is a real
+        // probe error, not a verified "gone" (fail closed).
+        assert!(!probe_means_interface_gone(
+            zh_cn,
+            "",
+            Some(vec!["Wintun".into()]),
+            "Wintun"
+        ));
+        // Listing probe failed → fail closed (not verified gone).
+        assert!(!probe_means_interface_gone(zh_cn, "", None, "Wintun"));
+        // English markers still fast-path without the listing.
+        assert!(probe_means_interface_gone(
+            "The interface does not exist.",
+            "",
+            None,
+            "Wintun"
         ));
     }
 

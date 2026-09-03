@@ -26,6 +26,8 @@
 
 use ice_config::AppError;
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
 use std::process::Command;
 
 /// Stable error code when the UAC prompt was cancelled (or the relaunch
@@ -61,15 +63,17 @@ pub fn relaunch_elevated(app: &tauri::AppHandle) -> Result<bool, AppError> {
             "try {{ Start-Process -FilePath '{exe_quoted}' -ArgumentList '{flag}' -Verb RunAs -ErrorAction Stop | Out-Null; exit 0 }} catch {{ exit 1223 }}",
             flag = crate::instance::RELAUNCH_FLAG
         );
-        let output = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .map_err(|err| {
-                AppError::with_code(
-                    ERR_ELEVATION_CANCELLED,
-                    format!("spawn UAC relaunch: {err}"),
-                )
-            })?;
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        // CREATE_NO_WINDOW: the GUI app must not flash a console window for
+        // the relaunch subprocess.
+        command.creation_flags(0x0800_0000);
+        let output = command.output().map_err(|err| {
+            AppError::with_code(
+                ERR_ELEVATION_CANCELLED,
+                format!("spawn UAC relaunch: {err}"),
+            )
+        })?;
         if !output.status.success() {
             return Err(AppError::with_code(
                 ERR_ELEVATION_CANCELLED,

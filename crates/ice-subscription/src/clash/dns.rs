@@ -9,6 +9,7 @@
 //! drops the fakeip server and the `local` server, and rewires every
 //! `local` reference to the DNS `final` tag.
 
+use ice_config::NormalizedProfile;
 use serde_json::{json, Value};
 
 pub fn parse_dns(doc: &Value) -> (Option<Value>, Vec<String>) {
@@ -208,6 +209,114 @@ pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<String>) 
     // `dns` inbound type was removed); it is dropped silently rather than kept.
 
     (Some(out), warnings)
+}
+
+/// Re-apply the platform DNS shape to an already-converted `profile.dns`
+/// (sing-box form). No-op off-Windows.
+///
+/// The desktop caches the parsed profile on disk (`profile.json`) and reuses
+/// it across app versions, so a profile parsed by an older binary keeps its
+/// old DNS shape (fakeip + `local` + UDP upstreams) even after the Windows
+/// emission landed. Loading therefore re-normalizes: drop fakeip / `local`
+/// servers and rules, UDP → DoT, pin `final` and every `domain_resolver` to
+/// the last IP-hosted TCP server (circular-dependency guard, V12), force
+/// `ipv4_only`. Mirrors the Windows branch of [`parse_dns_on`].
+pub fn normalize_dns_on(profile: &mut NormalizedProfile, windows: bool) {
+    if !windows {
+        return;
+    }
+    let Some(dns) = profile.dns.as_mut() else {
+        return;
+    };
+
+    // Server phase: drop fakeip / `local`, UDP → DoT, pin the anchor. The
+    // block ends the `servers` borrow so `dns` can be mutated below.
+    let (anchor, usable) = {
+        let Some(servers) = dns.get_mut("servers").and_then(|v| v.as_array_mut()) else {
+            return;
+        };
+
+        // fakeip answers are unreachable on Windows (V11) and `local`
+        // re-enters the TUN via the adapter DNS.
+        servers.retain(|s| {
+            !matches!(
+                s.get("type").and_then(|v| v.as_str()),
+                Some("fakeip" | "local")
+            )
+        });
+
+        // UDP upstreams are captured by the core's own TUN; rewrite to DoT.
+        for server in servers.iter_mut() {
+            if server.get("type").and_then(|v| v.as_str()) == Some("udp") {
+                if let Some(obj) = server.as_object_mut() {
+                    obj.insert("type".into(), json!("tls"));
+                    obj.insert("server_port".into(), json!(853));
+                }
+            }
+        }
+
+        // The resolution anchor must be an IP-hosted TCP server; a
+        // domain-hosted `final` is a startup FATAL (circular server
+        // dependency, V12).
+        let anchor = servers
+            .iter()
+            .rev()
+            .find(|server| {
+                server
+                    .get("server")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|host| host.parse::<std::net::IpAddr>().is_ok())
+            })
+            .map(|server| {
+                server
+                    .get("tag")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("dns-remote")
+                    .to_string()
+            })
+            .unwrap_or_else(|| {
+                servers.push(json!({
+                    "type": "tls",
+                    "tag": "dns-remote-anchor",
+                    "server": "223.5.5.5",
+                    "server_port": 853,
+                }));
+                "dns-remote-anchor".to_string()
+            });
+
+        // Every `domain_resolver` reference to the dropped `local` server
+        // points at the anchor instead.
+        for server in servers.iter_mut() {
+            if server.get("domain_resolver").and_then(|v| v.as_str()) == Some("local") {
+                if let Some(obj) = server.as_object_mut() {
+                    obj.insert("domain_resolver".into(), json!(anchor.clone()));
+                }
+            }
+        }
+
+        (anchor, !servers.is_empty())
+    };
+
+    dns["final"] = json!(anchor);
+
+    // DNS rules: drop the query_type → fakeip rule; fake-ip-filter suffixes
+    // that resolved via `local` resolve via the anchor.
+    if let Some(rules) = dns.get_mut("rules").and_then(|v| v.as_array_mut()) {
+        rules.retain(|r| r.get("server").and_then(|v| v.as_str()) != Some("fakeip"));
+        for rule in rules.iter_mut() {
+            if rule.get("server").and_then(|v| v.as_str()) == Some("local") {
+                if let Some(obj) = rule.as_object_mut() {
+                    obj.insert("server".into(), json!(anchor));
+                }
+            }
+        }
+    }
+
+    dns["strategy"] = json!("ipv4_only");
+
+    if !usable {
+        profile.dns = None;
+    }
 }
 
 /// Whether a mapped nameserver dials a domain host (needs `domain_resolver`).
@@ -432,5 +541,89 @@ mod tests {
             doh["domain_resolver"], "dns-remote-0",
             "domain host resolves via the IP-hosted anchor, never local"
         );
+    }
+
+    #[test]
+    fn normalize_dns_on_rewrites_a_stale_cached_profile() {
+        // A profile parsed by an older binary keeps the old shape (fakeip +
+        // local + UDP + domain-hosted final). Loading must re-apply the
+        // Windows shape; off-Windows it stays untouched.
+        let mut profile = NormalizedProfile::from_nodes_only(vec![]);
+        profile.dns = Some(json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.1/16" },
+                { "type": "udp", "tag": "dns-remote-0", "server": "119.29.29.29", "server_port": 53 },
+                { "type": "tls", "tag": "dns-remote-1", "server": "223.5.5.5", "server_port": 853 },
+                { "type": "https", "tag": "dns-remote-2", "server": "dns.pub", "domain_resolver": "local" },
+            ],
+            "rules": [
+                { "query_type": ["A", "AAAA"], "server": "fakeip" },
+                { "domain_suffix": ["lan"], "server": "local" },
+            ],
+            "final": "dns-remote-2",
+            "strategy": "prefer_ipv4",
+        }));
+
+        normalize_dns_on(&mut profile, false);
+        assert_eq!(
+            profile.dns.as_ref().unwrap()["servers"][0]["type"],
+            "local",
+            "off-Windows must be a no-op"
+        );
+
+        normalize_dns_on(&mut profile, true);
+        let dns = profile.dns.expect("dns block kept");
+        let servers = dns["servers"].as_array().unwrap();
+        let tags: Vec<&str> = servers.iter().filter_map(|s| s["tag"].as_str()).collect();
+        assert!(!tags.contains(&"fakeip"), "fakeip dropped");
+        assert!(!tags.contains(&"local"), "local dropped");
+        let udp = servers
+            .iter()
+            .find(|s| s["tag"] == "dns-remote-0")
+            .expect("converted upstream");
+        assert_eq!(udp["type"], "tls", "UDP upstream becomes DoT");
+        assert_eq!(udp["server_port"], 853);
+        assert_eq!(
+            dns["final"], "dns-remote-1",
+            "final = last IP-hosted server"
+        );
+        assert_eq!(dns["strategy"], "ipv4_only");
+        let doh = servers
+            .iter()
+            .find(|s| s["tag"] == "dns-remote-2")
+            .expect("DoH server");
+        assert_eq!(
+            doh["domain_resolver"], "dns-remote-1",
+            "domain host resolves via the IP-hosted anchor, never local"
+        );
+        let rules = dns["rules"].as_array().unwrap();
+        assert!(
+            !rules.iter().any(|r| r["server"] == "fakeip"),
+            "fakeip rule dropped"
+        );
+        assert!(
+            rules.iter().any(|r| r["server"] == "dns-remote-1"),
+            "fake-ip-filter suffixes resolve via the anchor"
+        );
+    }
+
+    #[test]
+    fn normalize_dns_on_falls_back_to_the_builtin_anchor() {
+        // Only unusable servers remain: the block is kept with the builtin
+        // DoT anchor (mirrors parse_dns_on) instead of being dropped.
+        let mut profile = NormalizedProfile::from_nodes_only(vec![]);
+        profile.dns = Some(json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.1/16" },
+            ],
+            "final": "local",
+        }));
+        normalize_dns_on(&mut profile, true);
+        let dns = profile.dns.expect("block kept with the builtin anchor");
+        assert_eq!(dns["final"], "dns-remote-anchor");
+        assert_eq!(dns["servers"][0]["server"], "223.5.5.5");
+        assert_eq!(dns["servers"][0]["type"], "tls");
     }
 }

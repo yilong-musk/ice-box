@@ -1105,8 +1105,8 @@ mod tests_g5 {
 }
 
 pub use clash::{
-    parse_clash_profile, parse_clash_with_stats, ClashParseResult, CLASH_SUPPORTED_TYPES,
-    MAX_CLASH_PROXIES,
+    normalize_dns_on, parse_clash_profile, parse_clash_with_stats, ClashParseResult,
+    CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES,
 };
 pub use decode::maybe_decode_base64;
 pub use error::SubscriptionError;

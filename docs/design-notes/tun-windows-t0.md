@@ -314,6 +314,17 @@ verified missing interface. Everything below was incorporated in the flip:
   on startup. A cancelled prompt reverts the setting and surfaces
   `tun.elevation_cancelled`. The acceptance suite still runs from an
   already-elevated context.
+- **Cached-profile staleness (2026-09-03, live-host incident)**: the
+  desktop reuses the parsed `profile.json` across app versions, so a
+  profile parsed by an older binary keeps the old DNS shape (fakeip +
+  `local` + UDP) — the V11-broken shape — until the subscription is
+  re-fetched. `load_active_profile*` now re-applies the Windows emission
+  (`normalize_dns_on`) at load time. Also fixed: `netsh` probes spawned
+  `CREATE_NO_WINDOW` (a GUI app flashing a console per probe) and the
+  missing-interface detection is now locale-proof — the zh-CN netsh error
+  (`此名称的接口未与路由器一起注册`) matched no English marker, so an
+  absent adapter failed recovery forever (`recovery_required` loop); the
+  interface-listing cross-check is authoritative.
 
 ## 5. Safe-testing protocol (this spike)
 
