@@ -288,6 +288,7 @@ mod live {
     /// instance lock even when its core is stopped (in which case it owns no
     /// ports), so the lock probe below catches it; the port probe additionally
     /// catches any other holder of the configured ports.
+    #[cfg(target_os = "macos")]
     fn assert_app_not_running(paths: &AppPaths) {
         use fs2::FileExt;
         let lock_path = paths.root().join("instance.lock");
@@ -377,6 +378,7 @@ mod live {
 
     /// Stop the core without touching the data dir (helper-path tests that
     /// run against the installed app data dir).
+    #[cfg(target_os = "macos")]
     fn cleanup_keep_dir(paths: &AppPaths, core: &mut CoreController, proxy: &dyn SystemProxy) {
         let _ = orchestrate_stop(paths, core, proxy);
         let _ = paths.ensure_dirs();
