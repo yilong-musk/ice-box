@@ -337,10 +337,24 @@ mod tests {
         let dns = default_uri_list_dns("proxy");
         let servers = dns["servers"].as_array().unwrap();
         let tags: Vec<&str> = servers.iter().filter_map(|s| s["tag"].as_str()).collect();
-        assert!(tags.contains(&"local"));
         assert!(tags.contains(&"cn-dns"));
         assert!(tags.contains(&"remote-dns"));
         assert_eq!(dns["final"], "remote-dns");
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                !tags.contains(&"local"),
+                "local re-enters the TUN on Windows; must not be emitted"
+            );
+            assert_eq!(dns["strategy"], "ipv4_only");
+            for server in servers {
+                assert_ne!(server["type"], "udp", "TCP transports only on Windows");
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(tags.contains(&"local"));
+        }
         let rules = dns["rules"].as_array().unwrap();
         assert_eq!(rules[0]["server"], "cn-dns");
         let remote = servers.iter().find(|s| s["tag"] == "remote-dns").unwrap();
@@ -384,7 +398,14 @@ mod tests {
         apply_builtin_default_rules(&mut p);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "proxy");
-        assert_eq!(p.dns.unwrap()["servers"][2]["detour"], "proxy");
+        let dns = p.dns.unwrap();
+        let remote = dns["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "remote-dns")
+            .expect("remote-dns server");
+        assert_eq!(remote["detour"], "proxy");
     }
 
     #[test]
@@ -401,6 +422,13 @@ mod tests {
         apply_builtin_default_rules(&mut p);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "g0");
-        assert_eq!(p.dns.unwrap()["servers"][2]["detour"], "g0");
+        let dns = p.dns.unwrap();
+        let remote = dns["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "remote-dns")
+            .expect("remote-dns server");
+        assert_eq!(remote["detour"], "g0");
     }
 }
