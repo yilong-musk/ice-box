@@ -616,9 +616,12 @@ mod tests {
 
         let _ = child.kill();
         child.wait().expect("wait reap");
+        // Windows keeps the exit code queryable while `child` still holds the
+        // process handle, so a reaped process reports its real exit code
+        // (any `Some`), unlike unix where the code is unavailable (-1).
         let mut gone = false;
         for _ in 0..200 {
-            if pid_proc.try_wait().expect("try_wait gone") == Some(-1) {
+            if pid_proc.try_wait().expect("try_wait gone").is_some() {
                 gone = true;
                 break;
             }
@@ -647,7 +650,7 @@ mod tests {
         pid_proc.force_kill().expect("force_kill");
         let mut gone = false;
         for _ in 0..200 {
-            if pid_proc.try_wait().expect("try_wait gone") == Some(-1) {
+            if pid_proc.try_wait().expect("try_wait gone").is_some() {
                 gone = true;
                 break;
             }
