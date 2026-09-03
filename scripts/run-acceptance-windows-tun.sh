@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Windows TUN live acceptance (plan §6 "Live Windows acceptance").
 #
-# The Windows T0 spike (`windows_tun_ready`) is still pending; this script is
-# the dev opt-in runner that turns the host spike into a repeatable gate. It
-# exercises the native-path enable -> traffic -> disable roundtrip on a real
-# Windows host:
+# `windows_tun_ready` is green (flipped 2026-09-03 after the V1–V11 host
+# spike); this script is the live gate that exercises the native-path
+# enable -> traffic -> disable roundtrip on a real Windows host:
 #
 #   1. Preflights elevation: the wintun driver is embedded in the bundled
 #      sing-box binary, and adapter creation needs an Administrator context.
 #      Run this script from an elevated shell (or `Start-Process -Verb RunAs`
 #      a PowerShell window first) — no UAC prompt is issued by the test itself.
-#   2. Runs G9.14 with ICE_BOX_TUN_WINDOWS_DEV=1 (the dev elevated runner).
+#   2. Runs G9.14 (the production backend, no opt-in env vars).
 #
 # The ordinary gates (scripts/gate-local.sh / gate.sh) stay non-privileged
 # and never mutate host routes or proxy settings; this script is the
@@ -41,7 +40,7 @@ fi
 
 echo ""
 echo "== G9.14: TUN enable -> mixed curl -> disable -> adapter removal =="
-ICE_BOX_TUN_WINDOWS_DEV=1 cargo test -p ice-box --lib g9_14 -- --ignored --nocapture
+cargo test -p ice-box --lib g9_14 -- --ignored --nocapture
 
 echo ""
-echo "Windows TUN acceptance: OK (dev elevated runner)"
+echo "Windows TUN acceptance: OK (production backend)"

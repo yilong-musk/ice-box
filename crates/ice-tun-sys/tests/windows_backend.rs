@@ -1,13 +1,13 @@
 //! Windows backend tests (plan §5 T2 shared exit gate; `windows_tun_ready`
-//! pending — host-free on every CI platform).
+//! green since 2026-09-03 — host-free on every CI platform).
 //!
 //! The backend logic runs against a fake `WindowsHost` (simulated `netsh` /
 //! `route print` state) and a fake `CoreCoordinator` that starts/stops the
 //! "elevated core" by mutating the same fake host. Proves: prepare validation
 //! and adapter-name collision fallback; journaled apply with rollback on
 //! journal-write failure; verify semantics (index identity, exact addresses,
-//! full-route lock, control path); fail-closed restore; kill residue
-//! recovery; and the dev-runner factory wiring.
+//! full-route lock, control path, DNS ownership); fail-closed restore;
+//! kill residue recovery; and the factory wiring.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,8 @@ use ice_tun_sys::error::{TunError, TunErrorCode};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::routes;
 use ice_tun_sys::windows::{
-    parse_netsh_interfaces, WindowsInterfaceState, WindowsTunBackend, DEFAULT_WINTUN_NAME,
+    parse_netsh_interfaces, DnsSource, InterfaceDns, WindowsInterfaceState, WindowsTunBackend,
+    DEFAULT_WINTUN_NAME,
 };
 #[cfg(target_os = "windows")]
 use ice_tun_sys::WindowsHost;
@@ -98,11 +99,13 @@ fn fake_owned_destinations() -> Vec<&'static str> {
 }
 
 /// Simulated OS state: interfaces + route table (destination → interface
-/// identity: an IP for v4 routes, the interface index as a string for v6).
+/// identity: an IP for v4 routes, the interface index as a string for v6) +
+/// per-interface IPv4 DNS.
 #[derive(Default)]
 struct HostState {
     interfaces: Vec<(String, WindowsInterfaceState)>,
     routes: Vec<(String, String)>,
+    dns: Vec<InterfaceDns>,
 }
 
 /// Fake `WindowsHost` sharing one `HostState` with the fake coordinator.
@@ -112,6 +115,47 @@ struct FakeHost {
 }
 
 impl FakeHost {
+    /// The TUN peers sing-box assigns as the adapter's DNS: the other host
+    /// of the /30 and /126 address ranges.
+    fn tun_peer_dns(addresses: &[String]) -> Vec<String> {
+        let mut peers = Vec::new();
+        for address in addresses {
+            let (addr, prefix) = address
+                .split_once('/')
+                .map_or((address.as_str(), 0), |(a, p)| {
+                    (a, p.parse::<u8>().unwrap_or(0))
+                });
+            if let Ok(v4) = addr.parse::<std::net::Ipv4Addr>() {
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - prefix)
+                };
+                let network = u32::from(v4) & mask;
+                let peer = if u32::from(v4) == network + 1 {
+                    network + 2
+                } else {
+                    network + 1
+                };
+                peers.push(std::net::Ipv4Addr::from(peer).to_string());
+            } else if let Ok(v6) = addr.parse::<std::net::Ipv6Addr>() {
+                let mask = if prefix == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - prefix)
+                };
+                let network = u128::from(v6) & mask;
+                let peer = if u128::from(v6) == network + 1 {
+                    network + 2
+                } else {
+                    network + 1
+                };
+                peers.push(std::net::Ipv6Addr::from(peer).to_string());
+            }
+        }
+        peers
+    }
+
     fn add_wintun(&self, name: &str, addresses: &[String]) {
         let mut state = self.state.lock().unwrap();
         state.interfaces.push((
@@ -139,12 +183,19 @@ impl FakeHost {
         state
             .routes
             .push(("127.0.0.0/8".to_string(), "127.0.0.1".to_string()));
+        // sing-box claims DNS on the adapter: the TUN peers.
+        state.dns.push(InterfaceDns {
+            name: name.to_string(),
+            source: DnsSource::Static,
+            servers: Self::tun_peer_dns(addresses),
+        });
     }
 
     fn remove_wintun(&self, name: &str) {
         let mut state = self.state.lock().unwrap();
         state.interfaces.retain(|(existing, _)| existing != name);
         state.routes.retain(|(_, identity)| identity == "127.0.0.1");
+        state.dns.retain(|entry| entry.name != name);
     }
 
     /// Hard-kill clean model: the adapter disappears and the kernel flushes
@@ -154,6 +205,7 @@ impl FakeHost {
         let mut state = self.state.lock().unwrap();
         state.interfaces.retain(|(existing, _)| existing != name);
         state.routes.retain(|(_, identity)| identity == "127.0.0.1");
+        state.dns.retain(|entry| entry.name != name);
     }
 
     /// Residue model: the adapter is gone but owned routes survive (what the
@@ -221,6 +273,10 @@ impl ice_tun_sys::WindowsHost for FakeHost {
 
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError> {
         Ok(self.resolve(destination))
+    }
+
+    fn dns_v4_servers(&self) -> Result<Vec<InterfaceDns>, TunError> {
+        Ok(self.state.lock().unwrap().dns.clone())
     }
 }
 
@@ -514,25 +570,102 @@ fn apply_journals_granular_steps_and_returns_observed_ownership() {
         "every observed route is recorded as owned"
     );
     assert!(
-        applied.dns_before.is_none() && applied.dns_after.is_none(),
-        "Windows DNS ownership is an open spike item; nothing claimed yet"
+        applied.dns_before.is_some() && applied.dns_after.is_some(),
+        "DNS ownership is claimed (spike lock): both snapshots are journaled"
+    );
+    let before = applied.dns_before.as_ref().unwrap();
+    let after = applied.dns_after.as_ref().unwrap();
+    assert!(
+        after
+            .platform_snapshot
+            .contains("\"servers\":[\"10.0.0.2\",\"fdfe:dcba:9876::2\"]"),
+        "dns_after must show the TUN peers on the adapter: {}",
+        after.platform_snapshot
+    );
+    assert_ne!(
+        before.platform_snapshot, after.platform_snapshot,
+        "the adapter's DNS claim must be observable"
     );
 
     let journal = TunJournal::load(&journal_path(&dir))
         .unwrap()
         .expect("journal");
-    assert_eq!(journal.last_completed_step, steps::ROUTES_ADDED);
+    assert_eq!(journal.last_completed_step, steps::DNS_APPLIED);
     assert_eq!(journal.interface_name.as_deref(), Some("Wintun"));
     assert_eq!(journal.interface_id.as_deref(), Some("17"));
     assert_eq!(journal.addresses, applied.addresses);
     assert_eq!(journal.routes, applied.routes);
+    assert!(
+        journal.dns_before.is_some() && journal.dns_after.is_some(),
+        "journal must persist the DNS snapshots"
+    );
 
     let health = bk.verify(&applied).expect("verify");
     assert!(
         health.all_ok(),
         "applied capture must be healthy: {health:?}"
     );
+    assert!(health.dns_consistent, "the adapter must still own DNS");
     assert!(!health.nothing_owned);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn verify_reports_dns_inconsistent_when_adapter_dns_is_lost() {
+    let dir = temp_dir("verify-dns-lost");
+    let host = FakeHost::default();
+    let applied = apply_ok(&dir, &host, FakeCoreCoordinator::new(host.clone()));
+
+    // A third party removes the adapter's DNS while the capture is active.
+    host.state.lock().unwrap().dns.clear();
+
+    let bk = backend(&dir, host.clone(), FakeCoreCoordinator::new(host.clone()));
+    let health = bk.verify(&applied).expect("verify");
+    assert!(
+        !health.dns_consistent,
+        "DNS ownership loss must be observable"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restore_preserves_external_dns_change() {
+    let dir = temp_dir("restore-dns-external");
+    let host = FakeHost::default();
+    let applied = apply_ok(&dir, &host, FakeCoreCoordinator::new(host.clone()));
+
+    // A third party changed the physical adapter's DNS during the session;
+    // restore must not fight it (no elevated context), only teardown TUN.
+    host.state.lock().unwrap().dns.push(InterfaceDns {
+        name: "Ethernet".into(),
+        source: DnsSource::Static,
+        servers: vec!["8.8.8.8".into()],
+    });
+
+    let mut bk = backend(&dir, host.clone(), FakeCoreCoordinator::new(host.clone()));
+    bk.restore(&applied).expect("restore");
+    let journal = TunJournal::load(&journal_path(&dir))
+        .unwrap()
+        .expect("journal");
+    assert!(
+        journal.dns_before.is_none() && journal.dns_after.is_none(),
+        "restore journals the DNS release"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restore_cleans_dns_when_host_matches_the_pre_start_snapshot() {
+    let dir = temp_dir("restore-dns-clean");
+    let host = FakeHost::default();
+    let applied = apply_ok(&dir, &host, FakeCoreCoordinator::new(host.clone()));
+
+    let mut bk = backend(&dir, host.clone(), FakeCoreCoordinator::new(host.clone()));
+    bk.restore(&applied).expect("restore");
+    let journal = TunJournal::load(&journal_path(&dir))
+        .unwrap()
+        .expect("journal");
+    assert_eq!(journal.last_completed_step, steps::INTERFACE_REMOVED);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -881,13 +1014,15 @@ fn create_backend_capability_matches_the_platform_gate() {
     }
     #[cfg(target_os = "windows")]
     {
-        // The dev opt-in is not set in this test; production stays
-        // fail-closed until `windows_tun_ready`.
+        // windows_tun_ready flipped 2026-09-03: production uses the real
+        // backend; without a bundled binary it stays fail-closed at
+        // tun.permission_required (the deferred coordinator), never
+        // Unsupported.
         assert!(
-            !capability.supported,
-            "windows_tun_ready pending: fail closed without the dev opt-in"
+            capability.supported,
+            "windows_tun_ready green: the real backend is active"
         );
-        assert!(capability.reason.is_some());
+        assert!(capability.reason.is_none());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -909,8 +1044,8 @@ fn windows_backend_capability_reports_planned_shape() {
     assert!(capability.supported);
     assert!(capability.ipv4 && capability.ipv6);
     assert!(
-        !capability.dns_hijack,
-        "Windows DNS ownership is an open spike item"
+        capability.dns_hijack,
+        "Windows DNS ownership is claimed (spike lock: adapter DNS = TUN peers)"
     );
 }
 
@@ -924,6 +1059,33 @@ Idx     Met         MTU          State          Name
 ";
     let parsed = parse_netsh_interfaces(output);
     assert_eq!(parsed[1], (17, "Wintun".to_string()));
+}
+
+#[test]
+fn netsh_dnsservers_parser_handles_dhcp_and_static_blocks() {
+    let output = "\
+Configuration for interface \"Ethernet\"
+    DNS servers configured through DHCP:   223.5.5.5
+                                            119.29.29.29
+    Register with which suffix:             Primary Only
+
+Configuration for interface \"Wintun\"
+    Static Configured DNS Servers:          10.0.0.2
+                                            10.0.0.3
+    Register with which suffix:             Primary Only
+
+Configuration for interface \"Loopback Pseudo-Interface 1\"
+    Register with which suffix:             None
+";
+    let parsed = ice_tun_sys::windows::parse_netsh_dnsservers(output);
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[0].name, "Ethernet");
+    assert_eq!(parsed[0].source, DnsSource::Dhcp);
+    assert_eq!(parsed[0].servers, vec!["223.5.5.5", "119.29.29.29"]);
+    assert_eq!(parsed[1].name, "Wintun");
+    assert_eq!(parsed[1].source, DnsSource::Static);
+    assert_eq!(parsed[1].servers, vec!["10.0.0.2", "10.0.0.3"]);
+    assert_eq!(parsed[2].servers, Vec::<String>::new());
 }
 
 #[cfg(target_os = "windows")]

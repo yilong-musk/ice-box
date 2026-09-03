@@ -442,18 +442,18 @@ fn pid_is_alive(_pid: u32) -> bool {
     false
 }
 
-/// Dev-only elevated runner for the Windows live gate (plan §5 T3 exit gate
-/// analogue; `windows_tun_ready` pending).
+/// Elevated runner for the Windows TUN path (`windows_tun_ready` green since
+/// 2026-09-03; the app process is not elevated, so the core runs elevated).
 ///
 /// The Windows TUN path requires an Administrator context: the wintun driver
 /// is embedded in the bundled sing-box binary, and `WintunCreateAdapter`
-/// needs admin. This runner (opt-in via `ICE_BOX_TUN_WINDOWS_DEV`) requires
-/// the *current* process to already be elevated (run the acceptance suite
-/// from an Administrator shell) and spawns sing-box directly; the child
-/// inherits the elevation. `stop` terminates the process tree with
-/// `taskkill /T /F` — the accepted Windows termination model (windows-plan
-/// §2); whether the wintun adapter survives the hard kill is a T0 spike item
-/// that the journal + recovery handle.
+/// needs admin. This runner requires the *current* process to already be
+/// elevated (the live acceptance suite runs from an Administrator shell) and
+/// spawns sing-box directly; the child inherits the elevation. `stop` is
+/// graceful-first (`taskkill /T`, which the core uses to remove its WFP
+/// filters and routes) with a forced `/F` fallback after `TERM_GRACE` — the
+/// strict-route WFP filters must not be stranded, they black-hole host TCP
+/// (design note §4).
 #[cfg(target_os = "windows")]
 pub struct WindowsElevatedCoreCoordinator {
     binary: PathBuf,
@@ -480,7 +480,7 @@ impl WindowsElevatedCoreCoordinator {
         } else {
             Err(TunError::new(
                 TunErrorCode::PermissionRequired,
-                "the Windows TUN dev runner needs an elevated context (run the acceptance suite from an Administrator shell); the production path will use the privileged helper (T5)",
+                "TUN transitions need an elevated context (the core runs elevated to create the wintun adapter); run the acceptance suite from an Administrator shell",
             ))
         }
     }
@@ -591,6 +591,52 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
         let Some(pid) = self.child.as_ref().map(|child| child.id()) else {
             return Ok(());
         };
+        // Graceful-first termination (design note tun-windows-t0 §4): the
+        // strict-route WFP filters sing-box installs are removed on its
+        // graceful shutdown path only. A hard `/F` kill strands them, which
+        // black-holes every non-loopback TCP connection on the host (V11
+        // observation: curl 000 / ping OK / stale filters). Send the close
+        // request first (taskkill without `/F` delivers WM_CLOSE, which the
+        // core treats as a signal and uses to clean up its filters and
+        // routes), then fall back to the forced kill after `TERM_GRACE`.
+        let close = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match close {
+            Ok(status) if status.success() => {}
+            Ok(_) => {
+                // A graceful close request can legitimately fail for a
+                // console-only process; the forced fallback below decides.
+            }
+            Err(_) => {}
+        }
+
+        // Bounded wait for the process tree to die on its own (graceful path).
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline {
+            match self.child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(_)) => {
+                        self.child = None;
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        self.child = None;
+                        return Ok(());
+                    }
+                },
+                None => return Ok(()),
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+
+        // Graceful close did not finish the tree; force-kill (WFP filters may
+        // strand — the journal + recovery handle residue, and the next apply
+        // recreates the filters).
         let kill = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(Stdio::null())
@@ -620,7 +666,7 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
                 ));
             }
         }
-        // Bounded wait for the process tree to die.
+        // Bounded wait for the process tree to die after the forced kill.
         let deadline = Instant::now() + TERM_GRACE;
         while Instant::now() < deadline {
             match self.child.as_mut() {

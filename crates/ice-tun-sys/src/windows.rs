@@ -1,46 +1,49 @@
-//! Windows TUN backend (plan §5 T2; T0 gate `windows_tun_ready` pending).
+//! Windows TUN backend (plan §5 T2; T0 gate `windows_tun_ready` flipped
+//! 2026-09-03, design note tun-windows-t0 §1.2).
 //!
-//! Ownership model (planned, to be locked by the Windows T0 spike): the
-//! elevated sing-box process — run by an injected [`CoreCoordinator`] — owns
-//! the WinTUN adapter, its addresses, and its routes, exactly like the macOS
-//! native path. The wintun driver is embedded in the pinned sing-box binary
-//! (sing-tun `internal/wintun` loads it from memory), so no side-by-side DLL
-//! has to ship; adapter creation requires an Administrator context, which is
-//! why the core runs elevated.
+//! Ownership model (locked by the Windows T0 spike): the elevated sing-box
+//! process — run by an injected [`CoreCoordinator`] — owns the WinTUN
+//! adapter, its addresses, its routes, and its DNS. The wintun driver is
+//! embedded in the pinned sing-box binary (sing-tun `internal/wintun` loads
+//! it from memory), so no side-by-side DLL has to ship; adapter creation
+//! requires an Administrator context, which is why the core runs elevated.
 //!
-//! Windows identity (planned): the interface **index** from
+//! Windows identity: the interface **index** from
 //! `netsh interface ipv4 show interfaces` is the adapter identity token
-//! recorded in the journal (the analogue of the macOS utun index). Routes are
-//! matched through the route table's own identity: IPv4 `route print -4`
-//! rows carry the owning interface's IP in the `Interface` column, IPv6
-//! `route print -6` rows carry the interface index in the `If` column.
+//! (the analogue of the macOS utun index). Routes are matched through the
+//! route table's own identity: IPv4 `route print -4` rows carry the owning
+//! interface's IP in the `Interface` column, IPv6 `route print -6` rows
+//! carry the interface index in the `If` column.
 //!
-//! Windows DNS (open spike item): whether sing-box 1.13.19 mutates the
-//! adapter's DNS servers on Windows (and whether `strict_route` installs the
-//! WFP port-53 filter in this pinned version) is exactly what the T0 spike
-//! must verify before the DNS journal fields are claimed. Until then the
-//! backend records no DNS ownership, mirroring the macOS lock.
+//! Windows DNS (locked by the spike, §1.1/§4): sing-box sets the TUN
+//! adapter's DNS servers to the TUN peers, so every system query enters the
+//! engine (proven by `nslookup` resolving through the TUN peer). The backend
+//! claims ownership the macOS way — journal `dns_before` / `dns_after`
+//! snapshots and compare-before-restore — but observes only: the adapter's
+//! DNS dies with the adapter, and the backend never mutates DNS itself (no
+//! elevated context; `set_dns` is unsupported). A third-party DNS change
+//! during the session is preserved, mirroring macOS.
 //!
-//! Expected routes: sing-box's Windows auto-route set is NOT the macOS
-//! sub-range trick (`autoRouteUseSubRanges` is Darwin-only), so the backend
-//! observes the routes that actually resolve to the adapter after convergence
-//! and journals those as owned. The spike reconciles this with a locked
-//! deterministic constant if the set is stable.
+//! Expected routes: the observed, stable Windows auto-route set
+//! (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 +
+//! fdfe:dcba:9876::/126) is probed after convergence and journaled as owned.
 //!
 //! The module is compiled on every platform so the backend logic stays
 //! host-free testable on all CI hosts; `create_backend` gates activation per
-//! platform (Windows stays fail-closed until `windows_tun_ready`).
+//! platform.
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
 use crate::coordinator::CoreCoordinator;
 use crate::error::{TunError, TunErrorCode};
-use crate::journal::{steps, CidrRecord, JournalState, RouteRecord, TunJournal};
+use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 
 /// Default WinTUN adapter name (sing-box default on Windows).
@@ -73,6 +76,21 @@ pub struct WindowsInterfaceState {
     pub index: Option<u32>,
 }
 
+/// How an interface's IPv4 DNS servers were configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DnsSource {
+    Dhcp,
+    Static,
+}
+
+/// Per-interface IPv4 DNS state (`netsh interface ipv4 show dnsservers`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceDns {
+    pub name: String,
+    pub source: DnsSource,
+    pub servers: Vec<String>,
+}
+
 /// Host reads the Windows backend needs. Implementations must be read-only:
 /// they never mutate the OS. `ProcessWindowsHost` shells out to `netsh` /
 /// `route print`; tests inject a fake.
@@ -85,6 +103,10 @@ pub trait WindowsHost {
     /// through. IPv4 returns the owning interface's IP; IPv6 returns the
     /// owning interface's index as a string. `None` when no route exists.
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError>;
+    /// Per-interface IPv4 DNS servers (`netsh interface ipv4 show
+    /// dnsservers`). The TUN adapter appears here with the TUN peers once
+    /// sing-box has claimed DNS.
+    fn dns_v4_servers(&self) -> Result<Vec<InterfaceDns>, TunError>;
 }
 
 /// Host reads via subprocess (`netsh`, `route print`). Read-only.
@@ -259,6 +281,99 @@ impl WindowsHost for ProcessWindowsHost {
             Ok(parse_route_print_v4(&out.stdout, &probe))
         }
     }
+
+    fn dns_v4_servers(&self) -> Result<Vec<InterfaceDns>, TunError> {
+        let out = run_command("netsh", &["interface", "ipv4", "show", "dnsservers"])?;
+        if out.status != Some(0) {
+            return Err(TunError::new(
+                TunErrorCode::HealthcheckFailed,
+                format!(
+                    "netsh interface ipv4 show dnsservers failed: {}",
+                    out.stderr.trim()
+                ),
+            ));
+        }
+        Ok(parse_netsh_dnsservers(&out.stdout))
+    }
+}
+
+/// `netsh interface ipv4 show dnsservers` → per-interface IPv4 DNS state.
+///
+/// Block shape (English locale, as the other parsers here assume):
+///
+/// ```text
+/// Configuration for interface "Ethernet"
+///     DNS servers configured through DHCP:   223.5.5.5
+///                                             119.29.29.29
+///     Register with which suffix:             Primary Only
+/// ```
+///
+/// Static configuration uses `Static Configured DNS Servers:`. Interfaces
+/// without DNS servers appear with an empty server list.
+pub fn parse_netsh_dnsservers(output: &str) -> Vec<InterfaceDns> {
+    let mut result = Vec::new();
+    let mut current: Option<InterfaceDns> = None;
+    let mut collecting = false;
+
+    for line in output.lines() {
+        if let Some(name) = line
+            .strip_prefix("Configuration for interface \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
+            if let Some(prev) = current.take() {
+                result.push(prev);
+            }
+            current = Some(InterfaceDns {
+                name: name.to_string(),
+                source: DnsSource::Dhcp,
+                servers: Vec::new(),
+            });
+            collecting = false;
+            continue;
+        }
+        if let Some(entry) = current.as_mut() {
+            let trimmed = line.trim();
+            // The first server shares the header line
+            // (`... through DHCP:   223.5.5.5`); continuation lines carry the
+            // rest.
+            let same_line_ips: Vec<String> = trimmed
+                .split_once(':')
+                .map(|(_, rest)| {
+                    rest.split_whitespace()
+                        .filter(|word| word.parse::<std::net::Ipv4Addr>().is_ok())
+                        .map(|word| word.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if trimmed.contains("configured through DHCP") {
+                entry.source = DnsSource::Dhcp;
+                collecting = true;
+                entry.servers.extend(same_line_ips);
+                continue;
+            }
+            if trimmed.contains("Static Configured DNS Servers") {
+                entry.source = DnsSource::Static;
+                collecting = true;
+                entry.servers.extend(same_line_ips);
+                continue;
+            }
+            if trimmed.starts_with("Register with which suffix") {
+                collecting = false;
+                continue;
+            }
+            if collecting {
+                if let Some(addr) = trimmed.split_whitespace().next() {
+                    if addr.parse::<std::net::Ipv4Addr>().is_ok() {
+                        entry.servers.push(addr.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(entry) = current.take() {
+        result.push(entry);
+    }
+    result
 }
 
 /// `netsh interface ipv4 show interfaces` → `(index, name)` pairs.
@@ -578,6 +693,18 @@ impl WindowsTunBackend {
         }
     }
 
+    /// Serialized per-interface IPv4 DNS snapshot (JSON, human-readable and
+    /// parseable for the compare-before-restore in [`restore`](TunBackend::restore)).
+    fn dns_snapshot_string(&self) -> Result<String, TunError> {
+        let entries = self.host.dns_v4_servers()?;
+        serde_json::to_string(&entries).map_err(|err| {
+            TunError::new(
+                TunErrorCode::HealthcheckFailed,
+                format!("serialize DNS snapshot: {err}"),
+            )
+        })
+    }
+
     /// Resolve the adapter name: the requested name when free, else a
     /// deterministic collision probe (`Wintun 2`, `Wintun 3`, ...), else fail
     /// closed. Mirrors the macOS utun fallback probe.
@@ -765,10 +892,10 @@ impl TunBackend for WindowsTunBackend {
             reason: None,
             ipv4: true,
             ipv6: true,
-            // Open spike item: whether sing-box 1.13.19 mutates adapter DNS
-            // on Windows is locked by the T0 spike; until then the backend
-            // claims no DNS ownership.
-            dns_hijack: false,
+            // Locked by the host spike (design note §1.1): sing-box sets the
+            // TUN adapter's DNS to the TUN peers, so the backend journals
+            // dns_before / dns_after and verifies the adapter still owns DNS.
+            dns_hijack: true,
         }
     }
 
@@ -820,6 +947,15 @@ impl TunBackend for WindowsTunBackend {
             ));
         };
         let expected_addresses = config.addresses.clone();
+
+        // DNS ownership (locked by the spike): snapshot the per-interface
+        // IPv4 DNS before the core starts; after convergence the TUN adapter
+        // carries the TUN peers. The journal stores both snapshots so restore
+        // can compare-before-restore and verify can prove the adapter still
+        // owns DNS. Read-only; the backend never mutates DNS itself.
+        let dns_before = Some(DnsSnapshot {
+            platform_snapshot: self.dns_snapshot_string()?,
+        });
 
         // Mutation boundary: the elevated core starts and sing-box creates
         // the adapter, assigns addresses, and installs routes in one go.
@@ -887,6 +1023,21 @@ impl TunBackend for WindowsTunBackend {
             return Err(self.rollback_after_apply_failure(err));
         }
 
+        // The adapter now owns DNS (sing-box set the peers); snapshot it and
+        // journal both snapshots. A probe failure rolls the apply back.
+        let dns_after = match self.dns_snapshot_string() {
+            Ok(snapshot) => Some(DnsSnapshot {
+                platform_snapshot: snapshot,
+            }),
+            Err(err) => return Err(self.rollback_after_apply_failure(err)),
+        };
+        if let Err(err) = self.journal_record(steps::DNS_APPLIED, |journal| {
+            journal.dns_before = dns_before.clone();
+            journal.dns_after = dns_after.clone();
+        }) {
+            return Err(self.rollback_after_apply_failure(err));
+        }
+
         let owned_routes = observed.routes.clone();
         Ok(AppliedTun {
             interface_name: Some(name.to_string()),
@@ -895,10 +1046,8 @@ impl TunBackend for WindowsTunBackend {
             routes: owned_routes.clone(),
             expected_addresses,
             expected_routes: owned_routes.iter().map(|r| r.destination.clone()).collect(),
-            // Open spike item: Windows DNS ownership not yet locked; journal
-            // DNS fields stay absent until the spike verifies the behavior.
-            dns_before: None,
-            dns_after: None,
+            dns_before,
+            dns_after,
             core_pid: Some(core_pid),
         })
     }
@@ -958,12 +1107,24 @@ impl TunBackend for WindowsTunBackend {
         let interface_gone = state.is_none();
         let owned_routes_remain = self.owned_routes_remain(applied)?;
         let nothing_owned = interface_gone && !owned_routes_remain;
+        // DNS lock: nothing changed since apply AND the TUN adapter still
+        // carries DNS servers (the peers). A probe failure fails closed.
+        let dns_consistent = match &applied.dns_after {
+            Some(after) => {
+                let current = self.host.dns_v4_servers()?;
+                let tun_has_dns = current
+                    .iter()
+                    .any(|entry| entry.name == name && !entry.servers.is_empty());
+                serde_json::to_string(&current).unwrap_or_default() == after.platform_snapshot
+                    && tun_has_dns
+            }
+            None => true,
+        };
         Ok(TunHealth {
             interface_up,
             addresses_present,
             routes_owned,
-            // Open spike item: Windows DNS ownership not yet locked.
-            dns_consistent: true,
+            dns_consistent,
             control_path_reachable,
             nothing_owned,
         })
@@ -1015,6 +1176,24 @@ impl TunBackend for WindowsTunBackend {
                 format!("owned routes still resolve to {name:?} after core stop"),
             ));
         }
+
+        // DNS compare-before-restore: the TUN adapter (and its DNS) died with
+        // the core above, so the remaining interfaces must match the
+        // pre-start snapshot. A third-party DNS change during the session is
+        // preserved — the backend never mutates DNS itself (no elevated
+        // context on the app side; `set_dns` is unsupported).
+        if let Some(before) = &applied.dns_before {
+            let current = self.dns_snapshot_string()?;
+            if current != before.platform_snapshot {
+                tracing::warn!(
+                    "system DNS no longer matches the pre-start snapshot; external change preserved (Windows backend never mutates DNS)"
+                );
+            }
+        }
+        self.journal_record(steps::DNS_RESTORED, |journal| {
+            journal.dns_before = None;
+            journal.dns_after = None;
+        })?;
 
         self.journal_record(steps::ROUTES_REMOVED, |journal| {
             journal.routes.clear();

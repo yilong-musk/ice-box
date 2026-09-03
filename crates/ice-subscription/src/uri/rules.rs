@@ -232,26 +232,56 @@ pub fn default_uri_list_rules() -> Vec<Value> {
 /// a domestic server, everything else via a remote DoH through the given
 /// `detour` (anti-pollution). The `local` server backs
 /// `route.default_domain_resolver`.
+///
+/// Windows (design note tun-windows-t0 §1.2): no `local` server (it re-enters
+/// the TUN via the adapter DNS), UDP upstreams rewritten to DoT (the core's
+/// UDP outbound is captured by its own TUN), and `ipv4_only` (the IPv6 path
+/// is broken, #4178). `route.default_domain_resolver` then resolves via the
+/// `remote-dns` final tag (wired by ice-config).
 pub fn default_uri_list_dns(detour: &str) -> Value {
-    json!({
-        "servers": [
-            { "type": "local", "tag": "local" },
-            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
-            {
-                "type": "https",
-                "tag": "remote-dns",
-                "server": "1.1.1.1",
-                "server_port": 443,
-                "path": "/dns-query",
-                "detour": detour,
-            },
-        ],
-        "rules": [
-            { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
-        ],
-        "final": "remote-dns",
-        "strategy": "prefer_ipv4",
-    })
+    #[cfg(target_os = "windows")]
+    {
+        json!({
+            "servers": [
+                { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
+                {
+                    "type": "https",
+                    "tag": "remote-dns",
+                    "server": "1.1.1.1",
+                    "server_port": 443,
+                    "path": "/dns-query",
+                    "detour": detour,
+                },
+            ],
+            "rules": [
+                { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
+            ],
+            "final": "remote-dns",
+            "strategy": "ipv4_only",
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+                {
+                    "type": "https",
+                    "tag": "remote-dns",
+                    "server": "1.1.1.1",
+                    "server_port": 443,
+                    "path": "/dns-query",
+                    "detour": detour,
+                },
+            ],
+            "rules": [
+                { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
+            ],
+            "final": "remote-dns",
+            "strategy": "prefer_ipv4",
+        })
+    }
 }
 
 /// Attach the built-in split-routing defaults to a profile that carries no

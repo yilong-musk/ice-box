@@ -129,14 +129,12 @@ pub struct CaptureStatus {
     pub capture_transition_id: Option<String>,
     pub tun_available: bool,
     pub tun_unavailable_reason: Option<String>,
-    /// True when the platform must not surface TUN controls at all. Currently
-    /// Windows: the T0 gate is blocked upstream (`docs/design-notes/
-    /// tun-windows-t0.md`), so the production backend reports
-    /// `supported=false` and the controls stay hidden. Derived from the
-    /// backend capability rather than a bare `cfg!` so the controls
-    /// reappear automatically when `windows_tun_ready` flips green, and so
-    /// the `ICE_BOX_TUN_WINDOWS_DEV` opt-in (capability supported) exposes
-    /// the controls to exercise the backend from the UI.
+    /// True when the platform must not surface TUN controls at all.
+    /// Currently only Windows: the backend reports `supported=false` when
+    /// no bundled sing-box binary is present (deferred coordinator), so the
+    /// controls stay hidden. Derived from the backend capability rather than
+    /// a bare `cfg!` so the controls reappear automatically when the
+    /// capability turns supported.
     pub tun_ui_hidden: bool,
 }
 
@@ -431,13 +429,12 @@ impl CaptureController {
             capture_transition_id: transition_id,
             tun_available: capability.supported,
             tun_unavailable_reason: capability.reason,
-            // Windows hides TUN controls while the gate is pending. Deriving
-            // from the backend capability (not a bare `cfg!(windows)`)
-            // removes the coupling to `windows_tun_ready`: when
-            // `create_backend` turns green the controls reappear here without
-            // a second edit, and the `ICE_BOX_TUN_WINDOWS_DEV` dev runner
-            // (capability supported) keeps the controls visible so the dev
-            // backend stays exercisable and disableable from the UI.
+            // Windows hides TUN controls while the backend is unsupported
+            // (e.g. no bundled binary → deferred coordinator →
+            // tun.permission_required). Deriving from the backend capability
+            // (not a bare `cfg!(windows)`) keeps the two in lockstep: the
+            // controls reappear automatically when the capability turns
+            // supported.
             tun_ui_hidden: cfg!(target_os = "windows") && !capability.supported,
         }
     }

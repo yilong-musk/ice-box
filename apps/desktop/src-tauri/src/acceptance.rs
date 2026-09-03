@@ -1190,12 +1190,10 @@ mod live {
     }
 
     /// Windows TUN live gate (plan §6 live Windows acceptance; the
-    /// `windows_tun_ready` gate is still pending — this is the dev opt-in
-    /// runner). Mirrors G9.12 with the Windows native path: requires
-    /// `ICE_BOX_TUN_WINDOWS_DEV=1` and an already-elevated context (run the
-    /// acceptance suite from an Administrator shell). The compile-time
-    /// `tun_gate` is forced green only for this live test; production stays
-    /// fail-closed until the Windows T0 spike passes. Run via
+    /// `windows_tun_ready` live gate (flipped 2026-09-03): the production
+    /// Windows backend generates the real Tun config on this host. Requires
+    /// an already-elevated context (run the acceptance suite from an
+    /// Administrator shell). Run via
     /// `scripts/run-acceptance-windows-tun.sh`.
     #[cfg(target_os = "windows")]
     #[test]
@@ -1204,18 +1202,6 @@ mod live {
         use crate::capture::{CaptureController, TrafficCapture, TunStatus};
         use ice_config::TunSettings;
         use ice_tun_sys::{JournalState, ProcessWindowsHost, TunJournal, WindowsHost};
-
-        let dev_windows = std::env::var("ICE_BOX_TUN_WINDOWS_DEV")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false);
-        assert!(
-            dev_windows,
-            "run via scripts/run-acceptance-windows-tun.sh (sets ICE_BOX_TUN_WINDOWS_DEV and preflights elevation)"
-        );
-        // Live test only: let the real Windows backend generate a Tun config
-        // on this host. Production gating is untouched (tun_gate stays
-        // fail-closed on Windows).
-        ice_config::force_tun_gate_ready();
 
         let paths = temp_app("tun-live");
         seed_singbox_subscription(&paths);
