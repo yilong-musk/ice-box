@@ -627,7 +627,7 @@ mod tests {
         assert!(gone, "a reaped process must report exited");
 
         // A pid that never existed reads as gone, not as an error.
-        let phantom = PidProcess::new(4_000_000_000);
+        let mut phantom = PidProcess::new(4_000_000_000);
         assert_eq!(
             phantom.try_wait().expect("phantom pid"),
             Some(-1),
