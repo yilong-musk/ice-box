@@ -32,10 +32,12 @@ use tauri::Manager;
 
 /// Stable error code when the UAC prompt was cancelled (or the relaunch
 /// could not be started). Nothing was modified.
+#[cfg(target_os = "windows")]
 pub const ERR_ELEVATION_CANCELLED: &str = "tun.elevation_cancelled";
 
 /// How long the old instance stays alive after a successful spawn so the
 /// command response reaches the frontend before the process exits.
+#[cfg(target_os = "windows")]
 const EXIT_DELAY_MS: u64 = 1200;
 
 /// Relaunch the current executable elevated via UAC. `Ok(true)` means the
