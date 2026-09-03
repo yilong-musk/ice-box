@@ -197,8 +197,9 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
 /// adopted so the normal lifecycle, health probes, reload and watchdog
 /// reaping keep working). Identity is the pid only.
 ///
-/// `try_wait` probes liveness via `kill(pid, 0)`; the exit code is
-/// unavailable, so a detected exit reports `-1`.
+/// `try_wait` probes liveness: `kill(pid, 0)` on unix, `OpenProcess` +
+/// `GetExitCodeProcess` on Windows; the exit code is unavailable on unix, so
+/// a detected exit reports `-1`.
 #[derive(Debug, Clone)]
 pub struct PidProcess {
     pid: u32,
@@ -238,11 +239,31 @@ impl ManagedProcess for PidProcess {
                 Err(err)
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            // Graceful-first (mirrors the coordinator's taskkill `/T` without
+            // `/F`: WM_CLOSE, which sing-box treats as a shutdown signal and
+            // uses to remove its WFP filters and routes). A pid that is
+            // already gone is a no-op.
+            let status = Command::new("taskkill")
+                .args(["/PID", &self.pid.to_string(), "/T"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match status {
+                Ok(_) => Ok(()),
+                Err(err) => Err(io::Error::new(
+                    err.kind(),
+                    format!("taskkill /PID {} /T: {err}", self.pid),
+                )),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "PidProcess termination requires a unix host",
+                "PidProcess termination requires a unix or windows host",
             ))
         }
     }
@@ -269,11 +290,44 @@ impl ManagedProcess for PidProcess {
                 Err(err)
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{
+                CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+            };
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
+            let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, self.pid) };
+            if handle.is_null() {
+                return match io::Error::last_os_error().raw_os_error() {
+                    // The pid is already gone.
+                    Some(ERROR_INVALID_PARAMETER) => Ok(()),
+                    // The pid exists but belongs to another token; the
+                    // privileged coordinator owns termination.
+                    Some(ERROR_ACCESS_DENIED) => Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!(
+                            "pid {0} is owned by another token; terminate it via the privileged coordinator",
+                            self.pid
+                        ),
+                    )),
+                    _ => Err(io::Error::last_os_error()),
+                };
+            }
+            let ok = unsafe { TerminateProcess(handle, 1) };
+            unsafe { CloseHandle(handle) };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "PidProcess termination requires a unix host",
+                "PidProcess termination requires a unix or windows host",
             ))
         }
     }
@@ -300,11 +354,46 @@ impl ManagedProcess for PidProcess {
                 }
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{
+                CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+            };
+            use windows_sys::Win32::System::Threading::{
+                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+            };
+            // `OpenProcess` with query access is a pure liveness probe:
+            // - a valid handle + STILL_ACTIVE exit code → alive.
+            // - a valid handle + any other exit code → the process is gone.
+            // - ERROR_INVALID_PARAMETER → the pid never existed / was reaped.
+            // - ERROR_ACCESS_DENIED → the pid exists but belongs to another
+            //   token; treat as alive (unix EPERM parity for the elevated
+            //   core adopted from the privileged coordinator).
+            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid) };
+            if handle.is_null() {
+                return match io::Error::last_os_error().raw_os_error() {
+                    Some(ERROR_INVALID_PARAMETER) => Ok(Some(-1)),
+                    Some(ERROR_ACCESS_DENIED) => Ok(None),
+                    _ => Err(io::Error::last_os_error()),
+                };
+            }
+            let mut exit_code: u32 = 0;
+            let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+            unsafe { CloseHandle(handle) };
+            if queried == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if exit_code == STILL_ACTIVE {
+                Ok(None)
+            } else {
+                Ok(Some(exit_code as i32))
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "PidProcess liveness requires a unix host",
+                "PidProcess liveness requires a unix or windows host",
             ))
         }
     }
@@ -443,9 +532,9 @@ pub fn open_append(path: &Path) -> io::Result<File> {
 
 #[cfg(test)]
 mod tests {
-    // Every test in this module exercises unix-only behavior (PidProcess
-    // liveness/signals), so the parent-import is needed on unix only.
-    #[cfg(unix)]
+    // Every test in this module exercises PidProcess behavior (liveness /
+    // signals), so the parent-import is needed on both unix and windows.
+    #[cfg(any(unix, windows))]
     use super::*;
 
     #[cfg(unix)]
@@ -509,5 +598,62 @@ mod tests {
             err.to_string().contains("request_terminate"),
             "stop must surface the signal failure: {err}"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pid_process_windows_liveness_reports_alive_and_gone() {
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .spawn()
+            .expect("spawn powershell");
+        let mut pid_proc = PidProcess::new(child.id());
+        assert_eq!(
+            pid_proc.try_wait().expect("try_wait live"),
+            None,
+            "a running process reports alive"
+        );
+
+        let _ = child.kill();
+        child.wait().expect("wait reap");
+        let mut gone = false;
+        for _ in 0..200 {
+            if pid_proc.try_wait().expect("try_wait gone") == Some(-1) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(gone, "a reaped process must report exited");
+
+        // A pid that never existed reads as gone, not as an error.
+        let phantom = PidProcess::new(4_000_000_000);
+        assert_eq!(
+            phantom.try_wait().expect("phantom pid"),
+            Some(-1),
+            "a non-existent pid must report exited"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pid_process_windows_terminate_stops_the_process() {
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .spawn()
+            .expect("spawn powershell");
+        let mut pid_proc = PidProcess::new(child.id());
+
+        pid_proc.force_kill().expect("force_kill");
+        let mut gone = false;
+        for _ in 0..200 {
+            if pid_proc.try_wait().expect("try_wait gone") == Some(-1) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(gone, "force_kill must terminate the process");
+        let _ = child.wait();
     }
 }

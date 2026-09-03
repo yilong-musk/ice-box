@@ -330,7 +330,20 @@ verified missing interface. Everything below was incorporated in the flip:
   `子网前缀` ...), which made `observe_owned_state` never converge and
   the apply roll back after its retry window — all parsers now parse
   structurally (quoted-name boundaries, numeric columns, IPv4/IPv6 tokens,
-  `=====` blocks) instead of by English marker.
+  `=====` blocks) instead of by English marker. The same retest also
+  exposed that adoption of the elevated core failed on Windows:
+  `PidProcess` (ice-core, the adopted-pid handle used by
+  `adopt_external`) implemented `try_wait` / terminate / kill for unix
+  only and returned `Unsupported` on Windows, so the adopt health probe
+  aborted immediately (`try_wait: PidProcess liveness requires a unix
+  host`); the release + verification then converged clean and the app
+  restarted the normal core ~10s after the elevated one started — while
+  the TUN itself was healthy and routing traffic the whole time.
+  `PidProcess` now implements the Windows contracts
+  (OpenProcess + GetExitCodeProcess liveness with STILL_ACTIVE,
+  taskkill `/T` graceful-first terminate, TerminateProcess hard kill;
+  ERROR_INVALID_PARAMETER = gone, ERROR_ACCESS_DENIED = alive-not-
+  signalable parity with the unix EPERM path).
 
 ## 5. Safe-testing protocol (this spike)
 
