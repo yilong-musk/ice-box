@@ -27,8 +27,6 @@
 use ice_config::AppError;
 #[cfg(target_os = "windows")]
 use std::process::Command;
-#[cfg(target_os = "windows")]
-use tauri::Manager;
 
 /// Stable error code when the UAC prompt was cancelled (or the relaunch
 /// could not be started). Nothing was modified.
