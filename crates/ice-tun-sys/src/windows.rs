@@ -241,6 +241,14 @@ impl WindowsHost for ProcessWindowsHost {
             .find(|(existing, _)| existing == name)
             .map(|(_, up)| *up)
             .unwrap_or(false);
+        if !up {
+            tracing::debug!(
+                interface = name,
+                raw = %up_out.stdout,
+                parsed = ?parse_netsh_interface_show(&up_out.stdout),
+                "interface state: up probe reported the adapter down or not found"
+            );
+        }
 
         let v4_out = run_command(
             "netsh",
@@ -1138,6 +1146,14 @@ impl TunBackend for WindowsTunBackend {
                 == Some(id)
         });
         let interface_up = state.as_ref().is_some_and(|state| state.up && id_matches);
+        if !interface_up {
+            tracing::debug!(
+                name,
+                expected_id = ?expected_id,
+                observed = ?state,
+                "tun verify: interface up/id lock failed"
+            );
+        }
         // Exact-address lock: every address the config *required* must still
         // be on the interface (compared by bare address; netsh IPv6 entries
         // carry no prefix).
