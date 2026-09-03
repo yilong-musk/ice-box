@@ -302,10 +302,10 @@ impl ManagedProcess for PidProcess {
             if handle.is_null() {
                 return match io::Error::last_os_error().raw_os_error() {
                     // The pid is already gone.
-                    Some(err) if err == ERROR_INVALID_PARAMETER.0 as i32 => Ok(()),
+                    Some(err) if err == ERROR_INVALID_PARAMETER as i32 => Ok(()),
                     // The pid exists but belongs to another token; the
                     // privileged coordinator owns termination.
-                    Some(err) if err == ERROR_ACCESS_DENIED.0 as i32 => Err(io::Error::new(
+                    Some(err) if err == ERROR_ACCESS_DENIED as i32 => Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         format!(
                             "pid {0} is owned by another token; terminate it via the privileged coordinator",
@@ -372,8 +372,8 @@ impl ManagedProcess for PidProcess {
             let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid) };
             if handle.is_null() {
                 return match io::Error::last_os_error().raw_os_error() {
-                    Some(err) if err == ERROR_INVALID_PARAMETER.0 as i32 => Ok(Some(-1)),
-                    Some(err) if err == ERROR_ACCESS_DENIED.0 as i32 => Ok(None),
+                    Some(err) if err == ERROR_INVALID_PARAMETER as i32 => Ok(Some(-1)),
+                    Some(err) if err == ERROR_ACCESS_DENIED as i32 => Ok(None),
                     _ => Err(io::Error::last_os_error()),
                 };
             }
