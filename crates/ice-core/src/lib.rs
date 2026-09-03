@@ -792,6 +792,7 @@ pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
 /// itself may contain spaces; only the boundaries around the match must be
 /// argument delimiters, so an occurrence embedded in a longer argument is
 /// not treated as an own argument.
+#[cfg(unix)]
 fn config_is_own_argument(command: &str, config: &str) -> bool {
     let mut search_from = 0;
     while let Some(rel) = command[search_from..].find(config) {
