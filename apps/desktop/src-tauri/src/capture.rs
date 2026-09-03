@@ -836,6 +836,21 @@ impl CaptureController {
         // adopt/start above). On disagreement, release fail-closed.
         let health = backend.verify(&applied).map_err(map_tun)?;
         if !health.all_ok() {
+            tracing::error!(
+                ?health,
+                interface = %applied.interface_name.as_deref().unwrap_or("none"),
+                expected_addresses = ?applied.expected_addresses,
+                expected_routes = ?applied.expected_routes,
+                dns_before_snapshot_len = applied
+                    .dns_before
+                    .as_ref()
+                    .map(|snapshot| snapshot.platform_snapshot.len()),
+                dns_after_snapshot_len = applied
+                    .dns_after
+                    .as_ref()
+                    .map(|snapshot| snapshot.platform_snapshot.len()),
+                "tun readiness checks disagreed"
+            );
             let _ = core.stop(&self.paths.pid());
             let _ = backend.restore(&applied);
             self.journal_error("tun readiness checks disagreed")?;

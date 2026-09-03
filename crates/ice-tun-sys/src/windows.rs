@@ -1178,8 +1178,16 @@ impl TunBackend for WindowsTunBackend {
                 let tun_has_dns = current
                     .iter()
                     .any(|entry| entry.name == name && !entry.servers.is_empty());
-                serde_json::to_string(&current).unwrap_or_default() == after.platform_snapshot
-                    && tun_has_dns
+                let snapshot = serde_json::to_string(&current).unwrap_or_default();
+                if snapshot != after.platform_snapshot {
+                    tracing::debug!(
+                        interface = name,
+                        current = %snapshot,
+                        after = %after.platform_snapshot,
+                        "tun verify: dns snapshot drifted since apply"
+                    );
+                }
+                snapshot == after.platform_snapshot && tun_has_dns
             }
             None => true,
         };
