@@ -1300,6 +1300,9 @@ mod build_tests {
 
         assert_eq!(cfg["inbounds"][0]["listen"], "0.0.0.0");
         assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
+        #[cfg(target_os = "windows")]
+        assert_eq!(cfg["route"]["default_domain_resolver"], "dns-remote-0");
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(cfg["route"]["default_domain_resolver"], "local");
     }
 
@@ -1500,8 +1503,17 @@ mod build_tests {
             None,
         ))
         .unwrap();
-        assert_eq!(cfg["dns"]["final"], "local");
-        assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(cfg["dns"]["final"], "dns-remote-0");
+            assert_eq!(cfg["dns"]["servers"][0]["type"], "tls");
+            assert_eq!(cfg["dns"]["strategy"], "ipv4_only");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(cfg["dns"]["final"], "local");
+            assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
+        }
     }
 
     #[test]
@@ -1876,11 +1888,19 @@ mod build_tests {
             assert!(gate.ready, "macos_tun_ready is green after the T0 spike");
             assert_eq!(gate.reason, None);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                gate.ready,
+                "windows_tun_ready is green after the V1-V13 host spike"
+            );
+            assert_eq!(gate.reason, None);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             assert!(
                 !gate.ready,
-                "TUN must stay fail-closed off-macOS until its gate is green"
+                "TUN must stay fail-closed off-macOS/off-Windows until its gate is green"
             );
             assert!(gate.reason.is_some());
         }
