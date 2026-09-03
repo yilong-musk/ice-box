@@ -302,10 +302,10 @@ impl ManagedProcess for PidProcess {
             if handle.is_null() {
                 return match io::Error::last_os_error().raw_os_error() {
                     // The pid is already gone.
-                    Some(ERROR_INVALID_PARAMETER) => Ok(()),
+                    Some(err) if err == ERROR_INVALID_PARAMETER.0 as i32 => Ok(()),
                     // The pid exists but belongs to another token; the
                     // privileged coordinator owns termination.
-                    Some(ERROR_ACCESS_DENIED) => Err(io::Error::new(
+                    Some(err) if err == ERROR_ACCESS_DENIED.0 as i32 => Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         format!(
                             "pid {0} is owned by another token; terminate it via the privileged coordinator",
@@ -357,10 +357,10 @@ impl ManagedProcess for PidProcess {
         #[cfg(windows)]
         {
             use windows_sys::Win32::Foundation::{
-                CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+                CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
             };
             use windows_sys::Win32::System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
             };
             // `OpenProcess` with query access is a pure liveness probe:
             // - a valid handle + STILL_ACTIVE exit code → alive.
@@ -372,8 +372,8 @@ impl ManagedProcess for PidProcess {
             let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid) };
             if handle.is_null() {
                 return match io::Error::last_os_error().raw_os_error() {
-                    Some(ERROR_INVALID_PARAMETER) => Ok(Some(-1)),
-                    Some(ERROR_ACCESS_DENIED) => Ok(None),
+                    Some(err) if err == ERROR_INVALID_PARAMETER.0 as i32 => Ok(Some(-1)),
+                    Some(err) if err == ERROR_ACCESS_DENIED.0 as i32 => Ok(None),
                     _ => Err(io::Error::last_os_error()),
                 };
             }
@@ -383,7 +383,7 @@ impl ManagedProcess for PidProcess {
             if queried == 0 {
                 return Err(io::Error::last_os_error());
             }
-            if exit_code == STILL_ACTIVE {
+            if exit_code == STILL_ACTIVE as u32 {
                 Ok(None)
             } else {
                 Ok(Some(exit_code as i32))
