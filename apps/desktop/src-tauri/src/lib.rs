@@ -367,20 +367,36 @@ pub(crate) fn test_instance_lock(paths: &AppPaths) -> std::fs::File {
     file
 }
 
-/// A free loopback port for tests that bind real listeners. The picked
-/// ephemeral port is re-probed and skipped when already occupied (e.g. by a
-/// dev instance of the app holding the fixed defaults 17890 / 19150), so the
-/// suite never depends on host state.
+/// A free loopback port for tests that bind real listeners.
+///
+/// Ports come from a suite-wide counter in a fixed range below the OS
+/// ephemeral range (Linux default 32768+, macOS / Windows 49152+), so a
+/// concurrent test's `bind("127.0.0.1:0")` (e.g. `MockClashApi`) can never
+/// land on one. The counter is serialized by a global mutex, so parallel
+/// tests never pick the same port. Each candidate is probed and skipped when
+/// an external process already holds it (e.g. a dev instance of the app on
+/// the fixed defaults 17890 / 19150), so the suite never depends on host
+/// state. The gap between picking a port and actually binding it remains
+/// racy against *external* holders only — nothing inside the suite can take
+/// a counter port.
 #[cfg(test)]
 pub(crate) fn free_loopback_port() -> u16 {
-    loop {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
-        let port = listener.local_addr().expect("local_addr").port();
-        drop(listener);
+    const RANGE_START: u32 = 20_000;
+    const RANGE_END: u32 = 23_000;
+    static NEXT: std::sync::Mutex<u32> = std::sync::Mutex::new(RANGE_START);
+    let mut next = NEXT.lock().expect("port counter lock");
+    for _ in RANGE_START..RANGE_END {
+        let port = *next as u16;
+        *next = if *next + 1 >= RANGE_END {
+            RANGE_START
+        } else {
+            *next + 1
+        };
         if !ice_core::tcp_port_is_in_use("127.0.0.1", port) {
             return port;
         }
     }
+    panic!("no free loopback port in {RANGE_START}..{RANGE_END}");
 }
 
 /// Default settings with random free loopback ports for the mixed and clash

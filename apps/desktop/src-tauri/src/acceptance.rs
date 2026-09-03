@@ -1081,6 +1081,11 @@ mod live {
         // must never collide with a live app instance. The startup recovery
         // driver regenerates config from `settings.json`, so the test swaps in
         // its own settings (test ports) and restores the original afterwards.
+        // The swap is the only destructive step: it is written right before
+        // the session-B reclaim / recovery (the only step that reads it) and
+        // restored immediately after, so a SIGKILLed test process can only
+        // ever leave the installed `settings.json` in the test state during
+        // that short window.
         let settings_path = paths.settings();
         let saved_settings = fs::read(&settings_path).ok();
         let restore_settings = || -> std::io::Result<()> {
@@ -1093,9 +1098,10 @@ mod live {
             }
         };
         // Restore the original settings even when the test panics mid-way.
-        // The guard is registered before the destructive write below, so a
-        // panic during serialize/write cannot leave the user's real settings
-        // permanently in the test's (ports + tun) state.
+        // The guard is registered before the destructive write, so a panic
+        // during serialize/write/reclaim/recover cannot leave the user's real
+        // settings permanently in the test's (ports + tun) state. Restoring
+        // is idempotent: it is also called explicitly right after recovery.
         struct RestoreGuard<F: FnOnce() -> std::io::Result<()>>(Option<F>);
         impl<F: FnOnce() -> std::io::Result<()>> Drop for RestoreGuard<F> {
             fn drop(&mut self) {
@@ -1112,7 +1118,6 @@ mod live {
             .tun;
         settings.tun.enabled = true;
         let settings_text = serde_json::to_string_pretty(&settings).expect("serialize");
-        fs::write(&settings_path, settings_text).expect("write test settings");
 
         // Session A: diagnostic core + TUN enabled.
         let mut core_a = CoreController::new();
@@ -1135,13 +1140,19 @@ mod live {
         drop(capture_a);
         drop(core_a);
 
-        // Session B: fresh controllers, the real app startup sequence.
+        // Session B: fresh controllers, the real app startup sequence. The
+        // recovery driver regenerates the Diagnostic config from the on-disk
+        // `settings.json`, so the test settings are written only now (the
+        // previous session ran purely from in-memory settings) and the
+        // original settings are restored immediately after recovery.
         let mut core_b = CoreController::new();
         let capture_b = CaptureController::new(paths.clone(), None);
+        fs::write(&settings_path, settings_text).expect("write test settings");
         capture_b
             .reclaim_orphan_elevated_core(&mut core_b)
             .expect("session B: reclaim orphaned elevated core");
         let warning = capture_b.recover(&mut core_b).expect("session B: recover");
+        restore_settings().expect("restore original settings");
         assert!(warning.is_none(), "recovery warning: {warning:?}");
         let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone());
         core_b.start(&core_paths).expect("session B: auto-start");

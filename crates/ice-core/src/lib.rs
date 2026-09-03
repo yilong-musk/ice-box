@@ -721,12 +721,16 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
 /// and terminates the ones this user may signal (user-owned). Root-owned
 /// elevated cores are not signalable here and keep the pid-file / privileged
 /// daemon reclaim path. Returns how many processes were reclaimed.
+///
+/// `-ww` disables BSD `ps`'s terminal-width truncation of the `command`
+/// field: the config path sits at the tail of the command line, and a line
+/// cut before it would silently skip a leftover core.
 pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
     #[cfg(unix)]
     {
         let config = config_path.to_string_lossy();
         let Ok(output) = std::process::Command::new("ps")
-            .args(["-axo", "pid=,command="])
+            .args(["-axww", "-o", "pid=,command="])
             .output()
         else {
             return 0;
@@ -1100,12 +1104,28 @@ mod tests {
         bin
     }
 
+    /// Free loopback port for tests. Suite-wide counter in a fixed range
+    /// below the OS ephemeral range (Linux default 32768+, macOS / Windows
+    /// 49152+), so a concurrent test's `:0` bind can never land on it; the
+    /// counter is serialized, so parallel tests never pick the same port.
+    /// Candidates held by an external process are probed and skipped.
     fn free_loopback_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind ephemeral")
-            .local_addr()
-            .expect("local_addr")
-            .port()
+        const RANGE_START: u32 = 20_000;
+        const RANGE_END: u32 = 23_000;
+        static NEXT: std::sync::Mutex<u32> = std::sync::Mutex::new(RANGE_START);
+        let mut next = NEXT.lock().expect("port counter lock");
+        for _ in RANGE_START..RANGE_END {
+            let port = *next as u16;
+            *next = if *next + 1 >= RANGE_END {
+                RANGE_START
+            } else {
+                *next + 1
+            };
+            if !tcp_port_is_in_use("127.0.0.1", port) {
+                return port;
+            }
+        }
+        panic!("no free loopback port in {RANGE_START}..{RANGE_END}");
     }
 
     fn paths_in(dir: &Path, binary: PathBuf) -> CorePaths {

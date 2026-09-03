@@ -57,17 +57,20 @@ fn map_tun(err: TunError) -> AppError {
 /// The traffic monitor holds a long-lived `/traffic` stream to the clash API
 /// port. When the previous core dies (TUN disable / enable hand-off), the
 /// server's graceful close leaves that socket in `CLOSE_WAIT` until the
-/// monitor's read loop (1.5 s bound) consumes the EOF. On macOS a half-closed
-/// loopback connection still occupies its peer port: a fresh listener bind on
-/// the same port fails with `EADDRINUSE` in that window, which would surface
-/// as the next core's `bind: address already in use` even though no real
-/// holder exists. The probe mirrors the core's own bind options (SO_REUSEADDR,
-/// like sing-box's Go listeners), so it reports the port blocked only while a
-/// live holder exists, not during the `TIME_WAIT` window. Returns `true` once
-/// the ports are bindable again (or when the wait budget expires — the start
-/// then fails fast and stays fail-closed).
+/// monitor's read loop (1.5 s bound, `STREAM_READ_TIMEOUT` in
+/// `ice_core::traffic`) consumes the EOF. On macOS a half-closed loopback
+/// connection still occupies its peer port: a fresh listener bind on the
+/// same port fails with `EADDRINUSE` in that window, which would surface as
+/// the next core's `bind: address already in use` even though no real holder
+/// exists. The probe mirrors the core's own bind options (SO_REUSEADDR,
+/// like sing-box's Go listeners), so it reports the port blocked only while
+/// a live holder exists, not during the `TIME_WAIT` window. The budget is
+/// the monitor's 1.5 s read-loop bound plus a 0.6 s margin: a normal
+/// hand-off settles within it, while a genuinely held port stalls at most
+/// ~2 s before the start fails fast and stays fail-closed.
 fn wait_for_core_ports_released(settings: &AppSettings) -> bool {
-    const RELEASE_WAIT_TRIES: u32 = 14;
+    // 7 * 300 ms = 2.1 s: the 1.5 s monitor read-loop bound + 0.6 s margin.
+    const RELEASE_WAIT_TRIES: u32 = 7;
     const RELEASE_WAIT_DELAY_MS: u64 = 300;
     let probes: [(String, u16); 2] = [
         (settings.mixed_listen.clone(), settings.mixed_port),
