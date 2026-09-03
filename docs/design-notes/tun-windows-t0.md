@@ -324,7 +324,13 @@ verified missing interface. Everything below was incorporated in the flip:
   missing-interface detection is now locale-proof — the zh-CN netsh error
   (`此名称的接口未与路由器一起注册`) matched no English marker, so an
   absent adapter failed recovery forever (`recovery_required` loop); the
-  interface-listing cross-check is authoritative.
+  interface-listing cross-check is authoritative. The 2026-09-03 live
+  retest then exposed that *every* netsh / `route print` parser assumed
+  English output (zh-CN `接口 "以太网" 的配置`, `活动路由:`, `已连接`,
+  `子网前缀` ...), which made `observe_owned_state` never converge and
+  the apply roll back after its retry window — all parsers now parse
+  structurally (quoted-name boundaries, numeric columns, IPv4/IPv6 tokens,
+  `=====` blocks) instead of by English marker.
 
 ## 5. Safe-testing protocol (this spike)
 

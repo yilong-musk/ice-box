@@ -343,27 +343,18 @@ impl WindowsHost for ProcessWindowsHost {
 
 /// `netsh interface ipv4 show dnsservers` → per-interface IPv4 DNS state.
 ///
-/// Block shape (English locale, as the other parsers here assume):
-///
-/// ```text
-/// Configuration for interface "Ethernet"
-///     DNS servers configured through DHCP:   223.5.5.5
-///                                             119.29.29.29
-///     Register with which suffix:             Primary Only
-/// ```
-///
-/// Static configuration uses `Static Configured DNS Servers:`. Interfaces
+/// Locale-proof: the interface boundary is any quoted name on the line
+/// (zh-CN: `接口 "以太网" 的配置`, English: `Configuration for interface
+/// "Ethernet"`), the servers are the IPv4 tokens in the block (zh-CN:
+/// `通过 DHCP 配置的 DNS 服务器: 223.6.6.6`), and the source marker is
+/// `DHCP` / `Static` / `静态` (both locales spell DHCP the same). Interfaces
 /// without DNS servers appear with an empty server list.
 pub fn parse_netsh_dnsservers(output: &str) -> Vec<InterfaceDns> {
     let mut result = Vec::new();
     let mut current: Option<InterfaceDns> = None;
-    let mut collecting = false;
-
     for line in output.lines() {
-        if let Some(name) = line
-            .strip_prefix("Configuration for interface \"")
-            .and_then(|rest| rest.strip_suffix('"'))
-        {
+        let name = line.split('"').nth(1).filter(|name| !name.is_empty());
+        if let Some(name) = name {
             if let Some(prev) = current.take() {
                 result.push(prev);
             }
@@ -372,44 +363,19 @@ pub fn parse_netsh_dnsservers(output: &str) -> Vec<InterfaceDns> {
                 source: DnsSource::Dhcp,
                 servers: Vec::new(),
             });
-            collecting = false;
             continue;
         }
         if let Some(entry) = current.as_mut() {
             let trimmed = line.trim();
-            // The first server shares the header line
-            // (`... through DHCP:   223.5.5.5`); continuation lines carry the
-            // rest.
-            let same_line_ips: Vec<String> = trimmed
-                .split_once(':')
-                .map(|(_, rest)| {
-                    rest.split_whitespace()
-                        .filter(|word| word.parse::<std::net::Ipv4Addr>().is_ok())
-                        .map(|word| word.to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            if trimmed.contains("configured through DHCP") {
+            if trimmed.contains("DHCP") {
                 entry.source = DnsSource::Dhcp;
-                collecting = true;
-                entry.servers.extend(same_line_ips);
-                continue;
             }
-            if trimmed.contains("Static Configured DNS Servers") {
+            if trimmed.contains("Static") || trimmed.contains("静态") {
                 entry.source = DnsSource::Static;
-                collecting = true;
-                entry.servers.extend(same_line_ips);
-                continue;
             }
-            if trimmed.starts_with("Register with which suffix") {
-                collecting = false;
-                continue;
-            }
-            if collecting {
-                if let Some(addr) = trimmed.split_whitespace().next() {
-                    if addr.parse::<std::net::Ipv4Addr>().is_ok() {
-                        entry.servers.push(addr.to_string());
-                    }
+            for word in trimmed.split_whitespace() {
+                if word.parse::<std::net::Ipv4Addr>().is_ok() {
+                    entry.servers.push(word.to_string());
                 }
             }
         }
@@ -449,74 +415,114 @@ fn parse_netsh_interfaces_names(lines: &[String]) -> Vec<(u32, String)> {
     result
 }
 
-/// `netsh interface show interface name="<name>"` → `(name, up)` pairs (the
-/// `State` column is `Connected` when the media is up).
+/// `netsh interface show interface` → `(name, up)` pairs. Handles both the
+/// table form (`Admin State | State | Type | Interface Name`) and the
+/// single-interface block form (`<name>` on the first line, key/value lines
+/// after). Locale-proof: the `State` values are matched on `Connected` /
+/// `已连接` and the table-vs-block shapes are told apart by the separator
+/// line only the table form carries.
 pub fn parse_netsh_interface_show(output: &str) -> Vec<(String, bool)> {
-    let mut result = Vec::new();
-    for line in output.lines().skip(2) {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        // Admin State | State | Type | Interface Name (name may contain spaces)
-        if tokens.len() < 4 {
-            continue;
+    let lines: Vec<&str> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let is_separator = |line: &str| line.starts_with("---") || line.starts_with("===");
+    let is_up = |word: &str| matches!(word, "Connected" | "connected" | "已连接");
+    if lines.iter().any(|line| is_separator(line)) {
+        // Table form: the first line is the column header, the rows follow.
+        let mut result = Vec::new();
+        for line in lines.iter().skip(1) {
+            if is_separator(line) {
+                continue;
+            }
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() < 4 {
+                continue;
+            }
+            let name = tokens[3..].join(" ");
+            if !name.is_empty() {
+                result.push((name, is_up(tokens[1])));
+            }
         }
-        let up = tokens[1] == "Connected";
-        let name = tokens[3..].join(" ");
-        if !name.is_empty() {
-            result.push((name, up));
+        return result;
+    }
+    // Block form: the first non-empty line is the interface name; the
+    // connect-state line decides `up`.
+    let mut up = false;
+    let mut name: Option<String> = None;
+    for line in &lines {
+        if name.is_none() {
+            name = Some(line.to_string());
+        }
+        if line.to_lowercase().contains("connected") || line.contains("已连接") {
+            up = true;
         }
     }
-    result
+    name.map(|name| vec![(name, up)]).unwrap_or_default()
 }
 
 /// `netsh interface ipv4 show addresses name="<name>"` → CIDR addresses.
+///
+/// Locale-proof: the interface boundary is the quoted name (zh-CN:
+/// `接口 "以太网" 的配置`, English: `Configuration for interface "Ethernet"`).
+/// Both locales lay out the interface IP on the line right before the
+/// subnet-prefix line (`IP 地址:` / `IP Address:` then `子网前缀: .../24 (掩码
+/// ...)` / `Subnet Prefix: .../24 (mask ...)`), so the interface IP is the
+/// bare IPv4 token of the line preceding the CIDR-token line.
 pub fn parse_netsh_ipv4_addresses(output: &str, name: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let mut current_ip: Option<String> = None;
     let mut in_interface = false;
+    let mut last_ip: Option<String> = None;
     for line in output.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("Configuration for interface ") {
-            in_interface = rest.trim_matches('"') == name;
+        if line.contains(&format!("\"{name}\"")) {
+            in_interface = true;
+            last_ip = None;
             continue;
         }
         if !in_interface {
             continue;
         }
-        if let Some(rest) = line.strip_prefix("IP Address:") {
-            current_ip = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("Subnet Prefix:") {
-            if let Some(ip) = current_ip.take() {
-                // `10.0.0.0/30 (mask 255.255.255.252)` → prefix number 30.
-                let prefix = rest
-                    .split_whitespace()
-                    .next()
-                    .and_then(|token| token.split('/').nth(1))
-                    .unwrap_or("32");
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let cidr = tokens.iter().find_map(|token| {
+            let (ip, prefix) = token.split_once('/')?;
+            if ip.parse::<std::net::Ipv4Addr>().is_ok() && prefix.parse::<u32>().is_ok() {
+                Some((ip.to_string(), prefix.to_string()))
+            } else {
+                None
+            }
+        });
+        if let Some((_, prefix)) = cidr {
+            if let Some(ip) = last_ip.take() {
                 result.push(format!("{ip}/{prefix}"));
+            }
+            continue;
+        }
+        for token in tokens {
+            if !token.contains('/') && token.parse::<std::net::Ipv4Addr>().is_ok() {
+                last_ip = Some(token.to_string());
+                break;
             }
         }
     }
     result
 }
 
-/// `netsh interface ipv6 show addresses name="<name>"` → bare IPv6 addresses
-/// (netsh reports no prefix length).
-pub fn parse_netsh_ipv6_addresses(output: &str, name: &str) -> Vec<String> {
+/// `netsh interface ipv6 show addresses interface="<name>"` → bare IPv6
+/// addresses (netsh reports no prefix length).
+///
+/// Locale-proof: the probe is interface-scoped, so every IPv6 token in the
+/// output is claimed (zh-CN: `地址 fe80::...%5 参数` — the address precedes
+/// the `接口 Luid : 以太网` name line — English: `Address fdfe:dcba:9876::1`).
+/// Link-local zone suffixes (`%5`) are stripped.
+pub fn parse_netsh_ipv6_addresses(output: &str, _name: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let mut in_interface = false;
     for line in output.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("Interface ") {
-            // `Interface 17: Wintun` — match by the trailing name.
-            in_interface = rest.split(':').nth(1).map(str::trim) == Some(name);
-            continue;
-        }
-        if in_interface {
-            if let Some(address) = line.strip_prefix("Address ") {
-                let address = address.trim();
-                if address.parse::<std::net::Ipv6Addr>().is_ok() {
-                    result.push(address.to_string());
-                }
+        for token in line.split_whitespace() {
+            let bare = token.split('%').next().unwrap_or(token);
+            if bare.parse::<std::net::Ipv6Addr>().is_ok() {
+                result.push(bare.to_string());
             }
         }
     }
@@ -557,40 +563,36 @@ pub struct RoutePrintV4Row {
 }
 
 /// Parse the `Active Routes:` section of `route print -4`.
+///
+/// Locale-proof: the section markers (`Active Routes:` / `活动路由:`) are
+/// localized, so the table is located structurally — the `=====`-delimited
+/// blocks; the active table is the first block containing valid rows. Row
+/// validity is decided by the dotted netmask token (column 2), which is
+/// locale-independent; the interface-list block and the `Persistent Routes:`
+/// block (English `Persistent Routes:` / zh-CN `永久路由:`) never match.
 pub fn route_print_v4_rows(output: &str) -> Vec<RoutePrintV4Row> {
-    let mut rows = Vec::new();
-    let mut in_active = false;
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    for block in route_print_blocks(output) {
+        let mut rows = Vec::new();
+        for line in block {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() < 5 {
+                continue;
+            }
+            let Some(netmask_bits) = routes::dotted_netmask_to_prefix(tokens[1]) else {
+                continue;
+            };
+            rows.push(RoutePrintV4Row {
+                network: tokens[0].to_string(),
+                netmask_bits,
+                gateway: tokens[2].to_string(),
+                interface_ip: tokens[3].to_string(),
+            });
         }
-        if line.starts_with("Active Routes:") {
-            in_active = true;
-            continue;
+        if !rows.is_empty() {
+            return rows;
         }
-        if line.starts_with("Persistent Routes:") || line.starts_with("=====") {
-            in_active = false;
-            continue;
-        }
-        if !in_active || line.starts_with("Network Destination") {
-            continue;
-        }
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.len() < 5 {
-            continue;
-        }
-        let Some(netmask_bits) = routes::dotted_netmask_to_prefix(tokens[1]) else {
-            continue;
-        };
-        rows.push(RoutePrintV4Row {
-            network: tokens[0].to_string(),
-            netmask_bits,
-            gateway: tokens[2].to_string(),
-            interface_ip: tokens[3].to_string(),
-        });
     }
-    rows
+    Vec::new()
 }
 
 /// One IPv6 route table row.
@@ -604,45 +606,62 @@ pub struct RoutePrintV6Row {
 }
 
 /// Parse the `Active Routes:` section of `route print -6`.
+///
+/// Locale-proof like [`route_print_v4_rows`]: the active table is the first
+/// `=====`-delimited block containing rows whose first two columns are
+/// numeric (interface index, metric). Wrapped rows (destination on one line,
+/// gateway on the next — the zh-CN output wraps long destinations) are
+/// accepted with an empty gateway: only the interface index matters.
 pub fn route_print_v6_rows(output: &str) -> Vec<RoutePrintV6Row> {
-    let mut rows = Vec::new();
-    let mut in_active = false;
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    for block in route_print_blocks(output) {
+        let mut rows = Vec::new();
+        for line in block {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.len() < 3 {
+                continue;
+            }
+            let Some(if_index) = tokens[0].parse::<u32>().ok() else {
+                continue;
+            };
+            let Ok(metric) = tokens[1].parse::<u32>() else {
+                continue;
+            };
+            let (destination, prefix_bits) = split_prefix(tokens[2]);
+            rows.push(RoutePrintV6Row {
+                if_index,
+                metric,
+                destination,
+                prefix_bits,
+                gateway: tokens.get(3).unwrap_or(&"").to_string(),
+            });
         }
-        if line.starts_with("Active Routes:") {
-            in_active = true;
-            continue;
+        if !rows.is_empty() {
+            return rows;
         }
-        if line.starts_with("Persistent Routes:") || line.starts_with("=====") {
-            in_active = false;
-            continue;
-        }
-        if !in_active || line.starts_with("If Metric") {
-            continue;
-        }
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.len() < 4 {
-            continue;
-        }
-        let Some(if_index) = tokens[0].parse::<u32>().ok() else {
-            continue;
-        };
-        let Ok(metric) = tokens[1].parse::<u32>() else {
-            continue;
-        };
-        let (destination, prefix_bits) = split_prefix(tokens[2]);
-        rows.push(RoutePrintV6Row {
-            if_index,
-            metric,
-            destination,
-            prefix_bits,
-            gateway: tokens[3].to_string(),
-        });
     }
-    rows
+    Vec::new()
+}
+
+/// Split `route print` output into its `=====`-delimited blocks.
+fn route_print_blocks(output: &str) -> Vec<Vec<&str>> {
+    let mut blocks = Vec::new();
+    let mut current = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("=====") {
+            if !current.is_empty() {
+                blocks.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if !trimmed.is_empty() {
+            current.push(trimmed);
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    blocks
 }
 
 /// `dest/prefix` → `(dest, prefix_bits)`; `default` → `(::, 0)`.
@@ -1405,7 +1424,122 @@ Scope              : Global
             parse_netsh_ipv6_addresses(output, "Wintun"),
             ["fdfe:dcba:9876::1"]
         );
-        assert!(parse_netsh_ipv6_addresses(output, "Other").is_empty());
+        // The probe is interface-scoped (`interface=<name>`), so the parse is
+        // name-independent; the interface name never appears before the
+        // addresses in the zh-CN output either.
+        assert_eq!(
+            parse_netsh_ipv6_addresses(output, "Other"),
+            ["fdfe:dcba:9876::1"]
+        );
+    }
+
+    #[test]
+    fn zh_cn_netsh_outputs_parse_locale_proof() {
+        // Captured live on the zh-CN host (2026-09-03).
+        let show = "\
+以太网
+    种类:     专用
+    管理状态: 已启用
+    连接状态: 已连接
+";
+        assert_eq!(
+            parse_netsh_interface_show(show),
+            [("以太网".to_string(), true)]
+        );
+        let show_down = "\
+以太网
+    管理状态: 已启用
+    连接状态: 已断开
+";
+        assert_eq!(
+            parse_netsh_interface_show(show_down),
+            [("以太网".to_string(), false)]
+        );
+
+        let v4 = "\
+接口 \"以太网\" 的配置
+    DHCP 已启用:                          是
+    IP 地址:                           10.28.10.67
+    子网前缀:                        10.28.10.0/24 (掩码 255.255.255.0)
+    默认网关:                         10.28.10.1
+";
+        assert_eq!(parse_netsh_ipv4_addresses(v4, "以太网"), ["10.28.10.67/24"]);
+
+        let dns = "\
+接口 \"以太网\" 的配置
+    通过 DHCP 配置的 DNS 服务器:      223.6.6.6
+                                          61.130.254.34
+    用哪个前缀注册:                   只是主要
+
+接口 \"Loopback Pseudo-Interface 1\" 的配置
+    静态配置的 DNS 服务器:            无
+    用哪个前缀注册:                   只是主要
+";
+        let parsed = parse_netsh_dnsservers(dns);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].name, "以太网");
+        assert_eq!(parsed[0].source, DnsSource::Dhcp);
+        assert_eq!(parsed[0].servers, ["223.6.6.6", "61.130.254.34"]);
+        assert_eq!(parsed[1].name, "Loopback Pseudo-Interface 1");
+        assert_eq!(parsed[1].source, DnsSource::Static);
+        assert!(parsed[1].servers.is_empty());
+
+        let v6 = "\
+地址 fe80::bb78:1915:9425:d77%5 参数
+---------------------------------------------------------
+接口 Luid          : 以太网
+作用域 ID          : 0.5
+有效生存时间       : infinite
+";
+        assert_eq!(
+            parse_netsh_ipv6_addresses(v6, "以太网"),
+            ["fe80::bb78:1915:9425:d77"]
+        );
+
+        let routes = "\
+===========================================================================
+接口列表
+  5...08 bf b8 00 e2 f3 ......Realtek PCIe GbE Family Controller
+===========================================================================
+
+IPv4 路由表
+===========================================================================
+活动路由:
+网络目标        网络掩码          网关      接口   跃点数
+          0.0.0.0          0.0.0.0       10.28.10.1      10.28.10.67     35
+       10.28.10.0    255.255.255.0            在链路上       10.28.10.67    291
+===========================================================================
+永久路由:
+  无
+";
+        assert_eq!(
+            parse_route_print_v4(routes, "10.28.10.67").as_deref(),
+            Some("10.28.10.67")
+        );
+        assert_eq!(
+            parse_route_print_v4(routes, "8.8.8.8").as_deref(),
+            Some("10.28.10.67"),
+            "default route wins for non-local destinations"
+        );
+
+        let routes6 = "\
+===========================================================================
+接口列表
+  5...08 bf b8 00 e2 f3 ......Realtek PCIe GbE Family Controller
+===========================================================================
+
+IPv6 路由表
+===========================================================================
+活动路由:
+ 接口跃点数    网络目标                 网关
+  1    331 ::1/128                  在链路上
+  5    291 fe80::/64                在链路上
+===========================================================================
+永久路由:
+  无
+";
+        assert_eq!(parse_route_print_v6(routes6, "::1"), Some(1));
+        assert_eq!(parse_route_print_v6(routes6, "fe80::1"), Some(5));
     }
 
     #[test]
