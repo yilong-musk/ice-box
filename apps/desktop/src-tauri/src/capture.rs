@@ -51,6 +51,47 @@ fn map_tun(err: TunError) -> AppError {
     AppError::with_code(err.code.as_str(), err.message)
 }
 
+/// Bounded wait for the app's own Clash API connections to release the core
+/// ports before the next core starts.
+///
+/// The traffic monitor holds a long-lived `/traffic` stream to the clash API
+/// port. When the previous core dies (TUN disable / enable hand-off), the
+/// server's graceful close leaves that socket in `CLOSE_WAIT` until the
+/// monitor's read loop (1.5 s bound, `STREAM_READ_TIMEOUT` in
+/// `ice_core::traffic`) consumes the EOF. On macOS a half-closed loopback
+/// connection still occupies its peer port: a fresh listener bind on the
+/// same port fails with `EADDRINUSE` in that window, which would surface as
+/// the next core's `bind: address already in use` even though no real holder
+/// exists. The probe mirrors the core's own bind options (SO_REUSEADDR,
+/// like sing-box's Go listeners), so it reports the port blocked only while
+/// a live holder exists, not during the `TIME_WAIT` window. The budget is
+/// the monitor's 1.5 s read-loop bound plus a 0.6 s margin: a normal
+/// hand-off settles within it, while a genuinely held port stalls at most
+/// ~2 s before the start fails fast and stays fail-closed.
+fn wait_for_core_ports_released(settings: &AppSettings) -> bool {
+    // 7 * 300 ms = 2.1 s: the 1.5 s monitor read-loop bound + 0.6 s margin.
+    const RELEASE_WAIT_TRIES: u32 = 7;
+    const RELEASE_WAIT_DELAY_MS: u64 = 300;
+    let probes: [(String, u16); 2] = [
+        (settings.mixed_listen.clone(), settings.mixed_port),
+        (settings.clash_api_listen.clone(), settings.clash_api_port),
+    ];
+    for _ in 0..RELEASE_WAIT_TRIES {
+        if probes
+            .iter()
+            .all(|(host, port)| ice_core::tcp_bind_available(host, *port))
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(RELEASE_WAIT_DELAY_MS));
+    }
+    tracing::warn!(
+        "core ports not bindable after {} ms; the next core start may fail with bind: address already in use",
+        u64::from(RELEASE_WAIT_TRIES) * RELEASE_WAIT_DELAY_MS
+    );
+    false
+}
+
 /// The backend that currently captures traffic (plan §4.3 status payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -750,6 +791,14 @@ impl CaptureController {
             return Err(AppError::from(err));
         }
 
+        // The app's own clash API `/traffic` stream can keep the ports in
+        // CLOSE_WAIT right after the previous core's shutdown; wait for them
+        // to be bindable so the elevated core's fresh bind cannot fail with
+        // `bind: address already in use` (macOS loopback behavior).
+        if !wait_for_core_ports_released(&tun_settings) {
+            tracing::warn!("enable_tun: core ports still occupied after core stop");
+        }
+
         // The backend starts the elevated core with config.json (coordinator)
         // and journals the observed ownership.
         let applied = match backend.apply(&prepared) {
@@ -981,8 +1030,11 @@ impl CaptureController {
         // that may signal a root-owned process) and verifies teardown — then
         // stop the app-managed core. Both must succeed before the journal is
         // marked clean; an unverified release is fail-closed.
+        tracing::info!(iface = ?applied.interface_name, "disable_tun: restore start");
         let restore_result = backend.restore(&applied);
+        tracing::info!(result = ?restore_result.as_ref().map(|_| "ok").map_err(|e| e.message.as_str()), "disable_tun: restore done");
         let stop_result = core.stop(&self.paths.pid());
+        tracing::info!(result = ?stop_result.as_ref().map(|_| "ok").map_err(|e| e.to_string()), "disable_tun: core stop done");
         match (restore_result, stop_result) {
             (Ok(()), Ok(())) => {}
             (Err(err), _) => {
@@ -1054,6 +1106,7 @@ impl CaptureController {
         self.finish_transition(TrafficCapture::Inactive, TunStatus::Disabled, None)?;
 
         if restart_diagnostic {
+            tracing::info!("disable_tun: regenerating diagnostic config and restarting core");
             generate_config(
                 &self.paths,
                 settings,
@@ -1061,6 +1114,13 @@ impl CaptureController {
                 CaptureIntent::Diagnostic,
             )?;
             let core_paths = build_core_paths(&self.paths, settings, binary);
+            // The app's own clash API `/traffic` stream can still hold the
+            // clash port in CLOSE_WAIT right after the elevated core's
+            // shutdown; wait for the ports to be bindable again before the
+            // restart (macOS would otherwise fail the fresh bind).
+            if !wait_for_core_ports_released(settings) {
+                tracing::warn!("disable_tun: core ports still occupied after restore");
+            }
             core.start(&core_paths).map_err(AppError::from)?;
         }
         Ok(())

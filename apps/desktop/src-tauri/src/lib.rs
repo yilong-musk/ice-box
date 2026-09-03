@@ -132,6 +132,18 @@ fn bootstrap_data_dir(
     if let Err(err) = core.reclaim_orphan_pid(&paths.pid()) {
         tracing::warn!(error = %err, "failed to reclaim orphan sing-box pid");
     }
+    // The pid file can be missing while a previous session's core is still
+    // running (the app was killed mid-teardown after the pid record was
+    // cleared); scan the process table for sing-box processes running this
+    // installation's config and reclaim the user-owned ones, so the auto-start
+    // never hits `bind: address already in use` with no way to recover.
+    let reclaimed = ice_core::reclaim_orphan_cores_with_config(&paths.config());
+    if reclaimed > 0 {
+        tracing::warn!(
+            reclaimed,
+            "reclaimed orphan sing-box cores without a pid file"
+        );
+    }
 
     let proxy = create_system_proxy();
     let proxy_recovery_warning = match recover_if_applied(&paths.proxy_backup(), proxy.as_ref()) {
@@ -353,6 +365,50 @@ pub(crate) fn test_instance_lock(paths: &AppPaths) -> std::fs::File {
         .expect("lock file");
     file.try_lock_exclusive().expect("lock");
     file
+}
+
+/// A free loopback port for tests that bind real listeners.
+///
+/// Ports come from a suite-wide counter in a fixed range below the OS
+/// ephemeral range (Linux default 32768+, macOS / Windows 49152+), so a
+/// concurrent test's `bind("127.0.0.1:0")` (e.g. `MockClashApi`) can never
+/// land on one. The counter is serialized by a global mutex, so parallel
+/// tests never pick the same port. Each candidate is probed and skipped when
+/// an external process already holds it (e.g. a dev instance of the app on
+/// the fixed defaults 17890 / 19150), so the suite never depends on host
+/// state. The gap between picking a port and actually binding it remains
+/// racy against *external* holders only — nothing inside the suite can take
+/// a counter port.
+#[cfg(test)]
+pub(crate) fn free_loopback_port() -> u16 {
+    const RANGE_START: u32 = 20_000;
+    const RANGE_END: u32 = 23_000;
+    static NEXT: std::sync::Mutex<u32> = std::sync::Mutex::new(RANGE_START);
+    let mut next = NEXT.lock().expect("port counter lock");
+    for _ in RANGE_START..RANGE_END {
+        let port = *next as u16;
+        *next = if *next + 1 >= RANGE_END {
+            RANGE_START
+        } else {
+            *next + 1
+        };
+        if !ice_core::tcp_port_is_in_use("127.0.0.1", port) {
+            return port;
+        }
+    }
+    panic!("no free loopback port in {RANGE_START}..{RANGE_END}");
+}
+
+/// Default settings with random free loopback ports for the mixed and clash
+/// API inbounds. Tests that start a (mock) core run the real port probe, so
+/// the fixed defaults would fail whenever another program holds them.
+#[cfg(test)]
+pub(crate) fn test_settings() -> ice_config::AppSettings {
+    ice_config::AppSettings {
+        mixed_port: free_loopback_port(),
+        clash_api_port: free_loopback_port(),
+        ..ice_config::AppSettings::default()
+    }
 }
 
 #[cfg(test)]

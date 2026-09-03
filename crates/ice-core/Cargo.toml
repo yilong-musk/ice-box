@@ -17,6 +17,7 @@ urlencoding = "2.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+socket2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -714,6 +714,112 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
     }
 }
 
+/// Reclaim leftover sing-box processes from previous app sessions whose pid
+/// file is missing or was cleared before the process was terminated (e.g. the
+/// app was killed mid-teardown, so the record of the still-running core is
+/// gone). Scans `ps` for sing-box processes running `run -c <config_path>`
+/// and terminates the ones this user may signal (user-owned). Root-owned
+/// elevated cores are not signalable here and keep the pid-file / privileged
+/// daemon reclaim path. Returns how many processes were reclaimed.
+///
+/// `-ww` disables BSD `ps`'s terminal-width truncation of the `command`
+/// field: the config path sits at the tail of the command line, and a line
+/// cut before it would silently skip a leftover core.
+pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
+    #[cfg(unix)]
+    {
+        let config = config_path.to_string_lossy();
+        let Ok(output) = std::process::Command::new("ps")
+            .args(["-axww", "-o", "pid=,command="])
+            .output()
+        else {
+            return 0;
+        };
+        let mut reclaimed = 0;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut fields = line.trim().splitn(2, ' ');
+            let Ok(pid) = fields.next().unwrap_or("").trim().parse::<u32>() else {
+                continue;
+            };
+            let command = fields.next().unwrap_or("");
+            // Match the app's spawn shape (`sing-box run -c <config>`), with
+            // the config path as a whitespace-delimited argument. `ps -o
+            // command=` joins argv with single spaces, so the config path may
+            // itself contain spaces (e.g. macOS "Application Support") and
+            // still match; only its boundaries must be argument delimiters. A
+            // process whose command line merely *embeds* the path in a longer
+            // argument (e.g. `<config>.bak` or `--dir <parent dir>`) is not a
+            // leftover core and must not be terminated.
+            let args: Vec<&str> = command.split_whitespace().collect();
+            let is_core = args.iter().any(|a| a.contains("sing-box"))
+                && args.contains(&"run")
+                && args.contains(&"-c")
+                && config_is_own_argument(command, config.as_ref());
+            if !is_core {
+                continue;
+            }
+            // Only processes this user may signal (kill(pid, 0) == 0) are
+            // terminated here; EPERM means a root-owned elevated core, which
+            // the privileged daemon reclaims via the pid file.
+            if !pid_is_alive(pid) {
+                continue;
+            }
+            let rc = unsafe { libc::kill(pid as i32, 0) };
+            if rc != 0 {
+                continue;
+            }
+            tracing::warn!(
+                pid,
+                "reclaiming orphan sing-box core running this installation's config (no pid file)"
+            );
+            if force_kill_pid(pid) {
+                // The kill is asynchronous; wait briefly so the auto-start's
+                // port probe cannot race a listener that is still closing.
+                let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                while std::time::Instant::now() < deadline && pid_is_alive(pid) {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                reclaimed += 1;
+            }
+        }
+        reclaimed
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = config_path;
+        0
+    }
+}
+
+/// Whether `config` appears in `command` as a whitespace-delimited argument,
+/// as `ps -o command=` renders it (argv joined with single spaces). The path
+/// itself may contain spaces; only the boundaries around the match must be
+/// argument delimiters, so an occurrence embedded in a longer argument is
+/// not treated as an own argument.
+#[cfg(unix)]
+fn config_is_own_argument(command: &str, config: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel) = command[search_from..].find(config) {
+        let start = search_from + rel;
+        let end = start + config.len();
+        let before = command[..start].chars().next_back();
+        let after = command[end..].chars().next();
+        let before_ok = match before {
+            None => true,
+            Some(c) => c.is_whitespace(),
+        };
+        let after_ok = match after {
+            None => true,
+            Some(c) => c.is_whitespace(),
+        };
+        if before_ok && after_ok {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
 #[cfg(test)]
 impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     /// Test helper: simulate a running core whose child already exited.
@@ -998,12 +1104,28 @@ mod tests {
         bin
     }
 
+    /// Free loopback port for tests. Suite-wide counter in a fixed range
+    /// below the OS ephemeral range (Linux default 32768+, macOS / Windows
+    /// 49152+), so a concurrent test's `:0` bind can never land on it; the
+    /// counter is serialized, so parallel tests never pick the same port.
+    /// Candidates held by an external process are probed and skipped.
     fn free_loopback_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind ephemeral")
-            .local_addr()
-            .expect("local_addr")
-            .port()
+        const RANGE_START: u32 = 20_000;
+        const RANGE_END: u32 = 23_000;
+        static NEXT: std::sync::Mutex<u32> = std::sync::Mutex::new(RANGE_START);
+        let mut next = NEXT.lock().expect("port counter lock");
+        for _ in RANGE_START..RANGE_END {
+            let port = *next as u16;
+            *next = if *next + 1 >= RANGE_END {
+                RANGE_START
+            } else {
+                *next + 1
+            };
+            if !tcp_port_is_in_use("127.0.0.1", port) {
+                return port;
+            }
+        }
+        panic!("no free loopback port in {RANGE_START}..{RANGE_END}");
     }
 
     fn paths_in(dir: &Path, binary: PathBuf) -> CorePaths {
@@ -1337,6 +1459,53 @@ mod tests {
 
         core.stop(&paths.pid_file).expect("stop");
         assert!(read_pid(&paths.pid_file).unwrap().is_none() || !paths.pid_file.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_orphan_cores_with_config_kills_matching_user_owned_process() {
+        let dir = temp_root("scan-reclaim");
+        let config = dir.join("config.json");
+        fs::write(&config, b"{}").unwrap();
+        // A fake "sing-box" process whose command line carries the config path
+        // exactly like a real leftover core, but no pid file records it:
+        // `sh -c 'sleep 60 & wait' <name> run -c <config>` keeps the shell's
+        // original argv (including the name and args) in the command line
+        // while staying alive.
+        let name = dir.join("sing-box");
+        let mut child = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "sleep 60 & wait",
+                &name.to_string_lossy(),
+                "run",
+                "-c",
+                &config.to_string_lossy(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn fake core");
+        let pid = child.id();
+        // Give `ps` a moment to see the process.
+        std::thread::sleep(Duration::from_millis(200));
+        let reclaimed = reclaim_orphan_cores_with_config(&config);
+        assert_eq!(
+            reclaimed, 1,
+            "the user-owned core running our config must be reclaimed"
+        );
+        // Reap the terminated process (a zombie still answers `kill(pid, 0)`)
+        // and confirm it is really gone afterwards.
+        let _ = child.wait();
+        let alive = unsafe { libc::kill(pid as i32, 0) };
+        assert!(
+            alive != 0,
+            "pid {pid} must be terminated after the scan reclaim"
+        );
+        // A second scan must be a no-op (nothing left).
+        assert_eq!(reclaim_orphan_cores_with_config(&config), 0);
+        let _ = child.wait();
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -36,8 +36,12 @@ fn base_url(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     Ok(format!("http://{}:{}", host, endpoints.port))
 }
 
-/// One process-wide agent (connection pool reused across requests; `Agent` is
-/// an `Arc` handle, so clones are cheap and thread-safe).
+/// One process-wide agent. Connection pooling is disabled on purpose: a
+/// pooled idle connection to a core that died stays half-closed (CLOSE_WAIT)
+/// on macOS, and its 4-tuple keeps the clash port occupied — a fresh
+/// listener bind on the same port then fails with `EADDRINUSE`. The app
+/// polls the clash API every second or two, so the extra loopback handshake
+/// is negligible.
 fn shared_agent() -> ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT
@@ -46,6 +50,7 @@ fn shared_agent() -> ureq::Agent {
                 .timeout_connect(CLASH_HTTP_TIMEOUT)
                 .timeout_read(CLASH_HTTP_TIMEOUT)
                 .timeout_write(CLASH_HTTP_TIMEOUT)
+                .max_idle_connections(0)
                 .build()
         })
         .clone()
@@ -272,9 +277,14 @@ pub(crate) fn traffic_foreach(
     mut on_sample: impl FnMut(TrafficSample) -> bool,
 ) -> Result<TrafficStreamEnd, CoreError> {
     let url = format!("{}/traffic", base_url(endpoints)?);
+    // A fresh agent per stream, with pooling disabled: when the stream ends
+    // the connection must close immediately (a pooled half-closed connection
+    // would keep the clash port occupied on macOS and block the next core's
+    // listener bind).
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(CLASH_HTTP_TIMEOUT)
         .timeout_read(read_timeout)
+        .max_idle_connections(0)
         .build();
     let response = agent
         .get(&url)

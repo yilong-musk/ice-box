@@ -140,6 +140,66 @@ fn helper_coordinator_end_to_end_start_stop() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Regression: the daemon replies to a Stop only after its own TERM→KILL
+/// grace (5 s TERM + 2 s KILL in `ice-helper`) has finished, so a client
+/// read bound shorter than that would abort the roundtrip while the daemon
+/// is still killing a slow-to-exit core — falsely failing a TUN disable /
+/// reclaim and forcing a fail-closed RecoveryRequired on a stop that
+/// succeeds moments later. The Stop client must wait for the daemon's full
+/// grace (this fixture core takes ~3.5 s to exit after SIGTERM, beyond the
+/// generic 3 s IPC timeout).
+#[test]
+fn stop_waiting_for_slow_core_does_not_time_out() {
+    let dir = temp_dir("slow");
+    let config_path = dir.join("config.json");
+    std::fs::write(&config_path, b"{}").unwrap();
+    let socket = dir.join("helper.sock");
+    let core_bin = dir.join("fake-core");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(
+        &core_bin,
+        "#!/bin/sh\ntrap 'sleep 3.5; exit 0' TERM\nwhile :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&core_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let config = Arc::new(ServerConfig {
+        token: "e2e-token".into(),
+        data_dir: dir.clone(),
+        core_bin,
+        core_log: dir.join("core.log"),
+        allowed_uid: Some(42),
+    });
+    let server = spawn_server(config, &socket);
+    for _ in 0..50 {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut coordinator =
+        HelperCoreCoordinator::new(socket.clone(), "e2e-token".into(), dir.clone());
+    coordinator
+        .start_with_config(&config_path)
+        .expect("start via helper");
+
+    // The core does not exit for ~3.5 s after SIGTERM; the Stop roundtrip
+    // must stay open past the generic IPC timeout and wait for the daemon's
+    // TERM grace instead of aborting.
+    let started = std::time::Instant::now();
+    coordinator
+        .stop()
+        .expect("stop must wait for the daemon grace");
+    assert!(
+        started.elapsed() >= Duration::from_millis(3000),
+        "the slow core must keep the Stop roundtrip open past the generic IPC timeout"
+    );
+
+    stop_server(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn helper_rejects_unauthorized_token() {
     let dir = temp_dir("auth");
