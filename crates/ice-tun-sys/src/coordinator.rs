@@ -701,7 +701,7 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
 
 /// Whether the current process carries an elevated (Administrator) token.
 #[cfg(target_os = "windows")]
-fn process_is_elevated() -> bool {
+pub fn process_is_elevated() -> bool {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,

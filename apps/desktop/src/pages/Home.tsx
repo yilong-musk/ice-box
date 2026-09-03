@@ -488,17 +488,48 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 size="sm"
                 pressed={tunOverride ?? configuredTun}
                 onPressedChange={(pressed) => {
+                  const s = settings;
                   if (pressed) {
+                    if (!s) return;
                     if (
                       status?.helper_supported === true &&
                       status?.helper_installed !== true
                     ) {
                       // No authorized helper (macOS): guide the user to
                       // install it first; the TUN-on setting is persisted only
-                      // after a successful install (cancel leaves it off). On
-                      // platforms without a helper the toggle proceeds
-                      // directly.
+                      // after a successful install (cancel leaves it off).
                       tunInstall.setOpen(true);
+                      return;
+                    }
+                    if (status?.helper_supported === false) {
+                      // Windows: persist, then relaunch the app elevated via
+                      // UAC when needed; the elevated successor applies the
+                      // saved TUN setting on startup. A cancelled prompt
+                      // reverts the setting and surfaces the error.
+                      void run(async () => {
+                        await api.saveSettings({
+                          ...s,
+                          tun: { ...s.tun, enabled: true },
+                        });
+                        try {
+                          const relaunched =
+                            await api.relaunchElevatedForTun();
+                          if (relaunched) {
+                            // The app exits to restart elevated.
+                            return;
+                          }
+                          // Already elevated: the backend follows the setting.
+                          setTunOverride(true);
+                        } catch (e) {
+                          await api
+                            .saveSettings({
+                              ...s,
+                              tun: { ...s.tun, enabled: false },
+                            })
+                            .catch(() => undefined);
+                          throw e;
+                        }
+                      });
                       return;
                     }
                     onToggleTunSetting(true);

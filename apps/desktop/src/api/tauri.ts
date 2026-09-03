@@ -236,6 +236,12 @@ export const api = {
   installHelper: () => invoke<void>("install_helper"),
   /** Uninstall the privileged helper via the system authorization dialog. */
   uninstallHelper: () => invoke<void>("uninstall_helper"),
+  /** In-app UAC relaunch for Windows TUN elevation: relaunches the app via
+   * the `runas` verb and quits (the elevated successor applies the persisted
+   * TUN setting on startup). `true` = relaunching, `false` = no relaunch
+   * needed (already elevated / not Windows); rejects when the prompt was
+   * cancelled (nothing modified). */
+  relaunchElevatedForTun: () => invoke<boolean>("relaunch_elevated_for_tun"),
   getLogView: (n: number) =>
     invoke<string[]>("get_log_view", { req: { n } }),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),

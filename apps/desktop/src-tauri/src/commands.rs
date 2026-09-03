@@ -656,6 +656,20 @@ pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
     .await
 }
 
+/// In-app UAC relaunch for Windows TUN elevation: when the current process
+/// is not elevated and the TUN setting was already persisted, relaunch the
+/// app via the `runas` verb (UAC prompt) and quit — the elevated successor
+/// applies `tun.enabled` on startup. `Ok(true)` = relaunching (the app will
+/// exit shortly), `Ok(false)` = no relaunch needed (already elevated, or not
+/// Windows), `Err` = the user cancelled the prompt (nothing modified).
+#[tauri::command]
+pub async fn relaunch_elevated_for_tun(app: AppHandle) -> Result<bool, AppError> {
+    run_blocking("relaunch_elevated_for_tun", move || {
+        crate::windows_elevation::relaunch_elevated(&app)
+    })
+    .await
+}
+
 /// Full stop used by tray Quit / app exit (disable TUN capture first, restore
 /// system proxy, then kill core).
 #[tauri::command]

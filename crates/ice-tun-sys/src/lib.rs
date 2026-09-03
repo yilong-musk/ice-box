@@ -39,6 +39,8 @@ pub use backend::{
     unsupported_capability, AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability,
     TunConfig, TunHealth, TunStack,
 };
+#[cfg(target_os = "windows")]
+pub use coordinator::process_is_elevated;
 pub use coordinator::{CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator};
 pub use error::{TunError, TunErrorCode};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};

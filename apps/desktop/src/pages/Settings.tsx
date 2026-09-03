@@ -476,9 +476,33 @@ export function Settings({ active = true }: { active?: boolean }) {
                   ) {
                     // No authorized helper (macOS): guide the user to install
                     // it first; the TUN-on setting is persisted only after a
-                    // successful install (cancel leaves the switch off). On
-                    // platforms without a helper the toggle proceeds directly.
+                    // successful install (cancel leaves the switch off).
                     tunInstall.setOpen(true);
+                    return;
+                  }
+                  if (checked === true && status?.helper_supported === false) {
+                    // Windows: persist, then relaunch the app elevated via
+                    // UAC when needed. The elevated successor applies the
+                    // saved TUN setting on startup.
+                    setError(null);
+                    void (async () => {
+                      try {
+                        await persistTunEnabled(true);
+                        const relaunched = await api.relaunchElevatedForTun();
+                        if (relaunched) {
+                          // The app exits to restart elevated; the setting is
+                          // already persisted and applies on the next start.
+                          return;
+                        }
+                        // Already elevated: the backend follows the setting.
+                        flashSaved();
+                      } catch (e) {
+                        // Prompt cancelled or relaunch failed: nothing was
+                        // modified; revert the switch and surface the error.
+                        await persistTunEnabled(false).catch(() => undefined);
+                        setError(formatInvokeError(e));
+                      }
+                    })();
                     return;
                   }
                   setForm({

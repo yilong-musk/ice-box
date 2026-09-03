@@ -10,6 +10,7 @@ mod orchestrate;
 mod shutdown;
 mod subscription_watch;
 mod tray;
+mod windows_elevation;
 
 use crate::capture::CaptureController;
 use crate::orchestrate::current_settings;
@@ -300,6 +301,7 @@ pub fn run() {
             commands::recover_tun,
             commands::install_helper,
             commands::uninstall_helper,
+            commands::relaunch_elevated_for_tun,
             commands::get_log_view,
             commands::get_runtime_config,
             commands::reveal_data_dir,

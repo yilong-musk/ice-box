@@ -304,6 +304,16 @@ verified missing interface. Everything below was incorporated in the flip:
   V11 showed a stranded strict-route WFP filter set black-holes every
   non-loopback TCP connection on the host; graceful exit removes the
   filters.
+- **In-app elevation (2026-09-03)**: TUN transitions require an elevated
+  process (adapter creation). There is no installable helper on Windows
+  (the privileged daemon is macOS-only); the app relaunches itself via
+  `Start-Process -Verb RunAs` (UAC) when the TUN toggle is used from an
+  unelevated context — the setting is persisted first, the old instance
+  quits through the normal cleanup path, and the elevated successor
+  (`--elevated-relaunch`, single-instance lock retry) applies `tun.enabled`
+  on startup. A cancelled prompt reverts the setting and surfaces
+  `tun.elevation_cancelled`. The acceptance suite still runs from an
+  already-elevated context.
 
 ## 5. Safe-testing protocol (this spike)
 
