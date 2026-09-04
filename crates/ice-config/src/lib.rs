@@ -73,10 +73,9 @@ pub struct TunGate {
     pub reason: Option<&'static str>,
 }
 
-/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready` — live
-/// spike passed); Windows is green (`windows_tun_ready` — flipped 2026-09-03
-/// after the V1–V11 host spike, design note §1.2); other platforms are out of
-/// scope for the first release.
+/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready`);
+/// Windows is green (`windows_tun_ready`, `docs/tun.md`); other platforms are
+/// out of scope for the first release.
 ///
 /// Test-only override: the desktop crate's host-free controller tests run on
 /// every CI host and inject fake backends; forcing the gate green there lets
@@ -300,7 +299,7 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
 
 /// Minimal DNS block locked for v1 (sing-box 1.13+ local resolver).
 ///
-/// Windows (design note §1.2): the OS-resolver-backed `local` server must not
+/// Windows (`docs/tun.md`): the OS-resolver-backed `local` server must not
 /// be used — its queries dial the TUN peer and re-enter the engine — and UDP
 /// upstreams are captured by the core's own TUN. The minimal block instead
 /// ships two DoT resolvers and `ipv4_only` (the IPv6 path is broken, #4178).
@@ -679,9 +678,9 @@ pub fn tun_dns_hijack_rule() -> Value {
     json!({ "port": [53], "action": "hijack-dns" })
 }
 
-/// Reserved bypass route rules for a `Tun` config (T0 spike §5, locked in
-/// architecture §24.5.6). Order is fixed: control path and local traffic are
-/// never captured or sniffed.
+/// Reserved bypass route rules for a `Tun` config (locked in architecture
+/// §24.5.6 and `docs/tun.md`). Order is fixed: control path and local traffic
+/// are never captured or sniffed.
 ///
 /// macOS / generic shape: the `hijack-dns` rule is inserted directly after
 /// the `process_name` rule when `dns_hijack` is set — the elevated core's
@@ -690,7 +689,7 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// receive fake-ip answers; client DNS queries (browser etc.) fall through to
 /// the hijack rule and are answered by the engine.
 ///
-/// Windows shape (locked by the host spike, design note §1.2): the
+/// Windows shape (locked in `docs/tun.md`): the
 /// `{"port": [53]}` hijack must be the **first** rule — the
 /// `protocol: dns` match does not fire in time on Windows (1.13 regression,
 /// #3878) — followed by the process bypass, sniff, a second `protocol: dns`
@@ -699,14 +698,13 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// core; #4455 self-loop).
 ///
 /// UDP user traffic (QUIC/HTTP3) is broken under the Windows shape — the
-/// core's UDP outbound is captured by its own TUN (design note §1.2 open
-/// items). UDP 443 is rejected with the default method (ICMP port
-/// unreachable), not `outbound: block` / `method: drop`: a silent black
-/// hole leaves Chrome/Edge parked on HTTP/3 (YouTube avatars on
-/// `yt3.ggpht.com` / `lh3.googleusercontent.com`, Telegram Web) until the
-/// QUIC timer expires, and some subresources never fall back. ICMP makes
-/// the browser fail the h3 probe immediately and reuse the proven IPv4
-/// TCP path.
+/// core's UDP outbound is captured by its own TUN (`docs/tun.md`). UDP 443 is
+/// rejected with the default method (ICMP port unreachable), not
+/// `outbound: block` / `method: drop`: a silent black hole leaves Chrome/Edge
+/// parked on HTTP/3 (YouTube avatars on `yt3.ggpht.com` /
+/// `lh3.googleusercontent.com`, Telegram Web) until the QUIC timer expires, and
+/// some subresources never fall back. ICMP makes the browser fail the h3 probe
+/// immediately and reuse the proven IPv4 TCP path.
 pub fn tun_reserved_rules(tun: &TunSettings) -> Vec<Value> {
     tun_reserved_rules_for(tun, cfg!(target_os = "windows"))
 }
@@ -2193,7 +2191,7 @@ mod build_tests {
 
     #[test]
     fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
-        // The locked Windows shape (design note §1.2): port-53 hijack first
+        // The locked Windows shape (`docs/tun.md`): port-53 hijack first
         // (the `protocol: dns` match does not fire in time on Windows),
         // process bypass, sniff, protocol-dns hijack, then the TUN
         // sub-ranges rejected BEFORE `ip_is_private` can loop them back

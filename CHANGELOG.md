@@ -5,6 +5,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-04
+
+### Added
+
+- Windows TUN as a production capture path. One UAC creates the per-user
+  scheduled task `ice-box-tun`; afterwards start/stop need no extra prompt.
+  Capture is IPv4 TCP only (DoT/DoH DNS, no fake-ip, UDP 443 rejected so
+  browsers fall back from HTTP/3). UDP/QUIC and IPv6 still require system
+  proxy. See `docs/tun.md`.
+- Chinese / English UI with a system-locale default and a Settings language
+  selector (the tray menu follows).
+- Per-subscription auto-update (1 / 3 / 6 / 12 / 24 h) with a background
+  refresh watchdog that also runs shortly after launch.
+- macOS TUN `dns_hijack` points the primary network service at public
+  resolvers so port-53 queries enter the TUN instead of a LAN resolver.
+
+### Changed
+
+- The TUN switch only chooses the next proxy-service start. Toggling it does
+  not start, stop, or hot-swap the live capture.
+- Subscriptions and Rules UI: simpler import form, search in the rules
+  header, no separate apply-config button.
+- Documentation: README rewritten; living docs are `docs/architecture.md`,
+  `docs/tun.md`, and `docs/release-process.md`. Completed plans and spike
+  diaries were removed.
+
+### Fixed
+
+- Reclaim orphan cores and release mixed/clash ports across TUN hand-offs
+  and wake, including the elevated Windows core (`PidProcess` liveness).
+- Windows TUN: locale-proof `netsh` / `route print` parsers, adapter-index
+  identity, graceful WFP teardown, silent console windows, launcher `/TR`
+  length under the schtasks limit.
+- Traffic stream treats a reset read as EOF; the home-page tooltip shows
+  units.
+- Subscription apply keeps the latest metadata and refreshes the timestamp
+  on HTTP 304.
+
 ## [0.1.2] - 2026-08-31
 
 ### Added
@@ -57,7 +95,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   opt-in only — production Windows stays fail-closed until the
   `windows_tun_ready` T0 spike passes on a real host
   (`scripts/run-acceptance-windows-tun.sh`, G9.14 live gate;
-  `docs/design-notes/tun-windows-t0.md`).
+  `docs/tun.md`).
 
 - `scripts/fetch-singbox.sh` / `prepare-singbox-resource.sh` / `.ps1` now
   also ship `libcronet.dll` next to `sing-box.exe` on Windows (NaiveProxy

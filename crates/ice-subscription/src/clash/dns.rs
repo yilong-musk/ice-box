@@ -1,6 +1,6 @@
 //! Clash `dns` → sing-box `dns` block.
 //!
-//! Windows emission differs (design note tun-windows-t0 §1.2, locked
+//! Windows emission differs (`docs/tun.md`, locked
 //! 2026-09-03): UDP upstreams are dialed by the core's own UDP outbound and
 //! captured by its own TUN (always fail); fake-ip answers (198.18.0.0/15)
 //! are outside the Windows auto-route sub-ranges and unreachable; and the

@@ -1,4 +1,4 @@
-//! macOS TUN backend (plan §5 T2; T0 locks §24.5).
+//! macOS TUN backend (architecture §24.5; `docs/tun.md`).
 //!
 //! Native sing-box ownership model (T0 lock): the elevated core — run by the
 //! injected [`CoreCoordinator`] — owns the utun adapter, its addresses, and

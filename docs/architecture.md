@@ -5,10 +5,8 @@ This document is the **implementation spec** for v1. Code must follow it; if the
 Status: **macOS + Windows v1 implemented** (start/stop, system proxy on both platforms, Clash/sing-box
 subscription parsing, hot reload for rule/subscription changes, mode switching (rebuild + reload,
 SIGHUP on macOS / restart on Windows) on both platforms, nodes/traffic UI); Windows CI, NSIS installer
-and Windows acceptance in place. **TUN capture in progress** (§24, per `docs/tun-mode-plan.md`:
-only T0 complete — shared feasibility locks and the host-free journaled recovery core in
-`crates/ice-tun-sys`; T1+ pending: no `TunSettings`, config generation, `CaptureController`,
-IPC, or platform backend integration yet).
+and Windows acceptance in place. **TUN capture landed** on both platforms (§24; platform
+emission, elevation, and known limits in `docs/tun.md`). Windows TUN is IPv4 TCP only.
 
 ---
 
@@ -106,7 +104,9 @@ When ice-box fetches subscriptions itself, it must **bypass the system proxy** (
 | Tray "Quit" | Stop flow (restore proxy first, then kill core) then exit |
 | Crash / killed with `kill -9` | Detected on next launch: if `proxy-backup.json` exists and is marked "applied", attempt restore at startup (see §10) |
 
-v1 does **not** do "UI exits, core keeps running as a service". If needed later, that requires a separate helper and is out of scope for this version.
+v1 does **not** do "UI exits, core keeps running as a service". TUN elevation uses a
+macOS helper or a Windows scheduled task only while the user has started the proxy
+service; Quit still stops capture and the core.
 
 ### 4.3 sing-box binary
 
@@ -135,12 +135,18 @@ ice-box/
 │   ├── ice-core/
 │   ├── ice-proxy-sys/
 │   ├── ice-tun-sys/              # TUN ownership, platform permission, recovery journal (§24.4)
+│   ├── ice-tun-launcher/         # Windows scheduled-task elevated core runner
+│   ├── ice-helper/               # macOS privileged helper daemon
+│   ├── ice-elevate/              # macOS AuthorizationServices install prompt
 │   ├── ice-config/
 │   ├── ice-subscription/
 │   └── ice-engine/               # config engine facade (§22)
 ├── third_party/sing-box/
 ├── configs/examples/
-└── docs/architecture.md
+└── docs/
+    ├── architecture.md
+    ├── tun.md                    # TUN emission, elevation, known limits
+    └── release-process.md
 ```
 
 Dependency direction (reverse dependencies forbidden):
@@ -811,20 +817,10 @@ v1 does not handle adversarial cases beyond "malicious subscription exhausting m
 
 ---
 
-## 19. Implementation slices (suggested order)
+## 19. Implementation slices
 
-Delivery order tied to the architecture:
-
-1. **Paths and settings persistence**, pid, crash-recovery proxy restore
-2. **ice-core**: spawn / stop / healthcheck / pid
-3. **Hot reload + fallback restart**
-4. **ice-proxy-sys** macOS, then Windows
-5. **ice-subscription** fetch + sing-box / Clash parsing + single active subscription
-6. **Clash parsing** (incrementally per protocol)
-7. **React**: subscriptions page + start/stop + logs
-8. **Packaging**: bundle sing-box as a resource, installers for both platforms
-
-Every step must be individually `cargo test`-able or manually testable; never roll slices 2-7 into one PR.
+v1 slices (paths, ice-core, hot reload, system proxy, subscriptions, UI, packaging)
+have landed. TUN capture is §24; platform locks live in `docs/tun.md`.
 
 ---
 
@@ -854,7 +850,7 @@ Every step must be individually `cargo test`-able or manually testable; never ro
 - Clash supported protocol checklist → **written in §11.4**: ss / vmess / trojan / socks / http
 - ~~final JSON of the minimal DNS config~~ → **written in §12.2**: `type: local` / `final: local`
 - ~~Windows port release wait on restart~~ → **written in §9.2**: 500 ms
-- TUN schema + platform locks → **written in §24.5**; exact JSON in the T0 design note
+- TUN schema + platform locks → **written in §24.5**; exact JSON and Windows emission in `docs/tun.md`
 
 ---
 
@@ -900,47 +896,17 @@ Rules:
 | Capture backend | how applications enter sing-box: system proxy **or** TUN (§24), never both |
 | Diagnostic config | Mixed-only runtime config (automatic core start / stopped service) |
 | TUN journal | `tun-state.json`: mutation log + ownership records for capture recovery (§24.4) |
-| Capture backend | how applications enter sing-box: system proxy **or** TUN (§24), never both |
-| TUN journal | `tun-state.json`: mutation log + ownership records for capture recovery (§24.4) |
 
 ---
 
 ## 24. TUN capture (TUN slice)
 
-Status: **T0 complete per `docs/tun-mode-plan.md`** (shared/macOS feasibility locks plus the
-host-free journaled recovery core in `crates/ice-tun-sys`), **T1 shared complete**
-(`TunSettings` in `settings.json`, `CaptureIntent::{Diagnostic, Tun}` config generation,
-structural intent validation, `tun_gate` capability preflight), **T2 shared complete**
-(macOS backend `MacosTunBackend`: host reads, utun collision fallback, journaled
-apply/restore/recover with rollback; `CoreCoordinator` boundary; fail-closed
-`UnsupportedTunBackend`), **T3 shared complete** (`CaptureController` in the shell:
-active backend + capture state machine, typed status payload, serialized settings
-transaction with `settings-pending.json`, startup/watchdog recovery, quit ordering,
-`adopt_external` core lifecycle for the elevated runner), **T4 complete** (typed TUN
-status/settings in the frontend API, Settings `tun.enabled` switch rendered from
-`tun_available`, Home active-backend status with TUN interface, `permission_required`
-fallback action and `recovery_required`「重试恢复」action via the `recover_tun` IPC
-command, frontend tests green), and **T5 (macOS helper + packaging) landed** (production
-privileged helper daemon `crates/ice-helper` with narrow authenticated IPC, app-side
-`HelperCoreCoordinator`, `create_backend` wiring, launchd install/uninstall scripts,
-entitlements, bundle embedding + CI check, and the G9.13 helper acceptance path (green on an
-authenticated host); the app is permanently unsigned — the helper is installed through the
-system authorization dialog (in-app `install_helper` / `uninstall_helper` IPC, `crates/ice-elevate`)
-or the install script, and the clean-machine gate is explicitly waived for this release.
-**Windows T0 complete — `windows_tun_ready` flipped 2026-09-03**: the V1–V11 host spike on a
-real Windows 11 host (driven from WSL via elevated PowerShell) locked the §1.2 config shape
-(port-53 hijack first, TCP-transport DNS only, `ipv4_only`, peer-reject; no fakeip — the
-198.18.0.0/15 answers are unreachable on Windows) and the production Windows backend is
-active in `create_backend`: `WindowsTunBackend` with read-only `netsh` / `route print`
-host probes and DNS ownership (`dns_before`/`dns_after`, compare-before-restore, verified
-adapter DNS), the graceful-stop elevated core runner (WFP filters are removed on graceful
-exit only — a stranded filter set black-holes host TCP), and platform emission in
-`ice-config`/`ice-subscription`. Windows T1–T5 follow the macOS slice order; the live gate
-is `scripts/run-acceptance-windows-tun.sh` (G9.14). See
-`docs/design-notes/tun-windows-t0.md`).
-This section records the approved product model, state machine, data
-contract, and the T0 platform locks. The plan's §2 decision record (capture selection ≠
-routing policy) is approved; T0's three open decisions are resolved as follows.
+Status: **landed** on macOS (helper + G9.12/G9.13) and Windows (`windows_tun_ready`,
+scheduled-task elevation). Windows TUN is IPv4 TCP only. Platform emission, elevation,
+inbound JSON, and known limits: `docs/tun.md`.
+
+This section is the product model, state machine, data contract, and T0 platform locks.
+Capture selection is not routing policy (`tun.enabled` vs `proxy_mode`).
 
 ### 24.1 Product model
 
@@ -1069,88 +1035,46 @@ tun_unavailable_reason: optional stable message
 
 ### 24.5 Platform locks (T0)
 
-1. **Schema pin (locked by the exact-binary spike):** the bundled `1.13.19` accepts the TUN
-   inbound `address` field (listable prefixes, IPv4+IPv6); `inet4_address` / `inet6_address`
-   are **rejected** by this build (`legacy tun address fields ... removed in 1.12.0`). Legacy
-   inbound `sniff` / `sniff_timeout` fields are rejected; sniffing moves to a route rule
-   `{"action": "sniff"}` (string form). Accepted fields verified by the spike:
-   `interface_name` (macOS requires `utun<N>` with a numeric suffix), `mtu`, `auto_route`,
-   `strict_route`, `stack` (`gvisor` / `system` / `mixed`), `route_address`,
-   `route_exclude_address`, `route_address_set` / `route_exclude_address_set` (rule-set
-   references require the `.srs` files to exist at start), `loopback_address`,
-   `include_interface` / `exclude_interface`, `exclude_mptcp`, `udp_timeout`. The exact JSON
-   shape and defaults are recorded in the T0 design note (`docs/design-notes/tun-t0-spike.md`).
-2. **macOS permission model (locked by the live spike):** creating a utun interface, assigning
-     addresses, and adding routes are **privileged** on macOS (unprivileged start fails at
-     `Connect: operation not permitted`). sing-box must therefore run elevated; the locked
-     execution context is a small privileged helper daemon (launchd) that runs the core as root
-     (native sing-box owns the
-     adapter/addresses/routes/DNS; `ice-tun-sys`
-     coordinates and verifies). A network-extension package was not required for the first
-     release. **Production helper (T5, landed):** `crates/ice-helper` serves a narrow
-     one-frame-per-connection JSON protocol over a root-owned Unix socket — `status` /
-     `start {config}` / `stop` only, no binary path / route / interface input ever accepted
-     from the client. Security: peer uid (`getpeereid`), per-installation token
-     (constant-time compare, root-owned 0644 in the data dir), protocol version, and a
-     canonicalized config path inside the installed data dir. The core binary path is fixed
-     at install. The app side (`HelperCoreCoordinator`) implements `CoreCoordinator`;
-     `create_backend` picks the dev `sudo` opt-in first, then the helper when a read-only
-     `status` probe authorizes, else the fail-closed deferred runner. **Install (permanently
-     unsigned):** the app never signs or notarizes, so SMAppService is not used; the
-     `install_helper` / `uninstall_helper` IPC commands prompt the system authorization dialog
-     (`AuthorizationServices`, deprecated-but-functional, `crates/ice-elevate`) and execute
-     the helper's own privileged `install` / `uninstall` modes as root — the single shared
-     implementation of the install logic (token, plist, pinned SHA-256, launchctl), also
-     driven manually via
-     `scripts/install-helper-macos.sh` / `uninstall-helper-macos.sh`
-     (design note `docs/design-notes/ice-helper-design.md`).
-     The clean-machine install/uninstall gate is explicitly waived for this release.
-     **Dev path (T3,
-     live gate):** until the helper is installed, the
-     explicit `ICE_BOX_TUN_DEV_SUDO` opt-in wires `SudoCoreCoordinator`, which runs the core
-     as root via `sudo -n` (never prompts; `tun.permission_required` before any OS mutation
-     without a cached credential / NOPASSWD rule) and terminates as root with bounded TERM→KILL
-     grace, because a non-root shell cannot signal a root-owned process. The destructive live
-     suite is `scripts/run-acceptance-macos-tun.sh` (G9.12 via the dev runner, G9.13 via the
-     installed helper); the ordinary gates stay non-privileged.
-3. **DNS (locked, live-confirmed):** native sing-box on macOS does **not** modify system DNS
-   (`scutil --dns` unchanged at start/stop). DNS interception happens at the sing-box router
-   for tunneled traffic (UDP/TCP 53 → DNS module); LAN/private resolvers bypass the tunnel via
-   `route_exclude_address` (RFC1918/4193, link-local, loopback, multicast). No OS DNS
-   operation is performed; `dns_before`/`dns_after` stay absent on the macOS backend.
-4. **Dual-stack is mandatory (locked by the live spike):** an IPv4-only `address` list makes
-   sing-tun install **no IPv6 routes**, silently leaking all IPv6 traffic through the real
-   gateway. The locked tun carries a ULA IPv6 address (`fdfe:dcba:9876::1/126`) so IPv6 is
-   captured and follows the same rules; the ULA gateway sits inside the excluded `fc00::/7`.
-   The settings `ipv6_address` field is therefore required, not optional.
-5. **Ownership (locked):** one owner per resource. On macOS, sing-box owns the adapter,
-   addresses, routes, and any DNS state; `ice-tun-sys` records ownership in the journal and
-   verifies. No split ownership between sing-box and a helper for the same resource.
-6. **Control path (locked, live-confirmed):** loopback Clash API / Mixed are excluded from
-   capture by the OS route table plus `loopback_address`; sing-box's own dials are bound to
-   the real default interface via `auto_detect_interface` (no self-loop); ice-box's own
-   control traffic (subscription fetch, geoip refresh) is routed direct by a first-position
-   `process_name` route rule (native darwin process matching verified live in the standalone
-   binary). **Sniff ordering:** the sniff action never rewrites destinations at this pin;
-   the sniffed domain lands in `metadata.Domain`, so `{"action": "sniff"}` must precede every
-   domain-matching rule (subscription rules match only the sniffed domain for IP connections).
-   Bypass ordering for a `Tun` config (locked): `process_name` / `ip_is_private` / `ip_cidr`
-   safety rules → `action: sniff` → `clash_mode` rules → custom and subscription rules. The
-   `Diagnostic` config keeps the existing Mixed-only behavior unchanged.
-7. **Crash residue on macOS (locked, live-confirmed):** SIGTERM removes routes + interface
-   itself; `kill -9` leaves the interface removed by the kernel and the utun routes flushed
-   with it (verified: 0 routes referencing the interface 2 s after `kill -9`). The journal +
-   verification stay the recovery safety net and the contract for platforms that leave
-   residue (Windows T0 host spike pending).
-8. **Windows:** WinTUN driver discovery, UAC / helper behavior, and clean-machine install
-   checks are the T0 Windows host spike, to be run on a real Windows host before T1 completes
-   (recorded in the design note's open items).
+Exact inbound JSON, helper IPC, Windows emission, and known limits: `docs/tun.md`.
+
+1. **Schema pin:** bundled `1.13.19` accepts TUN inbound `address` (listable IPv4+IPv6);
+   `inet4_address` / `inet6_address` and inbound `sniff` / `sniff_timeout` are FATAL.
+   Sniffing is the route rule `{"action": "sniff"}` (string form). macOS
+   `interface_name` must be `utun<N>` with a numeric suffix.
+2. **macOS elevation:** utun / addresses / routes are privileged. Production runs the
+   core as root via `ice-helper` (launchd). Native sing-box owns the adapter; `ice-tun-sys`
+   journals and verifies. Install is permanently unsigned (`install_helper` IPC /
+   `crates/ice-elevate`, or `scripts/install-helper-macos.sh`). Dev opt-in:
+   `ICE_BOX_TUN_DEV_SUDO` → `SudoCoreCoordinator`. Live gates: G9.12 / G9.13.
+3. **DNS:** sing-box does not rewrite `scutil --dns` on its own. Tunneled DNS is a route
+   rule (port 53 → DNS module). When `dns_hijack` is enabled, the macOS backend points the
+   primary network service at public resolvers (elevated, journaled `dns_before` /
+   `dns_after`, compare-before-restore) so queries do not stay on a LAN resolver that
+   bypasses the TUN. Windows claims adapter DNS the same way (TUN peers).
+4. **Dual-stack:** an IPv4-only `address` list installs **no IPv6 routes** and silently
+   leaks IPv6. macOS carries ULA `fdfe:dcba:9876::1/126` (`ipv6_address` required).
+   Windows emission forces `dns.strategy: ipv4_only` (upstream #4178) — IPv6 is not a
+   supported capture path there.
+5. **Ownership:** one owner per resource. On macOS, sing-box owns adapter / addresses /
+   routes / DNS; `ice-tun-sys` records and verifies. No split ownership with the helper.
+6. **Control path:** loopback Clash API / Mixed stay off the TUN via the OS route table
+   plus `loopback_address`; sing-box's own dials bind via `auto_detect_interface`;
+   ice-box control traffic is a first-position `process_name` direct rule. Sniff never
+   rewrites destinations; `{"action": "sniff"}` must precede every domain-matching rule.
+   Bypass order: `process_name` / `ip_is_private` / `ip_cidr` → sniff → `clash_mode` →
+   custom/subscription. Diagnostic config stays Mixed-only.
+7. **Crash residue on macOS:** SIGTERM removes routes + interface; `kill -9` drops the
+   utun and flushes its routes. Journal + verification remain the contract. Windows
+   requires a graceful core stop: stranded `strict_route` WFP filters black-hole host TCP.
+8. **Windows:** WinTUN is embedded in `sing-box.exe`. Elevation is the scheduled task
+   `ice-box-tun` (`ice-tun-launcher.exe`, one UAC to create). Emission is Windows-only
+   (port-53 hijack first, TCP DNS, no fake-ip, no `local` server, UDP 443 reject).
+   Capture is IPv4 TCP only — see `docs/tun.md`.
 
 ### 24.6 Reserved bypass policy (first release, fixed)
 
 Loopback, link-local, multicast, RFC1918, RFC4193, the Mixed and Clash API endpoints, the TUN
 CIDR, DNS resolver traffic, and ice-box/sing-box control traffic take the documented direct
 path. Other LAN destinations follow normal routing policy; `allow_lan` does not broaden the
-bypass list. IPv4 is mandatory; IPv6 capture is **mandatory as well** (dual-stack tun, §24.5
-point 4 — an IPv4-only tun silently leaks IPv6) and is exposed as a capability/limitation in
-status and docs, never labeled "all traffic".
+bypass list. IPv4 is mandatory. IPv6 capture is mandatory on macOS (dual-stack tun, §24.5
+point 4) and **not** offered on Windows (`ipv4_only`). Never label a platform "all traffic".
