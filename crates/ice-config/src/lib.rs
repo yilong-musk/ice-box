@@ -697,6 +697,12 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// hijack, and the peer-reject rule (the TUN sub-ranges, dropped before
 /// `ip_is_private` can route the TUN peer into `direct` and re-enter the
 /// core; #4455 self-loop).
+///
+/// UDP user traffic (QUIC/HTTP3) is broken under the Windows shape — the
+/// core's UDP outbound is captured by its own TUN (design note §1.2 open
+/// items) — so UDP 443 is rejected to force clients onto the proven IPv4
+/// TCP path (YouTube avatars and other Google CDN subresources otherwise
+/// hang on HTTP/3).
 pub fn tun_reserved_rules(tun: &TunSettings) -> Vec<Value> {
     tun_reserved_rules_for(tun, cfg!(target_os = "windows"))
 }
@@ -720,6 +726,11 @@ fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
             "ip_cidr": tun_cidrs,
             "action": "reject",
             "method": "drop",
+        }));
+        rules.push(json!({
+            "network": "udp",
+            "port": [443],
+            "outbound": "block",
         }));
         rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
         rules.push(json!({
@@ -2182,13 +2193,15 @@ mod build_tests {
         // (the `protocol: dns` match does not fire in time on Windows),
         // process bypass, sniff, protocol-dns hijack, then the TUN
         // sub-ranges rejected BEFORE `ip_is_private` can loop them back
-        // into the core (#4455).
+        // into the core (#4455). UDP 443 (QUIC/HTTP3) is rejected because
+        // UDP user traffic is broken under the Windows shape; the block
+        // makes clients fall back to the proven IPv4 TCP path.
         let tun = TunSettings {
             dns_hijack: false, // Windows always emits the hijack rules
             ..TunSettings::default()
         };
         let rules = tun_reserved_rules_for(&tun, true);
-        assert_eq!(rules.len(), 7);
+        assert_eq!(rules.len(), 8);
         assert_eq!(rules[0]["action"], "hijack-dns");
         assert_eq!(rules[0]["port"][0], 53);
         assert_eq!(rules[1]["process_name"][0], "ice-box");
@@ -2210,8 +2223,12 @@ mod build_tests {
             vec!["10.0.0.0/30", "fdfe:dcba:9876::/126"],
             "peer-reject covers the TUN sub-ranges derived from the addresses"
         );
-        assert_eq!(rules[5]["ip_is_private"], true);
-        assert_eq!(rules[6]["ip_cidr"][0], "127.0.0.0/8");
+        let quic = &rules[5];
+        assert_eq!(quic["network"], "udp");
+        assert_eq!(quic["port"][0], 443);
+        assert_eq!(quic["outbound"], "block");
+        assert_eq!(rules[6]["ip_is_private"], true);
+        assert_eq!(rules[7]["ip_cidr"][0], "127.0.0.0/8");
 
         let generic = tun_reserved_rules_for(&tun, false);
         assert_eq!(generic.len(), 4, "macOS/generic shape is unchanged");

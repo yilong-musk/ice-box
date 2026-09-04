@@ -355,6 +355,14 @@ verified missing interface. Everything below was incorporated in the flip:
   2026-09-04: first fully healthy live activation — `applied` journal,
   `verify_applied`, Wintun index 25, real DNS through the TUN peers,
   zero ERROR/WARN since adoption.
+  2026-09-04: the Windows reserved rules reject UDP 443 (`{"network":
+  "udp", "port": [443], "outbound": "block"}` after the peer-reject
+  rule) — live-symptom driven: YouTube pages loaded over IPv4 TCP but
+  user avatars (Google CDN `yt3.ggpht.com` / `lh3.googleusercontent.com`,
+  HTTP/3 over QUIC = UDP 443) never rendered because UDP user traffic
+  dies under the Windows shape (see §1.2 open items). Rejecting QUIC
+  forces browsers back onto the proven IPv4 TCP path (macOS emission
+  unchanged — its UDP path is not affected).
 
 ## Plan B (2026-09-04): scheduled-task elevation — zero UAC prompts
 
