@@ -2445,9 +2445,12 @@ mod tests {
     #[test]
     fn collect_status_does_not_block_on_held_proxy_lock() {
         let state = temp_state_with_node("proxy-held");
-        // Warm the helper-core drift caches (one-time SHA-256 of the bundled
-        // core) outside the measured window: the poll itself must stay cheap.
+        // Warm one-time / first-probe work outside the measured window: SHA-256
+        // of the bundled core (macOS helper drift) and the Windows scheduled-
+        // task existence probe (`schtasks /Query`, easily >500ms on CI). The
+        // poll itself must stay cheap and must not wait on `state.proxy`.
         let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
+        let _ = cached_tun_task_ready(&state);
         let _guard = state.proxy.lock().unwrap();
         let started = std::time::Instant::now();
         let status = collect_status(&state).expect("status");
