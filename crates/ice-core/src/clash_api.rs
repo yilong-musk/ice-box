@@ -298,7 +298,18 @@ pub(crate) fn traffic_foreach(
     }
     let reader = BufReader::new(response.into_reader());
     for line in reader.lines() {
-        let line = line.map_err(|e| CoreError::SpawnFailed(format!("clash traffic read: {e}")))?;
+        let line = match line {
+            Ok(line) => line,
+            // A core restart (or an aborted stream) resets the /traffic
+            // connection: on Windows the read surfaces as EINVAL / reset
+            // instead of a clean EOF. The follow legitimately ends there.
+            Err(err) if traffic_stream_ended(&err) => break,
+            Err(err) => {
+                return Err(CoreError::SpawnFailed(format!(
+                    "clash traffic read: {err}"
+                )));
+            }
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -313,6 +324,18 @@ pub(crate) fn traffic_foreach(
         }
     }
     Ok(TrafficStreamEnd::Eof)
+}
+
+/// Whether a `/traffic` read error means the stream ended (peer closed or
+/// reset the connection) rather than a genuine failure.
+fn traffic_stream_ended(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+    ) || (cfg!(target_os = "windows") && err.raw_os_error() == Some(22))
 }
 
 fn percent_encode_path(s: &str) -> String {
@@ -448,7 +471,10 @@ impl MockClashApi {
                                 if stream.write_all(header.as_bytes()).is_err() {
                                     return;
                                 }
-                                for i in 0..40u64 {
+                                // Keep the stream alive long enough that a slow client (loaded CI) still
+                                // reads its first tick before the mock closes;
+                                // the eof test's 3s read timeout bounds this.
+                                for i in 0..100u64 {
                                     let line = format!(
                                         "{{\"up\":{},\"down\":{}}}\n",
                                         100 + i,
