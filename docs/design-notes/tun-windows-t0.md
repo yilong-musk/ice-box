@@ -343,7 +343,18 @@ verified missing interface. Everything below was incorporated in the flip:
   (OpenProcess + GetExitCodeProcess liveness with STILL_ACTIVE,
   taskkill `/T` graceful-first terminate, TerminateProcess hard kill;
   ERROR_INVALID_PARAMETER = gone, ERROR_ACCESS_DENIED = alive-not-
-  signalable parity with the unix EPERM path).
+  signalable parity with the unix EPERM path). The 2026-09-03/04 live
+  retests then isolated the final blocker with targeted diagnostics:
+  the verify readiness lock failed on `interface_up` while addresses,
+  routes, DNS, and the control path all verified — `interface_state`
+  resolved the adapter index by re-parsing `list_interface_names`
+  output (bare names) as if it were the raw `netsh interface ipv4 show
+  interfaces` table, so the index was always `None` and the identity
+  lock failed unconditionally on every Windows host. The index now
+  comes from the raw listing table (regression test locks the lesson).
+  2026-09-04: first fully healthy live activation — `applied` journal,
+  `verify_applied`, Wintun index 25, real DNS through the TUN peers,
+  zero ERROR/WARN since adoption.
 
 ## 5. Safe-testing protocol (this spike)
 
