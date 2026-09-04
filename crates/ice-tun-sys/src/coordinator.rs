@@ -745,7 +745,7 @@ pub fn tun_task_exists() -> bool {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        return matches!(status, Ok(status) if status.success());
+        matches!(status, Ok(status) if status.success())
     }
     #[cfg(not(target_os = "windows"))]
     {
