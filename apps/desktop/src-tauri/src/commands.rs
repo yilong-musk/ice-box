@@ -28,6 +28,8 @@ use ice_subscription::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime};
 use tauri::{AppHandle, Manager, State};
@@ -828,7 +830,7 @@ fn ensure_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(),
 }
 
 #[cfg(target_os = "windows")]
-fn remove_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+fn remove_tun_elevation_inner(_app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     if !ice_tun_sys::tun_task_exists() {
         return Ok(());
     }
