@@ -65,9 +65,9 @@ export type StatusResponse = {
    * the helper is refreshed. */
   helper_stale: boolean;
   /** Windows scheduled-task elevation installed (plan B): when true, TUN
-   * transitions run without any elevation prompt; when false the frontend
-   * runs the one-time `ensureTunElevation` (single UAC) before enabling.
-   * Always true on non-Windows hosts. */
+   * start/stop runs without any elevation prompt; when false the frontend
+   * runs the one-time `ensureTunElevation` (single UAC) before persisting
+   * the TUN-on next-start desire. Always true on non-Windows hosts. */
   tun_elevation_ready: boolean;
 };
 

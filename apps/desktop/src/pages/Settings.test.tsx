@@ -454,6 +454,57 @@ describe("Settings", () => {
       },
       { timeout: 2000 },
     );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_installed: true,
+      configured_tun: true,
+      traffic_capture: "tun",
+      tun_status: "enabled",
+      tun_interface: "utun42",
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tun: expect.objectContaining({ enabled: false }),
+          }),
+        );
+      },
+      { timeout: 2000 },
+    );
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("prompts helper install before enabling TUN when the helper is missing", async () => {
@@ -511,8 +562,8 @@ describe("Settings", () => {
 
   it("enables TUN via the one-time scheduled-task elevation on a platform without a helper", async () => {
     // Windows (plan B): no install dialog, no UAC relaunch; the one-time
-    // elevation component is installed, the setting is persisted, and the
-    // service starts.
+    // elevation component is installed and the next-start desire is
+    // persisted. The proxy service is not started from this switch.
     ensureTunElevation.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       ...defaultStatus,
@@ -536,7 +587,7 @@ describe("Settings", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
-      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(

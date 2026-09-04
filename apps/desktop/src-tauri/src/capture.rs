@@ -252,6 +252,17 @@ pub fn tun_topology_changed(a: &TunSettings, b: &TunSettings) -> bool {
         || a.strict_route != b.strict_route
 }
 
+/// `tun.enabled` is the desired backend for the *next* service start. A
+/// settings save that only flips that flag must persist it without touching
+/// the live capture (no start, no stop, no backend switch).
+pub fn only_tun_enabled_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.tun.enabled = false;
+    right.tun.enabled = false;
+    left == right && previous.tun.enabled != next.tun.enabled
+}
+
 impl CaptureController {
     pub fn new(paths: AppPaths, resource_dir: Option<PathBuf>) -> Self {
         let owner = tun_owner_token(&paths);
@@ -1399,14 +1410,15 @@ impl CaptureController {
         Ok((!warnings.is_empty()).then(|| warnings.join("；")))
     }
 
-    /// Serialized capture-backend transition when `tun.enabled` (or the TUN
-    /// topology) changed while the service is active (plan §4.3). Writes the
-    /// pending record first; commits `settings.json` only after the requested
-    /// backend is healthy; on failure rolls back to the old backend; clears
-    /// the pending record in both cases. An uncertain rollback leaves both
-    /// backends disabled and enters `RecoveryRequired`. When the active
-    /// backend and the committed settings already agree with the candidate,
-    /// no transition runs: the candidate is persisted as-is.
+    /// Serialized live-TUN reconfigure when TUN topology changed while TUN
+    /// capture is already active (plan §4.3). `tun.enabled` is *not* a live
+    /// switch: flipping it is a next-start desire and is persisted without
+    /// calling this. Writes the pending record first; commits `settings.json`
+    /// only after the requested backend is healthy; on failure rolls back to
+    /// the old backend; clears the pending record in both cases. An uncertain
+    /// rollback leaves both backends disabled and enters `RecoveryRequired`.
+    /// When the active backend and the committed settings already agree with
+    /// the candidate, no transition runs: the candidate is persisted as-is.
     pub fn transition_tun_settings(
         &self,
         previous: &AppSettings,
@@ -1964,6 +1976,26 @@ mod tests {
 
     fn controller(paths: &AppPaths) -> CaptureController {
         CaptureController::with_backend_for_tests(paths.clone(), fake_backend())
+    }
+
+    #[test]
+    fn only_tun_enabled_changed_ignores_live_capture_desire() {
+        let off = tun_settings(false);
+        let on = tun_settings(true);
+        assert!(
+            only_tun_enabled_changed(&off, &on),
+            "flipping tun.enabled alone is a next-start desire"
+        );
+        assert!(only_tun_enabled_changed(&on, &off));
+        assert!(!only_tun_enabled_changed(&off, &off));
+        assert!(!only_tun_enabled_changed(&on, &on));
+
+        let mut on_and_port = on.clone();
+        on_and_port.mixed_port = 17900;
+        assert!(
+            !only_tun_enabled_changed(&off, &on_and_port),
+            "any other field change is not desire-only"
+        );
     }
 
     #[test]

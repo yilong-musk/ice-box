@@ -246,10 +246,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** TUN setting switch on the home page: persists `tun.enabled` through the
-   * normal settings path (the capture backend follows the committed setting).
-   * Enabling without an authorized helper guides the user through install
-   * first (same flow as the Settings page). */
+  /** TUN setting switch on the home page: persists `tun.enabled` as the
+   * desired backend for the *next* service start. It never starts or stops
+   * the live proxy service. Enabling without an authorized helper guides
+   * the user through install first (same flow as the Settings page). */
   function onToggleTunSetting(enabled: boolean) {
     if (!settings) return;
     setTunOverride(enabled);
@@ -505,14 +505,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       // Windows (plan B): a one-time elevation component (a
                       // scheduled task) makes TUN work without any further
                       // prompt. The first enable triggers a single UAC to
-                      // install it; afterwards persist + start directly.
+                      // install it, then persists the next-start desire.
+                      // Never start/stop the proxy service from this switch.
                       void run(async () => {
                         await api.ensureTunElevation();
                         await api.saveSettings({
                           ...s,
                           tun: { ...s.tun, enabled: true },
                         });
-                        await api.start();
                         setTunOverride(true);
                       });
                       return;

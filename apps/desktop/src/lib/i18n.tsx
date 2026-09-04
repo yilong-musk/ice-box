@@ -221,7 +221,7 @@ const zh = {
   "settings.language.en": "English",
   "settings.tun": "TUN 模式",
   "settings.tunDesc":
-    "开启后，主页的代理服务将使用透明代理接管应用流量（替代系统代理接管）",
+    "决定下次启动代理服务时走透明代理还是系统代理；切换本开关不会立即启停当前服务",
   "settings.tunEnable": "启用 TUN 模式",
   "settings.tunTransition.preparing": "正在启用 TUN…",
   "settings.tunTransition.stopping": "正在关闭 TUN…",
@@ -229,13 +229,13 @@ const zh = {
     "TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换",
   "settings.tunNotSupported": "当前平台暂不支持 TUN 模式",
   "settings.tunActiveWithIface":
-    "当前通过 TUN 接管流量{interface}；关闭后立即切回系统代理接管",
+    "当前通过 TUN 接管流量{interface}。关闭本开关不会停止当前服务，下次启动将改用系统代理",
   "settings.helperStale":
     "应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN",
   "settings.helperReady":
     "辅助组件已安装并授权，可直接启用 TUN",
   "settings.helperNeeded":
-    "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）；服务运行中按顺序完成旧后端关闭、新后端启用与就绪检查",
+    "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）。本开关只决定下次启动走 TUN 还是系统代理",
   "settings.tunElevationDesc":
     "TUN 需要在管理员（提权）上下文中运行：请以管理员身份重新启动 ice-box 后再开启，Windows 将弹出系统授权提示（UAC）",
   "settings.updateHelper": "更新辅助组件",
@@ -500,7 +500,7 @@ const en: Record<MessageKey, string> = {
   "settings.language.en": "English",
   "settings.tun": "TUN Mode",
   "settings.tunDesc":
-    "When enabled, the proxy service on Home captures app traffic via transparent proxy (instead of the system proxy)",
+    "Chooses transparent proxy vs the system proxy for the next time the proxy service starts. Toggling this switch does not start or stop the current service",
   "settings.tunEnable": "Enable TUN Mode",
   "settings.tunTransition.preparing": "Enabling TUN…",
   "settings.tunTransition.stopping": "Disabling TUN…",
@@ -508,13 +508,13 @@ const en: Record<MessageKey, string> = {
     "TUN cleanup is unconfirmed, so new TUN activation is blocked. Run “Retry Recovery” on Home before switching",
   "settings.tunNotSupported": "TUN is not supported on this platform",
   "settings.tunActiveWithIface":
-    "Capturing via TUN{interface}; disabling switches back to the system proxy immediately",
+    "Currently capturing via TUN{interface}. Turning this off does not stop the current service; the next start will use the system proxy",
   "settings.helperStale":
     "The app updated its core, but the helper still runs the old core. Click “Update Helper” below to replace it (a system authorization prompt will appear); TUN stays disabled until then",
   "settings.helperReady":
     "The helper is installed and authorized; TUN can be enabled directly",
   "settings.helperNeeded":
-    "System permission required: install and authorize the helper first (a system authorization prompt will appear). While the service is running, the old backend is stopped, the new one enabled, and readiness checked in order",
+    "System permission required: install and authorize the helper first (a system authorization prompt will appear). This switch only chooses TUN vs the system proxy for the next start",
   "settings.tunElevationDesc":
     "TUN must run in an elevated (administrator) context: restart ice-box as administrator before enabling it — Windows shows the system authorization prompt (UAC)",
   "settings.updateHelper": "Update Helper",

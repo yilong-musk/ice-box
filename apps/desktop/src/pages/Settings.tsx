@@ -484,13 +484,13 @@ export function Settings({ active = true }: { active?: boolean }) {
                     // Windows (plan B): a one-time elevation component (a
                     // scheduled task) makes TUN work without any further
                     // prompt. The first enable triggers a single UAC to
-                    // install it; afterwards persist + start directly.
+                    // install it, then persists the next-start desire.
+                    // Never start/stop the proxy service from this switch.
                     setError(null);
                     void (async () => {
                       try {
                         await api.ensureTunElevation();
                         await persistTunEnabled(true);
-                        await api.start();
                         flashSaved();
                       } catch (e) {
                         setError(formatInvokeError(e));

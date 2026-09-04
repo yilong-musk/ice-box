@@ -1,6 +1,6 @@
 //! Tauri IPC commands (architecture §14).
 
-use crate::capture::{tun_topology_changed, TrafficCapture, TunStatus};
+use crate::capture::{only_tun_enabled_changed, tun_topology_changed, TrafficCapture, TunStatus};
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
@@ -142,9 +142,10 @@ pub struct StatusResponse {
     /// blocked until the helper is refreshed.
     pub helper_stale: bool,
     /// Windows scheduled-task elevation is installed (plan B): when true, TUN
-    /// transitions run without any elevation prompt; when false the frontend
-    /// runs the one-time `ensure_tun_elevation` (single UAC) before enabling.
-    /// Always true on non-Windows hosts (no task concept there).
+    /// start/stop runs without any elevation prompt; when false the frontend
+    /// runs the one-time `ensure_tun_elevation` (single UAC) before persisting
+    /// the TUN-on next-start desire. Always true on non-Windows hosts (no
+    /// task concept there).
     pub tun_elevation_ready: bool,
 }
 
@@ -997,11 +998,21 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
         let previous = current_settings(&state.paths).unwrap_or_default();
         settings.validate()?;
         let active = state.capture.active_backend();
-        let tun_transition = active != TrafficCapture::Inactive
-            && (previous.tun.enabled != settings.tun.enabled
-                || (previous.tun.enabled && tun_topology_changed(&previous.tun, &settings.tun)));
+        // `tun.enabled` is next-start desire only: persist it without starting,
+        // stopping, or switching the live capture backend.
+        if only_tun_enabled_changed(&previous, &settings) {
+            persist_settings(&state.paths.settings(), &settings)?;
+            return Ok(());
+        }
+        // Live TUN topology reconfigure (addresses / MTU / stack / …) while
+        // TUN capture stays the active backend. Enabled flips never belong
+        // here — they were handled above.
+        let tun_transition = active == TrafficCapture::Tun
+            && previous.tun.enabled
+            && settings.tun.enabled
+            && tun_topology_changed(&previous.tun, &settings.tun);
         if tun_transition {
-            // Serialized backend transition (plan §4.3): the pending record is
+            // Serialized topology apply (plan §4.3): the pending record is
             // committed only after the requested backend is healthy.
             let binary = binary_for(&app)?;
             let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;

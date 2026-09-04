@@ -749,6 +749,61 @@ describe("Home", () => {
         }),
       );
     });
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+  });
+
+  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      traffic_capture: "tun",
+      tun_status: "enabled",
+      tun_interface: "utun42",
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    expect(tunToggle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(tunToggle);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: false }),
+        }),
+      );
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
   it("reflects the TUN toggle optimistically and snaps back when the save is not committed", async () => {
@@ -836,8 +891,9 @@ describe("Home", () => {
     const tunToggle = view.getByRole("button", { name: "TUN 模式" });
 
     // Windows (plan B): the one-time elevation component is installed
-    // (single UAC), the TUN-on setting persists, and the service starts —
-    // no dialog, no installHelper, no app relaunch.
+    // (single UAC) and the TUN-on next-start desire persists — no dialog,
+    // no installHelper, no app relaunch, and the live proxy service is
+    // not started from this switch.
     fireEvent.click(tunToggle);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(installHelper).not.toHaveBeenCalled();
@@ -848,7 +904,7 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
-      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
     });
   });
 
