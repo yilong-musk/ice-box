@@ -97,6 +97,10 @@ pub struct AppState {
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
+    /// Memoized Windows TUN scheduled-task existence probe (TTL'd, invalidated
+    /// by ensure/remove); `schtasks /Query` would otherwise spawn once per
+    /// status poll.
+    pub tun_task_cache: Mutex<Option<(Instant, bool)>>,
     /// Whether the running core supports live mode switches via the Clash API
     /// (`PATCH /configs`). The pinned sing-box never honors it; the probe is
     /// attempted once and the failure is remembered so later mode switches
@@ -210,6 +214,7 @@ pub fn run() {
                 profile_cache: Mutex::new(None),
                 log_view_cache: Mutex::new(None),
                 helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
             });
             // Startup TUN recovery: inside the orchestration lock, after the
@@ -301,7 +306,8 @@ pub fn run() {
             commands::recover_tun,
             commands::install_helper,
             commands::uninstall_helper,
-            commands::relaunch_elevated_for_tun,
+            commands::ensure_tun_elevation,
+            commands::remove_tun_elevation,
             commands::get_log_view,
             commands::get_runtime_config,
             commands::reveal_data_dir,

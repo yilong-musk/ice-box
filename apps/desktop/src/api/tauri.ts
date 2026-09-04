@@ -64,6 +64,11 @@ export type StatusResponse = {
    * updated): only one core version may exist, so TUN stays blocked until
    * the helper is refreshed. */
   helper_stale: boolean;
+  /** Windows scheduled-task elevation installed (plan B): when true, TUN
+   * transitions run without any elevation prompt; when false the frontend
+   * runs the one-time `ensureTunElevation` (single UAC) before enabling.
+   * Always true on non-Windows hosts. */
+  tun_elevation_ready: boolean;
 };
 
 export type ProxyMode = "rule" | "global" | "direct";
@@ -236,12 +241,12 @@ export const api = {
   installHelper: () => invoke<void>("install_helper"),
   /** Uninstall the privileged helper via the system authorization dialog. */
   uninstallHelper: () => invoke<void>("uninstall_helper"),
-  /** In-app UAC relaunch for Windows TUN elevation: relaunches the app via
-   * the `runas` verb and quits (the elevated successor applies the persisted
-   * TUN setting on startup). `true` = relaunching, `false` = no relaunch
-   * needed (already elevated / not Windows); rejects when the prompt was
-   * cancelled (nothing modified). */
-  relaunchElevatedForTun: () => invoke<boolean>("relaunch_elevated_for_tun"),
+  /** One-time Windows TUN elevation setup (plan B): installs the scheduled
+   * task that runs the TUN core elevated — the single UAC prompt the user
+   * ever sees. No-op when already installed / not Windows. */
+  ensureTunElevation: () => invoke<void>("ensure_tun_elevation"),
+  /** Remove the Windows TUN scheduled task (one UAC prompt). */
+  removeTunElevation: () => invoke<void>("remove_tun_elevation"),
   getLogView: (n: number) =>
     invoke<string[]>("get_log_view", { req: { n } }),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),

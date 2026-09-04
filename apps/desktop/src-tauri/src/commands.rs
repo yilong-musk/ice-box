@@ -139,6 +139,11 @@ pub struct StatusResponse {
     /// core (app updated): only one core version may exist, so TUN stays
     /// blocked until the helper is refreshed.
     pub helper_stale: bool,
+    /// Windows scheduled-task elevation is installed (plan B): when true, TUN
+    /// transitions run without any elevation prompt; when false the frontend
+    /// runs the one-time `ensure_tun_elevation` (single UAC) before enabling.
+    /// Always true on non-Windows hosts (no task concept there).
+    pub tun_elevation_ready: bool,
 }
 
 /// How long a `system_proxy_applied` check result is reused. The check spawns
@@ -352,6 +357,36 @@ fn reset_helper_probe_cache(state: &AppState) {
     }
 }
 
+/// TTL for the Windows scheduled-task existence probe (one `schtasks /Query`
+/// subprocess per miss; status polls every 2s).
+const TUN_TASK_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn cached_tun_task_ready(state: &AppState) -> bool {
+    if !cfg!(target_os = "windows") {
+        return true;
+    }
+    let now = Instant::now();
+    if let Ok(cache) = state.tun_task_cache.lock() {
+        if let Some((at, value)) = *cache {
+            if now.duration_since(at) < TUN_TASK_CACHE_TTL {
+                return value;
+            }
+        }
+    }
+    let value = ice_tun_sys::tun_task_exists();
+    if let Ok(mut cache) = state.tun_task_cache.lock() {
+        *cache = Some((now, value));
+    }
+    value
+}
+
+#[cfg(target_os = "windows")]
+fn reset_tun_task_cache(state: &AppState) {
+    if let Ok(mut cache) = state.tun_task_cache.lock() {
+        *cache = None;
+    }
+}
+
 fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     reconcile_unexpected_core_exit(state);
     // Snapshot core state and drop the lock before disk / `networksetup` work so
@@ -407,6 +442,7 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         helper_installed: cached_helper_installed(state),
         helper_supported: cfg!(target_os = "macos"),
         helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
+        tun_elevation_ready: cached_tun_task_ready(state),
     })
 }
 
@@ -656,18 +692,178 @@ pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
     .await
 }
 
-/// In-app UAC relaunch for Windows TUN elevation: when the current process
-/// is not elevated and the TUN setting was already persisted, relaunch the
-/// app via the `runas` verb (UAC prompt) and quit — the elevated successor
-/// applies `tun.enabled` on startup. `Ok(true)` = relaunching (the app will
-/// exit shortly), `Ok(false)` = no relaunch needed (already elevated, or not
-/// Windows), `Err` = the user cancelled the prompt (nothing modified).
+/// One-time Windows TUN elevation setup (plan B): installs the scheduled task
+/// that runs the TUN core elevated. The only elevation the user ever sees —
+/// a single UAC prompt to create the task; afterwards TUN transitions
+/// (`schtasks /Run` / `/End`) work from an unelevated app without prompts.
+/// No-op when the task already exists; always `Ok` on non-Windows hosts.
 #[tauri::command]
-pub async fn relaunch_elevated_for_tun(app: AppHandle) -> Result<bool, AppError> {
-    run_blocking("relaunch_elevated_for_tun", move || {
-        crate::windows_elevation::relaunch_elevated(&app)
+pub async fn ensure_tun_elevation(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("ensure_tun_elevation", move || {
+        let state = app.state::<AppState>();
+        ensure_tun_elevation_inner(&app, &state)
     })
     .await
+}
+
+/// Remove the Windows TUN scheduled task (one UAC prompt). No-op when the
+/// task does not exist; always `Ok` on non-Windows hosts.
+#[tauri::command]
+pub async fn remove_tun_elevation(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("remove_tun_elevation", move || {
+        let state = app.state::<AppState>();
+        remove_tun_elevation_inner(&app, &state)
+    })
+    .await
+}
+
+#[cfg(target_os = "windows")]
+fn tun_task_paths(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), AppError> {
+    let resource = resource_dir(app).ok_or_else(|| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "cannot resolve the bundled resources directory",
+        )
+    })?;
+    let launcher = resource.join("ice-tun-launcher.exe");
+    let binary = binary_for(app)?;
+    let pidfile = state.paths.root().join("tun-task.pid");
+    let stopfile = state.paths.root().join("tun-task.stop");
+    Ok((launcher, binary, pidfile, stopfile))
+}
+
+#[cfg(target_os = "windows")]
+fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
+    use std::os::windows::process::CommandExt;
+    // One UAC prompt for the schtasks.exe invocation (no app relaunch).
+    // Each element is wrapped in single quotes (PS literal: double quotes
+    // inside, like the /TR action, survive untouched).
+    let ps_args = args
+        .iter()
+        .map(|arg| format!("'{}'", arg.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        "try {{ Start-Process -FilePath 'schtasks.exe' -ArgumentList @({ps_args}) -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }} }} catch {{ exit 1223 }}"
+    );
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|err| {
+            AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                format!("spawn elevated schtasks: {err}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "the one-time TUN elevation setup was not granted; enable TUN again to retry",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    if ice_tun_sys::tun_task_exists() {
+        return Ok(());
+    }
+    let (launcher, binary, pidfile, stopfile) = tun_task_paths(app, state)?;
+    if !launcher.is_file() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!(
+                "TUN task launcher not found at {} (reinstall the app)",
+                launcher.display()
+            ),
+        ));
+    }
+    let args = ice_tun_sys::tun_task_create_args(
+        &launcher,
+        &binary,
+        &state.paths.config(),
+        &state.paths.core_log(),
+        &pidfile,
+        &stopfile,
+    );
+    if ice_tun_sys::process_is_elevated() {
+        // Already elevated: run schtasks directly (no UAC prompt).
+        let status = std::process::Command::new("schtasks.exe")
+            .args(&args)
+            .status()
+            .map_err(|err| {
+                AppError::with_code(
+                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                    format!("create the TUN scheduled task: {err}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                "the TUN scheduled task could not be created",
+            ));
+        }
+    } else {
+        run_elevated_schtasks(&args)?;
+    }
+    if !ice_tun_sys::tun_task_exists() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "the TUN scheduled task still does not exist after the setup run",
+        ));
+    }
+    reset_tun_task_cache(state);
+    tracing::info!("TUN scheduled task installed (one-time elevation complete)");
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    if !ice_tun_sys::tun_task_exists() {
+        return Ok(());
+    }
+    let args = vec![
+        "/Delete".to_string(),
+        "/TN".to_string(),
+        ice_tun_sys::TUN_TASK_NAME.to_string(),
+        "/F".to_string(),
+    ];
+    if ice_tun_sys::process_is_elevated() {
+        let status = std::process::Command::new("schtasks.exe")
+            .args(&args)
+            .status()
+            .map_err(|err| {
+                AppError::with_code(
+                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                    format!("delete the TUN scheduled task: {err}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                "the TUN scheduled task could not be deleted",
+            ));
+        }
+    } else {
+        run_elevated_schtasks(&args)?;
+    }
+    reset_tun_task_cache(state);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn remove_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(), AppError> {
+    Ok(())
 }
 
 /// Full stop used by tray Quit / app exit (disable TUN capture first, restore
@@ -2127,6 +2323,7 @@ mod tests {
             profile_cache: Mutex::new(None),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
         }
     }
@@ -2187,6 +2384,7 @@ mod tests {
             profile_cache: Mutex::new(None),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
         }
     }

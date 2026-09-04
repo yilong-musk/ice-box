@@ -40,8 +40,10 @@ pub use backend::{
     TunConfig, TunHealth, TunStack,
 };
 #[cfg(target_os = "windows")]
-pub use coordinator::process_is_elevated;
-pub use coordinator::{CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator};
+pub use coordinator::{process_is_elevated, tun_task_create_args, tun_task_create_command};
+pub use coordinator::{
+    tun_task_exists, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
+};
 pub use error::{TunError, TunErrorCode};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
@@ -104,11 +106,35 @@ pub fn create_backend(
         // windows_tun_ready flipped 2026-09-03 (design note §1.2): the
         // production path is the real backend. The elevated runner needs a
         // bundled binary; without one every transition stays fail-closed at
-        // `tun.permission_required` (no OS mutation).
+        // `tun.permission_required` (no OS mutation). The scheduled-task
+        // runner (plan B) is preferred when the TUN task exists and the
+        // bundled launcher is present — the app then never needs elevation;
+        // otherwise the UAC relaunch runner stays as the fallback (task
+        // missing/disabled, dev runs).
         let coordinator: Box<dyn CoreCoordinator + Send> = match binary {
-            Some(binary) => Box::new(crate::coordinator::WindowsElevatedCoreCoordinator::new(
-                binary, log_path,
-            )),
+            Some(binary) => {
+                let task_coordinator = (|| {
+                    let launcher = binary.parent()?.join("ice-tun-launcher.exe");
+                    if !launcher.is_file() {
+                        return None;
+                    }
+                    let pidfile = config_path.parent()?.join("tun-task.pid");
+                    let stopfile = config_path.parent()?.join("tun-task.stop");
+                    let coordinator =
+                        crate::coordinator::TaskCoreCoordinator::new(launcher, pidfile, stopfile);
+                    if crate::coordinator::tun_task_exists() {
+                        Some(coordinator)
+                    } else {
+                        None
+                    }
+                })();
+                match task_coordinator {
+                    Some(coordinator) => Box::new(coordinator),
+                    None => Box::new(crate::coordinator::WindowsElevatedCoreCoordinator::new(
+                        binary, log_path,
+                    )),
+                }
+            }
             None => {
                 tracing::warn!(
                     "no sing-box binary was resolved; Windows TUN transitions stay fail-closed"

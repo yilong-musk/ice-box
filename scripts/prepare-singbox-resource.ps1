@@ -37,6 +37,18 @@ if ($Platform -eq "win") {
   Copy-Item $Src $Bare -Force
   Write-Host "Prepared resource $Bare for $Platform (bundle entry compatibility)"
 
+  # Plan B (scheduled-task elevation): build + bundle the TUN task launcher.
+  # The workspace build has not run yet at beforeBuildCommand time, so it is
+  # built here explicitly.
+  $LauncherExe = Join-Path $Root "target/release/ice-tun-launcher.exe"
+  & cargo build --release -p ice-tun-launcher
+  if (-not (Test-Path $LauncherExe)) {
+    Write-Error "ice-tun-launcher build failed; the TUN scheduled-task elevation would be missing"
+    exit 1
+  }
+  Copy-Item $LauncherExe (Join-Path $DestDir "ice-tun-launcher.exe") -Force
+  Write-Host "Prepared resource ice-tun-launcher.exe for $Platform (TUN task elevation)"
+
   # Windows archive companion (Windows TUN packaging, plan §5 T5): the
   # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
   # is embedded in the pinned binary; the T0 spike re-verifies this before

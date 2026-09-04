@@ -726,6 +726,309 @@ pub fn process_is_elevated() -> bool {
     }
 }
 
+/// Fixed name of the scheduled task that runs the TUN core elevated (plan B:
+/// scheduled-task elevation). The task is created once with the
+/// highest-privilege flag (the creating moment is the only elevation the
+/// user ever sees); afterwards `schtasks /Run` / `/End` start and stop the
+/// elevated core without any UAC prompt.
+pub const TUN_TASK_NAME: &str = "ice-box-tun";
+
+/// Whether the TUN scheduled task exists (exit-code probe; the zh-CN
+/// `schtasks /Query` output is never parsed). Always `false` on non-Windows
+/// hosts (no task concept there).
+pub fn tun_task_exists() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("schtasks")
+            .args(["/Query", "/TN", TUN_TASK_NAME])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return matches!(status, Ok(status) if status.success());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// The argv of the `schtasks /Create` invocation that installs the TUN task
+/// (highest privilege, never auto-triggered — only `schtasks /Run` starts
+/// it). The `/TR` element carries the launcher action with backslash-escaped
+/// inner quotes, exactly as `schtasks` stores it. Must run from an elevated
+/// context exactly once; the runtime flow does that through a single UAC
+/// prompt, the installer does it at install time.
+#[cfg(target_os = "windows")]
+pub fn tun_task_create_args(
+    launcher: &Path,
+    binary: &Path,
+    config: &Path,
+    log: &Path,
+    pidfile: &Path,
+    stopfile: &Path,
+) -> Vec<String> {
+    let action = format!(
+        "\"{}\" --binary \"{}\" --config \"{}\" --log \"{}\" --pidfile \"{}\" --stopfile \"{}\"",
+        launcher.display(),
+        binary.display(),
+        config.display(),
+        log.display(),
+        pidfile.display(),
+        stopfile.display()
+    );
+    vec![
+        "/Create".to_string(),
+        "/TN".to_string(),
+        TUN_TASK_NAME.to_string(),
+        "/TR".to_string(),
+        format!("\"{action}\""),
+        "/SC".to_string(),
+        "ONCE".to_string(),
+        "/ST".to_string(),
+        "00:00".to_string(),
+        "/RL".to_string(),
+        "HIGHEST".to_string(),
+        "/F".to_string(),
+    ]
+}
+
+/// The full command line form of [`tun_task_create_args`] for `cmd /c` /
+/// NSIS installer usage.
+#[cfg(target_os = "windows")]
+pub fn tun_task_create_command(
+    launcher: &Path,
+    binary: &Path,
+    config: &Path,
+    log: &Path,
+    pidfile: &Path,
+    stopfile: &Path,
+) -> String {
+    let args = tun_task_create_args(launcher, binary, config, log, pidfile, stopfile);
+    format!("schtasks {}", args.join(" "))
+}
+
+/// Elevated runner for the Windows TUN path through the scheduled task
+/// (plan B). The app process never needs to be elevated: the task (created
+/// once) carries the highest-privilege token, and `schtasks /Run` / `/End`
+/// trigger and terminate it without UAC. The task action is the bundled
+/// `ice-tun-launcher`, which spawns sing-box, writes its pid to the
+/// handshake pid file, and honors a graceful-stop request via the stop file.
+#[cfg(target_os = "windows")]
+pub struct TaskCoreCoordinator {
+    launcher: PathBuf,
+    pidfile: PathBuf,
+    stopfile: PathBuf,
+    pid: Option<u32>,
+}
+
+#[cfg(target_os = "windows")]
+impl TaskCoreCoordinator {
+    pub fn new(launcher: PathBuf, pidfile: PathBuf, stopfile: PathBuf) -> Self {
+        Self {
+            launcher,
+            pidfile,
+            stopfile,
+            pid: None,
+        }
+    }
+
+    fn run_task(&self) -> Result<(), TunError> {
+        let status = Command::new("schtasks")
+            .args(["/Run", "/TN", TUN_TASK_NAME])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|err| {
+                TunError::new(TunErrorCode::ApplyFailed, format!("schtasks /Run: {err}"))
+            })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!(
+                    "schtasks /Run failed (exit {}): the TUN task may be missing or disabled",
+                    status.code().unwrap_or(-1)
+                ),
+            ))
+        }
+    }
+
+    fn end_task(&self) {
+        let _ = Command::new("schtasks")
+            .args(["/End", "/TN", TUN_TASK_NAME])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    fn reset_handshake(&self) -> Result<(), TunError> {
+        // Wait out a previously recorded core (the /End above kills the task
+        // tree hard, so the launcher cannot clean the pid file itself).
+        if let Some(pid) = self.pid {
+            let deadline = Instant::now() + TERM_GRACE;
+            while Instant::now() < deadline && pid_is_alive_windows(pid) {
+                std::thread::sleep(LIVENESS_POLL);
+            }
+        }
+        let _ = std::fs::remove_file(&self.stopfile);
+        let _ = std::fs::remove_file(&self.pidfile);
+        self.pid = None;
+        Ok(())
+    }
+
+    fn wait_for_pidfile(&self) -> Result<u32, TunError> {
+        // The task start + launcher spawn take a moment; the launcher writes
+        // the pid file within seconds of `schtasks /Run`.
+        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT * 10;
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&self.pidfile) {
+                if let Ok(pid) = contents.trim().parse::<u32>() {
+                    if pid != 0 && pid_is_alive_windows(pid) {
+                        return Ok(pid);
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(TunError::new(
+                    TunErrorCode::HealthcheckFailed,
+                    format!(
+                        "TUN task started but no live core pid appeared in {}",
+                        self.pidfile.display()
+                    ),
+                ));
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+    }
+}
+
+/// Pure liveness probe for a pid from an unelevated process: the elevated
+/// core is queryable via `PROCESS_QUERY_LIMITED_INFORMATION` across
+/// integrity levels (`GetExitCodeProcess`), but not signalable.
+#[cfg(target_os = "windows")]
+fn pid_is_alive_windows(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return match std::io::Error::last_os_error().raw_os_error() {
+            Some(err) if err == ERROR_ACCESS_DENIED as i32 => true,
+            Some(err) if err == ERROR_INVALID_PARAMETER as i32 => false,
+            _ => false,
+        };
+    }
+    let mut exit_code: u32 = 0;
+    let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+    unsafe { CloseHandle(handle) };
+    queried != 0 && exit_code == STILL_ACTIVE as u32
+}
+
+#[cfg(target_os = "windows")]
+impl CoreCoordinator for TaskCoreCoordinator {
+    fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
+        if !tun_task_exists() {
+            return Err(TunError::new(
+                TunErrorCode::PermissionRequired,
+                format!(
+                    "the TUN scheduled task {TUN_TASK_NAME} is missing; run the one-time elevation setup (ensure_tun_elevation) before enabling capture"
+                ),
+            ));
+        }
+        if !self.launcher.is_file() {
+            return Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("TUN task launcher not found at {}", self.launcher.display()),
+            ));
+        }
+        self.end_task();
+        self.reset_handshake()?;
+        self.run_task()?;
+        let pid = match self.wait_for_pidfile() {
+            Ok(pid) => pid,
+            Err(err) => {
+                self.end_task();
+                let _ = std::fs::remove_file(&self.pidfile);
+                return Err(err);
+            }
+        };
+        // Bounded liveness wait: catch immediate config/bind errors so the
+        // backend's interface verification is not the only signal.
+        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
+        while Instant::now() < deadline {
+            if !pid_is_alive_windows(pid) {
+                return Err(TunError::new(
+                    TunErrorCode::HealthcheckFailed,
+                    format!(
+                        "elevated sing-box exited during startup (pid {pid}); check {}",
+                        self.pidfile.display()
+                    ),
+                ));
+            }
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        self.pid = Some(pid);
+        tracing::info!(pid, "elevated sing-box started via the TUN scheduled task");
+        Ok(pid)
+    }
+
+    fn stop(&mut self) -> Result<(), TunError> {
+        let Some(pid) = self.pid else {
+            self.end_task();
+            return Ok(());
+        };
+        // Graceful-first (design note tun-windows-t0 §4): the strict-route
+        // WFP filters sing-box installs are removed on its graceful shutdown
+        // path only; a hard kill strands them and black-holes host TCP (V11).
+        // The elevated launcher honors the stop file with the same
+        // graceful-then-forced sequence the dev runner uses.
+        if let Err(err) = std::fs::write(&self.stopfile, "stop") {
+            return Err(TunError::new(
+                TunErrorCode::RestoreFailed,
+                format!("request TUN core stop: {err}"),
+            ));
+        }
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline && pid_is_alive_windows(pid) {
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        if !pid_is_alive_windows(pid) {
+            self.pid = None;
+            return Ok(());
+        }
+        // Graceful stop did not finish the tree (launcher gone); end the task
+        // hard (WFP residue is handled by the journal + recovery, and the
+        // next apply recreates the filters).
+        self.end_task();
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline && pid_is_alive_windows(pid) {
+            std::thread::sleep(LIVENESS_POLL);
+        }
+        if pid_is_alive_windows(pid) {
+            return Err(TunError::new(
+                TunErrorCode::RecoveryRequired,
+                format!("elevated sing-box (pid {pid}) survived the scheduled-task end"),
+            ));
+        }
+        self.pid = None;
+        Ok(())
+    }
+
+    fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
+        Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            "system DNS mutation is not supported on the Windows TUN task runner",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -759,6 +1062,36 @@ mod tests {
         assert!(
             !pid_is_alive(i32::MAX as u32 - 1),
             "an impossible pid must report gone (ESRCH)"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn tun_task_create_args_carry_the_highest_privilege_flag_and_action() {
+        let args = tun_task_create_args(
+            Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe"),
+            Path::new(r"C:\Program Files\ice-box\sing-box.exe"),
+            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\config.json"),
+            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\logs\sing-box.log"),
+            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.pid"),
+            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.stop"),
+        );
+        assert_eq!(
+            args,
+            [
+                "/Create",
+                "/TN",
+                TUN_TASK_NAME,
+                "/TR",
+                r#""C:\Program Files\ice-box\ice-tun-launcher.exe" --binary "C:\Program Files\ice-box\sing-box.exe" --config "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\config.json" --log "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\logs\sing-box.log" --pidfile "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.pid" --stopfile "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.stop""#,
+                "/SC",
+                "ONCE",
+                "/ST",
+                "00:00",
+                "/RL",
+                "HIGHEST",
+                "/F",
+            ]
         );
     }
 }

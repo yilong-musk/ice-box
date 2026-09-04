@@ -356,6 +356,32 @@ verified missing interface. Everything below was incorporated in the flip:
   `verify_applied`, Wintun index 25, real DNS through the TUN peers,
   zero ERROR/WARN since adoption.
 
+## Plan B (2026-09-04): scheduled-task elevation — zero UAC prompts
+
+The per-session elevation dance (toggle → UAC relaunch → re-enable) is
+gone. A scheduled task `ice-box-tun` (highest privilege, never
+auto-triggered) runs the TUN core elevated; the app itself never needs
+elevation:
+
+- one-time setup: `schtasks /Create` with the bundled
+  `ice-tun-launcher.exe` action — created by the installer (best-effort,
+  per-user NSIS is not elevated) or by the app's `ensure_tun_elevation`
+  (a single UAC prompt, no app relaunch);
+- `start` = `schtasks /Run`; `stop` = the app touches the stop file, the
+  elevated launcher does the graceful `taskkill /T` (WM_CLOSE, the
+  strict-route WFP filters are removed on this path only), then `schtasks
+  /End` hard fallback; liveness = cross-integrity
+  `PROCESS_QUERY_LIMITED_INFORMATION` + `GetExitCodeProcess` on the
+  handshake pid file;
+- the UAC relaunch machinery (relaunch_elevated, `--elevated-relaunch`
+  instance lock, frontend relaunch path) was removed; the
+  `WindowsElevatedCoreCoordinator` (direct spawn, requires an elevated
+  app) remains as the fallback when the task is missing (fail-closed
+  `tun.permission_required` — the frontend runs `ensure_tun_elevation`
+  first, so the fallback only surfaces if the task vanishes mid-flight).
+  `tun_elevation_ready` (status) reports task presence; `schtasks`
+  probes are exit-code based (zh-CN output is never parsed).
+
 ## 5. Safe-testing protocol (this spike)
 
 Every run: warn-level core logs, short curl timeouts, forced

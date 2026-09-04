@@ -8,6 +8,7 @@ members = [
   "crates/ice-subscription",
   "crates/ice-engine",
   "crates/ice-tun-sys",
+  "crates/ice-tun-launcher",
   "crates/ice-helper",
   "crates/ice-elevate",
 ]

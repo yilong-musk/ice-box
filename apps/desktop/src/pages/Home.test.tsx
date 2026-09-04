@@ -14,6 +14,7 @@ const saveSettings = vi.fn();
 const recoverTun = vi.fn();
 const installHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
+const ensureTunElevation = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -29,6 +30,7 @@ vi.mock("../api/tauri", () => ({
     installHelper: (...args: unknown[]) => installHelper(...args),
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
+    ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -795,7 +797,7 @@ describe("Home", () => {
     });
   });
 
-  it("enables TUN directly when already elevated on the home page without a helper", async () => {
+  it("enables TUN via the one-time scheduled-task elevation on the home page", async () => {
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -823,6 +825,7 @@ describe("Home", () => {
       helper_supported: false,
       helper_installed: false,
     });
+    ensureTunElevation.mockResolvedValue(undefined);
 
     const { container } = render(<Home />);
     const view = within(container);
@@ -832,23 +835,24 @@ describe("Home", () => {
     });
     const tunToggle = view.getByRole("button", { name: "TUN 模式" });
 
-    // No helper platform, already elevated: no dialog, no installHelper,
-    // no UAC relaunch; the setting saves and the toggle flips.
-    relaunchElevatedForTun.mockResolvedValue(false);
+    // Windows (plan B): the one-time elevation component is installed
+    // (single UAC), the TUN-on setting persists, and the service starts —
+    // no dialog, no installHelper, no app relaunch.
     fireEvent.click(tunToggle);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(installHelper).not.toHaveBeenCalled();
     await waitFor(() => {
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
-      expect(relaunchElevatedForTun).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("relaunches the app elevated via UAC from the home page", async () => {
+  it("reports a cancelled one-time elevation on the home page", async () => {
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -876,7 +880,7 @@ describe("Home", () => {
       helper_supported: false,
       helper_installed: false,
     });
-    relaunchElevatedForTun.mockResolvedValue(true);
+    ensureTunElevation.mockRejectedValue("tun.elevation_cancelled: x");
 
     const { container } = render(<Home />);
     const view = within(container);
@@ -886,69 +890,13 @@ describe("Home", () => {
     });
     const tunToggle = view.getByRole("button", { name: "TUN 模式" });
 
-    // Unelevated: persist the setting, then relaunch via UAC (the app exits
-    // to restart elevated; the successor applies the saved setting).
-    fireEvent.click(tunToggle);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(installHelper).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tun: expect.objectContaining({ enabled: true }),
-        }),
-      );
-      expect(relaunchElevatedForTun).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("reverts TUN when the UAC prompt is cancelled on the home page", async () => {
-    getSettings.mockResolvedValue({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: null,
-      auto_set_system_proxy: true,
-      allow_lan: false,
-      proxy_mode: "rule",
-      tun: tunSettings,
-    });
-    getStatus.mockResolvedValue({
-      core: {
-        status: "running",
-        message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
-      },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: false,
-      system_proxy_recorded: false,
-      system_proxy_available: true,
-      ...tunStatus,
-      helper_supported: false,
-      helper_installed: false,
-    });
-    relaunchElevatedForTun.mockRejectedValue("tun.elevation_cancelled: x");
-
-    const { container } = render(<Home />);
-    const view = within(container);
-
-    await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
-    });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
-
-    // Cancelled: the setting reverts to off and the error surfaces.
+    // Cancelled: nothing was persisted or started, the error surfaces.
     fireEvent.click(tunToggle);
     await waitFor(() => {
       expect(container.textContent).toContain("tun.elevation_cancelled");
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tun: expect.objectContaining({ enabled: false }),
-        }),
-      );
     });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     expect(tunToggle).toHaveAttribute("aria-pressed", "false");
   });
 

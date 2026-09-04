@@ -9,17 +9,6 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const FOCUS_FILE: &str = "instance.focus";
 
-/// CLI flag passed to the relaunched (UAC-elevated) instance: the single-
-/// instance lock may still be held by the exiting predecessor for a moment,
-/// so the flagged instance waits for the lock instead of exiting as
-/// Secondary right away.
-pub const RELAUNCH_FLAG: &str = "--elevated-relaunch";
-
-/// How long the elevated relaunch keeps retrying the instance lock before
-/// giving up to the Secondary (request-focus + exit) path.
-const RELAUNCH_LOCK_ATTEMPTS: u32 = 20;
-const RELAUNCH_LOCK_RETRY: Duration = Duration::from_millis(500);
-
 pub enum InstanceLock {
     Primary(std::fs::File),
     /// Another instance holds the lock; focus was requested on it.
@@ -41,19 +30,11 @@ pub fn acquire_or_request_focus(paths: &AppPaths) -> Result<InstanceLock, String
         .open(&lock_path)
         .map_err(|e| format!("open instance lock: {e}"))?;
 
-    // An instance relaunched via the in-app UAC flow exits its predecessor
-    // *after* the authorization prompt, so the elevated successor may start
-    // while the old lock is still held. Give that one a bounded wait instead
-    // of instantly requesting focus and exiting as Secondary.
-    let relaunching = std::env::args().any(|arg| arg == RELAUNCH_FLAG);
-    let mut attempts = 0u32;
-    while file.try_lock_exclusive().is_err() {
-        if !relaunching || attempts >= RELAUNCH_LOCK_ATTEMPTS {
-            request_focus(paths.root());
-            return Ok(InstanceLock::Secondary);
-        }
-        attempts += 1;
-        std::thread::sleep(RELAUNCH_LOCK_RETRY);
+    // The in-app UAC relaunch was removed with the scheduled-task elevation
+    // (plan B): every instance takes the lock or requests focus immediately.
+    if file.try_lock_exclusive().is_err() {
+        request_focus(paths.root());
+        return Ok(InstanceLock::Secondary);
     }
 
     file.set_len(0)

@@ -20,6 +20,8 @@ const saveSettings = vi.fn();
 const installHelper = vi.fn();
 const uninstallHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
+const ensureTunElevation = vi.fn();
+const start = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -30,6 +32,8 @@ vi.mock("../api/tauri", () => ({
     uninstallHelper: (...args: unknown[]) => uninstallHelper(...args),
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
+    ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    start: (...args: unknown[]) => start(...args),
     revealDataDir: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -505,10 +509,11 @@ describe("Settings", () => {
     });
   });
 
-  it("enables TUN directly when already elevated on a platform without a helper", async () => {
-    // Windows, already elevated: no install dialog, no UAC relaunch; the
-    // setting is persisted and the switch flips.
-    relaunchElevatedForTun.mockResolvedValue(false);
+  it("enables TUN via the one-time scheduled-task elevation on a platform without a helper", async () => {
+    // Windows (plan B): no install dialog, no UAC relaunch; the one-time
+    // elevation component is installed, the setting is persisted, and the
+    // service starts.
+    ensureTunElevation.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       ...defaultStatus,
       helper_supported: false,
@@ -525,12 +530,13 @@ describe("Settings", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(installHelper).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(relaunchElevatedForTun).toHaveBeenCalledTimes(1);
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
+      expect(start).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
@@ -540,40 +546,10 @@ describe("Settings", () => {
     });
   });
 
-  it("relaunches the app elevated via UAC when enabling TUN unelevated", async () => {
-    // Windows, not elevated: the setting is persisted first, then the UAC
-    // relaunch runs; the app exits to restart elevated (no switch flip
-    // needed — the successor applies the saved setting).
-    relaunchElevatedForTun.mockResolvedValue(true);
-    getStatus.mockResolvedValue({
-      ...defaultStatus,
-      helper_supported: false,
-      helper_installed: false,
-    });
-
-    const { container } = render(<Settings />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
-    });
-
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(installHelper).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tun: expect.objectContaining({ enabled: true }),
-        }),
-      );
-      expect(relaunchElevatedForTun).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("reverts TUN when the UAC prompt is cancelled", async () => {
-    // Windows, prompt cancelled: nothing was modified — the setting reverts
-    // to off and the error surfaces.
-    relaunchElevatedForTun.mockRejectedValue("tun.elevation_cancelled: x");
+  it("reports a cancelled one-time elevation when enabling TUN", async () => {
+    // Windows, setup prompt cancelled: nothing was persisted or started, the
+    // error surfaces and the switch stays off.
+    ensureTunElevation.mockRejectedValue("tun.elevation_cancelled: x");
     getStatus.mockResolvedValue({
       ...defaultStatus,
       helper_supported: false,
@@ -589,12 +565,9 @@ describe("Settings", () => {
     fireEvent.click(view.getByLabelText("启用 TUN 模式"));
     await waitFor(() => {
       expect(container.textContent).toContain("tun.elevation_cancelled");
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tun: expect.objectContaining({ enabled: false }),
-        }),
-      );
     });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
       "data-state",
       "unchecked",

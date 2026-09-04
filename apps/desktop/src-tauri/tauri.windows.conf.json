@@ -28,6 +28,7 @@
     "resources": {
       "resources/sing-box.exe": "sing-box.exe",
       "resources/sing-box": null,
+      "resources/ice-tun-launcher.exe": "ice-tun-launcher.exe",
       "resources/geoip": "geoip",
       "resources/ice-helper": null
     },
@@ -36,6 +37,7 @@
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "languages": ["SimpChinese", "English"],
+        "installerHooks": "./nsis/installer-hooks.nsh",
         "customLanguageFiles": {
           "English": "nsis/English.nsh",
           "SimpChinese": "nsis/SimpChinese.nsh"

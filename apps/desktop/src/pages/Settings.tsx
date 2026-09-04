@@ -481,25 +481,18 @@ export function Settings({ active = true }: { active?: boolean }) {
                     return;
                   }
                   if (checked === true && status?.helper_supported === false) {
-                    // Windows: persist, then relaunch the app elevated via
-                    // UAC when needed. The elevated successor applies the
-                    // saved TUN setting on startup.
+                    // Windows (plan B): a one-time elevation component (a
+                    // scheduled task) makes TUN work without any further
+                    // prompt. The first enable triggers a single UAC to
+                    // install it; afterwards persist + start directly.
                     setError(null);
                     void (async () => {
                       try {
+                        await api.ensureTunElevation();
                         await persistTunEnabled(true);
-                        const relaunched = await api.relaunchElevatedForTun();
-                        if (relaunched) {
-                          // The app exits to restart elevated; the setting is
-                          // already persisted and applies on the next start.
-                          return;
-                        }
-                        // Already elevated: the backend follows the setting.
+                        await api.start();
                         flashSaved();
                       } catch (e) {
-                        // Prompt cancelled or relaunch failed: nothing was
-                        // modified; revert the switch and surface the error.
-                        await persistTunEnabled(false).catch(() => undefined);
                         setError(formatInvokeError(e));
                       }
                     })();

@@ -502,33 +502,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       return;
                     }
                     if (status?.helper_supported === false) {
-                      // Windows: persist, then relaunch the app elevated via
-                      // UAC when needed; the elevated successor applies the
-                      // saved TUN setting on startup. A cancelled prompt
-                      // reverts the setting and surfaces the error.
+                      // Windows (plan B): a one-time elevation component (a
+                      // scheduled task) makes TUN work without any further
+                      // prompt. The first enable triggers a single UAC to
+                      // install it; afterwards persist + start directly.
                       void run(async () => {
+                        await api.ensureTunElevation();
                         await api.saveSettings({
                           ...s,
                           tun: { ...s.tun, enabled: true },
                         });
-                        try {
-                          const relaunched =
-                            await api.relaunchElevatedForTun();
-                          if (relaunched) {
-                            // The app exits to restart elevated.
-                            return;
-                          }
-                          // Already elevated: the backend follows the setting.
-                          setTunOverride(true);
-                        } catch (e) {
-                          await api
-                            .saveSettings({
-                              ...s,
-                              tun: { ...s.tun, enabled: false },
-                            })
-                            .catch(() => undefined);
-                          throw e;
-                        }
+                        await api.start();
+                        setTunOverride(true);
                       });
                       return;
                     }
