@@ -40,7 +40,7 @@ pub use backend::{
     TunConfig, TunHealth, TunStack,
 };
 #[cfg(target_os = "windows")]
-pub use coordinator::{process_is_elevated, tun_task_create_args, tun_task_create_command};
+pub use coordinator::{process_is_elevated, tun_task_create_args};
 pub use coordinator::{
     tun_task_exists, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
 };

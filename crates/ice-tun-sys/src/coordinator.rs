@@ -796,21 +796,6 @@ pub fn tun_task_create_args(
     ]
 }
 
-/// The full command line form of [`tun_task_create_args`] for `cmd /c` /
-/// NSIS installer usage.
-#[cfg(target_os = "windows")]
-pub fn tun_task_create_command(
-    launcher: &Path,
-    binary: &Path,
-    config: &Path,
-    log: &Path,
-    pidfile: &Path,
-    stopfile: &Path,
-) -> String {
-    let args = tun_task_create_args(launcher, binary, config, log, pidfile, stopfile);
-    format!("schtasks {}", args.join(" "))
-}
-
 /// Elevated runner for the Windows TUN path through the scheduled task
 /// (plan B). The app process never needs to be elevated: the task (created
 /// once) carries the highest-privilege token, and `schtasks /Run` / `/End`
