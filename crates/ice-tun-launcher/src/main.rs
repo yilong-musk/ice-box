@@ -117,7 +117,7 @@ fn run() -> i32 {
             return 2;
         }
     };
-    let child = match Command::new(&args.binary)
+    let mut child = match Command::new(&args.binary)
         .arg("run")
         .arg("-c")
         .arg(&args.config)
@@ -144,12 +144,9 @@ fn run() -> i32 {
         return 2;
     }
 
-    let mut child = child;
-    let mut stopped = false;
     loop {
         // Graceful stop requested by the app (stop file present).
-        if !stopped && args.stopfile.exists() {
-            stopped = true;
+        if args.stopfile.exists() {
             graceful_stop(pid);
             let deadline = Instant::now() + TERM_GRACE;
             while Instant::now() < deadline {
