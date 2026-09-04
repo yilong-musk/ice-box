@@ -1081,7 +1081,7 @@ mod tests {
                 "/SC",
                 "ONCE",
                 "/ST",
-                "00:00",
+                "23:59",
                 "/RL",
                 "HIGHEST",
                 "/F",
