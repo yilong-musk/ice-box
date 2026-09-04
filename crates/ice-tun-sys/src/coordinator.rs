@@ -765,27 +765,18 @@ pub fn tun_task_exists() -> bool {
 
 /// The argv of the `schtasks /Create` invocation that installs the TUN task
 /// (highest privilege, never auto-triggered — only `schtasks /Run` starts
-/// it). The `/TR` element carries the launcher action with backslash-escaped
-/// inner quotes, exactly as `schtasks` stores it. Must run from an elevated
-/// context exactly once; the runtime flow does that through a single UAC
-/// prompt, the installer does it at install time.
+/// it). The `/TR` element is `"<launcher>" --data "<data-dir>"` — the
+/// launcher derives the sing-box binary (same directory) and the
+/// config/log/pid/stop paths from the data dir, which also keeps the action
+/// far below the 261-char `/TR` limit. Must run from an elevated context
+/// exactly once; the runtime flow does that through a single UAC prompt, the
+/// installer does it at install time.
 #[cfg(target_os = "windows")]
-pub fn tun_task_create_args(
-    launcher: &Path,
-    binary: &Path,
-    config: &Path,
-    log: &Path,
-    pidfile: &Path,
-    stopfile: &Path,
-) -> Vec<String> {
+pub fn tun_task_create_args(launcher: &Path, data_dir: &Path) -> Vec<String> {
     let action = format!(
-        "\"{}\" --binary \"{}\" --config \"{}\" --log \"{}\" --pidfile \"{}\" --stopfile \"{}\"",
+        "\"{}\" --data \"{}\"",
         launcher.display(),
-        binary.display(),
-        config.display(),
-        log.display(),
-        pidfile.display(),
-        stopfile.display()
+        data_dir.display()
     );
     vec![
         "/Create".to_string(),
@@ -1064,11 +1055,7 @@ mod tests {
     fn tun_task_create_args_carry_the_highest_privilege_flag_and_action() {
         let args = tun_task_create_args(
             Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe"),
-            Path::new(r"C:\Program Files\ice-box\sing-box.exe"),
-            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\config.json"),
-            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\logs\sing-box.log"),
-            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.pid"),
-            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.stop"),
+            Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox"),
         );
         assert_eq!(
             args,
@@ -1077,7 +1064,7 @@ mod tests {
                 "/TN",
                 TUN_TASK_NAME,
                 "/TR",
-                r#""C:\Program Files\ice-box\ice-tun-launcher.exe" --binary "C:\Program Files\ice-box\sing-box.exe" --config "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\config.json" --log "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\logs\sing-box.log" --pidfile "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.pid" --stopfile "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox\tun-task.stop""#,
+                r#""C:\Program Files\ice-box\ice-tun-launcher.exe" --data "C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox""#,
                 "/SC",
                 "ONCE",
                 "/ST",
@@ -1086,6 +1073,12 @@ mod tests {
                 "HIGHEST",
                 "/F",
             ]
+        );
+        // The /TR value must stay far below the 261-char schtasks limit.
+        let tr_len = args[4].len();
+        assert!(
+            tr_len < 261,
+            "the /TR action is {tr_len} chars; schtasks rejects values above 261"
         );
     }
 }

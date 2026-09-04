@@ -48,42 +48,35 @@ struct Args {
 
 #[cfg(target_os = "windows")]
 fn parse_args() -> Option<Args> {
-    let mut args = Args {
-        binary: PathBuf::new(),
-        config: PathBuf::new(),
-        log: PathBuf::new(),
-        pidfile: PathBuf::new(),
-        stopfile: PathBuf::new(),
-    };
+    let mut data_dir = PathBuf::new();
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         let value = it.next()?;
-        match flag.as_str() {
-            "--binary" => args.binary = PathBuf::from(value),
-            "--config" => args.config = PathBuf::from(value),
-            "--log" => args.log = PathBuf::from(value),
-            "--pidfile" => args.pidfile = PathBuf::from(value),
-            "--stopfile" => args.stopfile = PathBuf::from(value),
-            _ => return None,
+        if flag != "--data" {
+            return None;
         }
+        data_dir = PathBuf::from(value);
     }
-    if args.binary.as_os_str().is_empty()
-        || args.config.as_os_str().is_empty()
-        || args.log.as_os_str().is_empty()
-        || args.pidfile.as_os_str().is_empty()
-        || args.stopfile.as_os_str().is_empty()
-    {
+    if data_dir.as_os_str().is_empty() {
         return None;
     }
-    Some(args)
+    // Derive every other path from the app data dir (fixed layout) so the
+    // scheduled task's `/TR` action stays far below schtasks's 261-char
+    // limit: only the data dir is baked into the task.
+    let exe_dir = std::env::current_exe().ok()?.parent().map(PathBuf::from)?;
+    Some(Args {
+        binary: exe_dir.join("sing-box.exe"),
+        config: data_dir.join("config.json"),
+        log: data_dir.join("logs").join("sing-box.log"),
+        pidfile: data_dir.join("tun-task.pid"),
+        stopfile: data_dir.join("tun-task.stop"),
+    })
 }
 
 #[cfg(target_os = "windows")]
 fn run() -> i32 {
     let Some(args) = parse_args() else {
-        eprintln!(
-            "usage: ice-tun-launcher --binary <path> --config <path> --log <path> --pidfile <path> --stopfile <path>"
-        );
+        eprintln!("usage: ice-tun-launcher --data <app-data-dir>");
         return 2;
     };
     if !args.binary.is_file() {

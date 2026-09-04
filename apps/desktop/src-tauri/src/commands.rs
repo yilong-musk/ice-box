@@ -720,10 +720,7 @@ pub async fn remove_tun_elevation(app: AppHandle) -> Result<(), AppError> {
 }
 
 #[cfg(target_os = "windows")]
-fn tun_task_paths(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), AppError> {
+fn tun_task_paths(app: &AppHandle, state: &AppState) -> Result<(PathBuf, PathBuf), AppError> {
     let resource = resource_dir(app).ok_or_else(|| {
         AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
@@ -731,10 +728,8 @@ fn tun_task_paths(
         )
     })?;
     let launcher = resource.join("ice-tun-launcher.exe");
-    let binary = binary_for(app)?;
-    let pidfile = state.paths.root().join("tun-task.pid");
-    let stopfile = state.paths.root().join("tun-task.stop");
-    Ok((launcher, binary, pidfile, stopfile))
+    let data_dir = state.paths.root().to_path_buf();
+    Ok((launcher, data_dir))
 }
 
 #[cfg(target_os = "windows")]
@@ -775,7 +770,7 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
     if ice_tun_sys::tun_task_exists() {
         return Ok(());
     }
-    let (launcher, binary, pidfile, stopfile) = tun_task_paths(app, state)?;
+    let (launcher, data_dir) = tun_task_paths(app, state)?;
     if !launcher.is_file() {
         return Err(AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
@@ -785,14 +780,7 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
             ),
         ));
     }
-    let args = ice_tun_sys::tun_task_create_args(
-        &launcher,
-        &binary,
-        &state.paths.config(),
-        &state.paths.core_log(),
-        &pidfile,
-        &stopfile,
-    );
+    let args = ice_tun_sys::tun_task_create_args(&launcher, &data_dir);
     if ice_tun_sys::process_is_elevated() {
         // Already elevated: run schtasks directly (no UAC prompt).
         use std::os::windows::process::CommandExt;
