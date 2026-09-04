@@ -1,5 +1,4 @@
-//! Windows TUN backend (plan §5 T2; T0 gate `windows_tun_ready` flipped
-//! 2026-09-03, design note tun-windows-t0 §1.2).
+//! Windows TUN backend (`docs/tun.md`; `windows_tun_ready` flipped 2026-09-03).
 //!
 //! Ownership model (locked by the Windows T0 spike): the elevated sing-box
 //! process — run by an injected [`CoreCoordinator`] — owns the WinTUN
@@ -970,7 +969,7 @@ impl TunBackend for WindowsTunBackend {
             reason: None,
             ipv4: true,
             ipv6: true,
-            // Locked by the host spike (design note §1.1): sing-box sets the
+            // Locked by the host spike (`docs/tun.md`): sing-box sets the
             // TUN adapter's DNS to the TUN peers, so the backend journals
             // dns_before / dns_after and verifies the adapter still owns DNS.
             dns_hijack: true,
@@ -1227,12 +1226,11 @@ impl TunBackend for WindowsTunBackend {
     fn restore(&mut self, applied: &AppliedTun) -> Result<(), TunError> {
         self.journal_record(steps::RESTORE_STARTED, |_| {})?;
 
-        // Release: stop the core; the native path's sing-box removes its
-        // routes and the adapter. Windows termination is a hard kill
-        // (accepted model, windows-plan §2) — whether the wintun adapter is
-        // removed on process death is a T0 spike item; if it survives, this
-        // backend fails closed into recovery_required (removal needs the
-        // privileged helper path).
+        // Release: stop the core; sing-box removes its routes and the adapter
+        // on a graceful stop (`docs/tun.md`). A stranded `strict_route` WFP
+        // filter set black-holes host TCP, so `coordinator.stop` is
+        // graceful-first. If the adapter survives, this backend fails closed
+        // into recovery_required.
         self.coordinator.stop().map_err(|err| {
             TunError::new(
                 err.code,

@@ -234,7 +234,7 @@ fn query_task_xml() -> Result<String, String> {
 fn graceful_stop(pid: u32) {
     // taskkill without `/F` delivers WM_CLOSE, which the console sing-box
     // treats as a shutdown signal and uses to remove its WFP filters and
-    // routes (design note tun-windows-t0 §4). A failure here is benign: the
+    // routes (`docs/tun.md`). A failure here is benign: the
     // forced `/F` fallback decides.
     taskkill(pid, false);
 }

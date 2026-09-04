@@ -453,7 +453,7 @@ fn pid_is_alive(_pid: u32) -> bool {
 /// graceful-first (`taskkill /T`, which the core uses to remove its WFP
 /// filters and routes) with a forced `/F` fallback after `TERM_GRACE` — the
 /// strict-route WFP filters must not be stranded, they black-hole host TCP
-/// (design note §4).
+/// (`docs/tun.md`).
 #[cfg(target_os = "windows")]
 pub struct WindowsElevatedCoreCoordinator {
     binary: PathBuf,
@@ -591,7 +591,7 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
         let Some(pid) = self.child.as_ref().map(|child| child.id()) else {
             return Ok(());
         };
-        // Graceful-first termination (design note tun-windows-t0 §4): the
+        // Graceful-first termination (`docs/tun.md`): the
         // strict-route WFP filters sing-box installs are removed on its
         // graceful shutdown path only. A hard `/F` kill strands them, which
         // black-holes every non-loopback TCP connection on the host (V11
@@ -1076,7 +1076,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
             self.end_task();
             return Ok(());
         };
-        // Graceful-first (design note tun-windows-t0 §4): the strict-route
+        // Graceful-first (`docs/tun.md`): the strict-route
         // WFP filters sing-box installs are removed on its graceful shutdown
         // path only; a hard kill strands them and black-holes host TCP (V11).
         // The elevated launcher honors the stop file with the same

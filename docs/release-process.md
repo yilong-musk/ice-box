@@ -13,7 +13,7 @@ the artifacts and compliance notices.
 
 macOS releases are permanently unsigned (documented product decision): the
 privileged helper for TUN is installed through the system authorization
-dialog at first use (see `docs/tun-mode-plan.md` T5 / `docs/design-notes/ice-helper-design.md`).
+dialog at first use (see `docs/tun.md`).
 Gatekeeper warnings are expected for published artifacts.
 
 ## Version sources

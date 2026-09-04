@@ -233,7 +233,7 @@ pub fn default_uri_list_rules() -> Vec<Value> {
 /// `detour` (anti-pollution). The `local` server backs
 /// `route.default_domain_resolver`.
 ///
-/// Windows (design note tun-windows-t0 §1.2): no `local` server (it re-enters
+/// Windows (`docs/tun.md`): no `local` server (it re-enters
 /// the TUN via the adapter DNS), UDP upstreams rewritten to DoT (the core's
 /// UDP outbound is captured by its own TUN), and `ipv4_only` (the IPv6 path
 /// is broken, #4178). `route.default_domain_resolver` then resolves via the

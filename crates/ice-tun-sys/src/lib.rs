@@ -106,7 +106,7 @@ pub fn create_backend(
     }
     #[cfg(target_os = "windows")]
     {
-        // windows_tun_ready flipped 2026-09-03 (design note §1.2): the
+        // windows_tun_ready flipped 2026-09-03 (`docs/tun.md`): the
         // production path is the real backend. The elevated runner needs a
         // bundled binary; without one every transition stays fail-closed at
         // `tun.permission_required` (no OS mutation). The scheduled-task
