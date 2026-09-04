@@ -305,9 +305,7 @@ pub(crate) fn traffic_foreach(
             // instead of a clean EOF. The follow legitimately ends there.
             Err(err) if traffic_stream_ended(&err) => break,
             Err(err) => {
-                return Err(CoreError::SpawnFailed(format!(
-                    "clash traffic read: {err}"
-                )));
+                return Err(CoreError::SpawnFailed(format!("clash traffic read: {err}")));
             }
         };
         let trimmed = line.trim();
