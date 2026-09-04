@@ -2,6 +2,7 @@
 
 use ice_config::{NormalizedOutbound, NormalizedProfile};
 
+use crate::clash::normalize_dns_on;
 use crate::error::SubscriptionError;
 use crate::store::{read_profile, SubscriptionPaths};
 use crate::uri::apply_builtin_default_rules;
@@ -24,6 +25,11 @@ pub fn load_active_profile(
 /// Like [`load_active_profile`], honoring the app's `auto_default_rules`
 /// setting: when enabled, rule-less profiles get the built-in defaults at
 /// load time so both the Rules page and the generated config stay consistent.
+///
+/// The cached `profile.json` may predate the Windows DNS emission (parsed by
+/// an older binary), so the platform DNS shape is re-applied at load time:
+/// [`normalize_dns_on`] drops fakeip / `local` / UDP upstreams and pins the
+/// anchor (no-op off-Windows).
 pub fn load_active_profile_with_default_rules(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
@@ -37,6 +43,7 @@ pub fn load_active_profile_with_default_rules(
         )));
     }
     let mut profile = read_profile(paths, meta.id)?;
+    normalize_dns_on(&mut profile, cfg!(target_os = "windows"));
     if auto_default_rules {
         apply_builtin_default_rules(&mut profile);
     }

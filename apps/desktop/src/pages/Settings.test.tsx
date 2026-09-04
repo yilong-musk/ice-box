@@ -19,6 +19,9 @@ const getStatus = vi.fn();
 const saveSettings = vi.fn();
 const installHelper = vi.fn();
 const uninstallHelper = vi.fn();
+const relaunchElevatedForTun = vi.fn();
+const ensureTunElevation = vi.fn();
+const start = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -27,6 +30,10 @@ vi.mock("../api/tauri", () => ({
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     installHelper: (...args: unknown[]) => installHelper(...args),
     uninstallHelper: (...args: unknown[]) => uninstallHelper(...args),
+    relaunchElevatedForTun: (...args: unknown[]) =>
+      relaunchElevatedForTun(...args),
+    ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    start: (...args: unknown[]) => start(...args),
     revealDataDir: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -61,6 +68,7 @@ const defaultStatus = {
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
   helper_installed: false,
+  helper_supported: true,
   helper_stale: false,
 } as const;
 
@@ -446,6 +454,57 @@ describe("Settings", () => {
       },
       { timeout: 2000 },
     );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_installed: true,
+      configured_tun: true,
+      traffic_capture: "tun",
+      tun_status: "enabled",
+      tun_interface: "utun42",
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tun: expect.objectContaining({ enabled: false }),
+          }),
+        );
+      },
+      { timeout: 2000 },
+    );
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("prompts helper install before enabling TUN when the helper is missing", async () => {
@@ -499,6 +558,71 @@ describe("Settings", () => {
         "checked",
       );
     });
+  });
+
+  it("enables TUN via the one-time scheduled-task elevation on a platform without a helper", async () => {
+    // Windows (plan B): no install dialog, no UAC relaunch; the one-time
+    // elevation component is installed and the next-start desire is
+    // persisted. The proxy service is not started from this switch.
+    ensureTunElevation.mockResolvedValue(undefined);
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(installHelper).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+      expect(start).not.toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+        "data-state",
+        "checked",
+      );
+    });
+  });
+
+  it("reports a cancelled one-time elevation when enabling TUN", async () => {
+    // Windows, setup prompt cancelled: nothing was persisted or started, the
+    // error surfaces and the switch stays off.
+    ensureTunElevation.mockRejectedValue("tun.elevation_cancelled: x");
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    await waitFor(() => {
+      expect(container.textContent).toContain("tun.elevation_cancelled");
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
   });
 
   it("keeps TUN off when the guided helper install fails", async () => {

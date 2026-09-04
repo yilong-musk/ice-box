@@ -927,14 +927,17 @@ entitlements, bundle embedding + CI check, and the G9.13 helper acceptance path 
 authenticated host); the app is permanently unsigned — the helper is installed through the
 system authorization dialog (in-app `install_helper` / `uninstall_helper` IPC, `crates/ice-elevate`)
 or the install script, and the clean-machine gate is explicitly waived for this release.
-Windows T5 is blocked on
-`windows_tun_ready`; the host-free Windows TUN backend (T2 shape) has landed
-behind the dev opt-in `ICE_BOX_TUN_WINDOWS_DEV` — `WindowsTunBackend` with
-read-only `netsh` / `route print` host probes (host-free parsing tests on all
-CI hosts), interface-index identity, observed-route ownership, and the dev
-elevated `taskkill`-based core runner. Production Windows stays fail-closed
-(`UnsupportedTunBackend`) until the T0 spike on a real host flips the gate;
-see `docs/design-notes/tun-windows-t0.md`).
+**Windows T0 complete — `windows_tun_ready` flipped 2026-09-03**: the V1–V11 host spike on a
+real Windows 11 host (driven from WSL via elevated PowerShell) locked the §1.2 config shape
+(port-53 hijack first, TCP-transport DNS only, `ipv4_only`, peer-reject; no fakeip — the
+198.18.0.0/15 answers are unreachable on Windows) and the production Windows backend is
+active in `create_backend`: `WindowsTunBackend` with read-only `netsh` / `route print`
+host probes and DNS ownership (`dns_before`/`dns_after`, compare-before-restore, verified
+adapter DNS), the graceful-stop elevated core runner (WFP filters are removed on graceful
+exit only — a stranded filter set black-holes host TCP), and platform emission in
+`ice-config`/`ice-subscription`. Windows T1–T5 follow the macOS slice order; the live gate
+is `scripts/run-acceptance-windows-tun.sh` (G9.14). See
+`docs/design-notes/tun-windows-t0.md`).
 This section records the approved product model, state machine, data
 contract, and the T0 platform locks. The plan's §2 decision record (capture selection ≠
 routing policy) is approved; T0's three open decisions are resolved as follows.

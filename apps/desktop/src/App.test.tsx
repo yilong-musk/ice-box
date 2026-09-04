@@ -45,6 +45,7 @@ const tunStatus = {
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
   helper_installed: false,
+  helper_supported: true,
   helper_stale: false,
 } as const;
 

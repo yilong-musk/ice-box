@@ -232,26 +232,56 @@ pub fn default_uri_list_rules() -> Vec<Value> {
 /// a domestic server, everything else via a remote DoH through the given
 /// `detour` (anti-pollution). The `local` server backs
 /// `route.default_domain_resolver`.
+///
+/// Windows (design note tun-windows-t0 §1.2): no `local` server (it re-enters
+/// the TUN via the adapter DNS), UDP upstreams rewritten to DoT (the core's
+/// UDP outbound is captured by its own TUN), and `ipv4_only` (the IPv6 path
+/// is broken, #4178). `route.default_domain_resolver` then resolves via the
+/// `remote-dns` final tag (wired by ice-config).
 pub fn default_uri_list_dns(detour: &str) -> Value {
-    json!({
-        "servers": [
-            { "type": "local", "tag": "local" },
-            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
-            {
-                "type": "https",
-                "tag": "remote-dns",
-                "server": "1.1.1.1",
-                "server_port": 443,
-                "path": "/dns-query",
-                "detour": detour,
-            },
-        ],
-        "rules": [
-            { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
-        ],
-        "final": "remote-dns",
-        "strategy": "prefer_ipv4",
-    })
+    #[cfg(target_os = "windows")]
+    {
+        json!({
+            "servers": [
+                { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
+                {
+                    "type": "https",
+                    "tag": "remote-dns",
+                    "server": "1.1.1.1",
+                    "server_port": 443,
+                    "path": "/dns-query",
+                    "detour": detour,
+                },
+            ],
+            "rules": [
+                { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
+            ],
+            "final": "remote-dns",
+            "strategy": "ipv4_only",
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+                {
+                    "type": "https",
+                    "tag": "remote-dns",
+                    "server": "1.1.1.1",
+                    "server_port": 443,
+                    "path": "/dns-query",
+                    "detour": detour,
+                },
+            ],
+            "rules": [
+                { "domain_suffix": CN_DOMAIN_SUFFIXES, "server": "cn-dns" },
+            ],
+            "final": "remote-dns",
+            "strategy": "prefer_ipv4",
+        })
+    }
 }
 
 /// Attach the built-in split-routing defaults to a profile that carries no
@@ -307,10 +337,24 @@ mod tests {
         let dns = default_uri_list_dns("proxy");
         let servers = dns["servers"].as_array().unwrap();
         let tags: Vec<&str> = servers.iter().filter_map(|s| s["tag"].as_str()).collect();
-        assert!(tags.contains(&"local"));
         assert!(tags.contains(&"cn-dns"));
         assert!(tags.contains(&"remote-dns"));
         assert_eq!(dns["final"], "remote-dns");
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                !tags.contains(&"local"),
+                "local re-enters the TUN on Windows; must not be emitted"
+            );
+            assert_eq!(dns["strategy"], "ipv4_only");
+            for server in servers {
+                assert_ne!(server["type"], "udp", "TCP transports only on Windows");
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(tags.contains(&"local"));
+        }
         let rules = dns["rules"].as_array().unwrap();
         assert_eq!(rules[0]["server"], "cn-dns");
         let remote = servers.iter().find(|s| s["tag"] == "remote-dns").unwrap();
@@ -354,7 +398,14 @@ mod tests {
         apply_builtin_default_rules(&mut p);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "proxy");
-        assert_eq!(p.dns.unwrap()["servers"][2]["detour"], "proxy");
+        let dns = p.dns.unwrap();
+        let remote = dns["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "remote-dns")
+            .expect("remote-dns server");
+        assert_eq!(remote["detour"], "proxy");
     }
 
     #[test]
@@ -371,6 +422,13 @@ mod tests {
         apply_builtin_default_rules(&mut p);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "g0");
-        assert_eq!(p.dns.unwrap()["servers"][2]["detour"], "g0");
+        let dns = p.dns.unwrap();
+        let remote = dns["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "remote-dns")
+            .expect("remote-dns server");
+        assert_eq!(remote["detour"], "g0");
     }
 }

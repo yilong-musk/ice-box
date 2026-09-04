@@ -208,10 +208,13 @@ proxies:
             .unwrap()
             .iter()
             .any(|r| r["server"] == "cn-dns"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(value["route"]["default_domain_resolver"], "remote-dns");
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(value["route"]["default_domain_resolver"], "local");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn subscription_to_config_honors_tun_intent() {
         let json = subscription_to_config(
@@ -232,11 +235,20 @@ proxies:
         validate_config_for_intent(&value, CaptureIntent::Tun).expect("intent structural check");
         assert_eq!(value["inbounds"][1]["type"], "tun");
         assert_eq!(value["inbounds"][1]["tag"], "tun-in");
-        assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
-        assert_eq!(value["route"]["rules"][1]["action"], "hijack-dns");
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
+            assert_eq!(value["route"]["rules"][1]["action"], "hijack-dns");
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(value["route"]["rules"][0]["port"][0], 53);
+            assert_eq!(value["route"]["rules"][0]["action"], "hijack-dns");
+            assert_eq!(value["route"]["rules"][1]["process_name"][0], "ice-box");
+        }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn subscription_to_config_rejects_tun_intent_off_green_platforms() {
         let err = subscription_to_config(
@@ -262,9 +274,9 @@ proxies:
     #[test]
     fn engine_exposes_tun_gate_for_preflight() {
         let gate: TunGate = tun_gate();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         assert!(gate.ready);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert!(!gate.ready);
     }
 

@@ -74,8 +74,9 @@ pub struct TunGate {
 }
 
 /// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready` — live
-/// spike passed); Windows is pending (`windows_tun_ready` — host spike not yet
-/// run); other platforms are out of scope for the first release.
+/// spike passed); Windows is green (`windows_tun_ready` — flipped 2026-09-03
+/// after the V1–V11 host spike, design note §1.2); other platforms are out of
+/// scope for the first release.
 ///
 /// Test-only override: the desktop crate's host-free controller tests run on
 /// every CI host and inject fake backends; forcing the gate green there lets
@@ -95,18 +96,14 @@ pub fn tun_gate() -> TunGate {
             reason: None,
         };
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
+        // Both gates are green: macOS T0–T5 landed (macos_tun_ready); Windows
+        // landed behind the §1.2 working shape (windows_tun_ready, flipped
+        // 2026-09-03 after the V1–V11 host spike).
         TunGate {
             ready: true,
             reason: None,
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        TunGate {
-            ready: false,
-            reason: Some("Windows TUN gate pending (windows_tun_ready): WinTUN/UAC spike not run"),
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -226,7 +223,7 @@ pub fn build_direct_only_config(
     // direct-only fallback.
     let mut rules = Vec::new();
     if capture_intent == CaptureIntent::Tun {
-        rules.extend(tun_reserved_rules(template.tun.dns_hijack));
+        rules.extend(tun_reserved_rules(&template.tun));
     }
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -234,7 +231,7 @@ pub fn build_direct_only_config(
         "final": "direct",
         "auto_detect_interface": true,
         "rules": rules,
-        "default_domain_resolver": "local",
+        "default_domain_resolver": minimal_default_domain_resolver(),
     });
 
     let mut inbounds = vec![json!({
@@ -302,16 +299,35 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
 }
 
 /// Minimal DNS block locked for v1 (sing-box 1.13+ local resolver).
+///
+/// Windows (design note §1.2): the OS-resolver-backed `local` server must not
+/// be used — its queries dial the TUN peer and re-enter the engine — and UDP
+/// upstreams are captured by the core's own TUN. The minimal block instead
+/// ships two DoT resolvers and `ipv4_only` (the IPv6 path is broken, #4178).
 pub fn minimal_dns_block() -> Value {
-    json!({
-        "servers": [
-            {
-                "type": "local",
-                "tag": "local"
-            }
-        ],
-        "final": "local"
-    })
+    #[cfg(target_os = "windows")]
+    {
+        json!({
+            "servers": [
+                { "type": "tls", "tag": "dns-remote-0", "server": "223.5.5.5", "server_port": 853 },
+                { "type": "tls", "tag": "dns-remote-1", "server": "119.29.29.29", "server_port": 853 }
+            ],
+            "final": "dns-remote-0",
+            "strategy": "ipv4_only",
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        json!({
+            "servers": [
+                {
+                    "type": "local",
+                    "tag": "local"
+                }
+            ],
+            "final": "local"
+        })
+    }
 }
 
 /// Whether the DNS block contains a `local`-tagged server (required for
@@ -324,6 +340,26 @@ fn dns_has_local_server(dns: &Value) -> bool {
                 .any(|s| s.get("tag").and_then(|v| v.as_str()) == Some("local"))
         })
         .unwrap_or(false)
+}
+
+/// The DNS `final` tag, when present (the Windows route default).
+fn dns_final_tag(dns: &Value) -> Option<String> {
+    dns.get("final")
+        .and_then(|v| v.as_str())
+        .map(|tag| tag.to_string())
+}
+
+/// The route `default_domain_resolver` matching [`minimal_dns_block`]: `local`
+/// everywhere, the DoT `final` tag on Windows.
+fn minimal_default_domain_resolver() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "dns-remote-0".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "local".to_string()
+    }
 }
 
 /// Merge template + subscription profile into a sing-box config object.
@@ -460,7 +496,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             // the control path, private/loopback/link-local/multicast
             // destinations, and the TUN endpoint are never captured or
             // sniffed, even in Global/Direct mode.
-            final_rules.extend(tun_reserved_rules(input.template.tun.dns_hijack));
+            final_rules.extend(tun_reserved_rules(&input.template.tun));
         }
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -542,11 +578,20 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
         dns_obj.remove("__ice_dns_listen");
     }
 
-    // sing-box 1.12+: domain addresses must be resolved via a domain resolver. When a
-    // `local` DNS server is present (always true for the minimal block, and ensured by
-    // the clash parser for domain nameservers / fake-ip filters), wire it up as the
-    // route default so outbound dials can resolve hosts.
-    if dns_has_local_server(&dns) {
+    // sing-box 1.12+: domain addresses must be resolved via a domain resolver.
+    // macOS: a `local` DNS server (always present for the minimal block, and
+    // ensured by the clash parser for domain nameservers / fake-ip filters)
+    // backs the OS resolver. Windows: `local` re-enters the TUN, so the route
+    // default points at the DNS `final` tag — guaranteed TCP-capable by the
+    // Windows emission (no UDP upstreams, no fakeip).
+    if cfg!(target_os = "windows") {
+        if let Some(final_tag) = dns_final_tag(&dns) {
+            route
+                .as_object_mut()
+                .unwrap()
+                .insert("default_domain_resolver".into(), json!(final_tag));
+        }
+    } else if dns_has_local_server(&dns) {
         route
             .as_object_mut()
             .unwrap()
@@ -638,15 +683,72 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// architecture §24.5.6). Order is fixed: control path and local traffic are
 /// never captured or sniffed.
 ///
-/// When `dns_hijack` is set, the `hijack-dns` rule is inserted directly
-/// after the `process_name` rule: the elevated core's *own* DNS dials
-/// (outbound server hostnames, DoH host resolution) match `process_name`
-/// and stay direct, so they never re-enter the DNS engine and receive
-/// fake-ip answers; client DNS queries (browser etc.) fall through to the
-/// hijack rule and are answered by the engine.
-pub fn tun_reserved_rules(dns_hijack: bool) -> Vec<Value> {
+/// macOS / generic shape: the `hijack-dns` rule is inserted directly after
+/// the `process_name` rule when `dns_hijack` is set — the elevated core's
+/// *own* DNS dials (outbound server hostnames, DoH host resolution) match
+/// `process_name` and stay direct, so they never re-enter the DNS engine and
+/// receive fake-ip answers; client DNS queries (browser etc.) fall through to
+/// the hijack rule and are answered by the engine.
+///
+/// Windows shape (locked by the host spike, design note §1.2): the
+/// `{"port": [53]}` hijack must be the **first** rule — the
+/// `protocol: dns` match does not fire in time on Windows (1.13 regression,
+/// #3878) — followed by the process bypass, sniff, a second `protocol: dns`
+/// hijack, and the peer-reject rule (the TUN sub-ranges, dropped before
+/// `ip_is_private` can route the TUN peer into `direct` and re-enter the
+/// core; #4455 self-loop).
+///
+/// UDP user traffic (QUIC/HTTP3) is broken under the Windows shape — the
+/// core's UDP outbound is captured by its own TUN (design note §1.2 open
+/// items). UDP 443 is rejected with the default method (ICMP port
+/// unreachable), not `outbound: block` / `method: drop`: a silent black
+/// hole leaves Chrome/Edge parked on HTTP/3 (YouTube avatars on
+/// `yt3.ggpht.com` / `lh3.googleusercontent.com`, Telegram Web) until the
+/// QUIC timer expires, and some subresources never fall back. ICMP makes
+/// the browser fail the h3 probe immediately and reuse the proven IPv4
+/// TCP path.
+pub fn tun_reserved_rules(tun: &TunSettings) -> Vec<Value> {
+    tun_reserved_rules_for(tun, cfg!(target_os = "windows"))
+}
+
+/// Platform-selectable reserved-rule builder so the Windows shape is testable
+/// on any host.
+fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
+    if windows {
+        let mut rules = vec![tun_dns_hijack_rule()];
+        rules.push(json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }));
+        rules.push(json!({ "action": "sniff" }));
+        rules.push(json!({ "protocol": "dns", "action": "hijack-dns" }));
+        let mut tun_cidrs = Vec::new();
+        if let Some(cidr) = tun_network_cidr(&tun.ipv4_address) {
+            tun_cidrs.push(json!(cidr));
+        }
+        if let Some(cidr) = tun_network_cidr(&tun.ipv6_address) {
+            tun_cidrs.push(json!(cidr));
+        }
+        rules.push(json!({
+            "ip_cidr": tun_cidrs,
+            "action": "reject",
+            "method": "drop",
+        }));
+        rules.push(json!({
+            "network": "udp",
+            "port": [443],
+            "action": "reject",
+        }));
+        rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
+        rules.push(json!({
+            "ip_cidr": [
+                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+                "224.0.0.0/4", "ff00::/8"
+            ],
+            "outbound": "direct"
+        }));
+        return rules;
+    }
+
     let mut rules = vec![json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" })];
-    if dns_hijack {
+    if tun.dns_hijack {
         rules.push(tun_dns_hijack_rule());
     }
     rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
@@ -662,6 +764,38 @@ pub fn tun_reserved_rules(dns_hijack: bool) -> Vec<Value> {
     // domain-matching rule (T0 spike §1.1).
     rules.push(json!({ "action": "sniff" }));
     rules
+}
+
+/// The network CIDR of a `host/prefix` address (host bits zeroed): the TUN
+/// sub-range that must never be dialed back into the core.
+fn tun_network_cidr(address: &str) -> Option<String> {
+    let (addr, prefix_str) = address.split_once('/')?;
+    let prefix: u8 = prefix_str.parse().ok()?;
+    if let Ok(v4) = addr.parse::<std::net::Ipv4Addr>() {
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix)
+        };
+        Some(format!(
+            "{}/{}",
+            std::net::Ipv4Addr::from(u32::from(v4) & mask),
+            prefix
+        ))
+    } else if let Ok(v6) = addr.parse::<std::net::Ipv6Addr>() {
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u128::MAX << (128 - prefix)
+        };
+        Some(format!(
+            "{}/{}",
+            std::net::Ipv6Addr::from(u128::from(v6) & mask),
+            prefix
+        ))
+    } else {
+        None
+    }
 }
 
 /// The locked TUN inbound shape for the bundled sing-box 1.13.19 (T0 spike §5):
@@ -1181,6 +1315,9 @@ mod build_tests {
 
         assert_eq!(cfg["inbounds"][0]["listen"], "0.0.0.0");
         assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
+        #[cfg(target_os = "windows")]
+        assert_eq!(cfg["route"]["default_domain_resolver"], "dns-remote-0");
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(cfg["route"]["default_domain_resolver"], "local");
     }
 
@@ -1381,8 +1518,17 @@ mod build_tests {
             None,
         ))
         .unwrap();
-        assert_eq!(cfg["dns"]["final"], "local");
-        assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(cfg["dns"]["final"], "dns-remote-0");
+            assert_eq!(cfg["dns"]["servers"][0]["type"], "tls");
+            assert_eq!(cfg["dns"]["strategy"], "ipv4_only");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(cfg["dns"]["final"], "local");
+            assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
+        }
     }
 
     #[test]
@@ -1757,11 +1903,19 @@ mod build_tests {
             assert!(gate.ready, "macos_tun_ready is green after the T0 spike");
             assert_eq!(gate.reason, None);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                gate.ready,
+                "windows_tun_ready is green after the V1-V13 host spike"
+            );
+            assert_eq!(gate.reason, None);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             assert!(
                 !gate.ready,
-                "TUN must stay fail-closed off-macOS until its gate is green"
+                "TUN must stay fail-closed off-macOS/off-Windows until its gate is green"
             );
             assert!(gate.reason.is_some());
         }
@@ -2010,11 +2164,11 @@ mod build_tests {
         assert!(build_direct_only_config(&bad_addr, CaptureIntent::Tun).is_err());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
-        // Windows gate pending / Linux out of scope: Tun generation must fail
-        // closed with the stable unavailable error, never emit a tun inbound.
+        // Linux / other hosts: Tun generation must fail closed with the stable
+        // unavailable error, never emit a tun inbound.
         let template = LocalTemplate {
             tun: TunSettings {
                 enabled: true,
@@ -2035,6 +2189,63 @@ mod build_tests {
         .expect_err("tun gate not green");
         assert!(matches!(err, ConfigError::TunUnavailable(_)));
         assert!(build_direct_only_config(&template, CaptureIntent::Tun).is_err());
+    }
+
+    #[test]
+    fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
+        // The locked Windows shape (design note §1.2): port-53 hijack first
+        // (the `protocol: dns` match does not fire in time on Windows),
+        // process bypass, sniff, protocol-dns hijack, then the TUN
+        // sub-ranges rejected BEFORE `ip_is_private` can loop them back
+        // into the core (#4455). UDP 443 (QUIC/HTTP3) is rejected with the
+        // default ICMP method because UDP user traffic is broken under the
+        // Windows shape; a silent `block`/`drop` black-holes HTTP/3 and
+        // Chrome/Edge never fall back to the proven IPv4 TCP path.
+        let tun = TunSettings {
+            dns_hijack: false, // Windows always emits the hijack rules
+            ..TunSettings::default()
+        };
+        let rules = tun_reserved_rules_for(&tun, true);
+        assert_eq!(rules.len(), 8);
+        assert_eq!(rules[0]["action"], "hijack-dns");
+        assert_eq!(rules[0]["port"][0], 53);
+        assert_eq!(rules[1]["process_name"][0], "ice-box");
+        assert_eq!(rules[1]["outbound"], "direct");
+        assert_eq!(rules[2]["action"], "sniff");
+        assert_eq!(rules[3]["protocol"], "dns");
+        assert_eq!(rules[3]["action"], "hijack-dns");
+        let reject = &rules[4];
+        assert_eq!(reject["action"], "reject");
+        assert_eq!(reject["method"], "drop");
+        let cidrs: Vec<&str> = reject["ip_cidr"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.as_str())
+            .collect();
+        assert_eq!(
+            cidrs,
+            vec!["10.0.0.0/30", "fdfe:dcba:9876::/126"],
+            "peer-reject covers the TUN sub-ranges derived from the addresses"
+        );
+        let quic = &rules[5];
+        assert_eq!(quic["network"], "udp");
+        assert_eq!(quic["port"][0], 443);
+        assert_eq!(quic["action"], "reject");
+        assert!(
+            quic.get("method").is_none() && quic.get("outbound").is_none(),
+            "default reject (ICMP) — not drop/block, so HTTP/3 fails fast"
+        );
+        assert_eq!(rules[6]["ip_is_private"], true);
+        assert_eq!(rules[7]["ip_cidr"][0], "127.0.0.0/8");
+
+        let generic = tun_reserved_rules_for(&tun, false);
+        assert_eq!(generic.len(), 4, "macOS/generic shape is unchanged");
+        assert_eq!(generic[0]["process_name"][0], "ice-box");
+        assert!(
+            generic.iter().all(|r| r["action"] != "reject"),
+            "no peer-reject rule in the generic shape"
+        );
     }
 
     #[test]

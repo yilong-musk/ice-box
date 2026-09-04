@@ -1711,11 +1711,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ice-tun-launcher"
+version = "0.1.2"
+dependencies = [
+ "sha2",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "ice-tun-sys"
 version = "0.1.2"
 dependencies = [
  "chrono",
  "ice-helper",
+ "ice-tun-launcher",
  "libc",
  "serde",
  "serde_json",

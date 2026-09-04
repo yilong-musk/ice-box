@@ -1,6 +1,6 @@
 //! Tauri IPC commands (architecture §14).
 
-use crate::capture::{tun_topology_changed, TrafficCapture, TunStatus};
+use crate::capture::{only_tun_enabled_changed, tun_topology_changed, TrafficCapture, TunStatus};
 use crate::core_watch::reconcile_unexpected_core_exit;
 use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
@@ -28,6 +28,8 @@ use ice_subscription::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime};
 use tauri::{AppHandle, Manager, State};
@@ -128,10 +130,24 @@ pub struct StatusResponse {
     /// Privileged helper daemon installed + authorized (read-only probe).
     /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
     pub helper_installed: bool,
+    /// Whether this platform has an installable privileged helper at all.
+    /// macOS only in this release: Windows elevates the TUN core through a
+    /// one-time scheduled-task setup (`ensure_tun_elevation`); unelevated
+    /// transitions fail with `tun.permission_required` until that task
+    /// exists. The frontend hides the helper install/uninstall actions and
+    /// the install-before-enable guide when this is false, and offers the
+    /// one-time task setup instead.
+    pub helper_supported: bool,
     /// The installed helper's root-owned core differs from the app's bundled
     /// core (app updated): only one core version may exist, so TUN stays
     /// blocked until the helper is refreshed.
     pub helper_stale: bool,
+    /// Windows scheduled-task elevation is installed (plan B): when true, TUN
+    /// start/stop runs without any elevation prompt; when false the frontend
+    /// runs the one-time `ensure_tun_elevation` (single UAC) before persisting
+    /// the TUN-on next-start desire. Always true on non-Windows hosts (no
+    /// task concept there).
+    pub tun_elevation_ready: bool,
 }
 
 /// How long a `system_proxy_applied` check result is reused. The check spawns
@@ -345,6 +361,36 @@ fn reset_helper_probe_cache(state: &AppState) {
     }
 }
 
+/// TTL for the Windows scheduled-task existence probe (one `schtasks /Query`
+/// subprocess per miss; status polls every 2s).
+const TUN_TASK_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn cached_tun_task_ready(state: &AppState) -> bool {
+    if !cfg!(target_os = "windows") {
+        return true;
+    }
+    let now = Instant::now();
+    if let Ok(cache) = state.tun_task_cache.lock() {
+        if let Some((at, value)) = *cache {
+            if now.duration_since(at) < TUN_TASK_CACHE_TTL {
+                return value;
+            }
+        }
+    }
+    let value = ice_tun_sys::tun_task_exists();
+    if let Ok(mut cache) = state.tun_task_cache.lock() {
+        *cache = Some((now, value));
+    }
+    value
+}
+
+#[cfg(target_os = "windows")]
+fn reset_tun_task_cache(state: &AppState) {
+    if let Ok(mut cache) = state.tun_task_cache.lock() {
+        *cache = None;
+    }
+}
+
 fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     reconcile_unexpected_core_exit(state);
     // Snapshot core state and drop the lock before disk / `networksetup` work so
@@ -398,7 +444,9 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         tun_unavailable_reason: capture.tun_unavailable_reason,
         tun_ui_hidden: capture.tun_ui_hidden,
         helper_installed: cached_helper_installed(state),
+        helper_supported: cfg!(target_os = "macos"),
         helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
+        tun_elevation_ready: cached_tun_task_ready(state),
     })
 }
 
@@ -495,8 +543,12 @@ fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
         }
     }
     if settings.tun.enabled {
-        // TUN path: the controller stops the app-managed core and the
+        // TUN path: make sure the Windows scheduled task exists (imported
+        // settings / auto-save can persist `tun.enabled` without the one-time
+        // UAC setup). No-op on macOS and when the pinned task is already
+        // installed. Then the controller stops the app-managed core and the
         // backend starts the elevated one (adopted afterwards).
+        ensure_tun_elevation_inner(app, state)?;
         state.capture.refresh_backend()?;
         let binary = binary_for(app)?;
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -648,6 +700,214 @@ pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
     .await
 }
 
+/// One-time Windows TUN elevation setup (plan B): installs the scheduled task
+/// that runs the TUN core elevated. The only elevation the user ever sees —
+/// a single UAC prompt to create the task; afterwards TUN transitions
+/// (`schtasks /Run` / `/End`) work from an unelevated app without prompts.
+/// No-op when the task already exists; always `Ok` on non-Windows hosts.
+#[tauri::command]
+pub async fn ensure_tun_elevation(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("ensure_tun_elevation", move || {
+        let state = app.state::<AppState>();
+        ensure_tun_elevation_inner(&app, &state)
+    })
+    .await
+}
+
+/// Remove the Windows TUN scheduled task (one UAC prompt). No-op when the
+/// task does not exist; always `Ok` on non-Windows hosts.
+#[tauri::command]
+pub async fn remove_tun_elevation(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("remove_tun_elevation", move || {
+        let state = app.state::<AppState>();
+        remove_tun_elevation_inner(&app, &state)
+    })
+    .await
+}
+
+#[cfg(target_os = "windows")]
+fn tun_task_paths(app: &AppHandle, state: &AppState) -> Result<(PathBuf, PathBuf), AppError> {
+    let resource = resource_dir(app).ok_or_else(|| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "cannot resolve the bundled resources directory",
+        )
+    })?;
+    let launcher = resource.join("ice-tun-launcher.exe");
+    let data_dir = state.paths.root().to_path_buf();
+    Ok((launcher, data_dir))
+}
+
+#[cfg(target_os = "windows")]
+fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
+    use std::os::windows::process::CommandExt;
+    // One UAC prompt for the schtasks.exe invocation (no app relaunch).
+    // The command is wrapped through `cmd /c` with `\"`-escaped inner
+    // quotes: `Start-Process -ArgumentList` joins elements verbatim without
+    // re-quoting, so a directly-passed `/TR` action loses its quotes to
+    // argv parsing and schtasks stores a broken action. The cmd form was
+    // verified live on the zh-CN host. The PowerShell wrapper single-quotes
+    // the cmd line and doubles apostrophes so paths like `O'Brien` stay intact.
+    let command = ice_tun_sys::schtasks_command_line(args);
+    let script = ice_tun_sys::elevated_schtasks_script(&command);
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|err| {
+            AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                format!("spawn elevated schtasks: {err}"),
+            )
+        })?;
+    if !output.status.success() {
+        tracing::warn!(
+            exit = output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            command = %command,
+            "one-time TUN elevation setup was not granted or failed"
+        );
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "the one-time TUN elevation setup was not granted; enable TUN again to retry",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    let (launcher, data_dir) = tun_task_paths(app, state)?;
+    if !launcher.is_file() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!(
+                "TUN task launcher not found at {} (reinstall the app)",
+                launcher.display()
+            ),
+        ));
+    }
+    let core = launcher
+        .parent()
+        .map(|dir| dir.join("sing-box.exe"))
+        .ok_or_else(|| {
+            AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                format!(
+                    "TUN task launcher path {} has no parent",
+                    launcher.display()
+                ),
+            )
+        })?;
+    if !core.is_file() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!(
+                "TUN core binary not found at {} (reinstall the app)",
+                core.display()
+            ),
+        ));
+    }
+    // Recreate when the task is missing *or* the stored pin no longer matches
+    // the bundled launcher/core (app update, or a replaced binary). `/F` on
+    // the create argv overwrites the existing task after one UAC prompt.
+    if ice_tun_sys::tun_task_exists() && ice_tun_sys::tun_task_pin_matches(&launcher) {
+        return Ok(());
+    }
+    let launcher_sha = ice_tun_sys::sha256_of_file(&launcher).map_err(|err| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!("hash TUN launcher: {err}"),
+        )
+    })?;
+    let core_sha = ice_tun_sys::sha256_of_file(&core).map_err(|err| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!("hash TUN core: {err}"),
+        )
+    })?;
+    let pin = ice_tun_sys::format_tun_task_pin(&launcher_sha, &core_sha);
+    let args = ice_tun_sys::tun_task_create_args(&launcher, &data_dir, &pin);
+    if ice_tun_sys::process_is_elevated() {
+        // Already elevated: run schtasks directly (no UAC prompt).
+        use std::os::windows::process::CommandExt;
+        let status = std::process::Command::new("schtasks.exe")
+            .args(&args)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()
+            .map_err(|err| {
+                AppError::with_code(
+                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                    format!("create the TUN scheduled task: {err}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                "the TUN scheduled task could not be created",
+            ));
+        }
+    } else {
+        run_elevated_schtasks(&args)?;
+    }
+    if !ice_tun_sys::tun_task_exists() {
+        tracing::warn!("TUN scheduled task still missing after the setup run");
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            "the TUN scheduled task still does not exist after the setup run",
+        ));
+    }
+    reset_tun_task_cache(state);
+    tracing::info!("TUN scheduled task installed (one-time elevation complete)");
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_tun_elevation_inner(_app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    if !ice_tun_sys::tun_task_exists() {
+        return Ok(());
+    }
+    let args = vec![
+        "/Delete".to_string(),
+        "/TN".to_string(),
+        ice_tun_sys::TUN_TASK_NAME.to_string(),
+        "/F".to_string(),
+    ];
+    if ice_tun_sys::process_is_elevated() {
+        use std::os::windows::process::CommandExt;
+        let status = std::process::Command::new("schtasks.exe")
+            .args(&args)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()
+            .map_err(|err| {
+                AppError::with_code(
+                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                    format!("delete the TUN scheduled task: {err}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                "the TUN scheduled task could not be deleted",
+            ));
+        }
+    } else {
+        run_elevated_schtasks(&args)?;
+    }
+    reset_tun_task_cache(state);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn remove_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(), AppError> {
+    Ok(())
+}
+
 /// Full stop used by tray Quit / app exit (disable TUN capture first, restore
 /// system proxy, then kill core).
 #[tauri::command]
@@ -759,11 +1019,21 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
         let previous = current_settings(&state.paths).unwrap_or_default();
         settings.validate()?;
         let active = state.capture.active_backend();
-        let tun_transition = active != TrafficCapture::Inactive
-            && (previous.tun.enabled != settings.tun.enabled
-                || (previous.tun.enabled && tun_topology_changed(&previous.tun, &settings.tun)));
+        // `tun.enabled` is next-start desire only: persist it without starting,
+        // stopping, or switching the live capture backend.
+        if only_tun_enabled_changed(&previous, &settings) {
+            persist_settings(&state.paths.settings(), &settings)?;
+            return Ok(());
+        }
+        // Live TUN topology reconfigure (addresses / MTU / stack / …) while
+        // TUN capture stays the active backend. Enabled flips never belong
+        // here — they were handled above.
+        let tun_transition = active == TrafficCapture::Tun
+            && previous.tun.enabled
+            && settings.tun.enabled
+            && tun_topology_changed(&previous.tun, &settings.tun);
         if tun_transition {
-            // Serialized backend transition (plan §4.3): the pending record is
+            // Serialized topology apply (plan §4.3): the pending record is
             // committed only after the requested backend is healthy.
             let binary = binary_for(&app)?;
             let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -2105,6 +2375,7 @@ mod tests {
             profile_cache: Mutex::new(None),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
         }
     }
@@ -2165,6 +2436,7 @@ mod tests {
             profile_cache: Mutex::new(None),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
         }
     }
@@ -2194,9 +2466,12 @@ mod tests {
     #[test]
     fn collect_status_does_not_block_on_held_proxy_lock() {
         let state = temp_state_with_node("proxy-held");
-        // Warm the helper-core drift caches (one-time SHA-256 of the bundled
-        // core) outside the measured window: the poll itself must stay cheap.
+        // Warm one-time / first-probe work outside the measured window: SHA-256
+        // of the bundled core (macOS helper drift) and the Windows scheduled-
+        // task existence probe (`schtasks /Query`, easily >500ms on CI). The
+        // poll itself must stay cheap and must not wait on `state.proxy`.
         let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
+        let _ = cached_tun_task_ready(&state);
         let _guard = state.proxy.lock().unwrap();
         let started = std::time::Instant::now();
         let status = collect_status(&state).expect("status");

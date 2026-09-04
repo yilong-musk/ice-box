@@ -30,6 +30,8 @@ pub fn acquire_or_request_focus(paths: &AppPaths) -> Result<InstanceLock, String
         .open(&lock_path)
         .map_err(|e| format!("open instance lock: {e}"))?;
 
+    // The in-app UAC relaunch was removed with the scheduled-task elevation
+    // (plan B): every instance takes the lock or requests focus immediately.
     if file.try_lock_exclusive().is_err() {
         request_focus(paths.root());
         return Ok(InstanceLock::Secondary);

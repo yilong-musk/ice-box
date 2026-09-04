@@ -14,7 +14,7 @@ upstream naming restriction). See [NOTICE](NOTICE) and
 
 The implementation spec lives in [docs/architecture.md](docs/architecture.md) (process model, state machine, single active subscription, IPC, failure rollback).
 
-- Traffic capture (system proxy or **TUN**): system proxy on macOS/Windows; TUN is a Settings switch — when enabled, the Home proxy-service button starts transparent capture through a sing-box `tun` inbound instead of changing the OS proxy (see [docs/tun-mode-plan.md](docs/tun-mode-plan.md) for the status/slices)
+- Traffic capture (system proxy or **TUN**): system proxy on macOS/Windows; TUN is a Settings/Home switch that only chooses the **next** proxy-service start (system proxy vs transparent `tun` inbound). Toggling it does not start or stop the live service. See [docs/tun-mode-plan.md](docs/tun-mode-plan.md) and **Windows TUN limits** below.
 - Subscriptions: sing-box first, Clash compatible; **only one subscription is active at a time**, switching the active subscription switches the entire set of policy groups / rules / DNS
 - Runtime updates: hot reload first (**SIGHUP** in-process rebuild, PID unchanged), restart as fallback
 - **Modes**: one-click switch between Rule / Global / Direct from the home page, switched **live via the Clash API** (`PATCH /configs`) on macOS **and** Windows — no config rebuild, no reload, no core restart, no connection drop
@@ -113,18 +113,35 @@ Tauri commands uniformly return JSON on failure:
 |-------|--------|
 | macOS | ✅ Release gate passed |
 | CI | `.github/workflows/ci.yml` → Linux + macOS + **Windows** `npm run gate` |
-| Windows | ✅ System proxy (WinInet), mode switching, NSIS build script, acceptance script |
-| TUN | 🚧 Slices T0–T4 landed, T5 macOS helper + packaging landed (G9.12 + G9.13 live gates green; macOS release is permanently unsigned with in-app elevated helper installation; clean-machine gate waived for this release); Windows T0 pending — see [docs/tun-mode-plan.md](docs/tun-mode-plan.md) |
+| Windows | ✅ System proxy (WinInet), mode switching, NSIS build script, acceptance script; TUN available with the IPv4-TCP-only limits below |
+| TUN | 🚧 macOS T0–T5 landed (G9.12 + G9.13 live gates green; permanently unsigned release with in-app helper install). Windows T0 landed (`windows_tun_ready` 2026-09-03) — **IPv4 TCP only**; see **Windows TUN** below and [docs/design-notes/tun-windows-t0.md](docs/design-notes/tun-windows-t0.md). |
 
 ### TUN status and prerequisites
 
-- The Settings page has a **TUN mode** switch; when enabled, the Home「启动代理服务」button starts transparent capture through a sing-box `tun` inbound instead of the OS system proxy. `system_proxy` and TUN stay mutually exclusive, and stopping the service disables whichever backend is active.
-- macOS needs root for adapter/route changes. Two elevated-core runners exist:
+- The Home/Settings **TUN mode** switch is the *desired* backend for the **next**「启动代理服务」: on → sing-box `tun` inbound; off → OS system proxy. Changing the switch does not start, stop, or hot-swap the live capture. `system_proxy` and TUN stay mutually exclusive at the OS boundary; stopping the service disables whichever backend is active.
+- **macOS** needs root for adapter/route changes. Two elevated-core runners exist:
   - **Production helper** (T5): a small `ice-helper` launchd daemon (root-owned socket + per-installation token; narrow start/stop IPC with path allowlist). The release is permanently unsigned, so on first use the app prompts the system authorization dialog and installs it itself (Settings → TUN 模式 →「安装辅助组件」); `scripts/install-helper-macos.sh` / `uninstall-helper-macos.sh` are the manual/CI equivalent. The install logic lives once in `crates/ice-helper/src/install.rs`.
   - **Dev runner**: the opt-in `ICE_BOX_TUN_DEV_SUDO=1` plus a cached root credential (`sudo -v`) runs the core via `sudo -n`. The destructive live suite is `npm run acceptance:tun` (macOS only; `--helper` runs it through the installed helper).
 - Without the helper installed, TUN transitions fail closed with a permission error and no system change; the Home page then offers the in-app「安装辅助组件」action.
-- A platform with a pending gate (`tun_available=false`, e.g. Windows) shows the switch disabled with the reason; the system-proxy fallback remains the documented path there.
 - If TUN cleanup cannot be confirmed (e.g. crash), the app fail-closes (`recovery_required`), blocks new TUN activation, and Home offers「重试恢复」. Cleanup is ownership-verified from `tun-state.json`; unrelated routes/DNS are never touched.
+
+#### Windows TUN (current, first release)
+
+Windows TUN **is on** (scheduled-task elevation, one UAC to create `ice-box-tun`; afterwards start/stop need no extra prompt). It is **not** feature-complete relative to macOS. Locked shape and evidence: [docs/design-notes/tun-windows-t0.md](docs/design-notes/tun-windows-t0.md).
+
+| Works | Does not work (known, not a settings bug) |
+|-------|-------------------------------------------|
+| IPv4 TCP capture (ordinary HTTPS) | **UDP user traffic** — QUIC/HTTP3, games, browser DoH. The core's UDP outbound is captured by its own TUN (Windows weak-host routing; `auto_detect_interface` binds TCP only). A GUI/config change cannot fix this on the pinned sing-box 1.13.19. |
+| System DNS via the TUN peer (DoT/DoH upstreams) | **IPv6 path** (upstream #4178). Emission forces `dns.strategy: ipv4_only`. |
+| Mixed inbound still available for diagnostics | **fake-ip** DNS (198.18.0.0/15 is outside Windows auto-route sub-ranges) |
+
+Workarounds already in the Windows emission (not optional):
+
+- DNS upstreams are TCP-only (DoT/DoH). UDP/53 to the engine is hijacked; UDP DNS *out* of the core is not used.
+- UDP destination port 443 is **rejected** (ICMP) so Chrome/Edge fail HTTP/3 immediately and reuse IPv4 TCP. Sites that prefer HTTP/3 (e.g. `web.telegram.org`, YouTube avatars on `yt3.ggpht.com` / `lh3.googleusercontent.com`) otherwise hang. macOS does not apply this rule.
+- Long-running stability (Wi-Fi roam, hours of uptime) is unverified.
+
+Use **system proxy** on Windows when you need UDP or IPv6. Do not expect TUN to carry QUIC until an upstream/core change (not planned for this pin).
 
 ### Common commands
 

@@ -469,11 +469,33 @@ export function Settings({ active = true }: { active?: boolean }) {
                 }
                 aria-label={t("settings.tunEnable")}
                 onCheckedChange={(checked) => {
-                  if (checked === true && status?.helper_installed !== true) {
-                    // No authorized helper: guide the user to install it first;
-                    // the TUN-on setting is persisted only after a successful
-                    // install (cancel leaves the switch off).
+                  if (
+                    checked === true &&
+                    status?.helper_supported === true &&
+                    status?.helper_installed !== true
+                  ) {
+                    // No authorized helper (macOS): guide the user to install
+                    // it first; the TUN-on setting is persisted only after a
+                    // successful install (cancel leaves the switch off).
                     tunInstall.setOpen(true);
+                    return;
+                  }
+                  if (checked === true && status?.helper_supported === false) {
+                    // Windows (plan B): a one-time elevation component (a
+                    // scheduled task) makes TUN work without any further
+                    // prompt. The first enable triggers a single UAC to
+                    // install it, then persists the next-start desire.
+                    // Never start/stop the proxy service from this switch.
+                    setError(null);
+                    void (async () => {
+                      try {
+                        await api.ensureTunElevation();
+                        await persistTunEnabled(true);
+                        flashSaved();
+                      } catch (e) {
+                        setError(formatInvokeError(e));
+                      }
+                    })();
                     return;
                   }
                   setForm({
@@ -511,13 +533,16 @@ export function Settings({ active = true }: { active?: boolean }) {
               </FieldDescription>
             ) : status?.helper_stale === true ? (
               <FieldDescription>{t("settings.helperStale")}</FieldDescription>
-            ) : (
+            ) : status?.helper_supported === true ? (
               <FieldDescription>
                 {status?.helper_installed
                   ? t("settings.helperReady")
                   : t("settings.helperNeeded")}
               </FieldDescription>
+            ) : (
+              <FieldDescription>{t("settings.tunElevationDesc")}</FieldDescription>
             )}
+            {status?.helper_supported === true && (
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -559,6 +584,7 @@ export function Settings({ active = true }: { active?: boolean }) {
                 {t("settings.uninstallHelper")}
               </Button>
             </div>
+            )}
             </div>
           </CardContent>
         </Card>

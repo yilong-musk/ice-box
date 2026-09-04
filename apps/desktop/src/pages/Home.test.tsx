@@ -13,6 +13,8 @@ const stopSystemProxy = vi.fn();
 const saveSettings = vi.fn();
 const recoverTun = vi.fn();
 const installHelper = vi.fn();
+const relaunchElevatedForTun = vi.fn();
+const ensureTunElevation = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -26,6 +28,9 @@ vi.mock("../api/tauri", () => ({
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     recoverTun: (...args: unknown[]) => recoverTun(...args),
     installHelper: (...args: unknown[]) => installHelper(...args),
+    relaunchElevatedForTun: (...args: unknown[]) =>
+      relaunchElevatedForTun(...args),
+    ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -42,7 +47,9 @@ const tunStatus = {
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
   helper_installed: false,
+  helper_supported: true,
   helper_stale: false,
+  tun_elevation_ready: true,
 } as const;
 
 const tunSettings = {
@@ -663,6 +670,55 @@ describe("Home", () => {
     });
   });
 
+  it("shows permission-required state with one-time elevation setup when the helper is not supported", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+      tun_elevation_ready: false,
+      configured_tun: true,
+      tun_status: "permission_required",
+      tun_error: { code: "tun.permission_required", message: "task missing" },
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+    ensureTunElevation.mockResolvedValue(undefined);
+    start.mockResolvedValue(undefined);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("alert")).toHaveTextContent("一次性管理员授权");
+    });
+    expect(view.queryByRole("button", { name: "安装辅助组件" })).not.toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: "完成一次性权限设置" }));
+    await waitFor(() => {
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalled();
+    });
+  });
+
   it("shows recovery-required state with a recovery action, no fallback", async () => {
     getStatus.mockResolvedValue({
       core: {
@@ -743,6 +799,120 @@ describe("Home", () => {
         }),
       );
     });
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+  });
+
+  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      traffic_capture: "tun",
+      tun_status: "enabled",
+      tun_interface: "utun42",
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    expect(tunToggle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(tunToggle);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: false }),
+        }),
+      );
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+  });
+
+  it("does not mark the power button busy while the TUN setting is saved", async () => {
+    let releaseSave: (() => void) | undefined;
+    saveSettings.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        }),
+    );
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "TUN 模式" }));
+
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
+    expect(container.textContent).not.toContain("处理中");
+    expect(view.getByRole("button", { name: "TUN 模式" })).toBeDisabled();
+
+    releaseSave?.();
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeEnabled();
+    });
+    expect(container.textContent).not.toContain("处理中");
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
   it("reflects the TUN toggle optimistically and snaps back when the save is not committed", async () => {
@@ -789,6 +959,110 @@ describe("Home", () => {
     await waitFor(() => {
       expect(tunToggle).toHaveAttribute("aria-pressed", "false");
     });
+  });
+
+  it("enables TUN via the one-time scheduled-task elevation on the home page", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+    ensureTunElevation.mockResolvedValue(undefined);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+
+    // Windows (plan B): the one-time elevation component is installed
+    // (single UAC) and the TUN-on next-start desire persists — no dialog,
+    // no installHelper, no app relaunch, and the live proxy service is
+    // not started from this switch.
+    fireEvent.click(tunToggle);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(installHelper).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+      expect(start).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports a cancelled one-time elevation on the home page", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+    });
+    ensureTunElevation.mockRejectedValue("tun.elevation_cancelled: x");
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+
+    // Cancelled: nothing was persisted or started, the error surfaces.
+    fireEvent.click(tunToggle);
+    await waitFor(() => {
+      expect(container.textContent).toContain("tun.elevation_cancelled");
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
   });
 
   it("prompts helper install before enabling TUN on the home page", async () => {

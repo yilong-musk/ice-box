@@ -1,6 +1,7 @@
 //! Clash YAML → full `NormalizedProfile`.
 
 mod dns;
+pub use dns::normalize_dns_on;
 mod groups;
 mod names;
 mod proxies;
@@ -229,6 +230,7 @@ mod fixture_tests {
         assert!(types.contains(&"loadbalance"));
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn s4_dns_fakeip_local_and_domain_resolver() {
         let raw =
@@ -244,9 +246,8 @@ mod fixture_tests {
             dns.get("__ice_dns_listen").is_none(),
             "no internal listen carrying remains"
         );
-        let fakeip = &dns["servers"][1];
-        assert_eq!(fakeip["type"], "fakeip");
-        assert_eq!(fakeip["inet4_range"], "198.18.0.1/16");
+        assert_eq!(dns["servers"][1]["type"], "fakeip");
+        assert_eq!(dns["servers"][1]["inet4_range"], "198.18.0.1/16");
         let servers = dns["servers"].as_array().unwrap();
         assert!(
             servers
@@ -268,5 +269,62 @@ mod fixture_tests {
             .unwrap()
             .iter()
             .any(|r| r["server"] == "local"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn s4_windows_dns_shape_drops_fakeip_and_local_and_anchors() {
+        let raw =
+            std::fs::read_to_string(fixtures_dir().join("subscription-clash-dns-fakeip.yaml"))
+                .unwrap();
+        let profile = parse_clash_profile(&raw).unwrap();
+        let dns = profile.dns.expect("dns block");
+        let servers = dns["servers"].as_array().unwrap();
+        assert!(
+            !servers.iter().any(|s| s["type"] == "fakeip"),
+            "fakeip is unreachable on Windows (V11); must not be emitted"
+        );
+        assert!(
+            !servers.iter().any(|s| s["type"] == "local"),
+            "local re-enters the TUN on Windows; must not be emitted"
+        );
+        for server in servers {
+            assert_ne!(
+                server["type"], "udp",
+                "UDP upstreams are captured by the core's own TUN on Windows"
+            );
+            if server["type"] == "tls" {
+                assert_eq!(server["server_port"], 853, "DoT upstreams dial 853");
+            }
+        }
+        assert!(servers.iter().any(|s| s["server"] == "223.5.5.5"));
+        let final_tag = dns["final"].as_str().expect("final tag");
+        assert!(
+            servers
+                .iter()
+                .find(|s| s["tag"] == final_tag)
+                .is_some_and(|s| s["server"].as_str().is_some_and(|h| {
+                    h.parse::<std::net::IpAddr>().is_ok() && s["type"] == "tls"
+                })),
+            "final must be the last IP-hosted TCP server (circular dependency guard, V12)"
+        );
+        assert_eq!(dns["strategy"], "ipv4_only", "forced on Windows");
+        let alidns = servers
+            .iter()
+            .find(|s| s["server"] == "dns.alidns.com")
+            .expect("alidns DoH");
+        assert_eq!(
+            alidns["domain_resolver"], final_tag,
+            "domain host resolves via the IP-hosted anchor, never local"
+        );
+        let rules = dns["rules"].as_array().unwrap();
+        assert!(
+            !rules.iter().any(|r| r["server"] == "local"),
+            "fake-ip-filter suffixes resolve via the TCP anchor on Windows"
+        );
+        assert!(
+            rules.iter().any(|r| r["server"] == final_tag),
+            "fake-ip-filter suffixes route to the anchor"
+        );
     }
 }

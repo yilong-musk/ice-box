@@ -39,8 +39,15 @@ pub use backend::{
     unsupported_capability, AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability,
     TunConfig, TunHealth, TunStack,
 };
-pub use coordinator::{CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator};
+#[cfg(target_os = "windows")]
+pub use coordinator::process_is_elevated;
+pub use coordinator::{
+    elevated_schtasks_script, schtasks_command_line, tun_task_create_args, tun_task_exists,
+    tun_task_pin_matches, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator,
+    TUN_TASK_NAME,
+};
 pub use error::{TunError, TunErrorCode};
+pub use ice_tun_launcher::{format_tun_task_pin, sha256_of_file};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
 pub use recovery::RecoveryDriver;
@@ -99,30 +106,51 @@ pub fn create_backend(
     }
     #[cfg(target_os = "windows")]
     {
-        if windows_dev_runner_enabled() {
-            let coordinator: Box<dyn CoreCoordinator + Send> = match binary {
-                Some(binary) => Box::new(crate::coordinator::WindowsElevatedCoreCoordinator::new(
-                    binary, log_path,
-                )),
-                None => {
-                    tracing::warn!(
-                        "ICE_BOX_TUN_WINDOWS_DEV is set but no sing-box binary was resolved; TUN transitions stay fail-closed"
-                    );
-                    Box::new(DeferredCoreCoordinator)
+        // windows_tun_ready flipped 2026-09-03 (design note §1.2): the
+        // production path is the real backend. The elevated runner needs a
+        // bundled binary; without one every transition stays fail-closed at
+        // `tun.permission_required` (no OS mutation). The scheduled-task
+        // runner (plan B) is preferred when the TUN task exists and the
+        // bundled launcher is present — the app then never needs elevation;
+        // otherwise the UAC relaunch runner stays as the fallback (task
+        // missing/disabled, dev runs).
+        let coordinator: Box<dyn CoreCoordinator + Send> = match binary {
+            Some(binary) => {
+                let task_coordinator = (|| {
+                    let launcher = binary.parent()?.join("ice-tun-launcher.exe");
+                    if !launcher.is_file() {
+                        return None;
+                    }
+                    let pidfile = config_path.parent()?.join("tun-task.pid");
+                    let stopfile = config_path.parent()?.join("tun-task.stop");
+                    let coordinator =
+                        crate::coordinator::TaskCoreCoordinator::new(launcher, pidfile, stopfile);
+                    if crate::coordinator::tun_task_exists() {
+                        Some(coordinator)
+                    } else {
+                        None
+                    }
+                })();
+                match task_coordinator {
+                    Some(coordinator) => Box::new(coordinator),
+                    None => Box::new(crate::coordinator::WindowsElevatedCoreCoordinator::new(
+                        binary, log_path,
+                    )),
                 }
-            };
-            Box::new(WindowsTunBackend::new(
-                owner_token,
-                Box::new(ProcessWindowsHost),
-                coordinator,
-                config_path,
-            ))
-        } else {
-            let _ = (owner_token, config_path, binary, log_path);
-            let reason =
-                "Windows TUN gate pending (windows_tun_ready): WinTUN/UAC host spike not run";
-            Box::new(UnsupportedTunBackend::new(reason))
-        }
+            }
+            None => {
+                tracing::warn!(
+                    "no sing-box binary was resolved; Windows TUN transitions stay fail-closed"
+                );
+                Box::new(DeferredCoreCoordinator)
+            }
+        };
+        Box::new(WindowsTunBackend::new(
+            owner_token,
+            Box::new(ProcessWindowsHost),
+            coordinator,
+            config_path,
+        ))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -169,18 +197,6 @@ fn helper_coordinator(config_path: &std::path::Path) -> Option<Box<dyn CoreCoord
 /// no OS mutation happens without an explicit opt-in.
 pub fn dev_sudo_runner_enabled() -> bool {
     std::env::var("ICE_BOX_TUN_DEV_SUDO")
-        .map(|value| !value.is_empty() && value != "0")
-        .unwrap_or(false)
-}
-
-/// Dev-only opt-in for the Windows elevated runner (plan §5 T3 exit gate
-/// analogue, Windows live gate). Set `ICE_BOX_TUN_WINDOWS_DEV=1` to exercise
-/// the native Windows TUN path from an already-elevated context (run the
-/// acceptance suite from an Administrator shell); production stays
-/// fail-closed (`UnsupportedTunBackend`) until `windows_tun_ready` turns
-/// green. Anything else (unset, empty, `0`) keeps the fail-closed backend.
-pub fn windows_dev_runner_enabled() -> bool {
-    std::env::var("ICE_BOX_TUN_WINDOWS_DEV")
         .map(|value| !value.is_empty() && value != "0")
         .unwrap_or(false)
 }

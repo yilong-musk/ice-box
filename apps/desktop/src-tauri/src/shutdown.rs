@@ -243,6 +243,7 @@ mod tests {
             profile_cache: Mutex::new(None),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
+            tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
         }
     }

@@ -84,6 +84,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const tunInstall = useTunInstallDialog(onInstallHelperThenEnableTun);
   const modeBusyRef = useRef(false);
   const pendingRef = useRef(false);
+  const tunSaveRef = useRef(false);
+  const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
 
   const refresh = useCallback(async (pollGen?: number) => {
@@ -116,7 +118,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         gen === pollGenRef.current &&
         activeRef.current &&
         !modeBusyRef.current &&
-        !pendingRef.current
+        !pendingRef.current &&
+        !tunSaveRef.current
       ) {
         setError(formatInvokeError(e));
       }
@@ -130,7 +133,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     const gen = pollGenRef.current;
     void refresh(gen);
     const id = window.setInterval(() => {
-      if (pendingRef.current || modeBusyRef.current) return;
+      if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
+        return;
+      }
       pollGenRef.current += 1;
       void refresh(pollGenRef.current);
     }, 2000);
@@ -172,6 +177,29 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     } finally {
       pendingRef.current = false;
       setPending(false);
+    }
+  }
+
+  /** Persist next-start TUN desire (and optional elevation / helper install)
+   * without treating it as a live capture start/stop. The power button stays
+   * on the current service state. */
+  async function persistTunDesire(action: () => Promise<void>) {
+    pollGenRef.current += 1;
+    tunSaveRef.current = true;
+    setTunSaving(true);
+    setError(null);
+    try {
+      await action();
+      pollGenRef.current += 1;
+      await refresh();
+    } catch (e) {
+      const message = formatInvokeError(e);
+      pollGenRef.current += 1;
+      await refresh();
+      setError(message);
+    } finally {
+      tunSaveRef.current = false;
+      setTunSaving(false);
     }
   }
 
@@ -246,14 +274,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** TUN setting switch on the home page: persists `tun.enabled` through the
-   * normal settings path (the capture backend follows the committed setting).
-   * Enabling without an authorized helper guides the user through install
-   * first (same flow as the Settings page). */
+  /** TUN setting switch on the home page: persists `tun.enabled` as the
+   * desired backend for the *next* service start. It never starts or stops
+   * the live proxy service. Enabling without an authorized helper guides
+   * the user through install first (same flow as the Settings page). */
   function onToggleTunSetting(enabled: boolean) {
     if (!settings) return;
     setTunOverride(enabled);
-    void run(async () => {
+    void persistTunDesire(async () => {
       await api.saveSettings({
         ...settings,
         tun: { ...settings.tun, enabled },
@@ -263,7 +291,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   function onInstallHelperThenEnableTun() {
     if (!settings) return;
-    void run(async () => {
+    void persistTunDesire(async () => {
       await api.installHelper();
       await api.saveSettings({
         ...settings,
@@ -297,6 +325,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   function onInstallHelper() {
     void run(async () => {
       await api.installHelper();
+      await api.start();
+    });
+  }
+
+  /** Windows (plan B): create the scheduled task (one UAC), then retry start. */
+  function onEnsureTunElevation() {
+    void run(async () => {
+      await api.ensureTunElevation();
       await api.start();
     });
   }
@@ -371,16 +407,30 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         )}
       {permissionRequired && (
         <WarnAlert className="shrink-0">
-          {t("home.warn.permissionRequired")}
+          {status?.helper_supported
+            ? t("home.warn.permissionRequired")
+            : t("home.warn.permissionRequiredNoHelper")}
           <span className="mt-2 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={onInstallHelper}
-              disabled={busy || status?.helper_installed === true}
-            >
-              {t("home.installHelper")}
-            </Button>
+            {status?.helper_supported && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onInstallHelper}
+                disabled={busy || status?.helper_installed === true}
+              >
+                {t("home.installHelper")}
+              </Button>
+            )}
+            {status?.helper_supported === false && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onEnsureTunElevation}
+                disabled={busy}
+              >
+                {t("home.ensureTunElevation")}
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"
@@ -484,12 +534,33 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 size="sm"
                 pressed={tunOverride ?? configuredTun}
                 onPressedChange={(pressed) => {
+                  const s = settings;
                   if (pressed) {
-                    if (status?.helper_installed !== true) {
-                      // No authorized helper: guide the user to install it
-                      // first; the TUN-on setting is persisted only after a
-                      // successful install (cancel leaves it off).
+                    if (!s) return;
+                    if (
+                      status?.helper_supported === true &&
+                      status?.helper_installed !== true
+                    ) {
+                      // No authorized helper (macOS): guide the user to
+                      // install it first; the TUN-on setting is persisted only
+                      // after a successful install (cancel leaves it off).
                       tunInstall.setOpen(true);
+                      return;
+                    }
+                    if (status?.helper_supported === false) {
+                      // Windows (plan B): a one-time elevation component (a
+                      // scheduled task) makes TUN work without any further
+                      // prompt. The first enable triggers a single UAC to
+                      // install it, then persists the next-start desire.
+                      // Never start/stop the proxy service from this switch.
+                      setTunOverride(true);
+                      void persistTunDesire(async () => {
+                        await api.ensureTunElevation();
+                        await api.saveSettings({
+                          ...s,
+                          tun: { ...s.tun, enabled: true },
+                        });
+                      });
                       return;
                     }
                     onToggleTunSetting(true);
@@ -499,6 +570,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }}
                 disabled={
                   busy ||
+                  tunSaving ||
                   !settings ||
                   status?.tun_available === false ||
                   status?.helper_stale === true
@@ -583,7 +655,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           open={tunInstall.open}
           onOpenChange={tunInstall.setOpen}
           onConfirm={tunInstall.confirm}
-          busy={busy}
+          busy={tunSaving}
         />
       )}
     </div>

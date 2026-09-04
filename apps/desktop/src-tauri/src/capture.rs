@@ -129,14 +129,12 @@ pub struct CaptureStatus {
     pub capture_transition_id: Option<String>,
     pub tun_available: bool,
     pub tun_unavailable_reason: Option<String>,
-    /// True when the platform must not surface TUN controls at all. Currently
-    /// Windows: the T0 gate is blocked upstream (`docs/design-notes/
-    /// tun-windows-t0.md`), so the production backend reports
-    /// `supported=false` and the controls stay hidden. Derived from the
-    /// backend capability rather than a bare `cfg!` so the controls
-    /// reappear automatically when `windows_tun_ready` flips green, and so
-    /// the `ICE_BOX_TUN_WINDOWS_DEV` opt-in (capability supported) exposes
-    /// the controls to exercise the backend from the UI.
+    /// True when the platform must not surface TUN controls at all.
+    /// Currently only Windows: the backend reports `supported=false` when
+    /// no bundled sing-box binary is present (deferred coordinator), so the
+    /// controls stay hidden. Derived from the backend capability rather than
+    /// a bare `cfg!` so the controls reappear automatically when the
+    /// capability turns supported.
     pub tun_ui_hidden: bool,
 }
 
@@ -252,6 +250,17 @@ pub fn tun_topology_changed(a: &TunSettings, b: &TunSettings) -> bool {
         || a.dns_hijack != b.dns_hijack
         || a.auto_route != b.auto_route
         || a.strict_route != b.strict_route
+}
+
+/// `tun.enabled` is the desired backend for the *next* service start. A
+/// settings save that only flips that flag must persist it without touching
+/// the live capture (no start, no stop, no backend switch).
+pub fn only_tun_enabled_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.tun.enabled = false;
+    right.tun.enabled = false;
+    left == right && previous.tun.enabled != next.tun.enabled
 }
 
 impl CaptureController {
@@ -431,13 +440,12 @@ impl CaptureController {
             capture_transition_id: transition_id,
             tun_available: capability.supported,
             tun_unavailable_reason: capability.reason,
-            // Windows hides TUN controls while the gate is pending. Deriving
-            // from the backend capability (not a bare `cfg!(windows)`)
-            // removes the coupling to `windows_tun_ready`: when
-            // `create_backend` turns green the controls reappear here without
-            // a second edit, and the `ICE_BOX_TUN_WINDOWS_DEV` dev runner
-            // (capability supported) keeps the controls visible so the dev
-            // backend stays exercisable and disableable from the UI.
+            // Windows hides TUN controls while the backend is unsupported
+            // (e.g. no bundled binary → deferred coordinator →
+            // tun.permission_required). Deriving from the backend capability
+            // (not a bare `cfg!(windows)`) keeps the two in lockstep: the
+            // controls reappear automatically when the capability turns
+            // supported.
             tun_ui_hidden: cfg!(target_os = "windows") && !capability.supported,
         }
     }
@@ -839,6 +847,21 @@ impl CaptureController {
         // adopt/start above). On disagreement, release fail-closed.
         let health = backend.verify(&applied).map_err(map_tun)?;
         if !health.all_ok() {
+            tracing::error!(
+                ?health,
+                interface = %applied.interface_name.as_deref().unwrap_or("none"),
+                expected_addresses = ?applied.expected_addresses,
+                expected_routes = ?applied.expected_routes,
+                dns_before_snapshot_len = applied
+                    .dns_before
+                    .as_ref()
+                    .map(|snapshot| snapshot.platform_snapshot.len()),
+                dns_after_snapshot_len = applied
+                    .dns_after
+                    .as_ref()
+                    .map(|snapshot| snapshot.platform_snapshot.len()),
+                "tun readiness checks disagreed"
+            );
             let _ = core.stop(&self.paths.pid());
             let _ = backend.restore(&applied);
             self.journal_error("tun readiness checks disagreed")?;
@@ -1387,14 +1410,15 @@ impl CaptureController {
         Ok((!warnings.is_empty()).then(|| warnings.join("；")))
     }
 
-    /// Serialized capture-backend transition when `tun.enabled` (or the TUN
-    /// topology) changed while the service is active (plan §4.3). Writes the
-    /// pending record first; commits `settings.json` only after the requested
-    /// backend is healthy; on failure rolls back to the old backend; clears
-    /// the pending record in both cases. An uncertain rollback leaves both
-    /// backends disabled and enters `RecoveryRequired`. When the active
-    /// backend and the committed settings already agree with the candidate,
-    /// no transition runs: the candidate is persisted as-is.
+    /// Serialized live-TUN reconfigure when TUN topology changed while TUN
+    /// capture is already active (plan §4.3). `tun.enabled` is *not* a live
+    /// switch: flipping it is a next-start desire and is persisted without
+    /// calling this. Writes the pending record first; commits `settings.json`
+    /// only after the requested backend is healthy; on failure rolls back to
+    /// the old backend; clears the pending record in both cases. An uncertain
+    /// rollback leaves both backends disabled and enters `RecoveryRequired`.
+    /// When the active backend and the committed settings already agree with
+    /// the candidate, no transition runs: the candidate is persisted as-is.
     pub fn transition_tun_settings(
         &self,
         previous: &AppSettings,
@@ -1952,6 +1976,26 @@ mod tests {
 
     fn controller(paths: &AppPaths) -> CaptureController {
         CaptureController::with_backend_for_tests(paths.clone(), fake_backend())
+    }
+
+    #[test]
+    fn only_tun_enabled_changed_ignores_live_capture_desire() {
+        let off = tun_settings(false);
+        let on = tun_settings(true);
+        assert!(
+            only_tun_enabled_changed(&off, &on),
+            "flipping tun.enabled alone is a next-start desire"
+        );
+        assert!(only_tun_enabled_changed(&on, &off));
+        assert!(!only_tun_enabled_changed(&off, &off));
+        assert!(!only_tun_enabled_changed(&on, &on));
+
+        let mut on_and_port = on.clone();
+        on_and_port.mixed_port = 17900;
+        assert!(
+            !only_tun_enabled_changed(&off, &on_and_port),
+            "any other field change is not desire-only"
+        );
     }
 
     #[test]
