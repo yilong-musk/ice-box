@@ -782,7 +782,10 @@ pub fn tun_task_create_args(
         "/TN".to_string(),
         TUN_TASK_NAME.to_string(),
         "/TR".to_string(),
-        format!("\"{action}\""),
+        // The action starts and ends with a quoted path; as one argv element
+        // std quotes/escapes it into `"\"...\""` form when building the
+        // schtasks command line, which is exactly what schtasks /TR stores.
+        action,
         "/SC".to_string(),
         "ONCE".to_string(),
         "/ST".to_string(),
