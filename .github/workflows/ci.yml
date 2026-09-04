@@ -19,6 +19,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ice-box-${{ runner.os }}
+          cache-on-failure: true
 
       - uses: actions/setup-node@v5
         with:

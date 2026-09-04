@@ -131,10 +131,32 @@ fn copy_helper_resource(manifest_dir: &Path) {
     }
 }
 
+/// Ensure `resources/ice-tun-launcher.exe` exists on Windows so `tauri_build`
+/// accepts the bundle resource during cargo check / clippy / test. The real
+/// binary is built by `prepare-singbox-resource.ps1` (beforeBuildCommand) for
+/// `tauri build`; the workspace gate must not pay for a release compile.
+fn copy_tun_launcher_resource(manifest_dir: &Path) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let dest = manifest_dir.join("resources").join("ice-tun-launcher.exe");
+    if let Err(err) = fs::create_dir_all(dest.parent().expect("parent")) {
+        println!("cargo:warning=create resources dir: {err}");
+        return;
+    }
+    if dest.is_file() {
+        return;
+    }
+    if let Err(err) = fs::write(&dest, b"") {
+        println!("cargo:warning=create ice-tun-launcher resource marker: {err}");
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     copy_singbox_resource(&manifest_dir);
     copy_geoip_resources(&manifest_dir);
     copy_helper_resource(&manifest_dir);
+    copy_tun_launcher_resource(&manifest_dir);
     tauri_build::build()
 }

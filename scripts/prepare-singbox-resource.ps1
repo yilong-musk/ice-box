@@ -38,8 +38,9 @@ if ($Platform -eq "win") {
   Write-Host "Prepared resource $Bare for $Platform (bundle entry compatibility)"
 
   # Plan B (scheduled-task elevation): build + bundle the TUN task launcher.
-  # The workspace build has not run yet at beforeBuildCommand time, so it is
-  # built here explicitly.
+  # The workspace gate only touches an empty resource marker (build.rs) so
+  # clippy/test do not pay for a release compile; this is the sole release
+  # build of the launcher for the bundle.
   $LauncherExe = Join-Path $Root "target/release/ice-tun-launcher.exe"
   & cargo build --release -p ice-tun-launcher
   if (-not (Test-Path $LauncherExe)) {
