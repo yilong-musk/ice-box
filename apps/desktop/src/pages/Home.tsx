@@ -84,6 +84,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const tunInstall = useTunInstallDialog(onInstallHelperThenEnableTun);
   const modeBusyRef = useRef(false);
   const pendingRef = useRef(false);
+  const tunSaveRef = useRef(false);
+  const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
 
   const refresh = useCallback(async (pollGen?: number) => {
@@ -116,7 +118,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         gen === pollGenRef.current &&
         activeRef.current &&
         !modeBusyRef.current &&
-        !pendingRef.current
+        !pendingRef.current &&
+        !tunSaveRef.current
       ) {
         setError(formatInvokeError(e));
       }
@@ -130,7 +133,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     const gen = pollGenRef.current;
     void refresh(gen);
     const id = window.setInterval(() => {
-      if (pendingRef.current || modeBusyRef.current) return;
+      if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
+        return;
+      }
       pollGenRef.current += 1;
       void refresh(pollGenRef.current);
     }, 2000);
@@ -172,6 +177,29 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     } finally {
       pendingRef.current = false;
       setPending(false);
+    }
+  }
+
+  /** Persist next-start TUN desire (and optional elevation / helper install)
+   * without treating it as a live capture start/stop. The power button stays
+   * on the current service state. */
+  async function persistTunDesire(action: () => Promise<void>) {
+    pollGenRef.current += 1;
+    tunSaveRef.current = true;
+    setTunSaving(true);
+    setError(null);
+    try {
+      await action();
+      pollGenRef.current += 1;
+      await refresh();
+    } catch (e) {
+      const message = formatInvokeError(e);
+      pollGenRef.current += 1;
+      await refresh();
+      setError(message);
+    } finally {
+      tunSaveRef.current = false;
+      setTunSaving(false);
     }
   }
 
@@ -253,7 +281,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   function onToggleTunSetting(enabled: boolean) {
     if (!settings) return;
     setTunOverride(enabled);
-    void run(async () => {
+    void persistTunDesire(async () => {
       await api.saveSettings({
         ...settings,
         tun: { ...settings.tun, enabled },
@@ -263,7 +291,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   function onInstallHelperThenEnableTun() {
     if (!settings) return;
-    void run(async () => {
+    void persistTunDesire(async () => {
       await api.installHelper();
       await api.saveSettings({
         ...settings,
@@ -507,13 +535,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       // prompt. The first enable triggers a single UAC to
                       // install it, then persists the next-start desire.
                       // Never start/stop the proxy service from this switch.
-                      void run(async () => {
+                      setTunOverride(true);
+                      void persistTunDesire(async () => {
                         await api.ensureTunElevation();
                         await api.saveSettings({
                           ...s,
                           tun: { ...s.tun, enabled: true },
                         });
-                        setTunOverride(true);
                       });
                       return;
                     }
@@ -524,6 +552,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }}
                 disabled={
                   busy ||
+                  tunSaving ||
                   !settings ||
                   status?.tun_available === false ||
                   status?.helper_stale === true
@@ -608,7 +637,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           open={tunInstall.open}
           onOpenChange={tunInstall.setOpen}
           onConfirm={tunInstall.confirm}
-          busy={busy}
+          busy={tunSaving}
         />
       )}
     </div>

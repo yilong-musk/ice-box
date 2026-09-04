@@ -806,6 +806,65 @@ describe("Home", () => {
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
+  it("does not mark the power button busy while the TUN setting is saved", async () => {
+    let releaseSave: (() => void) | undefined;
+    saveSettings.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        }),
+    );
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "TUN 模式" }));
+
+    expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
+    expect(container.textContent).not.toContain("处理中");
+    expect(view.getByRole("button", { name: "TUN 模式" })).toBeDisabled();
+
+    releaseSave?.();
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeEnabled();
+    });
+    expect(container.textContent).not.toContain("处理中");
+    expect(start).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+  });
+
   it("reflects the TUN toggle optimistically and snaps back when the save is not committed", async () => {
     getStatus.mockResolvedValue({
       core: {
