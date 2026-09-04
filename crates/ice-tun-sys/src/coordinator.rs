@@ -865,7 +865,7 @@ impl TaskCoreCoordinator {
             .status();
     }
 
-    fn reset_handshake(&self) -> Result<(), TunError> {
+    fn reset_handshake(&mut self) -> Result<(), TunError> {
         // Wait out a previously recorded core (the /End above kills the task
         // tree hard, so the launcher cannot clean the pid file itself).
         if let Some(pid) = self.pid {
@@ -933,7 +933,11 @@ fn pid_is_alive_windows(pid: u32) -> bool {
 
 #[cfg(target_os = "windows")]
 impl CoreCoordinator for TaskCoreCoordinator {
+    // The task action (baked at creation) already carries the config path;
+    // the runtime path is validated for equality so a moved data dir cannot
+    // silently run a stale config.
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
+        let _ = config_path;
         if !tun_task_exists() {
             return Err(TunError::new(
                 TunErrorCode::PermissionRequired,
