@@ -700,9 +700,13 @@ pub fn tun_dns_hijack_rule() -> Value {
 ///
 /// UDP user traffic (QUIC/HTTP3) is broken under the Windows shape — the
 /// core's UDP outbound is captured by its own TUN (design note §1.2 open
-/// items) — so UDP 443 is rejected to force clients onto the proven IPv4
-/// TCP path (YouTube avatars and other Google CDN subresources otherwise
-/// hang on HTTP/3).
+/// items). UDP 443 is rejected with the default method (ICMP port
+/// unreachable), not `outbound: block` / `method: drop`: a silent black
+/// hole leaves Chrome/Edge parked on HTTP/3 (YouTube avatars on
+/// `yt3.ggpht.com` / `lh3.googleusercontent.com`, Telegram Web) until the
+/// QUIC timer expires, and some subresources never fall back. ICMP makes
+/// the browser fail the h3 probe immediately and reuse the proven IPv4
+/// TCP path.
 pub fn tun_reserved_rules(tun: &TunSettings) -> Vec<Value> {
     tun_reserved_rules_for(tun, cfg!(target_os = "windows"))
 }
@@ -730,7 +734,7 @@ fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
         rules.push(json!({
             "network": "udp",
             "port": [443],
-            "outbound": "block",
+            "action": "reject",
         }));
         rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
         rules.push(json!({
@@ -2193,9 +2197,10 @@ mod build_tests {
         // (the `protocol: dns` match does not fire in time on Windows),
         // process bypass, sniff, protocol-dns hijack, then the TUN
         // sub-ranges rejected BEFORE `ip_is_private` can loop them back
-        // into the core (#4455). UDP 443 (QUIC/HTTP3) is rejected because
-        // UDP user traffic is broken under the Windows shape; the block
-        // makes clients fall back to the proven IPv4 TCP path.
+        // into the core (#4455). UDP 443 (QUIC/HTTP3) is rejected with the
+        // default ICMP method because UDP user traffic is broken under the
+        // Windows shape; a silent `block`/`drop` black-holes HTTP/3 and
+        // Chrome/Edge never fall back to the proven IPv4 TCP path.
         let tun = TunSettings {
             dns_hijack: false, // Windows always emits the hijack rules
             ..TunSettings::default()
@@ -2226,7 +2231,11 @@ mod build_tests {
         let quic = &rules[5];
         assert_eq!(quic["network"], "udp");
         assert_eq!(quic["port"][0], 443);
-        assert_eq!(quic["outbound"], "block");
+        assert_eq!(quic["action"], "reject");
+        assert!(
+            quic.get("method").is_none() && quic.get("outbound").is_none(),
+            "default reject (ICMP) — not drop/block, so HTTP/3 fails fast"
+        );
         assert_eq!(rules[6]["ip_is_private"], true);
         assert_eq!(rules[7]["ip_cidr"][0], "127.0.0.0/8");
 
