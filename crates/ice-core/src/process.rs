@@ -244,12 +244,15 @@ impl ManagedProcess for PidProcess {
             // Graceful-first (mirrors the coordinator's taskkill `/T` without
             // `/F`: WM_CLOSE, which sing-box treats as a shutdown signal and
             // uses to remove its WFP filters and routes). A pid that is
-            // already gone is a no-op.
+            // already gone is a no-op. CREATE_NO_WINDOW: a console child of
+            // the GUI app would flash a black window.
+            use std::os::windows::process::CommandExt;
             let status = Command::new("taskkill")
                 .args(["/PID", &self.pid.to_string(), "/T"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
                 .status();
             match status {
                 Ok(_) => Ok(()),

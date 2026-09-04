@@ -74,6 +74,24 @@ fn parse_args() -> Option<Args> {
 }
 
 #[cfg(target_os = "windows")]
+fn taskkill(pid: u32, forced: bool) {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new("taskkill");
+    command
+        .args(["/PID", &pid.to_string(), "/T"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // CREATE_NO_WINDOW: the launcher is a GUI-subsystem process; a
+        // console child would flash a black window on every stop.
+        .creation_flags(0x0800_0000);
+    if forced {
+        command.arg("/F");
+    }
+    let _ = command.status();
+}
+
+#[cfg(target_os = "windows")]
 fn run() -> i32 {
     let Some(args) = parse_args() else {
         eprintln!("usage: ice-tun-launcher --data <app-data-dir>");
@@ -153,12 +171,7 @@ fn run() -> i32 {
                 std::thread::sleep(POLL_INTERVAL);
             }
             if child.try_wait().ok().flatten().is_none() {
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+                taskkill(pid, true);
             }
             let _ = std::fs::remove_file(&args.stopfile);
             break;
@@ -180,12 +193,7 @@ fn graceful_stop(pid: u32) {
     // treats as a shutdown signal and uses to remove its WFP filters and
     // routes (design note tun-windows-t0 §4). A failure here is benign: the
     // forced `/F` fallback decides.
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    taskkill(pid, false);
 }
 
 #[cfg(not(target_os = "windows"))]
