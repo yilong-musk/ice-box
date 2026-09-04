@@ -131,11 +131,12 @@ pub struct StatusResponse {
     /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
     pub helper_installed: bool,
     /// Whether this platform has an installable privileged helper at all.
-    /// macOS only in this release: Windows elevates the TUN core differently
-    /// (the app itself must run as administrator — the coordinator rejects
-    /// unelevated transitions with `tun.permission_required`). The frontend
-    /// hides the helper install/uninstall actions and the install-before-
-    /// enable guide when this is false.
+    /// macOS only in this release: Windows elevates the TUN core through a
+    /// one-time scheduled-task setup (`ensure_tun_elevation`); unelevated
+    /// transitions fail with `tun.permission_required` until that task
+    /// exists. The frontend hides the helper install/uninstall actions and
+    /// the install-before-enable guide when this is false, and offers the
+    /// one-time task setup instead.
     pub helper_supported: bool,
     /// The installed helper's root-owned core differs from the app's bundled
     /// core (app updated): only one core version may exist, so TUN stays
@@ -542,8 +543,12 @@ fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
         }
     }
     if settings.tun.enabled {
-        // TUN path: the controller stops the app-managed core and the
+        // TUN path: make sure the Windows scheduled task exists (imported
+        // settings / auto-save can persist `tun.enabled` without the one-time
+        // UAC setup). No-op on macOS and when the pinned task is already
+        // installed. Then the controller stops the app-managed core and the
         // backend starts the elevated one (adopted afterwards).
+        ensure_tun_elevation_inner(app, state)?;
         state.capture.refresh_backend()?;
         let binary = binary_for(app)?;
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -741,11 +746,10 @@ fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
     // quotes: `Start-Process -ArgumentList` joins elements verbatim without
     // re-quoting, so a directly-passed `/TR` action loses its quotes to
     // argv parsing and schtasks stores a broken action. The cmd form was
-    // verified live on the zh-CN host.
-    let command = schtasks_command_line(args);
-    let script = format!(
-        "try {{ Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','{command}' -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }} }} catch {{ exit 1223 }}"
-    );
+    // verified live on the zh-CN host. The PowerShell wrapper single-quotes
+    // the cmd line and doubles apostrophes so paths like `O'Brien` stay intact.
+    let command = ice_tun_sys::schtasks_command_line(args);
+    let script = ice_tun_sys::elevated_schtasks_script(&command);
     let output = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
@@ -771,31 +775,8 @@ fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Rebuild an argv list into a `cmd`-friendly command line: arguments are
-/// quoted when they carry spaces or quotes, and embedded quotes are escaped
-/// as `\"` — the form `cmd` + `schtasks` round-trip correctly (the /TR
-/// action keeps its quotes in the stored task).
-#[cfg(target_os = "windows")]
-fn schtasks_command_line(args: &[String]) -> String {
-    let quoted = args
-        .iter()
-        .map(|arg| {
-            if arg.chars().any(|ch| ch == ' ' || ch == '"') {
-                format!("\"{}\"", arg.replace('"', "\\\""))
-            } else {
-                arg.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("schtasks {quoted}")
-}
-
 #[cfg(target_os = "windows")]
 fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
-    if ice_tun_sys::tun_task_exists() {
-        return Ok(());
-    }
     let (launcher, data_dir) = tun_task_paths(app, state)?;
     if !launcher.is_file() {
         return Err(AppError::with_code(
@@ -806,7 +787,47 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
             ),
         ));
     }
-    let args = ice_tun_sys::tun_task_create_args(&launcher, &data_dir);
+    let core = launcher
+        .parent()
+        .map(|dir| dir.join("sing-box.exe"))
+        .ok_or_else(|| {
+            AppError::with_code(
+                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+                format!(
+                    "TUN task launcher path {} has no parent",
+                    launcher.display()
+                ),
+            )
+        })?;
+    if !core.is_file() {
+        return Err(AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!(
+                "TUN core binary not found at {} (reinstall the app)",
+                core.display()
+            ),
+        ));
+    }
+    // Recreate when the task is missing *or* the stored pin no longer matches
+    // the bundled launcher/core (app update, or a replaced binary). `/F` on
+    // the create argv overwrites the existing task after one UAC prompt.
+    if ice_tun_sys::tun_task_exists() && ice_tun_sys::tun_task_pin_matches(&launcher) {
+        return Ok(());
+    }
+    let launcher_sha = ice_tun_sys::sha256_of_file(&launcher).map_err(|err| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!("hash TUN launcher: {err}"),
+        )
+    })?;
+    let core_sha = ice_tun_sys::sha256_of_file(&core).map_err(|err| {
+        AppError::with_code(
+            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            format!("hash TUN core: {err}"),
+        )
+    })?;
+    let pin = ice_tun_sys::format_tun_task_pin(&launcher_sha, &core_sha);
+    let args = ice_tun_sys::tun_task_create_args(&launcher, &data_dir, &pin);
     if ice_tun_sys::process_is_elevated() {
         // Already elevated: run schtasks directly (no UAC prompt).
         use std::os::windows::process::CommandExt;

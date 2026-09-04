@@ -49,6 +49,7 @@ const tunStatus = {
   helper_installed: false,
   helper_supported: true,
   helper_stale: false,
+  tun_elevation_ready: true,
 } as const;
 
 const tunSettings = {
@@ -665,6 +666,55 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: false }),
         }),
       );
+      expect(start).toHaveBeenCalled();
+    });
+  });
+
+  it("shows permission-required state with one-time elevation setup when the helper is not supported", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+      tun_elevation_ready: false,
+      configured_tun: true,
+      tun_status: "permission_required",
+      tun_error: { code: "tun.permission_required", message: "task missing" },
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+    ensureTunElevation.mockResolvedValue(undefined);
+    start.mockResolvedValue(undefined);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("alert")).toHaveTextContent("一次性管理员授权");
+    });
+    expect(view.queryByRole("button", { name: "安装辅助组件" })).not.toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: "完成一次性权限设置" }));
+    await waitFor(() => {
+      expect(ensureTunElevation).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalled();
     });
   });

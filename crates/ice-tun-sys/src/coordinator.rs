@@ -731,7 +731,7 @@ pub fn process_is_elevated() -> bool {
 /// highest-privilege flag (the creating moment is the only elevation the
 /// user ever sees); afterwards `schtasks /Run` / `/End` start and stop the
 /// elevated core without any UAC prompt.
-pub const TUN_TASK_NAME: &str = "ice-box-tun";
+pub const TUN_TASK_NAME: &str = ice_tun_launcher::TUN_TASK_NAME;
 
 /// Run `schtasks` with `CREATE_NO_WINDOW` (the calls come from the GUI app /
 /// the status poll; without it every invocation flashes a console window).
@@ -768,11 +768,12 @@ pub fn tun_task_exists() -> bool {
 /// it). The `/TR` element is `"<launcher>" --data "<data-dir>"` — the
 /// launcher derives the sing-box binary (same directory) and the
 /// config/log/pid/stop paths from the data dir, which also keeps the action
-/// far below the 261-char `/TR` limit. Must run from an elevated context
-/// exactly once; the runtime flow does that through a single UAC prompt, the
-/// installer does it at install time.
-#[cfg(target_os = "windows")]
-pub fn tun_task_create_args(launcher: &Path, data_dir: &Path) -> Vec<String> {
+/// far below the 261-char `/TR` limit. `pin` is stored in `/D` (the task
+/// description) so a replaced launcher or `sing-box.exe` is refused without
+/// spending `/TR` budget. Must run from an elevated context exactly once;
+/// the runtime flow does that through a single UAC prompt, the installer
+/// does it at install time.
+pub fn tun_task_create_args(launcher: &Path, data_dir: &Path, pin: &str) -> Vec<String> {
     let action = format!(
         "\"{}\" --data \"{}\"",
         launcher.display(),
@@ -796,8 +797,113 @@ pub fn tun_task_create_args(launcher: &Path, data_dir: &Path) -> Vec<String> {
         "23:59".to_string(),
         "/RL".to_string(),
         "HIGHEST".to_string(),
+        "/D".to_string(),
+        pin.to_string(),
         "/F".to_string(),
     ]
+}
+
+/// Rebuild an argv list into a `cmd`-friendly command line: arguments are
+/// quoted when they carry spaces or quotes, and embedded quotes are escaped
+/// as `\"` — the form `cmd` + `schtasks` round-trip correctly (the /TR
+/// action keeps its quotes in the stored task).
+pub fn schtasks_command_line(args: &[String]) -> String {
+    let quoted = args
+        .iter()
+        .map(|arg| {
+            if arg.chars().any(|ch| ch == ' ' || ch == '"') {
+                format!("\"{}\"", arg.replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("schtasks {quoted}")
+}
+
+/// PowerShell single-quoted string. The only escape is doubling `'`.
+fn powershell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// PowerShell `-Command` body that elevates `cmd /c <schtasks …>` with one
+/// UAC prompt. The cmd line is single-quoted so a path such as `O'Brien`
+/// cannot break out of the string (or inject extra PowerShell).
+pub fn elevated_schtasks_script(command: &str) -> String {
+    let quoted = powershell_single_quote(command);
+    format!(
+        "try {{ Start-Process -FilePath 'cmd.exe' -ArgumentList '/c',{quoted} -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }} }} catch {{ exit 1223 }}"
+    )
+}
+
+/// Whether the TUN scheduled task exists and its `/D` pin matches the
+/// on-disk launcher and sibling `sing-box.exe`. Always `false` on
+/// non-Windows hosts.
+pub fn tun_task_pin_matches(launcher: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        verify_task_binaries(launcher).is_ok()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = launcher;
+        false
+    }
+}
+
+/// Read the scheduled-task XML and refuse a replaced launcher or core.
+#[cfg(target_os = "windows")]
+fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
+    let xml = query_tun_task_xml().ok_or_else(|| {
+        TunError::new(
+            TunErrorCode::PermissionRequired,
+            format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
+        )
+    })?;
+    let pin = ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
+        TunError::new(
+            TunErrorCode::PermissionRequired,
+            format!(
+                "the TUN scheduled task {TUN_TASK_NAME} is missing the binary pin; run the one-time elevation setup (ensure_tun_elevation) before enabling capture"
+            ),
+        )
+    })?;
+    let core = ice_tun_launcher::core_beside_launcher(launcher).ok_or_else(|| {
+        TunError::new(
+            TunErrorCode::ApplyFailed,
+            format!(
+                "TUN task launcher path {} has no parent",
+                launcher.display()
+            ),
+        )
+    })?;
+    match ice_tun_launcher::pin_matches_files(&pin, launcher, &core) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TunError::new(
+            TunErrorCode::ApplyFailed,
+            format!(
+                "TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
+                core.display()
+            ),
+        )),
+        Err(err) => Err(TunError::new(TunErrorCode::ApplyFailed, err)),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn query_tun_task_xml() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let output = Command::new("schtasks")
+        .args(["/Query", "/TN", TUN_TASK_NAME, "/XML"])
+        .stdin(Stdio::null())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(ice_tun_launcher::decode_schtasks_output(&output.stdout))
 }
 
 /// Elevated runner for the Windows TUN path through the scheduled task
@@ -933,6 +1039,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
                 format!("TUN task launcher not found at {}", self.launcher.display()),
             ));
         }
+        verify_task_binaries(&self.launcher)?;
         self.end_task();
         self.reset_handshake()?;
         self.run_task()?;
@@ -1050,12 +1157,16 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn tun_task_create_args_carry_the_highest_privilege_flag_and_action() {
+    fn tun_task_create_args_carry_the_highest_privilege_flag_action_and_pin() {
+        let pin = ice_tun_launcher::format_tun_task_pin(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        );
         let args = tun_task_create_args(
             Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe"),
             Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox"),
+            &pin,
         );
         assert_eq!(
             args,
@@ -1071,6 +1182,8 @@ mod tests {
                 "23:59",
                 "/RL",
                 "HIGHEST",
+                "/D",
+                pin.as_str(),
                 "/F",
             ]
         );
@@ -1080,5 +1193,60 @@ mod tests {
             tr_len < 261,
             "the /TR action is {tr_len} chars; schtasks rejects values above 261"
         );
+        assert_eq!(TUN_TASK_NAME, ice_tun_launcher::TUN_TASK_NAME);
+    }
+
+    #[test]
+    fn powershell_single_quote_doubles_apostrophes() {
+        assert_eq!(powershell_single_quote("plain"), "'plain'");
+        assert_eq!(
+            powershell_single_quote(r"C:\Users\O'Brien\AppData"),
+            r"'C:\Users\O''Brien\AppData'"
+        );
+        assert_eq!(powershell_single_quote("a'b'c"), "'a''b''c'");
+    }
+
+    #[test]
+    fn schtasks_command_line_quotes_spaces_but_not_apostrophes() {
+        let args = [
+            "/Create".to_string(),
+            "/TR".to_string(),
+            r#"C:\Users\O'Brien\ice-tun-launcher.exe"#.to_string(),
+            "/D".to_string(),
+            r"C:\Users\O'Brien\AppData\Roaming\ice".to_string(),
+        ];
+        let command = schtasks_command_line(&args);
+        assert!(command.contains(r"C:\Users\O'Brien\ice-tun-launcher.exe"));
+        assert!(
+            !command.contains(r#""C:\Users\O'Brien\ice-tun-launcher.exe""#),
+            "apostrophe-only paths do not need cmd quotes"
+        );
+
+        let spaced = schtasks_command_line(&[
+            "/TR".to_string(),
+            r"C:\Program Files\ice-box\ice-tun-launcher.exe".to_string(),
+        ]);
+        assert!(spaced.contains(r#""C:\Program Files\ice-box\ice-tun-launcher.exe""#));
+    }
+
+    #[test]
+    fn elevated_schtasks_script_does_not_break_on_apostrophe_paths() {
+        let command = schtasks_command_line(&[
+            "/Create".to_string(),
+            "/TN".to_string(),
+            "ice-box-tun".to_string(),
+            "/TR".to_string(),
+            r#""C:\Users\O'Brien\AppData\Local\Programs\ice-box\ice-tun-launcher.exe" --data "C:\Users\O'Brien\AppData\Roaming\com.yilong-musk.icebox""#.to_string(),
+        ]);
+        let script = elevated_schtasks_script(&command);
+        assert!(
+            script.contains("O''Brien"),
+            "embedded apostrophes must be doubled for PowerShell"
+        );
+        assert!(
+            !script.contains("'C:\\Users\\O'Brien"),
+            "an unescaped apostrophe would terminate the PowerShell string"
+        );
+        assert!(script.contains("-ArgumentList '/c',"));
     }
 }

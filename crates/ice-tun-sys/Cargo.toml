@@ -12,6 +12,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
+ice-tun-launcher = { path = "../ice-tun-launcher" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

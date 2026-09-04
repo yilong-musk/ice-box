@@ -40,11 +40,14 @@ pub use backend::{
     TunConfig, TunHealth, TunStack,
 };
 #[cfg(target_os = "windows")]
-pub use coordinator::{process_is_elevated, tun_task_create_args};
+pub use coordinator::process_is_elevated;
 pub use coordinator::{
-    tun_task_exists, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
+    elevated_schtasks_script, schtasks_command_line, tun_task_create_args, tun_task_exists,
+    tun_task_pin_matches, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator,
+    TUN_TASK_NAME,
 };
 pub use error::{TunError, TunErrorCode};
+pub use ice_tun_launcher::{format_tun_task_pin, sha256_of_file};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
 pub use recovery::RecoveryDriver;

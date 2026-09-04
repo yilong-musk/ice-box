@@ -18,8 +18,11 @@
 //! the launcher tree without cleanup — the coordinator tolerates the stale
 //! pid file and resets it on the next start.
 //!
-//! Usage: `ice-tun-launcher --binary <path> --config <path> --log <path>
-//! --pidfile <path> --stopfile <path>`
+//! Usage: `ice-tun-launcher --data <app-data-dir>`
+//!
+//! Before spawning sing-box the launcher checks the SHA-256 pin stored in
+//! the `ice-box-tun` scheduled-task description (set at elevated create
+//! time). A replaced `sing-box.exe` is refused.
 
 // A GUI-subsystem binary: the scheduled task starts it elevated, and a
 // console subsystem would flash a black window on every `schtasks /Run`.
@@ -99,6 +102,10 @@ fn run() -> i32 {
     };
     if !args.binary.is_file() {
         eprintln!("sing-box binary not found at {}", args.binary.display());
+        return 2;
+    }
+    if let Err(err) = verify_pinned_core(&args.binary) {
+        eprintln!("{err}");
         return 2;
     }
     if !args.config.is_file() {
@@ -185,6 +192,42 @@ fn run() -> i32 {
     let _ = child.wait();
     let _ = std::fs::remove_file(&args.pidfile);
     0
+}
+
+/// Refuse to spawn a replaced `sing-box.exe`: the expected hash lives in the
+/// elevated scheduled task, which an unelevated process cannot rewrite.
+#[cfg(target_os = "windows")]
+fn verify_pinned_core(core: &std::path::Path) -> Result<(), String> {
+    let xml = query_task_xml()?;
+    let pin = ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
+        "TUN scheduled task is missing the binary pin; refusing to start".to_string()
+    })?;
+    let exe = std::env::current_exe().map_err(|err| format!("current exe: {err}"))?;
+    if !ice_tun_launcher::pin_matches_files(&pin, &exe, core)? {
+        return Err(format!(
+            "launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
+            core.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn query_task_xml() -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let output = Command::new("schtasks")
+        .args(["/Query", "/TN", ice_tun_launcher::TUN_TASK_NAME, "/XML"])
+        .stdin(Stdio::null())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|err| format!("query TUN scheduled task: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "query TUN scheduled task failed (exit {})",
+            output.status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(ice_tun_launcher::decode_schtasks_output(&output.stdout))
 }
 
 #[cfg(target_os = "windows")]

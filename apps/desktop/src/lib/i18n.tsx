@@ -109,8 +109,9 @@ const zh = {
   "home.warn.permissionRequired":
     "启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。",
   "home.warn.permissionRequiredNoHelper":
-    "启用 TUN 需要管理员权限，未修改任何系统配置。请以管理员身份重新运行 ice-box 后再开启 TUN，或停用 TUN 改用系统代理。",
+    "启用 TUN 需要一次性管理员授权（创建计划任务），未修改任何系统配置。点击「完成一次性权限设置」将弹出系统 UAC；授权后自动重试，或停用 TUN 改用系统代理。",
   "home.installHelper": "安装辅助组件",
+  "home.ensureTunElevation": "完成一次性权限设置",
   "home.fallbackToSystemProxy": "停用 TUN，改用系统代理",
   "home.warn.recoveryRequired":
     "TUN 清理未确认，已阻止新的 TUN 激活。清理不确定时不会启用系统代理回退；请先重试恢复。",
@@ -386,8 +387,9 @@ const en: Record<MessageKey, string> = {
   "home.warn.permissionRequired":
     "Enabling TUN requires system permission; no system configuration was changed. Clicking “Install Helper” opens the system authorization prompt; installation retries automatically, or disable TUN and use the system proxy.",
   "home.warn.permissionRequiredNoHelper":
-    "Enabling TUN requires administrator privileges; no system configuration was changed. Restart ice-box as administrator before enabling TUN, or disable TUN and use the system proxy.",
+    "Enabling TUN needs a one-time administrator approval to create the scheduled task; no system configuration was changed. Click “Complete one-time setup” to open UAC; approval retries automatically, or disable TUN and use the system proxy.",
   "home.installHelper": "Install Helper",
+  "home.ensureTunElevation": "Complete one-time setup",
   "home.fallbackToSystemProxy": "Disable TUN, use system proxy",
   "home.warn.recoveryRequired":
     "TUN cleanup is unconfirmed, so new TUN activation is blocked. The system-proxy fallback is not enabled while cleanup is uncertain; retry recovery first.",

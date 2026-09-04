@@ -329,6 +329,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     });
   }
 
+  /** Windows (plan B): create the scheduled task (one UAC), then retry start. */
+  function onEnsureTunElevation() {
+    void run(async () => {
+      await api.ensureTunElevation();
+      await api.start();
+    });
+  }
+
   const inboundLabel =
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
@@ -411,6 +419,16 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 disabled={busy || status?.helper_installed === true}
               >
                 {t("home.installHelper")}
+              </Button>
+            )}
+            {status?.helper_supported === false && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onEnsureTunElevation}
+                disabled={busy}
+              >
+                {t("home.ensureTunElevation")}
               </Button>
             )}
             <Button
