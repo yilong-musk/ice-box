@@ -736,15 +736,14 @@ fn tun_task_paths(app: &AppHandle, state: &AppState) -> Result<(PathBuf, PathBuf
 fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
     use std::os::windows::process::CommandExt;
     // One UAC prompt for the schtasks.exe invocation (no app relaunch).
-    // Each element is wrapped in single quotes (PS literal: double quotes
-    // inside, like the /TR action, survive untouched).
-    let ps_args = args
-        .iter()
-        .map(|arg| format!("'{}'", arg.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(",");
+    // The command is wrapped through `cmd /c` with `\"`-escaped inner
+    // quotes: `Start-Process -ArgumentList` joins elements verbatim without
+    // re-quoting, so a directly-passed `/TR` action loses its quotes to
+    // argv parsing and schtasks stores a broken action. The cmd form was
+    // verified live on the zh-CN host.
+    let command = schtasks_command_line(args);
     let script = format!(
-        "try {{ Start-Process -FilePath 'schtasks.exe' -ArgumentList @({ps_args}) -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }} }} catch {{ exit 1223 }}"
+        "try {{ Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','{command}' -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }} }} catch {{ exit 1223 }}"
     );
     let output = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -757,12 +756,38 @@ fn run_elevated_schtasks(args: &[String]) -> Result<(), AppError> {
             )
         })?;
     if !output.status.success() {
+        tracing::warn!(
+            exit = output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            command = %command,
+            "one-time TUN elevation setup was not granted or failed"
+        );
         return Err(AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
             "the one-time TUN elevation setup was not granted; enable TUN again to retry",
         ));
     }
     Ok(())
+}
+
+/// Rebuild an argv list into a `cmd`-friendly command line: arguments are
+/// quoted when they carry spaces or quotes, and embedded quotes are escaped
+/// as `\"` — the form `cmd` + `schtasks` round-trip correctly (the /TR
+/// action keeps its quotes in the stored task).
+#[cfg(target_os = "windows")]
+fn schtasks_command_line(args: &[String]) -> String {
+    let quoted = args
+        .iter()
+        .map(|arg| {
+            if arg.chars().any(|ch| ch == ' ' || ch == '"') {
+                format!("\"{}\"", arg.replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("schtasks {quoted}")
 }
 
 #[cfg(target_os = "windows")]
@@ -804,6 +829,7 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
         run_elevated_schtasks(&args)?;
     }
     if !ice_tun_sys::tun_task_exists() {
+        tracing::warn!("TUN scheduled task still missing after the setup run");
         return Err(AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
             "the TUN scheduled task still does not exist after the setup run",
