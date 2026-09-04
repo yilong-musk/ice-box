@@ -733,18 +733,28 @@ pub fn process_is_elevated() -> bool {
 /// elevated core without any UAC prompt.
 pub const TUN_TASK_NAME: &str = "ice-box-tun";
 
+/// Run `schtasks` with `CREATE_NO_WINDOW` (the calls come from the GUI app /
+/// the status poll; without it every invocation flashes a console window).
+#[cfg(target_os = "windows")]
+fn run_schtasks(args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
+    Command::new("schtasks")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .status()
+}
+
 /// Whether the TUN scheduled task exists (exit-code probe; the zh-CN
 /// `schtasks /Query` output is never parsed). Always `false` on non-Windows
 /// hosts (no task concept there).
 pub fn tun_task_exists() -> bool {
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("schtasks")
-            .args(["/Query", "/TN", TUN_TASK_NAME])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let status = run_schtasks(&["/Query", "/TN", TUN_TASK_NAME]);
         matches!(status, Ok(status) if status.success())
     }
     #[cfg(not(target_os = "windows"))]
@@ -788,8 +798,11 @@ pub fn tun_task_create_args(
         action,
         "/SC".to_string(),
         "ONCE".to_string(),
+        // A past /ST makes schtasks refuse to create the task ("the task
+        // cannot run"), so use the end of the day; the task is only ever
+        // triggered by `schtasks /Run` anyway.
         "/ST".to_string(),
-        "00:00".to_string(),
+        "23:59".to_string(),
         "/RL".to_string(),
         "HIGHEST".to_string(),
         "/F".to_string(),
@@ -822,15 +835,9 @@ impl TaskCoreCoordinator {
     }
 
     fn run_task(&self) -> Result<(), TunError> {
-        let status = Command::new("schtasks")
-            .args(["/Run", "/TN", TUN_TASK_NAME])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|err| {
-                TunError::new(TunErrorCode::ApplyFailed, format!("schtasks /Run: {err}"))
-            })?;
+        let status = run_schtasks(&["/Run", "/TN", TUN_TASK_NAME]).map_err(|err| {
+            TunError::new(TunErrorCode::ApplyFailed, format!("schtasks /Run: {err}"))
+        })?;
         if status.success() {
             Ok(())
         } else {
@@ -845,12 +852,7 @@ impl TaskCoreCoordinator {
     }
 
     fn end_task(&self) {
-        let _ = Command::new("schtasks")
-            .args(["/End", "/TN", TUN_TASK_NAME])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = run_schtasks(&["/End", "/TN", TUN_TASK_NAME]);
     }
 
     fn reset_handshake(&mut self) -> Result<(), TunError> {

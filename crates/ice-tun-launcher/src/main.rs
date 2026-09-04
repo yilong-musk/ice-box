@@ -21,6 +21,10 @@
 //! Usage: `ice-tun-launcher --binary <path> --config <path> --log <path>
 //! --pidfile <path> --stopfile <path>`
 
+// A GUI-subsystem binary: the scheduled task starts it elevated, and a
+// console subsystem would flash a black window on every `schtasks /Run`.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
 #[cfg(target_os = "windows")]

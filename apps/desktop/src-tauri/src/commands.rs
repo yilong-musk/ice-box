@@ -795,8 +795,10 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
     );
     if ice_tun_sys::process_is_elevated() {
         // Already elevated: run schtasks directly (no UAC prompt).
+        use std::os::windows::process::CommandExt;
         let status = std::process::Command::new("schtasks.exe")
             .args(&args)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
             .map_err(|err| {
                 AppError::with_code(
@@ -841,8 +843,10 @@ fn remove_tun_elevation_inner(_app: &AppHandle, state: &AppState) -> Result<(), 
         "/F".to_string(),
     ];
     if ice_tun_sys::process_is_elevated() {
+        use std::os::windows::process::CommandExt;
         let status = std::process::Command::new("schtasks.exe")
             .args(&args)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
             .map_err(|err| {
                 AppError::with_code(
