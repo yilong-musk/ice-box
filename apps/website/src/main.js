@@ -19,7 +19,6 @@ document.querySelector("#root").innerHTML = `
         <h1>Control your<br><em>network, clearly.</em></h1>
       </div>
       <div class="hero-aside">
-        <p class="hero-lede">A focused desktop client for nodes, rules, subscriptions, and live traffic.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="#demo">Open live demo <span>↓</span></a>
           <a class="text-link" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">View source ↗</a>
@@ -31,8 +30,7 @@ document.querySelector("#root").innerHTML = `
         </div>
       </div>
     </section>
-    <section class="demo-section page-wrap" id="demo"><div class="section-intro"><div><p class="eyebrow">THE REAL FRONTEND</p><h2>Try ice-box<br><em>in your browser.</em></h2></div><p>Interactive demo powered by the same desktop UI in this repository. No install required.</p></div><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small>live product demo</small></strong><span>v0.1.3</span></div><iframe title="ice-box real desktop frontend demo" src="./demo.html"></iframe></div></section>
-    <section class="final-cta page-wrap"><p class="eyebrow">OPEN SOURCE</p><h2>Make the network<br><em>feel understandable.</em></h2><a class="button button-primary" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">Get ice-box on GitHub ↗</a></section>
+    <section class="demo-section page-wrap" id="demo"><h2>Try ice-box</h2><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small>live product demo</small></strong><span>v0.1.3</span></div><iframe title="ice-box real desktop frontend demo" src="./demo.html"></iframe></div></section>
   </main>
   <footer class="site-footer page-wrap"><span>© 2026 ice-box</span><a href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">github.com/yilong-musk/ice-box ↗</a></footer>
 `;
