@@ -5,7 +5,7 @@ Tauri 2 + React, with a bundled [sing-box](https://github.com/SagerNet/sing-box)
 
 [Live Demo](https://yilong-musk.github.io/ice-box/)
 
-[![ice-box Home](docs/images/demo-home.png)](https://yilong-musk.github.io/ice-box/)
+[![ice-box Home](docs/images/home.png)](https://yilong-musk.github.io/ice-box/)
 
 ## Features
 
