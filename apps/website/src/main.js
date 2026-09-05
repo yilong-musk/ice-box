@@ -19,8 +19,8 @@ document.querySelector("#root").innerHTML = `
       </div>
       <div class="hero-aside">
         <div class="hero-actions">
-          <a class="button button-primary" href="#demo">Open live demo <span>↓</span></a>
-          <a class="text-link" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">View source ↗</a>
+          <a class="button button-primary" href="#demo">Live Demo <span>↓</span></a>
+          <a class="text-link" href="https://github.com/yilong-musk/ice-box/releases/latest" target="_blank" rel="noreferrer">Download ↗</a>
         </div>
         <div class="hero-meta">
           <span><b class="status-dot green"></b> v0.1.3</span>

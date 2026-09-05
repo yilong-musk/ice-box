@@ -3,6 +3,10 @@
 Lightweight proxy client for **macOS** and **Windows**.  
 Tauri 2 + React, with a bundled [sing-box](https://github.com/SagerNet/sing-box) **1.13.19** core.
 
+[Live Demo](https://yilong-musk.github.io/ice-box/)
+
+[![ice-box Home](docs/images/demo-home.png)](https://yilong-musk.github.io/ice-box/)
+
 ## Features
 
 - System proxy or TUN — the switch picks the **next** start, it does not hot-swap
