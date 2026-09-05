@@ -17,5 +17,8 @@ export default defineConfig({
       { find: "@", replacement: desktopSrc },
     ],
   },
+  build: {
+    chunkSizeWarningLimit: 1000,
+  },
   server: { port: 4174, strictPort: true },
 });
