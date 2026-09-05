@@ -13,6 +13,9 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  NODE_OPTIONS: --no-deprecation
+
 concurrency:
   group: pages
   cancel-in-progress: true
