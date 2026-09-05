@@ -31,6 +31,8 @@ jobs:
       - name: Install website dependencies
         run: npm ci
         working-directory: apps/website
+      - name: Make shared dependencies visible to desktop sources
+        run: ln -s "$GITHUB_WORKSPACE/apps/website/node_modules" "$GITHUB_WORKSPACE/apps/desktop/node_modules"
       - name: Build website
         run: npm run build
         working-directory: apps/website

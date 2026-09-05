@@ -11,6 +11,7 @@ export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss()],
   resolve: {
+    dedupe: ["react", "react-dom", "lucide-react", "recharts", "radix-ui", "@tanstack/react-virtual", "class-variance-authority", "clsx", "tailwind-merge"],
     alias: [
       { find: path.resolve(desktopSrc, "api/tauri"), replacement: path.resolve(root, "src/browser-api.ts") },
       { find: path.resolve(desktopSrc, "lib/windowChrome"), replacement: path.resolve(root, "src/browser-window-chrome.ts") },
