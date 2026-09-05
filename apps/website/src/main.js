@@ -17,11 +17,19 @@ document.querySelector("#root").innerHTML = `
       <div class="hero-copy">
         <p class="eyebrow"><span class="eyebrow-dot"></span> OPEN SOURCE · DESKTOP PROXY CLIENT</p>
         <h1>Control your<br><em>network, clearly.</em></h1>
-        <p class="hero-lede">A focused desktop client for nodes, rules, subscriptions, and live traffic.</p>
-        <div class="hero-actions"><a class="button button-primary" href="#demo">Open live demo <span>↓</span></a><a class="text-link" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">View source ↗</a></div>
-        <div class="hero-meta"><span><b class="status-dot green"></b> v0.1.3</span><span>MIT licensed</span><span>macOS · Windows</span></div>
       </div>
-      <div class="hero-aside" aria-label="ice-box project summary"><div class="hero-mark"><img src="${logoUrl}" alt=""><div class="hero-mark-name">ice-box</div><div class="hero-mark-label">LOCAL DESKTOP CONTROL</div><div class="hero-mark-rule"></div><div class="hero-mark-meta"><span>React + Tauri</span><span>Rust core</span><span>sing-box</span></div></div></div>
+      <div class="hero-aside">
+        <p class="hero-lede">A focused desktop client for nodes, rules, subscriptions, and live traffic.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#demo">Open live demo <span>↓</span></a>
+          <a class="text-link" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">View source ↗</a>
+        </div>
+        <div class="hero-meta">
+          <span><b class="status-dot green"></b> v0.1.3</span>
+          <span>MIT licensed</span>
+          <span>macOS · Windows</span>
+        </div>
+      </div>
     </section>
     <section class="demo-section page-wrap" id="demo"><div class="section-intro"><div><p class="eyebrow">THE REAL FRONTEND</p><h2>Try ice-box<br><em>in your browser.</em></h2></div><p>Interactive demo powered by the same desktop UI in this repository. No install required.</p></div><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small>live product demo</small></strong><span>v0.1.3</span></div><iframe title="ice-box real desktop frontend demo" src="./demo.html"></iframe></div></section>
     <section class="final-cta page-wrap"><p class="eyebrow">OPEN SOURCE</p><h2>Make the network<br><em>feel understandable.</em></h2><a class="button button-primary" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">Get ice-box on GitHub ↗</a></section>
