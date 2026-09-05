@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020", "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"], "module": "ESNext", "skipLibCheck": true,
+    "moduleResolution": "bundler", "allowImportingTsExtensions": true, "resolveJsonModule": true,
+    "paths": { "@/*": ["../desktop/src/*"] },
+    "isolatedModules": true, "noEmit": true, "jsx": "react-jsx", "baseUrl": ".", "strict": true,
+    "noUnusedLocals": true, "noUnusedParameters": true, "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src", "../desktop/src/App.tsx", "../desktop/src/pages", "../desktop/src/components", "../desktop/src/lib", "../desktop/src/hooks"],
+  "exclude": ["../desktop/src/**/*.test.ts", "../desktop/src/**/*.test.tsx"]
+}
