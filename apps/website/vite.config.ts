@@ -20,6 +20,12 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      input: {
+        main: path.resolve(root, "index.html"),
+        demo: path.resolve(root, "demo.html"),
+      },
+    },
   },
   server: { port: 4174, strictPort: true },
 });
