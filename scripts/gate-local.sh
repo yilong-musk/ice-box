@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Quick local gate before committing: fmt, clippy, lib tests, tsc, vitest.
-# Intentionally lighter than scripts/gate.sh (no vite build, no desktop deps).
+# Quick local gate before committing: fmt, clippy, lib tests, tsc, vitest,
+# and a Live Demo Home screenshot when desktop/website UI files changed.
+# Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,5 +23,8 @@ echo "== tsc --noEmit =="
 
 echo "== vitest =="
 (cd apps/desktop && npm test)
+
+echo "== capture demo home =="
+bash scripts/capture-demo-home.sh
 
 echo "gate-local: OK"

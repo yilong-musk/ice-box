@@ -15,6 +15,7 @@
     "fetch-singbox": "bash scripts/fetch-singbox.sh",
     "prepare-singbox": "bash scripts/prepare-singbox-resource.sh",
     "gate": "bash scripts/gate.sh",
+    "capture-home": "CAPTURE_DEMO_HOME_FORCE=1 bash scripts/capture-demo-home.sh",
     "acceptance": "bash scripts/run-acceptance-macos.sh",
     "acceptance:tun": "bash scripts/run-acceptance-macos-tun.sh",
     "acceptance:win": "bash scripts/run-acceptance-windows.sh"

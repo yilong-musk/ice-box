@@ -31,6 +31,13 @@ export type {
   TrafficSnapshot,
 } from "../../../apps/desktop/src/api/tauri";
 
+/** README / CI screenshot mode (`demo.html?capture=1`) freezes traffic and skips mock latency. */
+function isCaptureMode(): boolean {
+  return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("capture") === "1";
+}
+
+const CAPTURE_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+
 const settings: AppSettings = {
   mixed_listen: "127.0.0.1",
   mixed_port: 17890,
@@ -74,7 +81,7 @@ const subscriptions: SubscriptionMeta[] = [
     rule_count: 42,
     has_dns: true,
     parse_warnings: [],
-    last_updated: new Date(Date.now() - 4 * 60_000).toISOString(),
+    last_updated: new Date((isCaptureMode() ? CAPTURE_NOW : Date.now()) - 4 * 60_000).toISOString(),
     last_error: null,
     etag: null,
     last_modified: null,
@@ -100,7 +107,8 @@ const ruleRows = [
 let running = true;
 let trafficTick = 0;
 
-const delay = (ms = 80) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const delay = (ms = 80) =>
+  isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 export function formatInvokeError(err: unknown): string {
   if (err && typeof err === "object" && "message" in err) return String(err.message);
@@ -140,7 +148,21 @@ export const api = {
   async setGroupSelection(): Promise<void> { await delay(); },
   async testNodeDelay(tag: string): Promise<DelayTestResponse> { await delay(300); return { tag, delay_ms: 42 + Math.floor(Math.random() * 90) }; },
   async getTrafficSnapshot(): Promise<TrafficSnapshot> {
-    await delay(); trafficTick += 1;
+    await delay();
+    if (isCaptureMode()) {
+      const up = 240_200;
+      const down = 1_380_000;
+      return {
+        points: Array.from({ length: 24 }, (_, index) => ({
+          t: CAPTURE_NOW - (23 - index) * 2500,
+          up: up * (0.55 + (index % 5) / 10),
+          down: down * (0.58 + (index % 6) / 10),
+        })),
+        latest: { up, down },
+        peak: { up: up * 1.2, down: down * 1.15 },
+      };
+    }
+    trafficTick += 1;
     const up = running ? 180_000 + (trafficTick % 5) * 22_000 : 0;
     const down = running ? 1_300_000 + (trafficTick % 7) * 75_000 : 0;
     return { points: Array.from({ length: 24 }, (_, index) => ({ t: Date.now() - (23 - index) * 2500, up: up * (0.55 + (index % 5) / 10), down: down * (0.58 + (index % 6) / 10) })), latest: { up, down }, peak: { up: up * 1.2, down: down * 1.15 } };

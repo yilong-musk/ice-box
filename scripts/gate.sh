@@ -24,4 +24,9 @@ npm test
 echo "== vite build =="
 npm run build
 
+if [[ -z "${CI:-}" ]]; then
+  echo "== capture demo home =="
+  bash "$ROOT/scripts/capture-demo-home.sh"
+fi
+
 echo "G9.10 gate: OK"
