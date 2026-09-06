@@ -21,6 +21,9 @@ npx tsc --noEmit
 echo "== vitest =="
 npm test
 
+echo "== merge-updater-latest fixtures =="
+bash "$ROOT/scripts/test-merge-updater-latest.sh"
+
 echo "== vite build =="
 npm run build
 

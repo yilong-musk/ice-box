@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
@@ -10,6 +10,8 @@ const getSettings = vi.fn();
 const listNodes = vi.fn();
 const setTrayLanguage = vi.fn();
 const restoreLaunchProxy = vi.fn();
+const checkAppUpdate = vi.fn();
+const installAppUpdate = vi.fn();
 
 const defaultSettings = {
   mixed_listen: "127.0.0.1",
@@ -34,6 +36,7 @@ const defaultSettings = {
     dns_hijack: false,
   },
   language: "system",
+  check_app_updates: true,
 } as const;
 
 const tunStatus = {
@@ -57,6 +60,9 @@ vi.mock("./api/tauri", () => ({
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
     restoreLaunchProxy: (...args: unknown[]) => restoreLaunchProxy(...args),
+    checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
+    installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
+    listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
     getTrafficSnapshot: vi
       .fn()
@@ -77,6 +83,14 @@ describe("App", () => {
     restoreLaunchProxy.mockResolvedValue(undefined);
     setTrayLanguage.mockResolvedValue(undefined);
     listNodes.mockResolvedValue([]);
+    checkAppUpdate.mockResolvedValue({
+      available: false,
+      version: null,
+      notes: null,
+      skipped: false,
+      should_prompt: false,
+    });
+    installAppUpdate.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -260,10 +274,10 @@ describe("App", () => {
   it("keeps overlay drag regions in the sidebar chrome and page header", () => {
     const { container } = render(<App />);
     const regions = container.querySelectorAll("[data-tauri-drag-region]");
-    expect(regions.length).toBe(3);
+    expect(regions.length).toBe(4);
     expect(regions[1]).toHaveTextContent("主页");
     expect(regions[2]).toHaveTextContent("ice-box");
-    expect(regions[2]).toHaveTextContent(APP_VERSION);
+    expect(regions[3]).toHaveTextContent(APP_VERSION);
   });
 
   it("keeps the nodes list mounted when switching away and back", async () => {
@@ -297,5 +311,30 @@ describe("App", () => {
     expect(view.queryByText("暂无节点")).toBeNull();
     expect(panel!.parentElement?.className.split(/\s+/)).toContain("flex");
     expect(panel!.parentElement?.className.split(/\s+/)).not.toContain("hidden");
+  });
+
+  it("shows a sidebar upgrade icon when a background check finds a version", async () => {
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+      ).toBeInTheDocument();
+    });
+    expect(checkAppUpdate).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "安装更新" })).toBeEnabled();
+    });
+    expect(screen.getByText("发现新版本 0.1.6")).toBeInTheDocument();
   });
 });

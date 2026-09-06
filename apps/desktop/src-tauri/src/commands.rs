@@ -1219,6 +1219,10 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
             persist_settings(&state.paths.settings(), &settings)?;
             return Ok(());
         }
+        if crate::app_update::only_check_app_updates_changed(&previous, &settings) {
+            persist_settings(&state.paths.settings(), &settings)?;
+            return Ok(());
+        }
         // Live TUN topology reconfigure (addresses / MTU / stack / …) while
         // TUN capture stays the active backend. Enabled flips never belong
         // here — they were handled above.

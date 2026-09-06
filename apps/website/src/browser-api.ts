@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  CheckAppUpdateResponse,
   DelayTestResponse,
   ListRulesRequest,
   ListRulesResponse,
@@ -50,6 +51,7 @@ const settings: AppSettings = {
   proxy_mode: "rule",
   auto_default_rules: true,
   language: "en",
+  check_app_updates: true,
   tun: {
     enabled: false,
     interface_name: null,
@@ -147,6 +149,16 @@ export const api = {
     if (settings.proxy_service_enabled) running = true;
   },
   async saveSettings(next: AppSettings): Promise<void> { await delay(); Object.assign(settings, structuredClone(next)); },
+  async checkAppUpdate(): Promise<CheckAppUpdateResponse> {
+    await delay();
+    return { available: false, version: null, notes: null, skipped: false, should_prompt: false };
+  },
+  async recordUpdatePrompt(): Promise<void> {},
+  async skipAppUpdate(): Promise<void> {},
+  async installAppUpdate(): Promise<void> { await delay(); },
+  async listenAppUpdateProgress(): Promise<() => void> {
+    return () => {};
+  },
   async setTrayLanguage(): Promise<void> {},
   async listNodes(): Promise<NodeInfo[]> { await delay(); return [...nodes]; },
   async setSelectedNode(tag: string): Promise<void> { settings.selected_tag = tag; await delay(); },

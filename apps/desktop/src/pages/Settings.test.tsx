@@ -22,12 +22,19 @@ const uninstallHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
 const ensureTunElevation = vi.fn();
 const start = vi.fn();
+const checkAppUpdate = vi.fn();
+const installAppUpdate = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
     getSettings: (...args: unknown[]) => getSettings(...args),
     getStatus: (...args: unknown[]) => getStatus(...args),
     saveSettings: (...args: unknown[]) => saveSettings(...args),
+    checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
+    recordUpdatePrompt: vi.fn(),
+    skipAppUpdate: vi.fn(),
+    installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
+    listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     installHelper: (...args: unknown[]) => installHelper(...args),
     uninstallHelper: (...args: unknown[]) => uninstallHelper(...args),
     relaunchElevatedForTun: (...args: unknown[]) =>
@@ -90,9 +97,18 @@ describe("Settings", () => {
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "system",
+      check_app_updates: true,
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
+    checkAppUpdate.mockResolvedValue({
+      available: false,
+      version: null,
+      notes: null,
+      skipped: false,
+      should_prompt: false,
+    });
+    installAppUpdate.mockResolvedValue(undefined);
   });
 
   it("auto-saves only valid settings and blocks invalid ones", async () => {
@@ -247,6 +263,7 @@ describe("Settings", () => {
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "system",
+      check_app_updates: true,
       tun: tunSettings,
     });
 
@@ -287,6 +304,7 @@ describe("Settings", () => {
       allow_lan: false,
       proxy_mode: "rule" as const,
       language: "system" as const,
+      check_app_updates: true,
       tun: tunSettings,
     };
     const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
@@ -398,6 +416,7 @@ describe("Settings", () => {
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "en",
+      check_app_updates: true,
       tun: tunSettings,
     });
     render(<Settings />);
@@ -482,6 +501,7 @@ describe("Settings", () => {
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "system",
+      check_app_updates: true,
       tun: { ...tunSettings, enabled: true },
     });
 
@@ -987,5 +1007,118 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("tun.helper_install_failed");
     });
+  });
+
+  it("checks for app updates from the settings card", async () => {
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    await waitFor(() => {
+      expect(checkAppUpdate).toHaveBeenCalledWith(false);
+      expect(container.textContent).toContain("发现新版本 0.1.6");
+    });
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: "安装更新" }));
+    await waitFor(() => {
+      expect(installAppUpdate).toHaveBeenCalled();
+    });
+  });
+
+  it("still offers install after a check that marks the version skipped", async () => {
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: null,
+      skipped: true,
+      should_prompt: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    await waitFor(() => {
+      expect(container.textContent).toContain("发现新版本 0.1.6");
+    });
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+  });
+
+  it("shows install next to check when a parent reported an available update", async () => {
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.1.6",
+          notes: "fixes",
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    expect(container.textContent).toContain("发现新版本 0.1.6");
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+  });
+
+  it("explains a missing GitHub update catalog instead of blaming the proxy", async () => {
+    checkAppUpdate.mockRejectedValue(
+      "update.feed_unavailable: Could not fetch a valid release JSON from the remote",
+    );
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    await waitFor(() => {
+      expect(container.textContent).toContain("未找到 GitHub 上的更新清单");
+    });
+    expect(container.textContent).not.toContain("请先启动代理服务");
+  });
+
+  it("keeps the proxy hint for a real update check network failure", async () => {
+    checkAppUpdate.mockRejectedValue(
+      "update.check_failed: error sending request for url",
+    );
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    await waitFor(() => {
+      expect(container.textContent).toContain("请先启动代理服务后再试");
+    });
+  });
+
+  it("persists turning off automatic update checks", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("自动检查更新")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByLabelText("自动检查更新"));
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ check_app_updates: false }),
+        );
+      },
+      { timeout: 2000 },
+    );
   });
 });

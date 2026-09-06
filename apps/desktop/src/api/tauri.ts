@@ -1,6 +1,7 @@
 /** Typed wrappers around Tauri invoke (architecture §14). */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type CoreStatus =
   | "stopped"
@@ -101,6 +102,8 @@ export type AppSettings = {
   auto_default_rules: boolean;
   /** "system" follows the OS locale; otherwise an explicit UI language. */
   language: "system" | "zh" | "en";
+  /** Background update checks and the auto prompt. Defaults to on. */
+  check_app_updates: boolean;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -160,6 +163,20 @@ export type TrafficSnapshot = {
 export type AppErrorPayload = {
   code: string;
   message: string;
+};
+
+export type CheckAppUpdateResponse = {
+  available: boolean;
+  version: string | null;
+  notes: string | null;
+  skipped: boolean;
+  should_prompt: boolean;
+};
+
+export type UpdateProgressPayload = {
+  phase: string;
+  downloaded: number;
+  content_length: number | null;
 };
 
 export type RuleTypeCount = {
@@ -258,6 +275,20 @@ export const api = {
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
+  checkAppUpdate: (background = false) =>
+    invoke<CheckAppUpdateResponse>("check_app_update", {
+      req: { background },
+    }),
+  recordUpdatePrompt: () => invoke<void>("record_update_prompt"),
+  skipAppUpdate: (version: string) =>
+    invoke<void>("skip_app_update", { req: { version } }),
+  installAppUpdate: () => invoke<void>("install_app_update"),
+  listenAppUpdateProgress: (
+    handler: (payload: UpdateProgressPayload) => void,
+  ) =>
+    listen<UpdateProgressPayload>("app-update://progress", (event) =>
+      handler(event.payload),
+    ),
   setTrayLanguage: (language: "zh" | "en") =>
     invoke<void>("set_tray_language", { language }),
   setProxyMode: (mode: ProxyMode) =>

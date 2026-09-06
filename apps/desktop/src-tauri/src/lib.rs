@@ -1,4 +1,5 @@
 mod acceptance;
+mod app_update;
 mod capture;
 mod commands;
 mod core_watch;
@@ -143,6 +144,8 @@ pub fn run() {
     install_panic_hook();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let root = app
                 .path()
@@ -272,12 +275,21 @@ pub fn run() {
             commands::add_custom_rule,
             commands::remove_custom_rule,
             commands::get_traffic_snapshot,
+            app_update::check_app_update,
+            app_update::record_update_prompt,
+            app_update::skip_app_update,
+            app_update::install_app_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
+            if crate::app_update::update_installing() {
+                // The updater already ran graceful_stop; let NSIS / the
+                // bundle replace take over instead of prevent_exit.
+                return;
+            }
             // Cmd+Q / OS logout / app.exit() path: run the same cleanup as tray
             // Quit (stop core + restore system proxy) before the process dies,
             // instead of orphaning sing-box and leaving the proxy applied until
