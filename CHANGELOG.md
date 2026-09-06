@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-06
+
+### Fixed
+
+- The GitHub Release pipeline now finds nested macOS updater archives when
+  synthesizing `latest.json`. Installed 0.1.5 clients can install this build
+  from Settings / the sidebar upgrade arrow.
+
 ## [0.1.5] - 2026-09-06
 
 ### Added
