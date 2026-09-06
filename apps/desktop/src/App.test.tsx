@@ -9,6 +9,7 @@ const getStatus = vi.fn();
 const getSettings = vi.fn();
 const listNodes = vi.fn();
 const setTrayLanguage = vi.fn();
+const restoreLaunchProxy = vi.fn();
 
 const defaultSettings = {
   mixed_listen: "127.0.0.1",
@@ -17,6 +18,7 @@ const defaultSettings = {
   clash_api_port: 19090,
   selected_tag: null,
   auto_set_system_proxy: false,
+  proxy_service_enabled: false,
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,
@@ -54,6 +56,7 @@ vi.mock("./api/tauri", () => ({
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
+    restoreLaunchProxy: (...args: unknown[]) => restoreLaunchProxy(...args),
     setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
     getTrafficSnapshot: vi
       .fn()
@@ -71,6 +74,7 @@ describe("App", () => {
     vi.clearAllMocks();
     clearNodesSnapshot();
     getSettings.mockResolvedValue(defaultSettings);
+    restoreLaunchProxy.mockResolvedValue(undefined);
     setTrayLanguage.mockResolvedValue(undefined);
     listNodes.mockResolvedValue([]);
     getStatus.mockResolvedValue({
@@ -101,6 +105,7 @@ describe("App", () => {
     expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
     expect(document.documentElement.lang).toBe("en");
     expect(setTrayLanguage).toHaveBeenCalledWith("en");
+    expect(restoreLaunchProxy).toHaveBeenCalled();
   });
 
   it("shows proxy recovery warning globally on any tab", async () => {

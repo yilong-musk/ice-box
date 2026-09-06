@@ -45,6 +45,7 @@ const settings: AppSettings = {
   clash_api_port: 19090,
   selected_tag: "Tokyo / edge-01",
   auto_set_system_proxy: true,
+  proxy_service_enabled: false,
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,
@@ -141,6 +142,10 @@ export const api = {
     };
   },
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },
+  async restoreLaunchProxy(): Promise<void> {
+    await delay();
+    if (settings.proxy_service_enabled) running = true;
+  },
   async saveSettings(next: AppSettings): Promise<void> { await delay(); Object.assign(settings, structuredClone(next)); },
   async setTrayLanguage(): Promise<void> {},
   async listNodes(): Promise<NodeInfo[]> { await delay(); return [...nodes]; },

@@ -1,5 +1,9 @@
 //! Load the single active subscription profile.
 
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
 use ice_config::{NormalizedOutbound, NormalizedProfile};
 
 use crate::clash::normalize_dns_on;
@@ -7,6 +11,26 @@ use crate::error::SubscriptionError;
 use crate::store::{read_profile, SubscriptionPaths};
 use crate::uri::apply_builtin_default_rules;
 use crate::{SubscriptionIndex, SubscriptionMeta};
+
+/// mtime/len of a file; `None` when the path is missing. Atomic writes change
+/// at least one of these, so a matching signature is enough to reuse a parse.
+fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+struct ProfileLoadCache {
+    profile_path: PathBuf,
+    profile_sig: Option<(SystemTime, u64)>,
+    nodes_sig: Option<(SystemTime, u64)>,
+    auto_default_rules: bool,
+    profile: Arc<NormalizedProfile>,
+}
+
+/// Process-wide parse cache for the active profile. `generate_config` and the
+/// UI read path otherwise deserialize the same multi-MB `profile.json` on
+/// every cold start.
+static PROFILE_LOAD_CACHE: Mutex<Option<ProfileLoadCache>> = Mutex::new(None);
 
 /// Returns the active subscription meta, if any.
 pub fn active_subscription(index: &SubscriptionIndex) -> Option<&SubscriptionMeta> {
@@ -42,12 +66,38 @@ pub fn load_active_profile_with_default_rules(
             meta.name, meta.id
         )));
     }
+    let profile_path = paths.profile(meta.id);
+    let nodes_path = paths.nodes(meta.id);
+    let profile_sig = file_sig(&profile_path);
+    let nodes_sig = file_sig(&nodes_path);
+
+    let mut cache = PROFILE_LOAD_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.as_ref() {
+        if entry.profile_path == profile_path
+            && entry.profile_sig == profile_sig
+            && entry.nodes_sig == nodes_sig
+            && entry.auto_default_rules == auto_default_rules
+        {
+            return Ok((*entry.profile).clone());
+        }
+    }
+
     let mut profile = read_profile(paths, meta.id)?;
     normalize_dns_on(&mut profile, cfg!(target_os = "windows"));
     if auto_default_rules {
         apply_builtin_default_rules(&mut profile);
     }
-    Ok(profile)
+    let profile = Arc::new(profile);
+    *cache = Some(ProfileLoadCache {
+        profile_path,
+        profile_sig,
+        nodes_sig,
+        auto_default_rules,
+        profile: profile.clone(),
+    });
+    Ok((*profile).clone())
 }
 
 /// Resolve `selected_tag`: keep if present in outbounds/groups, else default_outbound or first tag.
@@ -107,5 +157,70 @@ mod tests {
             resolve_selected_tag(Some("Proxies"), &profile).as_deref(),
             Some("Proxies")
         );
+    }
+
+    #[test]
+    fn load_active_profile_cache_invalidates_when_profile_changes() {
+        use crate::store::{load_index, write_subscription_success};
+        use crate::{SubscriptionFormat, SubscriptionMeta};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use uuid::Uuid;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-profile-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let node = |tag: &str| NormalizedOutbound {
+            tag: tag.into(),
+            outbound: serde_json::json!({"type":"socks","tag":tag,"server":"1.1.1.1","server_port":1}),
+        };
+        write_subscription_success(
+            &paths,
+            &meta,
+            "{}",
+            &NormalizedProfile::from_nodes_only(vec![node("n1")]),
+        )
+        .expect("seed");
+        let index = load_index(&paths).expect("index");
+        let first = load_active_profile_with_default_rules(&paths, &index, false).expect("first");
+        assert_eq!(first.nodes[0].tag, "n1");
+        let again = load_active_profile_with_default_rules(&paths, &index, false).expect("cache");
+        assert_eq!(again.nodes[0].tag, "n1");
+
+        write_subscription_success(
+            &paths,
+            &meta,
+            "{}",
+            &NormalizedProfile::from_nodes_only(vec![node("n2-longer-tag")]),
+        )
+        .expect("rewrite");
+        let index = load_index(&paths).expect("index");
+        let updated =
+            load_active_profile_with_default_rules(&paths, &index, false).expect("invalidated");
+        assert_eq!(updated.nodes[0].tag, "n2-longer-tag");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

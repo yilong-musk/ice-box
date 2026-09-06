@@ -281,6 +281,13 @@ pub struct AppSettings {
     pub clash_api_port: u16,
     pub selected_tag: Option<String>,
     pub auto_set_system_proxy: bool,
+    /// Last user-desired proxy-service state (Home power button).
+    ///
+    /// Written on a successful start / stop of capture; quit must not clear it.
+    /// Launch restores capture when this is true. Missing field → false so
+    /// existing `settings.json` files keep the previous "core only" launch.
+    #[serde(default)]
+    pub proxy_service_enabled: bool,
     /// When true, the mixed inbound binds `0.0.0.0` so LAN devices can use the proxy.
     /// Defaults to false for existing `settings.json` files (`#[serde(default)]`).
     #[serde(default)]
@@ -317,6 +324,7 @@ impl Default for AppSettings {
             clash_api_port: 19090,
             selected_tag: None,
             auto_set_system_proxy: default_auto_set_system_proxy(),
+            proxy_service_enabled: false,
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
@@ -417,6 +425,21 @@ pub fn load_settings(path: &Path) -> Result<AppSettings, AppError> {
 pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
     settings.validate()?;
     write_json_atomic(path, settings).map_err(AppError::from)
+}
+
+/// Persist only the last user-desired proxy-service state.
+///
+/// No-op when the value is unchanged, including a missing `settings.json`
+/// whose load default is already `false` (does not create the file).
+/// Quit / crash cleanup must not call this with `false`: stopping capture on
+/// exit is not a user-off.
+pub fn set_proxy_service_enabled(path: &Path, enabled: bool) -> Result<(), AppError> {
+    let mut settings = load_settings(path)?;
+    if settings.proxy_service_enabled == enabled {
+        return Ok(());
+    }
+    settings.proxy_service_enabled = enabled;
+    save_settings(path, &settings)
 }
 
 #[cfg(test)]
@@ -562,6 +585,74 @@ mod tests {
     #[test]
     fn language_default_is_system() {
         assert_eq!(AppSettings::default().language, LanguagePreference::System);
+    }
+
+    #[test]
+    fn legacy_settings_without_proxy_service_enabled_loads_as_false() {
+        let path = temp_settings_path("legacy-proxy-service");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without proxy_service_enabled");
+        assert!(
+            !s.proxy_service_enabled,
+            "missing flag must mean off so launch stays core-only"
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn proxy_service_enabled_round_trips_through_save_and_load() {
+        let path = temp_settings_path("proxy-service-roundtrip");
+        save_settings(
+            &path,
+            &AppSettings {
+                proxy_service_enabled: true,
+                ..AppSettings::default()
+            },
+        )
+        .expect("save");
+        assert!(load_settings(&path).unwrap().proxy_service_enabled);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn set_proxy_service_enabled_does_not_create_file_when_already_off() {
+        let path = temp_settings_path("proxy-service-noop");
+        assert!(!path.exists());
+        set_proxy_service_enabled(&path, false).expect("noop");
+        assert!(!path.exists(), "default-off must not create settings.json");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn set_proxy_service_enabled_preserves_other_fields() {
+        let path = temp_settings_path("proxy-service-preserve");
+        save_settings(
+            &path,
+            &AppSettings {
+                mixed_port: 18080,
+                selected_tag: Some("n1".into()),
+                ..AppSettings::default()
+            },
+        )
+        .expect("seed");
+        set_proxy_service_enabled(&path, true).expect("enable flag");
+        let loaded = load_settings(&path).expect("reload");
+        assert!(loaded.proxy_service_enabled);
+        assert_eq!(loaded.mixed_port, 18080);
+        assert_eq!(loaded.selected_tag.as_deref(), Some("n1"));
+        set_proxy_service_enabled(&path, false).expect("disable flag");
+        let loaded = load_settings(&path).expect("reload");
+        assert!(!loaded.proxy_service_enabled);
+        assert_eq!(loaded.mixed_port, 18080);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

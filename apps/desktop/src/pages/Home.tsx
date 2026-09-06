@@ -87,51 +87,69 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const tunSaveRef = useRef(false);
   const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
+  const settingsRef = useRef<AppSettings | null>(null);
 
-  const refresh = useCallback(async (pollGen?: number) => {
-    const gen = pollGen ?? pollGenRef.current;
-    try {
-      const [s, n, settings] = await Promise.all([
-        api.getStatus(),
-        api.listNodes(),
-        api.getSettings(),
-      ]);
-      if (gen !== pollGenRef.current || !activeRef.current) return;
+  const refresh = useCallback(
+    async (pollGen?: number, opts?: { settings?: boolean }) => {
+      const gen = pollGen ?? pollGenRef.current;
+      const wantSettings = opts?.settings === true || settingsRef.current === null;
+      try {
+        const statusPromise = api.getStatus();
+        const nodesPromise = api.listNodes();
+        const settingsPromise = wantSettings
+          ? api.getSettings()
+          : Promise.resolve(null);
 
-      const selected = resolveSelectedTag(settings.selected_tag, n);
-      setStatus(s);
-      onStatus?.(s);
-      setNodes(n);
-      setSettings(settings);
-      setTunOverride(null);
-      setProxyMode(settings.proxy_mode);
-      setSelectedTag(selected);
-      writeNodesSnapshot({
-        nodes: n,
-        selectedTag: selected,
-        running: s.core.status === "running",
-      });
-      setError(null);
-    } catch (e) {
-      // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
-      if (
-        gen === pollGenRef.current &&
-        activeRef.current &&
-        !modeBusyRef.current &&
-        !pendingRef.current &&
-        !tunSaveRef.current
-      ) {
-        setError(formatInvokeError(e));
+        const s = await statusPromise;
+        if (gen !== pollGenRef.current || !activeRef.current) return;
+        setStatus(s);
+        onStatus?.(s);
+
+        const [n, nextSettings] = await Promise.all([
+          nodesPromise,
+          settingsPromise,
+        ]);
+        if (gen !== pollGenRef.current || !activeRef.current) return;
+        const settings = nextSettings ?? settingsRef.current;
+        if (!settings) return;
+
+        const selected = resolveSelectedTag(settings.selected_tag, n);
+        setNodes(n);
+        if (nextSettings) {
+          settingsRef.current = nextSettings;
+          setSettings(nextSettings);
+          setProxyMode(nextSettings.proxy_mode);
+        }
+        setTunOverride(null);
+        setSelectedTag(selected);
+        writeNodesSnapshot({
+          nodes: n,
+          selectedTag: selected,
+          running: s.core.status === "running",
+        });
+        setError(null);
+      } catch (e) {
+        // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
+        if (
+          gen === pollGenRef.current &&
+          activeRef.current &&
+          !modeBusyRef.current &&
+          !pendingRef.current &&
+          !tunSaveRef.current
+        ) {
+          setError(formatInvokeError(e));
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     activeRef.current = active;
     pollGenRef.current += 1;
     if (!active) return;
     const gen = pollGenRef.current;
-    void refresh(gen);
+    void refresh(gen, { settings: true });
     const id = window.setInterval(() => {
       if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
         return;
@@ -191,11 +209,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     try {
       await action();
       pollGenRef.current += 1;
-      await refresh();
+      await refresh(undefined, { settings: true });
     } catch (e) {
       const message = formatInvokeError(e);
       pollGenRef.current += 1;
-      await refresh();
+      await refresh(undefined, { settings: true });
       setError(message);
     } finally {
       tunSaveRef.current = false;
@@ -215,12 +233,12 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     try {
       await api.setProxyMode(mode);
       pollGenRef.current += 1;
-      await refresh();
+      await refresh(undefined, { settings: true });
     } catch (e) {
       if (isStale(gen)) return;
       const message = formatInvokeError(e);
       pollGenRef.current += 1;
-      await refresh();
+      await refresh(undefined, { settings: true });
       setError(message);
     } finally {
       if (!isStale(gen)) {

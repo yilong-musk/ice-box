@@ -90,6 +90,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -131,6 +132,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: "Proxies",
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
     });
@@ -195,6 +197,27 @@ describe("Home", () => {
     expect(readNodesSnapshot()).toBeUndefined();
   });
 
+  it("does not refetch settings on the 2s status poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<Home />);
+      await waitFor(() => {
+        expect(getSettings).toHaveBeenCalled();
+      });
+      const settingsCalls = getSettings.mock.calls.length;
+      const statusCalls = getStatus.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(getSettings.mock.calls.length).toBe(settingsCalls);
+      expect(getStatus.mock.calls.length).toBeGreaterThan(statusCalls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("switches proxy mode and reverts when it fails", async () => {
     getStatus.mockResolvedValue({
       core: {
@@ -222,6 +245,7 @@ describe("Home", () => {
         clash_api_port: 19090,
         selected_tag: "node-a",
         auto_set_system_proxy: true,
+        proxy_service_enabled: false,
         allow_lan: false,
         proxy_mode: currentMode,
       }),
@@ -456,6 +480,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -500,6 +525,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: "node-a",
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: { ...tunSettings, enabled: true },
@@ -641,6 +667,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: { ...tunSettings, enabled: true },
@@ -698,6 +725,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: { ...tunSettings, enabled: true },
@@ -777,6 +805,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -830,6 +859,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: { ...tunSettings, enabled: true },
@@ -886,6 +916,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -969,6 +1000,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -1025,6 +1057,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,
@@ -1074,6 +1107,7 @@ describe("Home", () => {
       clash_api_port: 19090,
       selected_tag: null,
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
       tun: tunSettings,

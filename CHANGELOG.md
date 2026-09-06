@@ -5,6 +5,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-06
+
+### Added
+
+- Restore the proxy service on launch when it was on at the last quit. A
+  stopped service stays stopped. Capture restore waits until the window's
+  first UI frame so system proxy / TUN do not contend with first paint;
+  the core still starts in the background immediately.
+
+### Changed
+
+- Faster app launch: reuse a parsed subscription profile across config
+  generation and the UI, overlap geoip copy with startup, skip duplicate
+  Home status/settings fetches, and paint core status before nodes return.
+  Orphan-core reclaim, system-proxy crash recovery, and TUN journal
+  recovery run on the auto-start worker instead of the setup thread, so
+  the window can appear while that work is still in flight.
+
 ## [0.1.3] - 2026-09-04
 
 ### Added

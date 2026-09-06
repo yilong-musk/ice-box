@@ -13,14 +13,17 @@ use crate::AppState;
 use ice_config::NormalizedOutbound;
 use ice_config::{
     load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint, rule_type_of,
-    save_group_selections, save_rule_overrides, save_settings as persist_settings, AppError,
-    AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
+    save_group_selections, save_rule_overrides, save_settings as persist_settings,
+    set_proxy_service_enabled, AppError, AppSettings, CaptureIntent, ErrorCode, NormalizedProfile,
+    ProxyMode, RuleOverrides,
 };
 use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
     HealthEndpoints, TrafficSnapshot, DELAY_TEST_URL,
 };
-use ice_proxy_sys::{is_proxy_applied_on_disk, is_proxy_live_applied, ProxyEndpoints};
+use ice_proxy_sys::{
+    is_proxy_applied_on_disk, is_proxy_live_applied, recover_if_applied, ProxyEndpoints,
+};
 use ice_subscription::{
     active_subscription, list_profile_outbounds, load_active_profile_with_default_rules,
     load_index, redact_subscription_url_for_log, redact_subscription_url_for_ui,
@@ -30,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime};
 use tauri::{AppHandle, Manager, State};
@@ -47,6 +52,22 @@ fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, AppError> {
         .orchestrate
         .lock()
         .map_err(|_| lock_poisoned("orchestrate"))
+}
+
+fn append_recovery_warning(state: &AppState, warning: String) {
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        let existing = slot.take().unwrap_or_default();
+        *slot = Some(if existing.is_empty() {
+            warning
+        } else {
+            format!("{existing}；{warning}")
+        });
+    }
+}
+
+/// Settings IPC must not overwrite the Home-owned start-on-launch flag.
+fn retain_proxy_service_enabled(previous: &AppSettings, next: &mut AppSettings) {
+    next.proxy_service_enabled = previous.proxy_service_enabled;
 }
 
 fn resource_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
@@ -411,21 +432,22 @@ fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
         .ok()
         .and_then(|g| g.clone());
     let proxy_available = state.system_proxy_available;
+    let settings = current_settings(&state.paths).ok();
     let system_proxy_recorded = if running {
         Some(is_proxy_applied_on_disk(&state.paths.proxy_backup()))
     } else {
         None
     };
     let system_proxy_applied = if running && proxy_available {
-        current_settings(&state.paths)
-            .ok()
-            .and_then(|settings| cached_system_proxy_applied(state, &settings))
+        settings
+            .as_ref()
+            .and_then(|settings| cached_system_proxy_applied(state, settings))
     } else {
         None
     };
-    let capture = current_settings(&state.paths)
-        .ok()
-        .map(|settings| state.capture.status(&settings))
+    let capture = settings
+        .as_ref()
+        .map(|settings| state.capture.status(settings))
         .unwrap_or_else(|| state.capture.status(&ice_config::AppSettings::default()));
     Ok(StatusResponse {
         core: core_state,
@@ -494,9 +516,10 @@ pub async fn list_subscriptions(app: AppHandle) -> Result<serde_json::Value, App
     .await
 }
 
-/// Start the core only (no system proxy). Used on app launch.
-pub fn start_core(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
-    let _orch = lock_orchestrate(state)?;
+/// Start the core only (no system proxy). App launch always uses this path;
+/// capture restore is a separate first-frame IPC. Assumes the caller holds
+/// the orchestrate lock.
+fn start_core_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let settings = current_settings(&state.paths)?;
     {
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -563,6 +586,7 @@ fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
         {
             let mut committed = settings.clone();
             committed.tun.interface_name = resolved;
+            committed.proxy_service_enabled = true;
             if let Err(commit_err) = persist_settings(&state.paths.settings(), &committed) {
                 let rollback = {
                     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
@@ -606,8 +630,162 @@ fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
             *cache = None;
         }
     }
+    // Persist after capture is on so a crash/quit still restores next launch.
+    // Settings saves overwrite every other field; they must not clear this flag.
+    set_proxy_service_enabled(&state.paths.settings(), true)?;
     attach_traffic(state, &settings);
     Ok(())
+}
+
+/// App-launch path: reclaim leftover cores, recover crash leftovers, then
+/// start the core. Capture is restored after the first UI frame via
+/// [`restore_proxy_service_on_launch`].
+///
+/// Holds the orchestrate lock for the whole sequence so `start` / restore
+/// cannot race a still-bound orphan. `orch_acquired`, when set, is signalled
+/// as soon as the lock is held so `setup` can return and show the window
+/// without waiting for `ps` / helper / `networksetup` work.
+pub fn auto_start_on_launch(
+    app: &AppHandle,
+    state: &AppState,
+    orch_acquired: Option<SyncSender<()>>,
+) -> Result<(), AppError> {
+    // Always unblock `setup` if this worker returns or panics before the
+    // handshake send below (otherwise the window never appears).
+    struct Notify(Option<SyncSender<()>>);
+    impl Drop for Notify {
+        fn drop(&mut self) {
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+    let mut notify = Notify(orch_acquired);
+    let _orch = lock_orchestrate(state)?;
+    if let Some(tx) = notify.0.take() {
+        let _ = tx.send(());
+    }
+    recover_launch_leftovers(state);
+    if state.shutdown_requested.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    start_core_inner(app, state)
+}
+
+/// Reclaim leftover sing-box processes and restore crash leftovers (system
+/// proxy backup + TUN journal). Never enables capture. Caller must hold the
+/// orchestrate lock so a later start cannot bind while an orphan still owns
+/// the ports.
+pub(crate) fn recover_launch_leftovers(state: &AppState) {
+    {
+        let mut core = match state.core.lock() {
+            Ok(core) => core,
+            Err(_) => return,
+        };
+        if let Err(err) = core.reclaim_orphan_pid(&state.paths.pid()) {
+            tracing::warn!(error = %err, "failed to reclaim orphan sing-box pid");
+        }
+    }
+    // The pid file can be missing while a previous session's core is still
+    // running (the app was killed mid-teardown after the pid record was
+    // cleared); scan the process table for sing-box processes running this
+    // installation's config and reclaim the user-owned ones, so the auto-start
+    // never hits `bind: address already in use` with no way to recover.
+    let reclaimed = ice_core::reclaim_orphan_cores_with_config(&state.paths.config());
+    if reclaimed > 0 {
+        tracing::warn!(
+            reclaimed,
+            "reclaimed orphan sing-box cores without a pid file"
+        );
+    }
+
+    {
+        let proxy = match state.proxy.lock() {
+            Ok(proxy) => proxy,
+            Err(_) => return,
+        };
+        match recover_if_applied(&state.paths.proxy_backup(), proxy.as_ref()) {
+            Ok(true) => {
+                tracing::info!("restored system proxy from previous session");
+            }
+            Ok(false) => {
+                tracing::debug!("no applied system proxy backup to restore");
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "system proxy crash recovery failed");
+                append_recovery_warning(state, format!("system proxy recovery failed: {err}"));
+            }
+        }
+    }
+    // Fail-closed exclusivity: when startup proxy recovery failed, the OS
+    // proxy is still applied and the app still owns it. Keep the capture
+    // controller consistent with disk so TUN activation stays rejected
+    // until the proxy is restored.
+    if is_proxy_applied_on_disk(&state.paths.proxy_backup()) {
+        tracing::warn!(
+            "system proxy backup still records applied after startup recovery; capture controller treats system proxy as the active backend"
+        );
+        let _ = state.capture.set_system_proxy_active();
+    }
+
+    let mut core = match state.core.lock() {
+        Ok(core) => core,
+        Err(_) => return,
+    };
+    // A leftover root-owned core from a previous session (the unprivileged
+    // process could not signal it) still holds the ports; reclaim it through
+    // the elevated coordinator before journal recovery so a later start /
+    // re-enable never hits `bind: address already in use`.
+    if let Err(err) = state.capture.reclaim_orphan_elevated_core(&mut **core) {
+        tracing::warn!(error = %err, "failed to reclaim orphaned elevated core");
+        append_recovery_warning(state, format!("残留内核清理未确认 ({err})"));
+    }
+    match state.capture.recover(&mut **core) {
+        Ok(Some(warning)) => append_recovery_warning(state, warning),
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(error = %err, "startup tun recovery failed");
+            append_recovery_warning(state, format!("TUN state recovery unconfirmed ({err})"));
+        }
+    }
+}
+
+/// After the window's first frame: if the last session left the proxy service
+/// on, enable the configured capture backend. Core auto-start may still be in
+/// flight; [`start_service`] waits on the orchestrate lock and no-ops the
+/// core spawn when it is already Running. StrictMode remounts are ignored.
+pub fn restore_proxy_service_on_launch(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
+    if !take_launch_proxy_restore(state)? {
+        return Ok(());
+    }
+    match start_service(app, state) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if state.shutdown_requested.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                *slot = Some(format!("proxy service auto-start failed ({err})"));
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Whether this process should enable capture for the post-paint restore.
+fn take_launch_proxy_restore(state: &AppState) -> Result<bool, AppError> {
+    if state.shutdown_requested.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    if !current_settings(&state.paths)?.proxy_service_enabled {
+        return Ok(false);
+    }
+    if state.capture.active_backend() != TrafficCapture::Inactive {
+        return Ok(false);
+    }
+    Ok(!state
+        .launch_proxy_restore_attempted
+        .swap(true, Ordering::SeqCst))
 }
 
 /// Home「启动代理服务」: ensure core is running, then take over the OS system proxy.
@@ -616,6 +794,17 @@ pub async fn start(app: AppHandle) -> Result<(), AppError> {
     run_blocking("start", move || {
         let state = app.state::<AppState>();
         start_service(&app, &state)
+    })
+    .await
+}
+
+/// First-frame restore of the last proxy-service state. No-op when the last
+/// session left capture off, or when capture is already active.
+#[tauri::command]
+pub async fn restore_launch_proxy(app: AppHandle) -> Result<(), AppError> {
+    run_blocking("restore_launch_proxy", move || {
+        let state = app.state::<AppState>();
+        restore_proxy_service_on_launch(&app, &state)
     })
     .await
 }
@@ -633,6 +822,7 @@ fn disable_active_backend_inner(app: &AppHandle, state: &AppState) -> Result<(),
     state
         .capture
         .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, true)?;
+    set_proxy_service_enabled(&state.paths.settings(), false)?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         *slot = None;
     }
@@ -1017,6 +1207,10 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let previous = current_settings(&state.paths).unwrap_or_default();
+        // Home start/stop own this flag. A Settings/Home save must not clobber
+        // a concurrently persisted on/off with a stale form snapshot.
+        let mut settings = settings;
+        retain_proxy_service_enabled(&previous, &mut settings);
         settings.validate()?;
         let active = state.capture.active_backend();
         // `tun.enabled` is next-start desire only: persist it without starting,
@@ -2377,6 +2571,9 @@ mod tests {
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
+            launch_proxy_restore_attempted: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
         }
     }
 
@@ -2438,7 +2635,105 @@ mod tests {
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
+            launch_proxy_restore_attempted: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
         }
+    }
+
+    #[test]
+    fn retain_proxy_service_enabled_ignores_stale_settings_payload() {
+        let previous = AppSettings {
+            proxy_service_enabled: true,
+            ..AppSettings::default()
+        };
+        let mut next = AppSettings {
+            mixed_port: 18080,
+            proxy_service_enabled: false,
+            ..AppSettings::default()
+        };
+        retain_proxy_service_enabled(&previous, &mut next);
+        assert!(next.proxy_service_enabled);
+        assert_eq!(next.mixed_port, 18080);
+    }
+
+    #[test]
+    fn launch_restores_proxy_service_only_when_flag_is_on() {
+        let state = temp_state_with_node("launch-flag");
+        assert!(
+            !take_launch_proxy_restore(&state).unwrap(),
+            "fresh data dir must not restore capture"
+        );
+        assert!(!state.launch_proxy_restore_attempted.load(Ordering::SeqCst));
+
+        set_proxy_service_enabled(&state.paths.settings(), true).unwrap();
+        assert!(take_launch_proxy_restore(&state).unwrap());
+        assert!(
+            !take_launch_proxy_restore(&state).unwrap(),
+            "StrictMode remount must not restore twice"
+        );
+        let _ = fs::remove_dir_all(state.paths.root());
+
+        let skipped = temp_state_with_node("launch-flag-off");
+        set_proxy_service_enabled(&skipped.paths.settings(), false).unwrap();
+        assert!(!take_launch_proxy_restore(&skipped).unwrap());
+        assert!(!skipped
+            .launch_proxy_restore_attempted
+            .load(Ordering::SeqCst));
+        let _ = fs::remove_dir_all(skipped.paths.root());
+    }
+
+    #[test]
+    fn launch_proxy_restore_skips_when_shutting_down_or_already_capturing() {
+        let shutting_down = temp_state_with_node("launch-flag-quit");
+        set_proxy_service_enabled(&shutting_down.paths.settings(), true).unwrap();
+        shutting_down
+            .shutdown_requested
+            .store(true, Ordering::SeqCst);
+        assert!(!take_launch_proxy_restore(&shutting_down).unwrap());
+        assert!(!shutting_down
+            .launch_proxy_restore_attempted
+            .load(Ordering::SeqCst));
+        let _ = fs::remove_dir_all(shutting_down.paths.root());
+
+        let already_on = temp_state_with_node("launch-flag-active");
+        set_proxy_service_enabled(&already_on.paths.settings(), true).unwrap();
+        already_on.capture.set_system_proxy_active().unwrap();
+        assert!(!take_launch_proxy_restore(&already_on).unwrap());
+        assert!(!already_on
+            .launch_proxy_restore_attempted
+            .load(Ordering::SeqCst));
+        let _ = fs::remove_dir_all(already_on.paths.root());
+    }
+
+    #[test]
+    fn recover_launch_leftovers_is_a_noop_on_a_fresh_data_dir() {
+        let state = temp_state_with_node("launch-recover-fresh");
+        recover_launch_leftovers(&state);
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+        assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn recover_launch_leftovers_clears_applied_proxy_backup_without_enabling_capture() {
+        let state = temp_state_with_node("launch-recover-proxy");
+        fs::write(
+            state.paths.proxy_backup(),
+            r#"{
+                "applied": true,
+                "pending_apply": false,
+                "applied_at": null,
+                "endpoints": {"http_host": "127.0.0.1", "http_port": 17890},
+                "backup": {"enabled": false, "http": null, "https": null, "socks": null, "extra": {}}
+            }"#,
+        )
+        .unwrap();
+        recover_launch_leftovers(&state);
+        assert!(!is_proxy_applied_on_disk(&state.paths.proxy_backup()));
+        assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+        let _ = fs::remove_dir_all(state.paths.root());
     }
 
     #[test]

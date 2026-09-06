@@ -53,6 +53,7 @@ const defaults: AppSettings = {
   clash_api_port: 19090,
   selected_tag: null,
   auto_set_system_proxy: false,
+  proxy_service_enabled: false,
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,

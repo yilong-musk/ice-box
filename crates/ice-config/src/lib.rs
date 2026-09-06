@@ -30,9 +30,9 @@ pub use selections::{
     apply_group_selections, load_group_selections, save_group_selections, GroupSelections,
 };
 pub use settings::{
-    clash_mode_name, default_auto_set_system_proxy, load_settings, save_settings, AppSettings,
-    LanguagePreference, ProxyMode, TunSettings, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS,
-    TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+    clash_mode_name, default_auto_set_system_proxy, load_settings, save_settings,
+    set_proxy_service_enabled, AppSettings, LanguagePreference, ProxyMode, TunSettings,
+    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 
 /// sing-box core version the config generator targets (architecture §12 / §22).

@@ -37,12 +37,16 @@ static ENSURED_GEOIP_DIRS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::ne
 
 /// Ensure `geoip-{code}.srs` rule-sets exist in the app data dir (copied from bundled
 /// resources, falling back to the repo copy for dev/tests). Returns the directory.
+///
+/// The directory lock is held for the whole copy so a setup warmup and the
+/// first `generate_config` cannot duplicate the scan.
 pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>) -> PathBuf {
     let target = app_paths.geoip_dir();
-    if let Ok(ensured) = ENSURED_GEOIP_DIRS.lock() {
-        if ensured.contains(&target) {
-            return target;
-        }
+    let mut ensured = ENSURED_GEOIP_DIRS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ensured.contains(&target) {
+        return target;
     }
     let mut sources: Vec<PathBuf> = Vec::new();
     if let Some(dir) = resource_dir {
@@ -73,9 +77,7 @@ pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>)
         tracing::info!(dir = %target.display(), copied, "geoip rule-sets ensured");
         break;
     }
-    if let Ok(mut ensured) = ENSURED_GEOIP_DIRS.lock() {
-        ensured.push(target.clone());
-    }
+    ensured.push(target.clone());
     target
 }
 
