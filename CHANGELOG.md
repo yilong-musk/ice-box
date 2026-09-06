@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-06
+
 ### Added
 
 - Restore the proxy service on launch when it was on at the last quit. A
