@@ -76,6 +76,22 @@ OUT="$(
 )"
 assert_json "$OUT"
 
+echo "== nested bundle dirs (CI artifact layout) =="
+mkdir -p "$TMP/nested/macos" "$TMP/nested/dmg"
+write_happy "$TMP/nested-flat"
+mv "$TMP/nested-flat/ice-box.app.tar.gz" "$TMP/nested/macos/"
+mv "$TMP/nested-flat/ice-box.app.tar.gz.sig" "$TMP/nested/macos/"
+mv "$TMP/nested-flat/ice-box_0.1.5_x64-setup.exe" "$TMP/nested/"
+mv "$TMP/nested-flat/ice-box_0.1.5_x64-setup.exe.sig" "$TMP/nested/"
+mv "$TMP/nested-flat/ice-box_0.1.5_aarch64.dmg" "$TMP/nested/dmg/"
+mv "$TMP/nested-flat/notes.md" "$TMP/nested/notes.md"
+NESTED_OUT="$(
+  GITHUB_REPOSITORY="yilong-musk/ice-box" \
+  ICE_BOX_UPDATER_PUB_DATE="2026-09-06T12:00:00Z" \
+    bash "$SCRIPT" "$TMP/nested" v0.1.5 "$TMP/nested/notes.md"
+)"
+assert_json "$NESTED_OUT"
+
 echo "== missing darwin archive =="
 write_happy "$TMP/no-darwin"
 rm -f "$TMP/no-darwin/ice-box.app.tar.gz" "$TMP/no-darwin/ice-box.app.tar.gz.sig"

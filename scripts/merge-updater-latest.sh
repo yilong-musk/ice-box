@@ -78,14 +78,14 @@ def pick_one(files: list[Path], label: str) -> Path:
 
 
 darwin = pick_one(
-    sorted(p for p in assets.glob("*.app.tar.gz") if p.is_file()),
+    sorted(p for p in assets.rglob("*.app.tar.gz") if p.is_file()),
     "darwin *.app.tar.gz",
 )
-windows = sorted(p for p in assets.glob("*-setup.exe") if p.is_file())
+windows = sorted(p for p in assets.rglob("*-setup.exe") if p.is_file())
 if not windows:
     windows = sorted(
         p
-        for p in assets.glob("*.exe")
+        for p in assets.rglob("*.exe")
         if p.is_file() and not p.name.endswith(".exe.sig")
     )
 windows_exe = pick_one(windows, "windows NSIS *.exe")

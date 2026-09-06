@@ -161,6 +161,14 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      # upload-artifact keeps bundle subdirs (macos/, dmg/). Flatten so
+      # merge-updater-latest.sh and `gh release create release-assets/*` see files.
+      - name: Flatten downloaded artifacts
+        run: |
+          find release-assets -mindepth 2 -type f -exec mv -t release-assets {} +
+          find release-assets -mindepth 1 -type d -empty -delete
+          ls -la release-assets
+
       - name: Prepare release notes
         id: notes
         run: |
