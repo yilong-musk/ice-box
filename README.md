@@ -14,6 +14,7 @@ Tauri 2 + React, with a bundled [sing-box](https://github.com/SagerNet/sing-box)
 - Rule / Global / Direct, node switch, latency test
 - Rule search, filter, custom rules
 - Live traffic on the home page
+- In-app updates from Settings (after installing 0.1.5 or later once)
 
 ## Docs
 
@@ -51,6 +52,7 @@ npm run fetch-singbox -- win && npm run build:win   # Windows NSIS
 ```
 
 macOS artifacts are **unsigned**. First launch: right-click → Open (or `xattr -dr com.apple.quarantine`).
+After 0.1.5 is installed, later versions can be installed from Settings → App updates.
 
 ## TUN
 

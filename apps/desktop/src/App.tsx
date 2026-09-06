@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ArrowUpCircle,
   House,
   ListFilter,
   Rss,
@@ -14,7 +15,7 @@ import {
   Settings as SettingsIcon,
   Waypoints,
 } from "lucide-react";
-import { api, type StatusResponse } from "./api/tauri";
+import { api, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
 import { Subscriptions } from "./pages/Subscriptions";
@@ -123,6 +124,9 @@ function App() {
   );
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
   const [languageReady, setLanguageReady] = useState(false);
+  const [availableUpdate, setAvailableUpdate] =
+    useState<CheckAppUpdateResponse | null>(null);
+  const [focusUpdateNonce, setFocusUpdateNonce] = useState(0);
   useThemePreference();
   const { preference, resolved, setPreference } = useLanguagePreference();
   const bootLanguageRef = useRef(preference);
@@ -131,6 +135,23 @@ function App() {
     void api.restoreLaunchProxy().catch(() => {
       // Home / status poll surfaces proxy_recovery_warning.
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .checkAppUpdate(true)
+      .then((result) => {
+        if (!cancelled && result.available && result.version) {
+          setAvailableUpdate(result);
+        }
+      })
+      .catch(() => {
+        // Background checks stay silent.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -240,11 +261,11 @@ function App() {
               </SidebarGroup>
             </SidebarContent>
             <SidebarFooter className="p-0 items-center justify-center">
-              <div
-                className="flex w-full select-none flex-col items-center justify-center gap-1 px-4 py-2.5"
-                data-tauri-drag-region
-              >
-                <div className="flex items-center justify-center gap-2.5">
+              <div className="flex w-full select-none flex-col items-center justify-center gap-1 px-4 py-2.5">
+                <div
+                  className="flex w-full items-center justify-center gap-2.5"
+                  data-tauri-drag-region
+                >
                   <img
                     src={logo}
                     alt=""
@@ -255,12 +276,30 @@ function App() {
                     ice-box
                   </h1>
                 </div>
-                <p
-                  className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums"
-                  aria-label={t("app.versionAria", { version: APP_VERSION })}
-                >
-                  {APP_VERSION}
-                </p>
+                <div className="flex items-center justify-center gap-1">
+                  <p
+                    className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums"
+                    aria-label={t("app.versionAria", { version: APP_VERSION })}
+                    data-tauri-drag-region
+                  >
+                    {APP_VERSION}
+                  </p>
+                  {availableUpdate?.available && availableUpdate.version ? (
+                    <button
+                      type="button"
+                      className="inline-flex size-4 shrink-0 items-center justify-center text-green-500 hover:text-green-400"
+                      aria-label={t("app.updateAvailableAria", {
+                        version: availableUpdate.version,
+                      })}
+                      onClick={() => {
+                        selectTab("settings");
+                        setFocusUpdateNonce((n) => n + 1);
+                      }}
+                    >
+                      <ArrowUpCircle className="size-3.5" aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </SidebarFooter>
           </Sidebar>
@@ -306,7 +345,12 @@ function App() {
               )}
               {visited.has("settings") && (
                 <TabPane active={tab === "settings"}>
-                  <Settings active={tab === "settings"} />
+                  <Settings
+                    active={tab === "settings"}
+                    availableUpdate={availableUpdate}
+                    onAvailableUpdate={setAvailableUpdate}
+                    focusUpdateNonce={focusUpdateNonce}
+                  />
                 </TabPane>
               )}
             </main>

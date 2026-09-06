@@ -77,6 +77,7 @@ const zh = {
   "app.nav.settings": "设置",
   "app.nav.aria": "主导航",
   "app.versionAria": "版本 {version}",
+  "app.updateAvailableAria": "有新版本 {version}，前往应用更新",
 
   // --- home page ---
   "home.mode.rule": "规则",
@@ -258,6 +259,22 @@ const zh = {
   "settings.helperStatusUnconfirmed":
     "辅助组件状态未确认，未更改 TUN 设置；请稍后重试",
   "settings.tunNotSaved": "TUN 设置未保存：请先修正上方表单中的错误后重试",
+  "settings.update": "应用更新",
+  "settings.updateAutoCheck": "自动检查更新",
+  "settings.updateCurrent": "当前版本 {version}",
+  "settings.updateCheck": "检查更新",
+  "settings.updateUpToDate": "已是最新版本",
+  "settings.updateAvailable": "发现新版本 {version}",
+  "settings.updateInstall": "安装更新",
+  "settings.updateCheckFailed":
+    "无法检查更新。若 GitHub 无法直连，请先启动代理服务后再试。",
+  "settings.updateFeedUnavailable":
+    "未找到 GitHub 上的更新清单。在带自动更新的版本正式发布之前，检查更新会失败。",
+
+  // --- app update progress ---
+  "update.installing": "正在下载更新…",
+  "update.progressPct": "正在下载更新… {pct}%",
+  "update.progressBytes": "已下载 {bytes} 字节",
 
   // --- window controls ---
   "window.minimize": "最小化",
@@ -355,6 +372,7 @@ const en: Record<MessageKey, string> = {
   "app.nav.settings": "Settings",
   "app.nav.aria": "Main navigation",
   "app.versionAria": "Version {version}",
+  "app.updateAvailableAria": "Version {version} is available, open App Updates",
 
   // --- home page ---
   "home.mode.rule": "Rule",
@@ -538,6 +556,22 @@ const en: Record<MessageKey, string> = {
   "settings.helperStatusUnconfirmed":
     "Helper status unconfirmed; TUN settings unchanged. Try again later",
   "settings.tunNotSaved": "TUN setting not saved: fix the errors above and retry",
+  "settings.update": "App Updates",
+  "settings.updateAutoCheck": "Check for updates automatically",
+  "settings.updateCurrent": "Current version {version}",
+  "settings.updateCheck": "Check for Updates",
+  "settings.updateUpToDate": "You're up to date",
+  "settings.updateAvailable": "Version {version} is available",
+  "settings.updateInstall": "Install Update",
+  "settings.updateCheckFailed":
+    "Could not check for updates. If GitHub is unreachable, start the proxy service and try again.",
+  "settings.updateFeedUnavailable":
+    "No update catalog was found on GitHub. Checking for updates fails until an updater-capable release is published.",
+
+  // --- app update progress ---
+  "update.installing": "Downloading update…",
+  "update.progressPct": "Downloading update… {pct}%",
+  "update.progressBytes": "Downloaded {bytes} bytes",
 
   // --- window controls ---
   "window.minimize": "Minimize",

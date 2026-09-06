@@ -7,6 +7,7 @@ subscription parsing, hot reload for rule/subscription changes, mode switching (
 SIGHUP on macOS / restart on Windows) on both platforms, nodes/traffic UI); Windows CI, NSIS installer
 and Windows acceptance in place. **TUN capture landed** on both platforms (§24; platform
 emission, elevation, and known limits in `docs/tun.md`). Windows TUN is IPv4 TCP only.
+**In-app auto-update landed** (§25).
 
 ---
 
@@ -186,6 +187,7 @@ Root path:
 ```
 <app_data>/
 ├── settings.json                 # app settings (not sing-box)
+├── update-check.json             # app-update throttle / skipped version (§25)
 ├── config.json                   # final config handed to sing-box
 ├── config.json.bak               # last successfully run config (for hot reload failure rollback)
 ├── proxy-backup.json             # system proxy backup + applied flag
@@ -232,6 +234,9 @@ Root path:
 - `allow_lan`: LAN sharing switch (default `false`, read compatibly from older settings.json). When on, the Mixed inbound binds `0.0.0.0`, while the system proxy / healthcheck still use `127.0.0.1`; the Clash API stays local-only.
 - TUN capture settings are added by the TUN slice (§24.1); missing TUN fields load as disabled
   (legacy `settings.json` files are unchanged).
+- `check_app_updates`: background GitHub checks and the sidebar indicator (default `true`; a
+  missing field loads as on so existing installs keep auto-check). Turning it off stops
+  background checks and the indicator; Settings still offers a manual check. See §25.
 
 ### 6.2 `proxy-backup.json`
 
@@ -713,6 +718,10 @@ Conventions:
 | Command | Description |
 |---------|-------------|
 | `get_settings` / `save_settings` | write `settings.json`; Apply if Running |
+| `check_app_update` | `{ background }` → `{ available, version, notes, skipped, should_prompt }` (§25; `should_prompt` is always false) |
+| `record_update_prompt` | persist `last_prompt_at` in `update-check.json` |
+| `skip_app_update` | `{ version }` persist `skipped_version` |
+| `install_app_update` | download, minisign-verify, `graceful_stop`, install / relaunch |
 
 ### 14.4 Subscriptions
 
@@ -751,12 +760,12 @@ Rule queries and management target the **currently active subscription** (single
 ```
 apps/desktop/src/
 ├── main.tsx
-├── App.tsx                 # layout: status bar + pages
+├── App.tsx                 # layout: status bar + pages; sidebar update indicator
 ├── api/tauri.ts            # invoke wrapper and types
 ├── pages/Home.tsx          # core status, system-proxy enable/disable, current node, errors
 ├── pages/Subscriptions.tsx
 ├── pages/Logs.tsx
-└── pages/Settings.tsx
+└── pages/Settings.tsx      # includes the app-update card
 ```
 
 v1 minimal UI set:
@@ -918,6 +927,7 @@ Rules:
 | Capture backend | how applications enter sing-box: system proxy **or** TUN (§24), never both |
 | Diagnostic config | Mixed-only runtime config (automatic core start / stopped service) |
 | TUN journal | `tun-state.json`: mutation log + ownership records for capture recovery (§24.4) |
+| App update state | `update-check.json`: check/prompt throttle and skipped version (§25) |
 
 ---
 
@@ -1102,3 +1112,95 @@ CIDR, DNS resolver traffic, and ice-box/sing-box control traffic take the docume
 path. Other LAN destinations follow normal routing policy; `allow_lan` does not broaden the
 bypass list. IPv4 is mandatory. IPv6 capture is mandatory on macOS (dual-stack tun, §24.5
 point 4) and **not** offered on Windows (`ipv4_only`). Never label a platform "all traffic".
+
+---
+
+## 25. In-app auto-update
+
+Status: **landed** on macOS (arm64 `.app.tar.gz`) and Windows (NSIS `.exe`). Integrity is
+**minisign** via `tauri-plugin-updater`; this is not Apple Developer ID / notarization and not
+Windows Authenticode. macOS remains permanently unsigned at the OS level (`docs/release-process.md`).
+
+The first updater-capable release (0.1.5) must be installed by hand. 0.1.4 and earlier cannot
+self-update into a build that includes the updater. After 0.1.5, later versions install from
+Settings, or from the sidebar upgrade arrow that opens the App Updates card.
+
+### 25.1 Product behavior
+
+- Default **on**: `settings.json` `check_app_updates` (serde default `true`). Off disables
+  background checks and the sidebar indicator; the Settings card can still check and install.
+- Background check after launch does not block first paint. Failures stay silent. `tauri dev`
+  / `debug_assertions` never hit GitHub in the background (they may still surface a cached
+  available version) and refuse install.
+- No update dialog and no top-bar banner. When a newer version is found:
+  - Settings → App Updates shows **Install Update** to the right of **Check for Updates**.
+  - The sidebar version number grows a green upgrade arrow; clicking it opens Settings and
+    scrolls to the App Updates card.
+- Never silent-restart. Confirmed install: download and minisign-verify → `graceful_stop`
+  (do **not** write `proxy_service_enabled=false`; same as tray Quit) → replace the bundle
+  (macOS) or run NSIS `installMode: passive` (Windows) → relaunch → existing
+  `restore_launch_proxy` brings capture back if it was on.
+- After a core-binary change, TUN uses the existing stale-helper / UAC re-pin paths
+  (`helper_stale`, `ensure_tun_elevation`). The Settings card does not re-explain that.
+
+### 25.2 Check path and proxy
+
+Frontend CSP `connect-src` is IPC-only. Checks and downloads run in Rust (`app_update.rs`)
+through `UpdaterExt`. The webview does not get `updater:*` permissions.
+
+TUN / system-proxy bypass puts the `ice-box` process on **direct**. GitHub would fail while
+the core is running unless the updater explicitly uses Mixed:
+
+- Core **Running**: HTTP proxy `http://{mixed_listen}:{mixed_port}` (when Mixed binds
+  `0.0.0.0`, still `127.0.0.1`). Mixed is HTTP+SOCKS; reqwest `Proxy::all` over HTTP is enough.
+- Core **stopped**: direct HTTPS.
+
+Endpoint: `https://github.com/yilong-musk/ice-box/releases/latest/download/latest.json`
+(`releases/latest` excludes pre-releases, matching the formal release process).
+Until that asset exists on the latest GitHub Release, `check()` maps
+`ReleaseNotFound` to `update.feed_unavailable` (not a Mixed-proxy failure).
+A genuine connect/timeout failure stays `update.check_failed`.
+
+### 25.3 `update-check.json`
+
+Lives in the app data dir (not `settings.json`):
+
+```json
+{
+  "last_check_at": "2026-09-06T10:00:00Z",
+  "available_version": "0.1.6",
+  "available_notes": "fixes"
+}
+```
+
+- `last_check_at`: background GitHub fetch at most once per 24h. Manual Settings check
+  always hits the network. A throttled background check returns the cached
+  `available_version` so the sidebar indicator and Install Update button stay visible.
+- `available_version` / `available_notes`: last successful GitHub result; cleared when the
+  check reports no newer release. Legacy `last_prompt_at` / `skipped_version` keys are
+  ignored.
+
+Host-free unit tests cover the 24h check window, cached available version, Mixed proxy URL
+construction, and the on-disk round trip. CI must not call GitHub.
+
+### 25.4 Install and process lifetime
+
+`ExitRequested` currently `prevent_exit()` then `graceful_stop`. Windows NSIS needs a real
+exit. While `UPDATE_INSTALLING` is set, `ExitRequested` must **not** prevent exit. Windows
+also uses updater `on_before_exit` for the same `graceful_stop`. macOS replaces the `.app`
+in place and `AppHandle::restart()` relaunches.
+
+Progress is a Tauri event `app-update://progress` (`downloaded`, `content_length`).
+
+### 25.5 Release artifacts
+
+`bundle.createUpdaterArtifacts` is **not** in `tauri.conf.json` (local / CI `tauri build`
+must succeed without the private key). Release builds merge
+`apps/desktop/src-tauri/tauri.updater.conf.json` and inject `TAURI_SIGNING_PRIVATE_KEY` /
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Windows stacks that overlay on `tauri.windows.conf.json`.
+
+Published updater pieces: macOS `*.app.tar.gz` + `.sig`, NSIS `*.exe.sig`, and `latest.json`
+with `platforms.darwin-aarch64` and `platforms.windows-x86_64`. Each platform `signature` is
+the **full `.sig` file text**; `url` is
+`https://github.com/yilong-musk/ice-box/releases/download/<tag>/<asset>`.
+`scripts/merge-updater-latest.sh` synthesizes the JSON (fixture-tested in gate).

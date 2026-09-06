@@ -309,9 +309,17 @@ pub struct AppSettings {
     /// files.
     #[serde(default)]
     pub language: LanguagePreference,
+    /// Background app-update checks and the sidebar indicator. Defaults to on
+    /// for existing `settings.json` files; the Settings page can turn it off.
+    #[serde(default = "default_check_app_updates")]
+    pub check_app_updates: bool,
 }
 
 fn default_auto_default_rules() -> bool {
+    true
+}
+
+fn default_check_app_updates() -> bool {
     true
 }
 
@@ -330,6 +338,7 @@ impl Default for AppSettings {
             tun: TunSettings::default(),
             auto_default_rules: true,
             language: LanguagePreference::System,
+            check_app_updates: true,
         }
     }
 }
@@ -585,6 +594,27 @@ mod tests {
     #[test]
     fn language_default_is_system() {
         assert_eq!(AppSettings::default().language, LanguagePreference::System);
+    }
+
+    #[test]
+    fn check_app_updates_defaults_on_for_legacy_files() {
+        let path = temp_settings_path("legacy-check-app-updates");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without check_app_updates");
+        assert!(
+            s.check_app_updates,
+            "missing flag must mean on so existing installs keep auto-check"
+        );
+        assert!(AppSettings::default().check_app_updates);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

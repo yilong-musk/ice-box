@@ -23,6 +23,11 @@ impl AppPaths {
         self.root.join("settings.json")
     }
 
+    /// App-update check throttle / skip state (architecture §25).
+    pub fn update_check(&self) -> PathBuf {
+        self.root.join("update-check.json")
+    }
+
     pub fn config(&self) -> PathBuf {
         self.root.join("config.json")
     }
@@ -110,6 +115,10 @@ mod tests {
         assert_eq!(
             p.settings(),
             PathBuf::from("/tmp/ice-box-data/settings.json")
+        );
+        assert_eq!(
+            p.update_check(),
+            PathBuf::from("/tmp/ice-box-data/update-check.json")
         );
         assert_eq!(p.config(), PathBuf::from("/tmp/ice-box-data/config.json"));
         assert_eq!(

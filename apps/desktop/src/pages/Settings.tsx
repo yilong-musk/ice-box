@@ -4,6 +4,7 @@ import {
   formatInvokeError,
   type AppSettings,
   type StatusResponse,
+  type CheckAppUpdateResponse,
 } from "../api/tauri";
 import {
   formatListenValidationError,
@@ -15,6 +16,8 @@ import {
 } from "../lib/generationGuard";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
+import { formatProgress } from "../components/UpdateAvailableDialog";
+import { APP_VERSION } from "../lib/appVersion";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -58,6 +61,7 @@ const defaults: AppSettings = {
   proxy_mode: "rule",
   auto_default_rules: true,
   language: "system",
+  check_app_updates: true,
   tun: {
     enabled: false,
     interface_name: null,
@@ -93,11 +97,31 @@ const TUN_TRANSITION_KEYS: Record<string, MessageKey> = {
   stopping: "settings.tunTransition.stopping",
 };
 
+function formatUpdateError(raw: string): string {
+  if (raw.includes("update.feed_unavailable")) {
+    return t("settings.updateFeedUnavailable");
+  }
+  if (raw.includes("update.check_failed")) {
+    return t("settings.updateCheckFailed");
+  }
+  return raw;
+}
+
 /// Debounce before persisting a changed setting (typing coalesces; switches
 /// and radios feel instant).
 const SAVE_DEBOUNCE_MS = 500;
 
-export function Settings({ active = true }: { active?: boolean }) {
+export function Settings({
+  active = true,
+  availableUpdate = null,
+  onAvailableUpdate,
+  focusUpdateNonce = 0,
+}: {
+  active?: boolean;
+  availableUpdate?: CheckAppUpdateResponse | null;
+  onAvailableUpdate?: (info: CheckAppUpdateResponse | null) => void;
+  focusUpdateNonce?: number;
+}) {
   const [form, setForm] = useState<AppSettings>(defaults);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +145,99 @@ export function Settings({ active = true }: { active?: boolean }) {
   /// Skip the first post-load snapshot so opening the page never persists
   /// the just-read settings; re-armed on every reload cycle.
   const skipInitialSaveRef = useRef(true);
+  const [updateInfo, setUpdateInfo] = useState<CheckAppUpdateResponse | null>(
+    availableUpdate,
+  );
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<{
+    downloaded: number;
+    contentLength: number | null;
+  } | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const updateCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (availableUpdate?.available && availableUpdate.version) {
+      setUpdateInfo(availableUpdate);
+    }
+  }, [availableUpdate]);
+
+  useEffect(() => {
+    if (!active || focusUpdateNonce <= 0) return;
+    const node = updateCardRef.current;
+    if (!node) return;
+    const id = window.requestAnimationFrame(() => {
+      node.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [active, focusUpdateNonce]);
+
+  useEffect(() => {
+    // Subscribe on mount so install progress is not lost to a post-click race.
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void api
+      .listenAppUpdateProgress((payload) => {
+        if (!cancelled) {
+          setUpdateProgress({
+            downloaded: payload.downloaded,
+            contentLength: payload.content_length,
+          });
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        // Progress events are best-effort.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  /// Sidebar arrow follows auto-check: off hides it even if Settings still
+  /// knows a newer version and can install it.
+  function publishSidebarUpdate(
+    info: CheckAppUpdateResponse | null,
+    autoCheck: boolean,
+  ) {
+    if (!autoCheck) {
+      onAvailableUpdate?.(null);
+      return;
+    }
+    onAvailableUpdate?.(info?.available && info.version ? info : null);
+  }
+
+  async function runUpdateCheck() {
+    setUpdateError(null);
+    setUpdateBusy(true);
+    try {
+      const result = await api.checkAppUpdate(false);
+      setUpdateInfo(result);
+      publishSidebarUpdate(result, form.check_app_updates);
+    } catch (e) {
+      setUpdateError(formatInvokeError(e));
+      setUpdateInfo(null);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function runUpdateInstall() {
+    setUpdateError(null);
+    setUpdateBusy(true);
+    setUpdateProgress({ downloaded: 0, contentLength: null });
+    try {
+      await api.installAppUpdate();
+    } catch (e) {
+      setUpdateError(formatInvokeError(e));
+      setUpdateBusy(false);
+      setUpdateProgress(null);
+    }
+  }
 
   /// Briefly show the "saved" confirmation; re-armed on each save.
   function flashSaved() {
@@ -446,6 +563,90 @@ export function Settings({ active = true }: { active?: boolean }) {
           </Field>
         </CardContent>
       </Card>
+
+          <div ref={updateCardRef} id="settings-app-update">
+          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+        <CardHeader>
+          <CardTitle>{t("settings.update")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <Field orientation="horizontal" className="w-auto gap-2">
+              <Switch
+                id="settings-check-app-updates"
+                size="sm"
+                checked={form.check_app_updates}
+                disabled={busy || !loaded}
+                aria-label={t("settings.updateAutoCheck")}
+                onCheckedChange={(checked) => {
+                  const enabled = checked === true;
+                  setForm({
+                    ...form,
+                    check_app_updates: enabled,
+                  });
+                  if (enabled) {
+                    publishSidebarUpdate(updateInfo, true);
+                  } else {
+                    onAvailableUpdate?.(null);
+                  }
+                }}
+              />
+              <FieldLabel htmlFor="settings-check-app-updates">
+                {t("settings.updateAutoCheck")}
+              </FieldLabel>
+            </Field>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.updateCurrent", { version: APP_VERSION })}
+            </p>
+            {updateInfo?.available && updateInfo.version ? (
+              <p className="text-xs">
+                {t("settings.updateAvailable", {
+                  version: updateInfo.version,
+                })}
+              </p>
+            ) : updateInfo && !updateInfo.available ? (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.updateUpToDate")}
+              </p>
+            ) : null}
+            {updateBusy && updateProgress ? (
+              <p className="text-xs text-muted-foreground">
+                {formatProgress(
+                  updateProgress.downloaded,
+                  updateProgress.contentLength,
+                )}
+              </p>
+            ) : null}
+            {updateError ? (
+              <FieldError>
+                {formatUpdateError(updateError)}
+              </FieldError>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || updateBusy || !loaded}
+                onClick={() => void runUpdateCheck()}
+              >
+                {t("settings.updateCheck")}
+              </Button>
+              {updateInfo?.available ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy || updateBusy || !loaded}
+                  onClick={() => void runUpdateInstall()}
+                >
+                  {t("settings.updateInstall")}
+                </Button>
+              ) : null}
+            </div>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+          </div>
 
       {tunUiHidden ? null : (
         <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">

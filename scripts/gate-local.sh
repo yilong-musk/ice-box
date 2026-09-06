@@ -24,6 +24,9 @@ echo "== tsc --noEmit =="
 echo "== vitest =="
 (cd apps/desktop && npm test)
 
+echo "== merge-updater-latest fixtures =="
+bash scripts/test-merge-updater-latest.sh
+
 echo "== capture demo home =="
 bash scripts/capture-demo-home.sh
 

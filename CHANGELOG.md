@@ -5,6 +5,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-06
+
+### Added
+
+- In-app auto-update via the Tauri updater (minisign integrity). After this
+  release is installed once, later versions can be downloaded from Settings.
+  Background checks default on (`check_app_updates`); a green arrow next to the
+  sidebar version opens the App Updates card, where Install Update appears
+  beside Check for Updates. 0.1.4 and earlier cannot self-update into this
+  release.
+
+### Fixed
+
+- Settings no longer reports a missing GitHub `latest.json` (unpublished
+  updater catalog) as a GitHub connectivity / proxy failure.
+
+### Changed
+
+- GitHub Releases now publish macOS `.app.tar.gz` + `.sig`, the NSIS `.exe.sig`,
+  and `latest.json` so installed 0.1.5+ clients can find the next build.
+
 ## [0.1.4] - 2026-09-06
 
 ### Added

@@ -8,13 +8,15 @@ update it whenever the process changes.
 
 A release is a **`vX.Y.Z` tag pushed to `main`**. The tag push triggers
 `.github/workflows/release.yml`, which gates the workspace, builds the macOS
-arm64 `.dmg` and the Windows NSIS `.exe`, and publishes a GitHub Release with
+arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`) and the Windows NSIS `.exe`
+(plus `.exe.sig`), synthesizes `latest.json`, and publishes a GitHub Release with
 the artifacts and compliance notices.
 
-macOS releases are permanently unsigned (documented product decision): the
-privileged helper for TUN is installed through the system authorization
-dialog at first use (see `docs/tun.md`).
-Gatekeeper warnings are expected for published artifacts.
+macOS releases are permanently unsigned at the Apple / Gatekeeper layer
+(documented product decision): the privileged helper for TUN is installed
+through the system authorization dialog at first use (see `docs/tun.md`).
+Gatekeeper warnings are expected for published artifacts. In-app updates use a
+separate **minisign** key for integrity; that is not Developer ID signing.
 
 ## Version sources
 
@@ -27,6 +29,27 @@ The version lives in exactly three places and **must stay in sync**:
 | `apps/desktop/src-tauri/tauri.conf.json` | `"version"` (installer metadata) |
 
 `Cargo.lock` is refreshed automatically by `cargo check`.
+
+## Updater signing keys (one-time)
+
+In-app updates (`docs/architecture.md` §25) verify artifacts with minisign.
+Generate the keypair once (not in the repo):
+
+```bash
+cd apps/desktop && npm run tauri signer generate -- -w ~/.tauri/ice-box.key
+```
+
+| Material | Where |
+|----------|--------|
+| Public key | `apps/desktop/src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (committed) |
+| Private key | GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY` |
+| Key password | GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+
+Losing the private key means already-installed clients cannot verify a new key;
+rotating it abandons those clients (they must reinstall by hand). CI **gate +
+build** jobs must **not** set `createUpdaterArtifacts` and do not need these
+secrets (fork PRs would otherwise fail). Only `release.yml` merges
+`src-tauri/tauri.updater.conf.json` and injects the secrets.
 
 ## Step-by-step
 
@@ -85,14 +108,19 @@ Pushing the tag is the point of no return: it triggers the release pipeline.
 
 | Job | Runner | Work |
 |-----|--------|------|
-| `build-macos` | macos-latest | gate + headless acceptance + `tauri build` → upload DMG |
-| `build-windows` | windows-latest | gate + headless acceptance + NSIS build (`npm run build:win`) → upload EXE |
-| `publish` | ubuntu-latest | `needs` both build jobs; downloads artifacts, extracts the changelog section via `scripts/release-notes.sh`, creates the GitHub Release |
+| `build-macos` | macos-latest | gate + headless acceptance + `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets) → upload DMG + `*.app.tar.gz` + `.sig` |
+| `build-windows` | windows-latest | gate + headless acceptance + NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`) → upload EXE + `.exe.sig` |
+| `publish` | ubuntu-latest | `needs` both build jobs; downloads artifacts; extracts the changelog section via `scripts/release-notes.sh`; `scripts/merge-updater-latest.sh` writes `latest.json`; creates the GitHub Release |
 
 Published assets:
 
-- `ice-box_<ver>_aarch64.dmg` (macOS Apple Silicon)
-- `ice-box_<ver>_x64-setup.exe` (Windows NSIS)
+- `ice-box_<ver>_aarch64.dmg` (macOS Apple Silicon, first-time install)
+- `ice-box.app.tar.gz` and `ice-box.app.tar.gz.sig` (macOS updater payload; exact names follow Tauri)
+- `ice-box_<ver>_x64-setup.exe` (Windows NSIS, first-time install)
+- `ice-box_<ver>_x64-setup.exe.sig` (Windows updater signature)
+- `latest.json` (`version`, `notes`, `pub_date`, `platforms.darwin-aarch64` /
+  `platforms.windows-x86_64`; each `signature` is the **full `.sig` file text**,
+  each `url` is `https://github.com/yilong-musk/ice-box/releases/download/<tag>/<asset>`)
 - `LICENSE`, `NOTICE` (bundled sing-box is GPL-3.0-or-later; the `NOTICE` file
   satisfies the redistribution requirements, the upstream license text is
   attached as `third_party/sing-box/LICENSE`)
@@ -101,8 +129,12 @@ Published assets:
 
 ```bash
 gh run list --workflow release.yml --limit 1   # conclusion: success
-gh release view v0.1.2 --json assets           # expected assets present
+gh release view v0.1.2 --json assets           # dmg, exe, tar.gz, sigs, latest.json
 ```
+
+`latest.json` must list both `darwin-aarch64` and `windows-x86_64` with non-empty
+signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
+(also run from `scripts/gate.sh` / `scripts/gate-local.sh`).
 
 ## Known issues and workarounds
 
@@ -143,6 +175,9 @@ completed macOS TUN live gates; the clean-machine install/uninstall gate is
 intentionally waived. Published `.app`/`.dmg` artifacts are unsigned and may
 trigger Gatekeeper warnings; users must right-click → Open (or use
 `xattr -dr com.apple.quarantine`) on first launch.
+
+In-app updates after 0.1.5 do not change that decision: they only check minisign
+signatures. Windows NSIS installers remain without Authenticode.
 
 ## Future milestones
 
