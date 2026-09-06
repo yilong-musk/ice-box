@@ -7,6 +7,7 @@ import { clearNodesSnapshot } from "./lib/nodes";
 
 const getStatus = vi.fn();
 const getSettings = vi.fn();
+const saveSettings = vi.fn();
 const listNodes = vi.fn();
 const setTrayLanguage = vi.fn();
 const restoreLaunchProxy = vi.fn();
@@ -63,6 +64,7 @@ vi.mock("./api/tauri", () => ({
     checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
+    saveSettings: (...args: unknown[]) => saveSettings(...args),
     setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
     getTrafficSnapshot: vi
       .fn()
@@ -91,6 +93,7 @@ describe("App", () => {
       should_prompt: false,
     });
     installAppUpdate.mockResolvedValue(undefined);
+    saveSettings.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -336,5 +339,35 @@ describe("App", () => {
       expect(screen.getByRole("button", { name: "安装更新" })).toBeEnabled();
     });
     expect(screen.getByText("发现新版本 0.1.6")).toBeInTheDocument();
+  });
+
+  it("hides the sidebar upgrade icon when automatic checks are turned off", async () => {
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("自动检查更新")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("自动检查更新"));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+      ).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
   });
 });

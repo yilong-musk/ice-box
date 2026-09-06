@@ -1121,4 +1121,71 @@ describe("Settings", () => {
       { timeout: 2000 },
     );
   });
+
+  it("clears the sidebar upgrade when automatic checks are turned off", async () => {
+    const onAvailableUpdate = vi.fn();
+    const available = {
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    };
+    const { container } = render(
+      <Settings
+        availableUpdate={available}
+        onAvailableUpdate={onAvailableUpdate}
+      />,
+    );
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("自动检查更新")).toBeInTheDocument();
+    });
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    fireEvent.click(view.getByLabelText("自动检查更新"));
+    expect(onAvailableUpdate).toHaveBeenCalledWith(null);
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    expect(container.textContent).toContain("发现新版本 0.1.6");
+    fireEvent.click(view.getByLabelText("自动检查更新"));
+    expect(onAvailableUpdate).toHaveBeenLastCalledWith(available);
+  });
+
+  it("does not restore the sidebar after a manual check while auto-check is off", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
+      check_app_updates: false,
+      tun: tunSettings,
+    });
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    const onAvailableUpdate = vi.fn();
+    const { container } = render(
+      <Settings onAvailableUpdate={onAvailableUpdate} />,
+    );
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    await waitFor(() => {
+      expect(container.textContent).toContain("发现新版本 0.1.6");
+    });
+    expect(onAvailableUpdate).toHaveBeenCalledWith(null);
+    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+  });
 });

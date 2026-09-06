@@ -198,13 +198,26 @@ export function Settings({
     };
   }, []);
 
+  /// Sidebar arrow follows auto-check: off hides it even if Settings still
+  /// knows a newer version and can install it.
+  function publishSidebarUpdate(
+    info: CheckAppUpdateResponse | null,
+    autoCheck: boolean,
+  ) {
+    if (!autoCheck) {
+      onAvailableUpdate?.(null);
+      return;
+    }
+    onAvailableUpdate?.(info?.available && info.version ? info : null);
+  }
+
   async function runUpdateCheck() {
     setUpdateError(null);
     setUpdateBusy(true);
     try {
       const result = await api.checkAppUpdate(false);
       setUpdateInfo(result);
-      onAvailableUpdate?.(result.available && result.version ? result : null);
+      publishSidebarUpdate(result, form.check_app_updates);
     } catch (e) {
       setUpdateError(formatInvokeError(e));
       setUpdateInfo(null);
@@ -566,10 +579,16 @@ export function Settings({
                 disabled={busy || !loaded}
                 aria-label={t("settings.updateAutoCheck")}
                 onCheckedChange={(checked) => {
+                  const enabled = checked === true;
                   setForm({
                     ...form,
-                    check_app_updates: checked === true,
+                    check_app_updates: enabled,
                   });
+                  if (enabled) {
+                    publishSidebarUpdate(updateInfo, true);
+                  } else {
+                    onAvailableUpdate?.(null);
+                  }
                 }}
               />
               <FieldLabel htmlFor="settings-check-app-updates">

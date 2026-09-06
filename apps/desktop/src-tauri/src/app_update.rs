@@ -88,9 +88,15 @@ fn empty_response() -> CheckAppUpdateResponse {
 }
 
 /// Last GitHub result, used when a background check is still inside the 24h window.
-pub fn cached_check_response(state: &UpdateCheckState) -> CheckAppUpdateResponse {
+/// Cached `available_version` is only surfaced when it is strictly newer than
+/// the running build so a post-install launch does not re-offer the version
+/// already installed.
+pub fn cached_check_response(
+    state: &UpdateCheckState,
+    installed_version: &str,
+) -> CheckAppUpdateResponse {
     match state.available_version.as_deref() {
-        Some(version) if !normalize_version(version).is_empty() => CheckAppUpdateResponse {
+        Some(version) if is_newer_version(version, installed_version) => CheckAppUpdateResponse {
             available: true,
             version: Some(normalize_version(version).to_string()),
             notes: state.available_notes.clone(),
@@ -108,6 +114,35 @@ pub fn normalize_version(version: &str) -> &str {
         .strip_prefix('v')
         .or_else(|| version.strip_prefix('V'))
         .unwrap_or(version)
+}
+
+/// True when `available` is a strictly newer dotted version than `installed`.
+/// Pre-release / build suffixes (`-beta`, `+meta`) are ignored. Unparseable
+/// values are treated as not newer so a stale cache cannot force a prompt.
+pub fn is_newer_version(available: &str, installed: &str) -> bool {
+    match (
+        parse_version_nums(normalize_version(available)),
+        parse_version_nums(normalize_version(installed)),
+    ) {
+        (Some(available), Some(installed)) => available > installed,
+        _ => false,
+    }
+}
+
+fn parse_version_nums(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = match parts.next() {
+        Some(part) => part.parse().ok()?,
+        None => 0,
+    };
+    Some((major, minor, patch))
+}
+
+fn installed_app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 pub fn load_update_check_state(path: &std::path::Path) -> UpdateCheckState {
@@ -229,15 +264,16 @@ pub async fn check_app_update(
     };
 
     let mut disk = load_update_check_state(&paths.update_check());
+    let installed = installed_app_version();
     // debug / tauri dev: never hit GitHub in the background; still surface a
     // previously cached available version so the sidebar indicator can show.
     if cfg!(debug_assertions) && req.background {
-        return Ok(cached_check_response(&disk));
+        return Ok(cached_check_response(&disk, installed));
     }
 
     let now = Utc::now();
     if req.background && !check_is_due(&disk, now) {
-        return Ok(cached_check_response(&disk));
+        return Ok(cached_check_response(&disk, installed));
     }
 
     let proxy = updater_proxy_url(&settings, core_running);
@@ -394,17 +430,42 @@ mod tests {
 
     #[test]
     fn cached_check_response_surfaces_last_available_version() {
-        assert!(!cached_check_response(&UpdateCheckState::default()).available);
+        assert!(!cached_check_response(&UpdateCheckState::default(), "0.1.5").available);
         let state = UpdateCheckState {
             available_version: Some(" v0.1.6 ".into()),
             available_notes: Some("fixes".into()),
             ..UpdateCheckState::default()
         };
-        let response = cached_check_response(&state);
+        let response = cached_check_response(&state, "0.1.5");
         assert!(response.available);
         assert_eq!(response.version.as_deref(), Some("0.1.6"));
         assert_eq!(response.notes.as_deref(), Some("fixes"));
         assert!(!response.should_prompt);
+    }
+
+    #[test]
+    fn cached_check_response_ignores_installed_or_older_version() {
+        let same = UpdateCheckState {
+            available_version: Some("v0.1.5".into()),
+            available_notes: Some("already installed".into()),
+            ..UpdateCheckState::default()
+        };
+        assert!(!cached_check_response(&same, "0.1.5").available);
+        let older = UpdateCheckState {
+            available_version: Some("0.1.4".into()),
+            ..UpdateCheckState::default()
+        };
+        assert!(!cached_check_response(&older, "0.1.5").available);
+        assert!(cached_check_response(&older, "0.1.3").available);
+    }
+
+    #[test]
+    fn is_newer_version_compares_dotted_triples() {
+        assert!(is_newer_version("0.1.6", "0.1.5"));
+        assert!(is_newer_version("v0.2.0", "0.1.9"));
+        assert!(!is_newer_version("0.1.5", "0.1.5"));
+        assert!(!is_newer_version("0.1.5", "0.1.6"));
+        assert!(!is_newer_version("not-a-version", "0.1.5"));
     }
 
     #[test]
