@@ -17,9 +17,7 @@ use crate::orchestrate::current_settings;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle, TrafficMonitor};
-use ice_proxy_sys::{
-    create_system_proxy, is_proxy_applied_on_disk, recover_if_applied, ProxyEndpoints, SystemProxy,
-};
+use ice_proxy_sys::{create_system_proxy, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,6 +105,9 @@ pub struct AppState {
     /// skip the two wasted HTTP roundtrips (forward-compatible: a core that
     /// honors the PATCH keeps the fast path).
     pub clash_live_mode_cache: Mutex<bool>,
+    /// The UI's post-paint capture restore runs once per process (StrictMode
+    /// remounts must not enable system proxy / TUN twice).
+    pub launch_proxy_restore_attempted: Arc<AtomicBool>,
 }
 
 fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
@@ -119,7 +120,7 @@ fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
 fn bootstrap_data_dir(
     paths: &AppPaths,
     shutdown_requested: Arc<AtomicBool>,
-) -> Result<(Box<dyn CoreHandle>, Option<String>), String> {
+) -> Result<Box<dyn CoreHandle>, String> {
     paths
         .ensure_dirs()
         .map_err(|e| format!("ensure data dirs: {e}"))?;
@@ -134,39 +135,7 @@ fn bootstrap_data_dir(
 
     let mut core = CoreController::new();
     core.set_health_cancel(shutdown_requested);
-    if let Err(err) = core.reclaim_orphan_pid(&paths.pid()) {
-        tracing::warn!(error = %err, "failed to reclaim orphan sing-box pid");
-    }
-    // The pid file can be missing while a previous session's core is still
-    // running (the app was killed mid-teardown after the pid record was
-    // cleared); scan the process table for sing-box processes running this
-    // installation's config and reclaim the user-owned ones, so the auto-start
-    // never hits `bind: address already in use` with no way to recover.
-    let reclaimed = ice_core::reclaim_orphan_cores_with_config(&paths.config());
-    if reclaimed > 0 {
-        tracing::warn!(
-            reclaimed,
-            "reclaimed orphan sing-box cores without a pid file"
-        );
-    }
-
-    let proxy = create_system_proxy();
-    let proxy_recovery_warning = match recover_if_applied(&paths.proxy_backup(), proxy.as_ref()) {
-        Ok(true) => {
-            tracing::info!("restored system proxy from previous session");
-            None
-        }
-        Ok(false) => {
-            tracing::debug!("no applied system proxy backup to restore");
-            None
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "system proxy crash recovery failed");
-            Some(format!("system proxy recovery failed: {err}"))
-        }
-    };
-
-    Ok((Box::new(core), proxy_recovery_warning))
+    Ok(Box::new(core))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -184,27 +153,17 @@ pub fn run() {
             let instance_lock = acquire_instance_lock(&paths)?;
             let paths_for_focus = paths.clone();
             let shutdown_requested = Arc::new(AtomicBool::new(false));
-            let (core, proxy_recovery_warning) =
-                bootstrap_data_dir(&paths, shutdown_requested.clone())?;
+            let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
-            let capture = CaptureController::new(paths.clone(), app.path().resource_dir().ok());
-            // Fail-closed exclusivity: when startup proxy recovery failed, the
-            // OS proxy is still applied and the app still owns it. Keep the
-            // capture controller consistent with disk so TUN activation stays
-            // rejected until the proxy is restored.
-            if is_proxy_applied_on_disk(&paths.proxy_backup()) {
-                tracing::warn!(
-                    "system proxy backup still records applied after startup recovery; capture controller treats system proxy as the active backend"
-                );
-                let _ = capture.set_system_proxy_active();
-            }
+            let resource_dir = app.path().resource_dir().ok();
+            let capture = CaptureController::new(paths.clone(), resource_dir.clone());
             app.manage(AppState {
                 paths,
                 core: Mutex::new(core),
                 proxy: Mutex::new(proxy),
                 orchestrate: Mutex::new(()),
-                proxy_recovery_warning: Mutex::new(proxy_recovery_warning),
+                proxy_recovery_warning: Mutex::new(None),
                 proxy_applied_cache: Mutex::new(None),
                 system_proxy_available,
                 shutdown_requested,
@@ -214,51 +173,51 @@ pub fn run() {
                 profile_cache: Mutex::new(None),
                 log_view_cache: Mutex::new(None),
                 helper_probe_cache: Mutex::new(None),
-            tun_task_cache: Mutex::new(None),
+                tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
+                launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
             });
-            // Startup TUN recovery: inside the orchestration lock, after the
-            // orphan-core reclamation in bootstrap. Never enables capture. A
-            // recovery error (e.g. an unreadable journal) is fail-closed: it
-            // is surfaced as a warning and TUN activation stays rejected
-            // until an explicit retry succeeds.
+            // Overlap geoip copy and the bundled-core SHA-256 with leftover
+            // reclaim / TUN recovery and the first UI status poll.
             {
-                let state = app.state::<AppState>();
-                let _orch = state.orchestrate.lock().ok();
-                let mut core = state.core.lock().ok();
-                if let Some(core) = core.as_deref_mut() {
-                    let append_warning = |warning: String| {
-                        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                            let existing = slot.take().unwrap_or_default();
-                            *slot = Some(if existing.is_empty() {
-                                warning
-                            } else {
-                                format!("{existing}；{warning}")
-                            });
-                        }
-                    };
-                    // A leftover root-owned core from a previous session (the
-                    // unprivileged bootstrap could not signal it) still holds
-                    // the ports; reclaim it through the elevated coordinator
-                    // before journal recovery so a later start / re-enable
-                    // never hits `bind: address already in use`.
-                    if let Err(err) = state
-                        .capture
-                        .reclaim_orphan_elevated_core(&mut **core)
-                    {
-                        tracing::warn!(error = %err, "failed to reclaim orphaned elevated core");
-                        append_warning(format!("残留内核清理未确认 ({err})"));
+                let warmup_paths = app.state::<AppState>().paths.clone();
+                let warmup_resource = resource_dir.clone();
+                std::thread::spawn(move || {
+                    let _ = crate::orchestrate::ensure_geoip_rule_sets(
+                        &warmup_paths,
+                        warmup_resource.as_deref(),
+                    );
+                    let _ = crate::helper_install::helper_core_stale(warmup_resource.as_deref());
+                });
+            }
+            // Product: opening the app starts the core immediately. Capture is
+            // restored after the first UI frame (`restore_launch_proxy`) so
+            // system proxy / TUN do not contend with first paint.
+            //
+            // Orphan reclaim, system-proxy crash recovery, and TUN journal
+            // recovery share this worker and the orchestrate lock so they
+            // still run before `start_core`, without blocking `setup` (and
+            // the window) on `ps` / helper / `networksetup`. The handshake
+            // waits only until the worker holds the lock, so Home `start`
+            // cannot slip in ahead of reclaim. Tray / watchdog setup then
+            // overlaps with the reclaim work.
+            let handle = app.handle().clone();
+            let (orch_tx, orch_rx) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let state = handle.state::<AppState>();
+                if let Err(err) = commands::auto_start_on_launch(&handle, &state, Some(orch_tx)) {
+                    if state.shutdown_requested.load(Ordering::SeqCst) {
+                        tracing::info!(error = %err, "auto-start aborted by quit");
+                        return;
                     }
-                    let recovery = state.capture.recover(&mut **core);
-                    match recovery {
-                        Ok(Some(warning)) => append_warning(warning),
-                        Ok(None) => {}
-                        Err(err) => {
-                            tracing::error!(error = %err, "startup tun recovery failed");
-                            append_warning(format!("TUN state recovery unconfirmed ({err})"));
-                        }
+                    tracing::error!(error = %err, "auto-start failed");
+                    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+                        *slot = Some(format!("auto-start failed ({err})"));
                     }
                 }
+            });
+            if orch_rx.recv().is_err() {
+                tracing::warn!("startup worker exited before acquiring orchestrate lock");
             }
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             let tray_language = {
@@ -270,25 +229,6 @@ pub fn run() {
             tray::setup_tray(app.handle(), tray_language)?;
             core_watch::spawn_core_watchdog(app.handle().clone());
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
-            // Product: opening the app starts the core only; system proxy is
-            // toggled from the home page. Quit still restores an applied proxy.
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                let state = handle.state::<AppState>();
-                if state.shutdown_requested.load(Ordering::SeqCst) {
-                    return;
-                }
-                if let Err(err) = commands::start_core(&handle, &state) {
-                    if state.shutdown_requested.load(Ordering::SeqCst) {
-                        tracing::info!(error = %err, "auto-start aborted by quit");
-                        return;
-                    }
-                    tracing::error!(error = %err, "auto-start core failed");
-                    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                        *slot = Some(format!("core auto-start failed ({err})"));
-                    }
-                }
-            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -301,6 +241,7 @@ pub fn run() {
             commands::get_status,
             commands::list_subscriptions,
             commands::start,
+            commands::restore_launch_proxy,
             commands::stop_system_proxy,
             commands::stop,
             commands::recover_tun,
@@ -423,7 +364,10 @@ pub(crate) fn test_settings() -> ice_config::AppSettings {
 mod tests {
     use super::*;
     use ice_config::write_json_atomic;
-    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
+    use ice_proxy_sys::{
+        recover_if_applied, ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError,
+        SystemProxy,
+    };
     use std::cell::Cell;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};

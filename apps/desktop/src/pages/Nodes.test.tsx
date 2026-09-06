@@ -49,6 +49,7 @@ describe("Nodes", () => {
       clash_api_port: 19090,
       selected_tag: "node-a",
       auto_set_system_proxy: true,
+      proxy_service_enabled: false,
       allow_lan: false,
       proxy_mode: "rule",
     });

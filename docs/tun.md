@@ -15,8 +15,10 @@ TUN stay mutually exclusive at the OS boundary.
 ## 1. Shared
 
 - Mixed inbound stays in both Diagnostic (Mixed-only) and Tun configs. Automatic
-  core start always uses the Diagnostic config so a restart cannot silently
-  create an adapter.
+  core start always uses the Diagnostic config, after leftover reclaim and crash
+  recovery on the same background worker. If `proxy_service_enabled` is set, the
+  first UI frame then runs the same start path as the Home power button (system
+  proxy or TUN). Crash recovery still never enables capture.
 - Dual-stack tun is **mandatory on macOS** (an IPv4-only tun installs no IPv6
   routes and silently leaks IPv6). Windows forces `dns.strategy: ipv4_only`
   instead (upstream #4178).

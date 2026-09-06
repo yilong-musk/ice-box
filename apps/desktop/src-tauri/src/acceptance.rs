@@ -225,6 +225,9 @@ mod tests {
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
+            launch_proxy_restore_attempted: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
         });
 
         let bg = state.clone();

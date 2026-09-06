@@ -93,6 +93,8 @@ export type AppSettings = {
   clash_api_port: number;
   selected_tag: string | null;
   auto_set_system_proxy: boolean;
+  /** Last Home power-button state; launch restores capture when true. */
+  proxy_service_enabled: boolean;
   allow_lan: boolean;
   proxy_mode: ProxyMode;
   tun: TunSettings;
@@ -252,6 +254,8 @@ export const api = {
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
   getSettings: () => invoke<AppSettings>("get_settings"),
+  /** First-frame restore of last-session capture. No-op when it was off. */
+  restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
   setTrayLanguage: (language: "zh" | "en") =>

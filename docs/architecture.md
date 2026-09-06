@@ -214,6 +214,7 @@ Root path:
   "clash_api_port": 19090,
   "selected_tag": null,
   "auto_set_system_proxy": false,
+  "proxy_service_enabled": false,
   "allow_lan": false
 }
 ```
@@ -224,6 +225,10 @@ Root path:
   no longer uses this flag to apply or skip the OS proxy. Default is `false`. System proxy is
   toggled from the home page (**启动代理服务** / **停止代理服务**). Missing `settings.json` uses
   this default and does not create the file.
+- `proxy_service_enabled`: last Home power-button state. Written on a successful start / stop of
+  capture; quit and crash cleanup must not clear it. After the window's first UI frame, launch
+  restores the configured capture backend when this is `true` (`restore_launch_proxy`). Missing
+  field loads as `false` (legacy launch stays core-only).
 - `allow_lan`: LAN sharing switch (default `false`, read compatibly from older settings.json). When on, the Mixed inbound binds `0.0.0.0`, while the system proxy / healthcheck still use `127.0.0.1`; the Clash API stays local-only.
 - TUN capture settings are added by the TUN slice (§24.1); missing TUN fields load as disabled
   (legacy `settings.json` files are unchanged).
@@ -287,10 +292,18 @@ Illegal transitions are rejected outright (error returned, state unchanged), e.g
 The system proxy is **not** an independent process lifecycle, but it **is** user-toggled
 separately from the core:
 
-- **App launch** starts the core only (`start_core`); does **not** apply the OS proxy.
-- **Home「启动代理服务」** (`start`) ensures the core is Running, then applies the OS proxy.
+- **App launch** starts the core immediately (`start_core`). Capture restore is a separate
+  first-frame IPC (`restore_launch_proxy`): if `settings.proxy_service_enabled` is true (the last
+  session left the proxy service on), the UI then runs `start` (`start_service`) to restore the
+  configured capture backend. Otherwise capture stays off. Crash leftover cleanup (orphan-core
+  reclaim, `recover_if_applied`, TUN journal recover) runs on the auto-start worker, still
+  **before** `start_core` and serialized on the orchestrate lock, so `setup` can return and
+  show the window without waiting on `ps` / helper / `networksetup`.
+- **Home「启动代理服务」** (`start`) ensures the core is Running, then applies the OS proxy
+  (or TUN when `tun.enabled`).
 - **Home「停止代理服务」** (`stop_system_proxy`) restores the OS proxy and **keeps the core Running**.
-- **App quit** (`stop` / `graceful_stop`) restores the OS proxy if `applied == true`, then stops the core.
+- **App quit** (`stop` / `graceful_stop`) restores the OS proxy if `applied == true`, then stops
+  the core. Quit does **not** clear `proxy_service_enabled`.
 - Apply while Running re-syncs the OS proxy **only if** it is already applied on disk (port change).
 - If enable fails after the core is Running: keep `Running`, surface a warning; mixed inbound stays usable.
 
@@ -310,7 +323,11 @@ separately from the core:
 7. status = Running
 ```
 
-System proxy is **not** part of this sequence. See §8.1b / §7.2.
+System proxy is **not** part of this sequence. See §8.1b / §7.2. App launch always runs this
+sequence in the background, **after** leftover reclaim and crash recovery on the same worker
+(§10 / §24.4). When `proxy_service_enabled` is true, the first UI frame then continues with
+§8.1b Enable (`restore_launch_proxy`); that call waits on the orchestrate lock if reclaim or
+`start_core` is still in flight.
 
 ### 8.1b Enable / disable system proxy (home page)
 
@@ -393,7 +410,8 @@ This document locks in "SIGHUP hot reload first, process restart on failure".
 
 ## 10. Crash recovery
 
-On app startup (`src-tauri` setup, via `ice_proxy_sys::recover_if_applied`):
+On app launch (auto-start worker, after orphan-core reclamation, via
+`ice_proxy_sys::recover_if_applied`):
 
 1. Read `proxy-backup.json` (skip if missing)
 2. If `applied == true`: run `restore`; on success set `applied = false` and write back atomically (**do not delete the file**)
@@ -653,9 +671,11 @@ Interface: `backup` / `apply` / `restore`.
 
 ### 13.4 Relationship to "local-only mixed"
 
-The system proxy points at `127.0.0.1:mixed_port`. Opening the app starts the **core only**;
-the home page **启动代理服务** / **停止代理服务** toggles the OS system proxy while the core
-stays up. Quitting the app restores the system proxy (if applied) and then stops the core.
+The system proxy points at `127.0.0.1:mixed_port`. Opening the app starts the core immediately
+and, after the first UI frame when `proxy_service_enabled` is true, restores the last capture
+backend. The home page **启动代理服务** / **停止代理服务** toggles capture while the core stays
+up. Quitting the app restores the system proxy (if applied) and then stops the core, without
+clearing the start-on-launch flag.
 
 ---
 
@@ -678,8 +698,9 @@ Conventions:
 
 | Command | Description |
 |---------|-------------|
-| `start_core` | §8.1 — app-launch path; core only |
+| `start_core` | §8.1 — app-launch path; core only, no capture |
 | `start` | §8.1b enable — ensure core Running, then start the configured capture backend (system proxy, or TUN when `tun.enabled`, plan §2) |
+| `restore_launch_proxy` | First UI frame: if `proxy_service_enabled`, run `start`; otherwise no-op. StrictMode remounts are ignored |
 | `stop_system_proxy` | §8.1b disable — disable whichever capture backend is active (restore OS proxy or release TUN); keep core Running |
 | `recover_tun` | plan §4.3 — on-demand TUN recovery retry (journal recovery driver; never enables capture); returns an optional warning when cleanup is still uncertain |
 | `stop` | §8.2 — app quit: disable TUN capture first, restore OS proxy if applied, then kill core |
@@ -741,7 +762,8 @@ apps/desktop/src/
 v1 minimal UI set:
 
 - Core follows the app (auto-start on launch, stop on quit); home **启动代理服务** /
-  **停止代理服务** toggle OS system proxy only; quit restores proxy if still applied
+  **停止代理服务** toggle capture and persist `proxy_service_enabled` so the next launch
+  restores an on service after the first UI frame; quit restores proxy if still applied
 - Subscription list: name, format, node count / policy group count / rule count / DNS marker, last update, error, **active switch (single-select)**, parse_warnings, update/delete
 - Import input (URL)
 - Read-only log tail
@@ -832,7 +854,7 @@ have landed. TUN capture is §24; platform locks live in `docs/tun.md`.
 | `ice-subscription` | sample JSON / Clash fixture detection and parsing |
 | `ice-core` | illegal state machine transitions; mock process can stand in for real sing-box |
 | `ice-proxy-sys` | platform tests marked `#[ignore]` or manual checklist; CI never touches the real system proxy by default |
-| `ice-config` / ice-box start | default `auto_set_system_proxy` is `false` (legacy field); Start never applies OS proxy; `create_system_proxy()` + defaults must not mutate the OS in CI (macOS/Windows live apply stays `#[ignore]`) |
+| `ice-config` / ice-box start | default `auto_set_system_proxy` is `false` (legacy field); Start never infers OS proxy from it; `proxy_service_enabled` default `false` (legacy `settings.json` stay core-only on launch); `create_system_proxy()` + defaults must not mutate the OS in CI (macOS/Windows live apply stays `#[ignore]`) |
 | Manual | Start then curl the mixed port; Stop then verify the system proxy is restored |
 
 `configs/examples/` serves as the fixture source.
@@ -1027,11 +1049,13 @@ tun_unavailable_reason: optional stable message
   never overwritten with stale data. Same ownership check applies to routes and adapter identity.
 - System-proxy recovery stays independent and keeps using `proxy-backup.json`; TUN state is
   never derived from it.
-- Startup recovery (inside the orchestration lock, after orphan-core reclamation): verify the
+- Startup recovery (inside the orchestration lock, after orphan-core reclamation on the
+  auto-start worker — not on the `setup` thread that blocks the window): verify the
   owner token (foreign journal → nothing touched) → resume the idempotent restore from
   `last_completed_step` → mark `clean` only after adapter/routes/DNS verification succeeds →
   otherwise persist `recovery_required` and block new TUN activation. Recovery never enables
-  capture, even when `settings.json` has `tun.enabled=true`.
+  capture, even when `settings.json` has `tun.enabled=true`. After recovery returns, the first
+  UI frame may still run `start_service` when `proxy_service_enabled` is true.
 
 ### 24.5 Platform locks (T0)
 

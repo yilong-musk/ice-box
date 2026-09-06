@@ -128,6 +128,12 @@ function App() {
   const bootLanguageRef = useRef(preference);
 
   useEffect(() => {
+    void api.restoreLaunchProxy().catch(() => {
+      // Home / status poll surfaces proxy_recovery_warning.
+    });
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     void api
       .getSettings()
@@ -181,15 +187,14 @@ function App() {
         // Background poll; tab pages surface their own errors.
       }
     };
-    void poll();
-    // The Home page polls the same status (plus nodes/settings) every 2s and
-    // reports it up via `onStatus`; skip the duplicate interval while Home is
-    // the active tab. Other tabs rely on this poll for the recovery banner.
+    // Home already polls status every 2s and reports it via `onStatus`.
+    // Skip a duplicate startup getStatus while Home is the active tab.
     if (tab === "home") {
       return () => {
         cancelled = true;
       };
     }
+    void poll();
     const id = window.setInterval(() => void poll(), 2000);
     return () => {
       cancelled = true;
