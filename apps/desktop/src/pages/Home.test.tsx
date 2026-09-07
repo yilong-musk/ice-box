@@ -1020,6 +1020,7 @@ describe("Home", () => {
       ...tunStatus,
       helper_supported: false,
       helper_installed: false,
+      tun_elevation_ready: false,
     });
     ensureTunElevation.mockResolvedValue(undefined);
 
@@ -1047,6 +1048,56 @@ describe("Home", () => {
       );
       expect(start).not.toHaveBeenCalled();
     });
+  });
+
+  it("skips the one-time elevation on the home page when the scheduled task is ready", async () => {
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      helper_supported: false,
+      helper_installed: false,
+      tun_elevation_ready: true,
+    });
+    ensureTunElevation.mockResolvedValue(undefined);
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: "TUN 模式" }));
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+    expect(ensureTunElevation).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("reports a cancelled one-time elevation on the home page", async () => {
@@ -1077,6 +1128,7 @@ describe("Home", () => {
       ...tunStatus,
       helper_supported: false,
       helper_installed: false,
+      tun_elevation_ready: false,
     });
     ensureTunElevation.mockRejectedValue("tun.elevation_cancelled: x");
 

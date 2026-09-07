@@ -239,7 +239,7 @@ const zh = {
   "settings.helperNeeded":
     "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）。本开关只决定下次启动走 TUN 还是系统代理",
   "settings.tunElevationDesc":
-    "TUN 需要在管理员（提权）上下文中运行：请以管理员身份重新启动 ice-box 后再开启，Windows 将弹出系统授权提示（UAC）",
+    "首次启用会弹出一次系统 UAC，用于创建计划任务 ice-box-tun；之后开关与启停都不再提权。本开关只决定下次启动走 TUN 还是系统代理",
   "settings.updateHelper": "更新辅助组件",
   "settings.installHelper": "安装辅助组件",
   "settings.uninstallHelper": "卸载辅助组件",
@@ -536,7 +536,7 @@ const en: Record<MessageKey, string> = {
   "settings.helperNeeded":
     "System permission required: install and authorize the helper first (a system authorization prompt will appear). This switch only chooses TUN vs the system proxy for the next start",
   "settings.tunElevationDesc":
-    "TUN must run in an elevated (administrator) context: restart ice-box as administrator before enabling it — Windows shows the system authorization prompt (UAC)",
+    "The first enable shows one UAC prompt to create the ice-box-tun scheduled task; later toggles and start/stop do not prompt. This switch only chooses TUN vs the system proxy for the next start",
   "settings.updateHelper": "Update Helper",
   "settings.installHelper": "Install Helper",
   "settings.uninstallHelper": "Uninstall Helper",

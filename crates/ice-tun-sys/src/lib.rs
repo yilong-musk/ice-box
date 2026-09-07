@@ -40,11 +40,11 @@ pub use backend::{
     TunConfig, TunHealth, TunStack,
 };
 #[cfg(target_os = "windows")]
-pub use coordinator::process_is_elevated;
+pub use coordinator::{process_is_elevated, run_elevated_wait};
 pub use coordinator::{
-    elevated_schtasks_script, schtasks_command_line, tun_task_create_args, tun_task_exists,
-    tun_task_pin_matches, CoreCoordinator, DeferredCoreCoordinator, SudoCoreCoordinator,
-    TUN_TASK_NAME,
+    quote_windows_args, schtasks_command_line, tun_task_exists, tun_task_has_pin,
+    tun_task_pin_matches, tun_task_xml_create_args, write_tun_task_xml, CoreCoordinator,
+    DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
 };
 pub use error::{TunError, TunErrorCode};
 pub use ice_tun_launcher::{format_tun_task_pin, sha256_of_file};
