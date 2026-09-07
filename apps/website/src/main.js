@@ -1,5 +1,9 @@
 import logoUrl from "../../desktop/src/assets/logo.png";
+import { version as appVersion } from "../../desktop/package.json";
 import "./style.css";
+
+/** Same source as the desktop app and the Live Demo title bar (`APP_VERSION`). */
+const displayVersion = `v${appVersion}`;
 
 const favicon = document.createElement("link");
 favicon.rel = "icon";
@@ -23,13 +27,13 @@ document.querySelector("#root").innerHTML = `
           <a class="text-link" href="https://github.com/yilong-musk/ice-box/releases/latest" target="_blank" rel="noreferrer">Download ↗</a>
         </div>
         <div class="hero-meta">
-          <span><b class="status-dot green"></b> v0.1.4</span>
+          <span><b class="status-dot green"></b> ${displayVersion}</span>
           <span>MIT licensed</span>
           <span>macOS · Windows</span>
         </div>
       </div>
     </section>
-    <section class="demo-section page-wrap" id="demo"><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small>live product demo</small></strong><span>v0.1.4</span></div><iframe title="ice-box real desktop frontend demo" src="./demo.html"></iframe></div></section>
+    <section class="demo-section page-wrap" id="demo"><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small>live product demo</small></strong><span>${displayVersion}</span></div><iframe title="ice-box real desktop frontend demo" src="./demo.html"></iframe></div></section>
   </main>
   <footer class="site-footer page-wrap"><span>© 2026 ice-box</span><a href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">github.com/yilong-musk/ice-box ↗</a></footer>
 `;

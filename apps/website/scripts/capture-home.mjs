@@ -21,6 +21,12 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const websiteDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(websiteDir, "../..");
 const outFile = path.join(repoRoot, "docs/images/home.png");
+const versionFile = path.join(repoRoot, "docs/images/home.version");
+const desktopPackageJson = path.join(repoRoot, "apps/desktop/package.json");
+
+function appVersion() {
+  return JSON.parse(fs.readFileSync(desktopPackageJson, "utf8")).version;
+}
 
 function waitForOutput(child, pattern, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -95,15 +101,18 @@ async function capture(baseUrl) {
   await new Promise((resolve) => setTimeout(resolve, 400));
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   await page.screenshot({ path: outFile, type: "png" });
+  const version = appVersion();
+  fs.writeFileSync(versionFile, `${version}\n`);
   await browser.close();
+  return version;
 }
 
 await ensureBuild();
 const preview = startPreview();
 try {
   await waitForOutput(preview, /Local:/, 30_000);
-  await capture(`http://127.0.0.1:${PREVIEW_PORT}`);
-  console.log(`Wrote ${path.relative(repoRoot, outFile)}`);
+  const version = await capture(`http://127.0.0.1:${PREVIEW_PORT}`);
+  console.log(`Wrote ${path.relative(repoRoot, outFile)} (${version})`);
 } finally {
   preview.kill("SIGTERM");
 }
