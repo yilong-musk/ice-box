@@ -69,6 +69,7 @@ const zh = {
   "common.empty": "（空）",
   "common.withIface": "（{iface}）",
   "common.withIfaceLabel": "接口 {iface}",
+  "common.dash": "—",
 
   // --- app shell ---
   "app.nav.home": "主页",
@@ -100,6 +101,13 @@ const zh = {
   "home.info.outbound": "当前出站",
   "home.info.inbound": "入站",
   "home.info.message": "消息",
+  "home.outboundTyped": "{tag}（{type}）",
+  "home.outboundGroupNow": "{tag} → {now}",
+  "home.coreStatus.running": "运行中",
+  "home.coreStatus.stopped": "已停止",
+  "home.coreStatus.starting": "启动中",
+  "home.coreStatus.stopping": "停止中",
+  "home.coreStatus.error": "出错",
   "home.power.start": "启动代理服务",
   "home.power.stop": "停止代理服务",
   "home.power.busy": "处理中…",
@@ -184,6 +192,7 @@ const zh = {
   "subs.summaryNodes": "{n} 节点",
   "subs.summaryGroups": "{n} 策略组",
   "subs.summaryRules": "{n} 规则",
+  "subs.hasDns": "DNS",
   "subs.deleteTitle": "删除订阅",
   "subs.deleteConfirm": "确认删除订阅「{name}」？",
   "subs.unknownError": "未知错误",
@@ -211,6 +220,7 @@ const zh = {
 
   // --- logs page ---
   "logs.empty": "（空）",
+  "logs.clear": "清空日志",
 
   // --- settings page ---
   "settings.appearance": "外观",
@@ -257,6 +267,9 @@ const zh = {
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.autoDefaultRulesDesc":
     "订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP / 国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS 分流",
+  "settings.coreLogLevel": "详细核心日志（info）",
+  "settings.coreLogLevelDesc":
+    "默认 warn，减少长期运行占盘；调试时打开 info，变更会在下次应用配置后生效",
   "settings.openDataDir": "打开数据目录",
   "settings.helperStatusUnconfirmed":
     "辅助组件状态未确认，未更改 TUN 设置；请稍后重试",
@@ -342,6 +355,43 @@ const zh = {
   "ruleType.user": "用户",
   "ruleType.other": "其他",
 
+  // --- IPC errors (FE-5) ---
+  "error.core.not_found": "找不到内核",
+  "error.core.spawn_failed": "内核启动失败",
+  "error.core.healthcheck_failed": "内核健康检查失败",
+  "error.core.invalid_state": "内核状态无效",
+  "error.core.adopt_rejected": "无法接管已有内核进程",
+  "error.core.api_failed": "内核接口请求失败",
+  "error.config.empty_outbounds": "没有可用出站",
+  "error.config.invalid": "配置无效",
+  "error.proxy.apply_failed": "系统代理设置失败",
+  "error.proxy.apply_failed_core_reloaded": "系统代理设置失败（内核已重载）",
+  "error.proxy.restore_failed": "系统代理恢复失败",
+  "error.sub.fetch_failed": "订阅下载失败",
+  "error.sub.unknown_format": "无法识别的订阅格式",
+  "error.sub.parse_failed": "订阅解析失败",
+  "error.sub.empty": "订阅为空",
+  "error.sub.not_found": "找不到该订阅",
+  "error.sub.io": "订阅读写失败",
+  "error.app.lock_poisoned": "内部状态已损坏",
+  "error.tun.not_supported": "当前平台不支持 TUN",
+  "error.tun.permission_required": "需要系统权限才能启用 TUN",
+  "error.tun.apply_failed": "TUN 启用失败",
+  "error.tun.restore_failed": "TUN 恢复失败",
+  "error.tun.healthcheck_failed": "TUN 健康检查失败",
+  "error.tun.recovery_required": "TUN 需要先恢复",
+  "error.tun.invalid_argument": "TUN 参数无效",
+  "error.tun.config_rejected": "已拒绝不安全的 TUN 配置",
+  "error.tun.helper_stale": "辅助组件版本过旧",
+  "error.tun.helper_install_failed": "辅助组件安装失败",
+  "error.tun.helper_install_cancelled": "已取消安装辅助组件",
+  "error.tun.helper_not_ready": "辅助组件未就绪",
+  "error.tun.elevation_cancelled": "已取消管理员授权",
+  "error.update.check_failed": "检查更新失败",
+  "error.update.feed_unavailable": "更新目录暂不可用",
+  "error.update.install_failed": "安装更新失败",
+  "error.update.disabled": "已关闭应用更新",
+
   // --- delay ---
   "delay.failed": "失败",
 } as const;
@@ -364,6 +414,7 @@ const en: Record<MessageKey, string> = {
   "common.empty": "(empty)",
   "common.withIface": " ({iface})",
   "common.withIfaceLabel": "interface {iface}",
+  "common.dash": "—",
 
   // --- app shell ---
   "app.nav.home": "Home",
@@ -395,6 +446,13 @@ const en: Record<MessageKey, string> = {
   "home.info.outbound": "Outbound",
   "home.info.inbound": "Inbound",
   "home.info.message": "Message",
+  "home.outboundTyped": "{tag} ({type})",
+  "home.outboundGroupNow": "{tag} → {now}",
+  "home.coreStatus.running": "Running",
+  "home.coreStatus.stopped": "Stopped",
+  "home.coreStatus.starting": "Starting",
+  "home.coreStatus.stopping": "Stopping",
+  "home.coreStatus.error": "Error",
   "home.power.start": "Start Proxy Service",
   "home.power.stop": "Stop Proxy Service",
   "home.power.busy": "Working…",
@@ -481,6 +539,7 @@ const en: Record<MessageKey, string> = {
   "subs.summaryNodes": "{n} nodes",
   "subs.summaryGroups": "{n} groups",
   "subs.summaryRules": "{n} rules",
+  "subs.hasDns": "DNS",
   "subs.deleteTitle": "Delete Subscription",
   "subs.deleteConfirm": "Delete subscription “{name}”?",
   "subs.unknownError": "Unknown error",
@@ -508,6 +567,7 @@ const en: Record<MessageKey, string> = {
 
   // --- logs page ---
   "logs.empty": "(empty)",
+  "logs.clear": "Clear logs",
 
   // --- settings page ---
   "settings.appearance": "Appearance",
@@ -554,6 +614,9 @@ const en: Record<MessageKey, string> = {
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.autoDefaultRulesDesc":
     "When a subscription carries no rules (e.g. share-link subscriptions), built-in split routing is attached automatically: private IPs / China IPs / China domains go direct and the rest goes through the selected node, with matching China / remote DNS split",
+  "settings.coreLogLevel": "Verbose core logs (info)",
+  "settings.coreLogLevelDesc":
+    "Default is warn to limit disk growth; turn on info for debug sessions. Takes effect after the next config apply",
   "settings.openDataDir": "Open Data Directory",
   "settings.helperStatusUnconfirmed":
     "Helper status unconfirmed; TUN settings unchanged. Try again later",
@@ -640,6 +703,44 @@ const en: Record<MessageKey, string> = {
   "ruleType.clashMode": "Clash Mode",
   "ruleType.user": "User",
   "ruleType.other": "Other",
+
+  // --- IPC errors (FE-5) ---
+  "error.core.not_found": "Core binary not found",
+  "error.core.spawn_failed": "Failed to start the core",
+  "error.core.healthcheck_failed": "Core health check failed",
+  "error.core.invalid_state": "Core is in an invalid state",
+  "error.core.adopt_rejected": "Cannot adopt the existing core process",
+  "error.core.api_failed": "Core API request failed",
+  "error.config.empty_outbounds": "No usable outbounds",
+  "error.config.invalid": "Configuration is invalid",
+  "error.proxy.apply_failed": "Failed to apply system proxy",
+  "error.proxy.apply_failed_core_reloaded":
+    "Failed to apply system proxy (core already reloaded)",
+  "error.proxy.restore_failed": "Failed to restore system proxy",
+  "error.sub.fetch_failed": "Failed to download the subscription",
+  "error.sub.unknown_format": "Unrecognized subscription format",
+  "error.sub.parse_failed": "Failed to parse the subscription",
+  "error.sub.empty": "Subscription is empty",
+  "error.sub.not_found": "Subscription not found",
+  "error.sub.io": "Subscription I/O failed",
+  "error.app.lock_poisoned": "Internal state is corrupted",
+  "error.tun.not_supported": "TUN is not supported on this platform",
+  "error.tun.permission_required": "System permission is required to enable TUN",
+  "error.tun.apply_failed": "Failed to enable TUN",
+  "error.tun.restore_failed": "Failed to restore TUN",
+  "error.tun.healthcheck_failed": "TUN health check failed",
+  "error.tun.recovery_required": "TUN must be recovered first",
+  "error.tun.invalid_argument": "TUN argument is invalid",
+  "error.tun.config_rejected": "Rejected an unsafe TUN configuration",
+  "error.tun.helper_stale": "Helper component is out of date",
+  "error.tun.helper_install_failed": "Failed to install the helper",
+  "error.tun.helper_install_cancelled": "Helper install was cancelled",
+  "error.tun.helper_not_ready": "Helper is not ready",
+  "error.tun.elevation_cancelled": "Administrator authorization was cancelled",
+  "error.update.check_failed": "Failed to check for updates",
+  "error.update.feed_unavailable": "Update catalog is not available yet",
+  "error.update.install_failed": "Failed to install the update",
+  "error.update.disabled": "App updates are disabled",
 
   // --- delay ---
   "delay.failed": "Failed",

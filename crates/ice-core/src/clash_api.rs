@@ -22,12 +22,19 @@ pub const CLASH_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Per-second delta from `GET /traffic` (`{"up": bytes, "down": bytes}`).
 pub const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(3);
 
+fn clash_api_err(path: &str, detail: impl std::fmt::Display) -> CoreError {
+    CoreError::ClashApi {
+        path: path.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
 fn ensure_loopback(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
     if !is_loopback_host(&endpoints.host) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api host must be loopback, got {}",
-            endpoints.host
-        )));
+        return Err(clash_api_err(
+            "/",
+            format!("clash api host must be loopback, got {}", endpoints.host),
+        ));
     }
     Ok(())
 }
@@ -61,23 +68,25 @@ fn shared_agent() -> ureq::Agent {
 fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .get(&url)
-        .call()
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api GET {path}: {e}")))?;
+    let response = agent.get(&url).call().map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     let mut body = String::new();
     response
         .into_reader()
         .take(256 * 1024)
         .read_to_string(&mut body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api read: {e}")))?;
+        .map_err(|e| clash_api_err(path, format!("read: {e}")))?;
     if !(200..300).contains(&status) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api GET {path} HTTP {status}: {body}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {body}")));
     }
     Ok(body)
+}
+
+/// `GET /version` — used by the health probe to prove the Clash API is the
+/// sing-box we started, not some other process that merely owns the port.
+pub fn probe_version(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+    let _body = clash_get(endpoints, "/version")?;
+    Ok(())
 }
 
 fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
@@ -87,14 +96,12 @@ fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result
         .put(&url)
         .set("Content-Type", "application/json")
         .send_string(json)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api PUT {path}: {e}")))?;
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
         let mut text = String::new();
         let _ = response.into_reader().take(512).read_to_string(&mut text);
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api PUT {path} HTTP {status}: {text}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
     }
     Ok(())
 }
@@ -106,14 +113,12 @@ fn clash_patch_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Resu
         .patch(&url)
         .set("Content-Type", "application/json")
         .send_string(json)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api PATCH {path}: {e}")))?;
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
         let mut text = String::new();
         let _ = response.into_reader().take(512).read_to_string(&mut text);
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api PATCH {path} HTTP {status}: {text}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
     }
     Ok(())
 }
@@ -138,7 +143,7 @@ pub fn proxy_delay(
     );
     let body = clash_get(endpoints, &path)?;
     let parsed: DelayResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash delay parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err(&path, format!("delay parse: {e}; body={body}")))?;
     Ok(parsed.delay)
 }
 
@@ -168,7 +173,7 @@ struct ConfigsResponse {
 pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     let body = clash_get(endpoints, "/configs")?;
     let parsed: ConfigsResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash configs parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err("/configs", format!("parse: {e}; body={body}")))?;
     Ok(parsed.mode)
 }
 
@@ -214,7 +219,7 @@ struct ProxyInfo {
 pub fn proxy_groups(endpoints: &HealthEndpoints) -> Result<Vec<GroupState>, CoreError> {
     let body = clash_get(endpoints, "/proxies")?;
     let parsed: ProxiesResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash proxies parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err("/proxies", format!("parse: {e}; body={body}")))?;
     Ok(proxy_groups_filter(parsed.proxies))
 }
 
@@ -265,7 +270,7 @@ pub fn traffic_sample(endpoints: &HealthEndpoints) -> Result<TrafficSample, Core
         found = Some(sample);
         false
     })?;
-    found.ok_or_else(|| CoreError::SpawnFailed("clash traffic stream ended without sample".into()))
+    found.ok_or_else(|| clash_api_err("/traffic", "stream ended without sample"))
 }
 
 /// Follow Clash `GET /traffic` and invoke `on_sample` for each JSON tick.
@@ -291,12 +296,10 @@ pub(crate) fn traffic_foreach(
     let response = agent
         .get(&url)
         .call()
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api GET /traffic: {e}")))?;
+        .map_err(|e| clash_api_err("/traffic", e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api GET /traffic HTTP {status}"
-        )));
+        return Err(clash_api_err("/traffic", format!("HTTP {status}")));
     }
     let reader = BufReader::new(response.into_reader());
     for line in reader.lines() {
@@ -307,7 +310,7 @@ pub(crate) fn traffic_foreach(
             // instead of a clean EOF. The follow legitimately ends there.
             Err(err) if traffic_stream_ended(&err) => break,
             Err(err) => {
-                return Err(CoreError::SpawnFailed(format!("clash traffic read: {err}")));
+                return Err(clash_api_err("/traffic", format!("read: {err}")));
             }
         };
         let trimmed = line.trim();
@@ -495,6 +498,14 @@ impl MockClashApi {
                                     "mode-list": ["Rule", "Global", "Direct"],
                                 })
                                 .to_string();
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                )
+                            }
+                            ("GET", "/version") if is_2xx => {
+                                let body = r#"{"version":"1.13.19"}"#;
                                 format!(
                                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                     body.len(),

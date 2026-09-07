@@ -2,6 +2,7 @@
 
 //! Disk layout under `subscriptions/` (architecture §6).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -70,11 +71,13 @@ impl SubscriptionPaths {
 pub fn load_index(paths: &SubscriptionPaths) -> Result<SubscriptionIndex, SubscriptionError> {
     let path = paths.index();
     if !path.exists() {
+        recover_subscription_dirs(paths);
         return Ok(SubscriptionIndex::default());
     }
     let raw = fs::read_to_string(&path)?;
     let mut index: SubscriptionIndex = serde_json::from_str(&raw)?;
     migrate_index_active(&mut index);
+    recover_subscription_dirs(paths);
     Ok(index)
 }
 
@@ -112,10 +115,85 @@ fn commit_staged_subscription(
 
     let final_dir = paths.sub_dir(id);
     if final_dir.exists() {
-        fs::remove_dir_all(&final_dir)?;
+        let ts = Utc::now().format("%Y%m%d%H%M%S%.f");
+        let old = old_profile_dir(paths, id, &ts.to_string());
+        fs::rename(&final_dir, &old).map_err(SubscriptionError::Io)?;
+        if let Err(err) = fs::rename(&staging, &final_dir) {
+            let _ = fs::rename(&old, &final_dir);
+            return Err(SubscriptionError::Io(err));
+        }
+        let _ = fs::remove_dir_all(&old);
+    } else if let Err(err) = fs::rename(&staging, &final_dir) {
+        return Err(SubscriptionError::Io(err));
     }
-    fs::rename(&staging, &final_dir).map_err(SubscriptionError::Io)?;
+    sweep_old_profile_dirs(paths, Some(id));
     Ok(())
+}
+
+fn old_profile_dir(paths: &SubscriptionPaths, id: Uuid, ts: &str) -> PathBuf {
+    paths.root().join(format!("{id}.old-{ts}"))
+}
+
+fn parse_old_profile_dir(name: &str) -> Option<Uuid> {
+    let (id, rest) = name.split_once(".old-")?;
+    if rest.is_empty() {
+        return None;
+    }
+    Uuid::parse_str(id).ok()
+}
+
+/// Restore `final` from `*.old-*` leftovers after a crash between renames,
+/// and drop leftover `.old-*` dirs when `final` already exists.
+pub fn recover_subscription_dirs(paths: &SubscriptionPaths) {
+    sweep_old_profile_dirs(paths, None);
+}
+
+fn sweep_old_profile_dirs(paths: &SubscriptionPaths, only: Option<Uuid>) {
+    let Ok(entries) = fs::read_dir(paths.root()) else {
+        return;
+    };
+    let mut by_id: HashMap<Uuid, Vec<PathBuf>> = HashMap::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(id) = parse_old_profile_dir(name) else {
+            continue;
+        };
+        if only.is_some_and(|want| want != id) {
+            continue;
+        }
+        by_id.entry(id).or_default().push(entry.path());
+    }
+    for (id, mut olds) in by_id {
+        olds.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        let final_dir = paths.sub_dir(id);
+        let mut rest = olds.as_slice();
+        if !final_dir.exists() {
+            if let Some((newest, tail)) = rest.split_first() {
+                match fs::rename(newest, &final_dir) {
+                    Ok(()) => {
+                        tracing::warn!(
+                            id = %id,
+                            "restored subscription profile from leftover .old dir"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            id = %id,
+                            error = %err,
+                            "failed to restore subscription profile from leftover .old dir"
+                        );
+                    }
+                }
+                rest = tail;
+            }
+        }
+        for old in rest {
+            let _ = fs::remove_dir_all(old);
+        }
+    }
 }
 
 /// Index mutation half of [`write_subscription_success`] (no `index.json`
@@ -463,6 +541,54 @@ mod tests {
         assert!(!paths.staging_dir(id).exists());
         let index = load_index(&paths).unwrap();
         assert_eq!(index.items.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recover_restores_profile_when_crash_leaves_only_old_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-store-old-recover-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: crate::SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+            tag: "kept".into(),
+            outbound: serde_json::json!({"type":"direct","tag":"kept"}),
+        }]);
+        write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
+
+        let final_dir = paths.sub_dir(id);
+        let old = paths.root().join(format!("{id}.old-crash"));
+        std::fs::rename(&final_dir, &old).unwrap();
+        assert!(!final_dir.exists(), "crash window: final is gone");
+        assert!(old.exists());
+
+        recover_subscription_dirs(&paths);
+        let loaded = read_profile(&paths, id).expect("profile restored from .old");
+        assert_eq!(loaded.nodes[0].tag, "kept");
+        assert!(!old.exists(), "restored .old dir is consumed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

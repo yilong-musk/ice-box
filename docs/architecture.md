@@ -136,11 +136,13 @@ ice-box/
 │   ├── ice-core/
 │   ├── ice-proxy-sys/
 │   ├── ice-tun-sys/              # TUN ownership, platform permission, recovery journal (§24.4)
+│   ├── ice-tun-pin/              # host-free Windows TUN task pin (sha256 / XML)
 │   ├── ice-tun-launcher/         # Windows scheduled-task elevated core runner
 │   ├── ice-helper/               # macOS privileged helper daemon
 │   ├── ice-elevate/              # macOS AuthorizationServices install prompt
 │   ├── ice-config/
 │   ├── ice-subscription/
+│   ├── ice-types/                # ErrorCode / HostPlatform / engine pin (no I/O)
 │   └── ice-engine/               # config engine facade (§22)
 ├── third_party/sing-box/
 ├── configs/examples/
@@ -157,13 +159,19 @@ ice-box (src-tauri)
   ├── ice-core
   ├── ice-proxy-sys
   ├── ice-tun-sys               # TUN journal + platform backend; never touches system proxy
+  │     └── ice-tun-pin         # Windows scheduled-task pin helpers (also used by ice-tun-launcher)
+  ├── ice-engine                # config / subscription facade (§22)
   ├── ice-config
   └── ice-subscription
         └── ice-config          # shared types such as NormalizedOutbound only
 
 ice-engine                      # facade over ice-config + ice-subscription (§22)
+  ├── ice-types
   ├── ice-config
   └── ice-subscription
+
+ice-config
+  └── ice-types                 # ErrorCode / HostPlatform / ENGINE_COMPAT_CORE_VERSION
 
 ice-core ──×── ice-subscription   # no direct dependency; orchestrated by the shell
 ice-proxy-sys ──×── ice-core
@@ -171,7 +179,9 @@ ice-tun-sys ──×── ice-core        # no direct dependency; orchestrated 
 ice-tun-sys ──×── ice-proxy-sys   # TUN state never reuses system-proxy backup data
 ```
 
-If shared DTOs keep growing, extract `ice-types`; for v1 they stay in `ice-config`.
+`ice-types` holds IPC DTOs with no I/O and no `cfg(target_os)`. `AppPaths` /
+`AppSettings` and pid/logging stay in `ice-config` so `ice-core` can use them
+without depending on `ice-engine` (which would pull in `ice-subscription`).
 
 ---
 
@@ -198,7 +208,6 @@ Root path:
 │   └── <uuid>/
 │       ├── meta.json             # redundant copy matching the index entry (for per-entry repair)
 │       ├── raw                     # raw bytes of the last successful fetch (no extension or .txt)
-│       ├── nodes.json              # normalized NormalizedOutbound[] cache
 │       └── profile.json            # full normalized result (nodes + policy groups + route + dns + parse_stats)
 ├── geoip/                         # bundled geoip-{code}.srs rule-sets (for routing GEOIP)
 └── logs/
@@ -256,7 +265,7 @@ Root path:
 
 - All JSON is written to a temp file first, then `rename`d (atomic replacement where possible).
 - Trigger reload only after `config.json` was updated successfully.
-- Subscription updates: write `raw` + `nodes.json` first, then update `index.json`.
+- Subscription updates: write `raw` + **profile.json** first, then update `index.json`.
 
 ---
 
@@ -391,13 +400,14 @@ whole service from the same config path (PID unchanged, listen port briefly rebu
 |------|----------|
 | Method | Unix: send **SIGHUP** to the sing-box subprocess (`ice_core::SignalReloader`); Windows: go straight to §9.2 restart |
 | Trigger | call `core.reload()` after writing the new `config.json` (rule/subscription changes) |
-| After success | TCP healthcheck against the clash API port again (same as §16.1) |
-| Mode switch | **not** a reload — switched live via Clash API `PATCH /configs` (Slice 4c, §12.2), same on every platform |
+| After success | TCP + Clash API `GET /version` healthcheck against the clash API port (same as §16.1) |
+| Mode switch | rebuild `config.json` (new `default_mode`) then `core.reload()` (SIGHUP / restart); see §12.4 |
 
-**Reload surface = rule/subscription/settings changes only.** Routing mode (Rule/Global/Direct)
-never rebuilds the config or touches the process: the generated config always carries the
-`clash_mode` rules and the runtime mode is switched with `PATCH /configs` (works identically on
-macOS and Windows, no restart needed on either platform).
+**Reload surface = rule/subscription/settings changes and routing-mode switches.** Routing
+mode (Rule/Global/Direct) is baked into `experimental.clash_api.default_mode` at build time.
+The pinned sing-box 1.13.19 does not honour live `PATCH /configs` mode changes (empty
+runtime `mode-list`), so every switch rebuilds + reloads. A `PATCH` is still attempted as a
+forward-compatible capability gate; it never fires against the pinned core.
 
 ### 9.2 Fallback
 
@@ -455,7 +465,7 @@ Do not silently re-`apply` the system proxy without the user knowing.
 3. If the body looks like base64 and decodes to Clash/YAML or JSON, re-detect on the decoded result
 4. `detect_format`: **JSON with `outbounds`/`endpoints` → sing-box**; otherwise Clash markers; otherwise Unknown → fail
 5. `parse_*` → `NormalizedProfile` (nodes + policy groups + routing + DNS); empty nodes fail, **no success state is written**
-6. Persist raw / nodes.json / **profile.json** / meta; the first imported subscription automatically becomes **active**
+6. Persist raw / **profile.json** / meta; the first imported subscription automatically becomes **active**
 7. Call Apply to generate `config.json` (hot reload if the user is Running)
 
 Naming: user-specified, otherwise from the `content-disposition` response header / URL path / `subscription-<short id>`.
@@ -690,7 +700,9 @@ Conventions:
 
 - Success returns structured JSON
 - Failure uniformly returns `{ "code": string, "message": string }` (locked; Rust: `ice_config::AppError`)
-- `code` values in §17; commands hold the main-thread lock briefly; blocking IO (HTTP, spawn) uses async / `spawn_blocking`
+- `code` values in §17 (`ice_config::ErrorCode`; frontend `apps/desktop/src/api/errorCodes.ts`)
+- Status reads an immutable core snapshot and never waits on start/stop; the shell emits `core://status-changed` on publish
+- Commands hold the main-thread lock briefly; blocking IO (HTTP, spawn) uses async / `spawn_blocking`
 
 ### 14.1 Existing
 
@@ -717,7 +729,8 @@ Conventions:
 
 | Command | Description |
 |---------|-------------|
-| `get_settings` / `save_settings` | write `settings.json`; Apply if Running |
+| `get_settings` / `save_settings` | `save_settings` takes a `SettingsPatch` (omitted fields keep the on-disk value). Apply if Running |
+| `get_traffic_snapshot` / `get_traffic_since` | rolling `/traffic` window; `get_traffic_since` returns only samples newer than `cursor` |
 | `check_app_update` | `{ background }` → `{ available, version, notes, skipped, should_prompt }` (§25; `should_prompt` is always false) |
 | `record_update_prompt` | persist `last_prompt_at` in `update-check.json` |
 | `skip_app_update` | `{ version }` persist `skipped_version` |
@@ -762,6 +775,8 @@ apps/desktop/src/
 ├── main.tsx
 ├── App.tsx                 # layout: status bar + pages; sidebar update indicator
 ├── api/tauri.ts            # invoke wrapper and types
+├── api/errorCodes.ts       # generated-from-Rust ErrorCode strings (ARCH-3)
+├── lib/runtimeStore.tsx    # shared status poller (visibility + core events)
 ├── pages/Home.tsx          # core status, system-proxy enable/disable, current node, errors
 ├── pages/Subscriptions.tsx
 ├── pages/Logs.tsx
@@ -813,13 +828,19 @@ A successful healthcheck may log one info line: `sing-box ready on 127.0.0.1:178
 | `core.spawn_failed` | failed to launch |
 | `core.healthcheck_failed` | healthcheck failed |
 | `core.invalid_state` | illegal state transition |
+| `core.adopt_rejected` | adopt refused a pid that is not the bundled core |
+| `core.api_failed` | Clash API request failed |
 | `config.empty_outbounds` | no usable nodes (selection/test paths; Start/Apply fall back to direct-only) |
 | `config.invalid` | generation/validation failed |
 | `proxy.apply_failed` / `proxy.restore_failed` | system proxy |
+| `proxy.apply_failed_core_reloaded` | proxy apply failed after a successful core reload |
 | `sub.fetch_failed` | network/timeout |
 | `sub.unknown_format` | unrecognized format |
 | `sub.parse_failed` | parse failed |
 | `sub.empty` | no nodes |
+| `sub.not_found` / `sub.io` | missing subscription / store IO |
+| `app.lock_poisoned` | internal mutex poisoned |
+| `update.check_failed` / `update.feed_unavailable` / `update.install_failed` / `update.disabled` | in-app updater |
 
 TUN capture codes (TUN slice, §24):
 
@@ -831,15 +852,26 @@ TUN capture codes (TUN slice, §24):
 | `tun.restore_failed` | capture restore failed |
 | `tun.healthcheck_failed` | adapter / route / DNS / control-path readiness disagreed |
 | `tun.recovery_required` | cleanup unverified; fail-closed until explicit recovery |
+| `tun.invalid_argument` | helper argument failed validation before privileged work |
+| `tun.config_rejected` | elevated start refused config after the content allowlist |
+| `tun.helper_stale` / `tun.helper_install_failed` / `tun.helper_install_cancelled` / `tun.helper_not_ready` | macOS helper install / version drift |
+| `tun.elevation_cancelled` | Windows one-time UAC cancelled |
 
-UI shows `message`, developers rely on `code`. IPC failure body shape in §14 (`{ code, message }` locked).
+The Rust enum `ice_config::ErrorCode` is the single IPC source of truth (including `tun.*` / `update.*`). `TunErrorCode` in `ice-tun-sys` maps onto those variants at the shell boundary. The desktop UI types `apps/desktop/src/api/errorCodes.ts` against the same strings.
+
+UI shows a localized summary for known codes (`error.*` keys) plus the
+stable `code`; unknown codes still render as `code: message`. Developers
+rely on `code`. IPC failure body shape in §14 (`{ code, message }` locked).
 
 ---
 
 ## 18. Security
 
 - clash API and mixed inbound are `127.0.0.1` only by default
-- Subscription requests validate TLS certificates (default reqwest / system roots)
+- Subscription requests validate TLS certificates with a cached rustls
+  `ClientConfig` and the OS trust store (`rustls-platform-verifier`); gzip
+  response bodies are decoded. Mixed inbound / updater HTTP is separate
+  (ureq / reqwest).
 - Never execute arbitrary scripts from subscriptions; parse data only
 - Tauri CSP: tightened for production; no dangerous shell plugins unless reveal-dir requires it
 - Config file permissions: user-private on macOS (default umask)
@@ -877,7 +909,7 @@ have landed. TUN capture is §24; platform locks live in `docs/tun.md`.
 **Details to write back into this document during implementation:**
 
 - ~~Bundled sing-box **exact version**~~ → **written in §4.3 / this table**: `1.13.19`
-- ~~reload HTTP method and path~~ → **written in §9.1**: `PUT /configs?force=true`
+- ~~reload HTTP method and path~~ → **written in §9.1**: Unix **SIGHUP** (pid unchanged) + Clash `GET /version`; Windows restarts the process. `PUT /configs?force=true` is a no-op on 1.13.19.
 - Clash supported protocol checklist → **written in §11.4**: ss / vmess / trojan / socks / http
 - ~~final JSON of the minimal DNS config~~ → **written in §12.2**: `type: local` / `final: local`
 - ~~Windows port release wait on restart~~ → **written in §9.2**: 500 ms
@@ -888,29 +920,38 @@ have landed. TUN capture is §24; platform locks live in `docs/tun.md`.
 ## 22. Config engine facade (ice-engine)
 
 `ice-engine` is the single cross-platform entry point for the config pipeline:
-**subscription body → normalized profile → final sing-box config**. It re-exports
-the engine surface from `ice-config` (build / validation / settings) and
-`ice-subscription` (import / parse / storage) and adds:
+**subscription body → normalized profile → final sing-box config**. The desktop
+shell depends on it for config generation (`build_config`,
+`build_direct_only_config`, `host_platform`). It re-exports the engine surface
+from `ice-config` (build / validation / settings) and `ice-subscription`
+(import / parse / storage) and adds:
 
 - `EngineError` unifying `ConfigError` and `SubscriptionError`
 - `import_subscription(raw)` → `(SubscriptionFormat, NormalizedProfile)`
 - `build_config(&BuildInput)` → `serde_json::Value`
 - `subscription_to_config(raw, template, geoip_dir)` → pretty JSON string
-- `ENGINE_COMPAT_CORE_VERSION` — the sing-box version the generator targets
+- `host_platform()` — compile-time target mapped to `HostPlatform` (the only
+  `cfg(target_os)` in this layer; `ice-config` / `ice-subscription` take the
+  enum as an argument)
+- `ENGINE_COMPAT_CORE_VERSION` — re-export of the pin in `ice-types`
   (`1.13.19`); bundled desktop binaries and any future embedded core must match
 
 Rules:
 
-1. Desktop shell may use the facade or the underlying crates directly; the facade
-   exists so future hosts (mobile apps embedding libsing-box) have one documented
-   API and cannot accidentally pull desktop-only crates (`ice-core`, `ice-proxy-sys`).
-2. The engine must stay free of platform dependencies (process / proxy / TUN live
+1. The desktop shell uses the facade for config generation. It may still
+   depend on `ice-config` / `ice-subscription` for settings paths and
+   subscription storage. Future hosts (mobile apps embedding libsing-box)
+   should go through the facade and must not pull desktop-only crates
+   (`ice-core`, `ice-proxy-sys`).
+2. The engine must stay free of platform I/O (process / proxy / TUN live
    in desktop crates). Verify with `cargo tree` after dependency changes.
 3. Supported platforms today are **macOS / Windows**. Cross-compilation checks for
    iOS / Android require those targets and an Android NDK; set them up only when
    mobile development starts.
-4. `ice_core::BUNDLED_SINGBOX_VERSION` mirrors `ice_config::ENGINE_COMPAT_CORE_VERSION`;
-   change the pin in the engine only.
+4. `ice_core::BUNDLED_SINGBOX_VERSION` mirrors
+   `ice_config::ENGINE_COMPAT_CORE_VERSION` (itself a re-export of `ice-types`)
+   so `ice-core` does not depend on `ice-engine`. Change the pin in `ice-types`
+   only.
 
 ---
 

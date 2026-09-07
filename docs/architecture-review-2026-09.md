@@ -1,10 +1,9 @@
 # Architecture and Implementation Review — September 2026
 
-Status: **Phase 0 and Phase 1 of the proposed fixes are implemented on this
-branch; remaining items are still Open.** Every item has a stable ID (`SEC-1`,
-`CORE-3`, …) so it can be referenced from issues, PRs and the CHANGELOG.
-When an item is fixed, mark it `Done (vX.Y.Z)` in the summary table rather
-than deleting it, so the review stays auditable.
+Status: **Phase 0–4 are done on this branch (unreleased).** Every item has a stable ID
+(`SEC-1`, `CORE-3`, …) so it can be referenced from issues, PRs and the
+CHANGELOG. When an item is fixed, mark it `Done (vX.Y.Z)` in the summary
+table rather than deleting it, so the review stays auditable.
 
 Companion documents: `architecture.md` (v1 spec), `tun.md` (TUN capture spec),
 `release-process.md`. File references below are `path:line` against commit
@@ -54,58 +53,58 @@ places.
 | SEC-4 | High | macOS helper | `SetDns` executes without validating `service`/`servers` | Done (unreleased) |
 | SEC-5 | Medium | macOS helper | Helper token file `0644`, plist `0644`, socket `0666` | Done (unreleased) |
 | SEC-6 | Medium | ice-core | `adopt_external` adopts any pid without identity check | Done (unreleased) |
-| SEC-7 | Low | macOS helper | `constant_time_eq` early-returns on length mismatch | Open |
+| SEC-7 | Low | macOS helper | `constant_time_eq` early-returns on length mismatch | Done (unreleased) |
 | SEC-8 | Low | ice-config | `force_tun_gate_ready` is a `pub`, process-global, irreversible test hook | Done (unreleased) |
 | CORE-1 | Medium | ice-core | `stop()` errors while `Stopping` (spec says stop is idempotent) | Done (unreleased) |
-| CORE-2 | Medium | ice-core | Health check is TCP-connect only | Open |
-| CORE-3 | Medium | ice-core | `PidProcess::try_wait` uses `kill(pid, 0)`; zombies look alive | Open |
-| CORE-4 | Medium | ice-core | Windows `pid_is_alive` treats `ACCESS_DENIED` as dead; `PidProcess` treats it as alive | Open |
-| CORE-5 | Medium | ice-core | `TrafficMonitor::ensure_thread` panics on poisoned slot and never recovers a dead supervisor | Open |
-| CORE-6 | Low | ice-core | `reclaim_orphan_cores_with_config` is a no-op on Windows | Open |
-| CORE-7 | Medium | ice-core / config | Neither `sing-box.log` nor `ice-box.log` rotates; core log level is `info` | Open |
-| CORE-8 | Low | ice-core | Clash API failures are reported as `CoreError::SpawnFailed` | Open |
-| ORCH-1 | Medium | src-tauri | `state.core` mutex is held for multi-second transitions; status polling blocks behind it | Open |
+| CORE-2 | Medium | ice-core | Health check is TCP-connect only | Done (unreleased) |
+| CORE-3 | Medium | ice-core | `PidProcess::try_wait` uses `kill(pid, 0)`; zombies look alive | Done (unreleased) |
+| CORE-4 | Medium | ice-core | Windows `pid_is_alive` treats `ACCESS_DENIED` as dead; `PidProcess` treats it as alive | Done (unreleased) |
+| CORE-5 | Medium | ice-core | `TrafficMonitor::ensure_thread` panics on poisoned slot and never recovers a dead supervisor | Done (unreleased) |
+| CORE-6 | Low | ice-core | `reclaim_orphan_cores_with_config` is a no-op on Windows | Done (unreleased) |
+| CORE-7 | Medium | ice-core / config | Neither `sing-box.log` nor `ice-box.log` rotates; core log level is `info` | Done (unreleased) |
+| CORE-8 | Low | ice-core | Clash API failures are reported as `CoreError::SpawnFailed` | Done (unreleased) |
+| ORCH-1 | Medium | src-tauri | `state.core` mutex is held for multi-second transitions; status polling blocks behind it | Done (unreleased) |
 | ORCH-2 | Low | src-tauri | Error classification by message substring (`"lock poisoned"`) | Done (unreleased) |
-| ORCH-3 | Medium | src-tauri / UI | `save_settings` takes whole-snapshot writes from two pages; last writer wins | Open |
+| ORCH-3 | Medium | src-tauri / UI | `save_settings` takes whole-snapshot writes from two pages; last writer wins | Done (unreleased) |
 | TUN-1 | High | ice-tun-sys (macOS) | `verify` treats a failed DNS probe as "consistent" | Done (unreleased) |
-| TUN-2 | Medium | ice-tun-sys | Journal write errors ignored in recovery | Open |
+| TUN-2 | Medium | ice-tun-sys | Journal write errors ignored in recovery | Done (unreleased) |
 | TUN-3 | Low | ice-config | `tun_network_cidr` accepts prefix > 32 / > 128 | Done (unreleased) |
-| CFG-1 | Medium | ice-config | `validate_config` only checks that `inbounds`/`outbounds` keys exist | Open |
-| CFG-2 | Medium | ice-config | Invalid `settings.json` makes `load_settings` fail hard; no fallback | Open |
-| CFG-3 | Low | ice-config | `restore_runtime_config_from_bak` uses non-atomic `fs::copy` | Open |
-| SUB-1 | High | ice-subscription | Profile commit is `remove_dir_all` then `rename`; crash in between loses the subscription | Open |
-| SUB-2 | Medium | ice-subscription | Clash >500 nodes is a hard error (spec: truncate + warn); sing-box JSON path has no caps | Open |
-| SUB-3 | Medium | ice-subscription | Custom HTTP/1.1 + rustls: webpki roots only, `ClientConfig` rebuilt per request, no gzip | Open |
-| SUB-4 | Medium | ice-subscription | Fetch worker `.expect()`s on a poisoned queue; a panic kills auto-update permanently | Open |
-| SUB-5 | Low | ice-subscription | `NoActiveSubscription` / `Io` mapped to `sub.fetch_failed` | Open |
-| SUB-6 | Low | ice-subscription | `PROFILE_LOAD_CACHE` is a process-global static and clones the whole profile on every hit | Open |
-| PROXY-1 | Medium | ice-proxy-sys | Corrupt `proxy-backup.json` reads as "not applied"; `recover_if_applied` errors instead — inconsistent, proxy may leak | Open |
-| PROXY-2 | Low | ice-proxy-sys (macOS) | Live probe = full `networksetup` backup (subprocess storm on cache miss) | Open |
-| ARCH-1 | Medium | workspace | `ice-config` is a shared kernel with platform `cfg`s; `ice-engine` façade is unused | Open |
-| ARCH-2 | Low | workspace | `ice-tun-sys` (lib) depends on `ice-tun-launcher` (bin crate) | Open |
-| ARCH-3 | Medium | workspace | Three error-code systems; ~39 string-literal `tun.*` codes | Open |
-| ARCH-4 | Low | workspace | Oversized files; tests inlined into production files | Open |
-| ARCH-5 | Low | ice-tun-sys | Four `start_with_config` implementations in `coordinator.rs` | Open |
-| PERF-1 | Low | ice-config | Deep clones and per-rule file stats on every Apply | Open |
-| PERF-2 | Medium | UI | Uncoordinated polling from four places; keeps running while hidden in tray | Open |
-| PERF-3 | Low | UI | Traffic chart refetches the full 120-point window every second | Open |
-| FE-1 | Medium | UI | No shared server-state layer; stale-response guard applied inconsistently | Open |
-| FE-2 | Low | UI | `Settings.tsx` ~1000 lines; reads status once, misses TUN transition states | Open |
-| FE-3 | Low | UI | `useCallback(fn, [])` over props that change every render (`Nodes.tsx`) | Open |
-| FE-4 | Low | UI | Unused `@tanstack/react-virtual`; `tailwindcss` in `dependencies` | Open |
-| FE-5 | Low | UI | i18n gaps: hardcoded punctuation/labels, raw enum display, English backend text in zh UI | Open |
-| FE-6 | Low | UI tests | Tests assert on zh copy and classNames | Open |
-| FE-7 | Low | website | `browser-api.ts` mirrors `api/tauri.ts` by hand | Open |
+| CFG-1 | Medium | ice-config | `validate_config` only checks that `inbounds`/`outbounds` keys exist | Done (unreleased) |
+| CFG-2 | Medium | ice-config | Invalid `settings.json` makes `load_settings` fail hard; no fallback | Done (unreleased) |
+| CFG-3 | Low | ice-config | `restore_runtime_config_from_bak` uses non-atomic `fs::copy` | Done (unreleased) |
+| SUB-1 | High | ice-subscription | Profile commit is `remove_dir_all` then `rename`; crash in between loses the subscription | Done (unreleased) |
+| SUB-2 | Medium | ice-subscription | Clash >500 nodes is a hard error (spec: truncate + warn); sing-box JSON path has no caps | Done (unreleased) |
+| SUB-3 | Medium | ice-subscription | Custom HTTP/1.1 + rustls: webpki roots only, `ClientConfig` rebuilt per request, no gzip | Done (unreleased) |
+| SUB-4 | Medium | ice-subscription | Fetch worker `.expect()`s on a poisoned queue; a panic kills auto-update permanently | Done (unreleased) |
+| SUB-5 | Low | ice-subscription | `NoActiveSubscription` / `Io` mapped to `sub.fetch_failed` | Done (unreleased) |
+| SUB-6 | Low | ice-subscription | `PROFILE_LOAD_CACHE` is a process-global static and clones the whole profile on every hit | Done (unreleased) |
+| PROXY-1 | Medium | ice-proxy-sys | Corrupt `proxy-backup.json` reads as "not applied"; `recover_if_applied` errors instead — inconsistent, proxy may leak | Done (unreleased) |
+| PROXY-2 | Low | ice-proxy-sys (macOS) | Live probe = full `networksetup` backup (subprocess storm on cache miss) | Done (unreleased) |
+| ARCH-1 | Medium | workspace | `ice-config` is a shared kernel with platform `cfg`s; `ice-engine` façade is unused | Done (unreleased) |
+| ARCH-2 | Low | workspace | `ice-tun-sys` (lib) depends on `ice-tun-launcher` (bin crate) | Done (unreleased) |
+| ARCH-3 | Medium | workspace | Three error-code systems; ~39 string-literal `tun.*` codes | Done (unreleased) |
+| ARCH-4 | Low | workspace | Oversized files; tests inlined into production files | Done (unreleased) |
+| ARCH-5 | Low | ice-tun-sys | Four `start_with_config` implementations in `coordinator.rs` | Done (unreleased) |
+| PERF-1 | Low | ice-config | Deep clones and per-rule file stats on every Apply | Done (unreleased) |
+| PERF-2 | Medium | UI | Uncoordinated polling from four places; keeps running while hidden in tray | Done (unreleased) |
+| PERF-3 | Low | UI | Traffic chart refetches the full 120-point window every second | Done (unreleased) |
+| FE-1 | Medium | UI | No shared server-state layer; stale-response guard applied inconsistently | Done (unreleased) |
+| FE-2 | Low | UI | `Settings.tsx` ~1000 lines; reads status once, misses TUN transition states | Done (unreleased) |
+| FE-3 | Low | UI | `useCallback(fn, [])` over props that change every render (`Nodes.tsx`) | Done (unreleased) |
+| FE-4 | Low | UI | Unused `@tanstack/react-virtual`; `tailwindcss` in `dependencies` | Done (unreleased) |
+| FE-5 | Low | UI | i18n gaps: hardcoded punctuation/labels, raw enum display, English backend text in zh UI | Done (unreleased) |
+| FE-6 | Low | UI tests | Tests assert on zh copy and classNames | Done (unreleased) |
+| FE-7 | Low | website | `browser-api.ts` mirrors `api/tauri.ts` by hand | Done (unreleased) |
 | CI-1 | High | CI | `cargo test --lib` never runs `crates/*/tests/*.rs` (~90 TUN integration tests) | Done (unreleased) |
-| CI-2 | Medium | CI | No `cargo audit` / `cargo deny` / `npm audit` | Open |
-| CI-3 | Low | build | No `rust-toolchain.toml`; no `[profile.release]` | Open |
-| CI-4 | Low | CI | Action versions inconsistent across workflows; no `concurrency` on ci/release | Open |
+| CI-2 | Medium | CI | No `cargo audit` / `cargo deny` / `npm audit` | Done (unreleased) |
+| CI-3 | Low | build | No `rust-toolchain.toml`; no `[profile.release]` | Done (unreleased) |
+| CI-4 | Low | CI | Action versions inconsistent across workflows; no `concurrency` on ci/release | Done (unreleased) |
 | CI-5 | High | packaging | `libcronet.dll` copied to `resources/` but not declared in `bundle.resources` | Done (unreleased) |
-| CI-6 | Low | repo | GeoIP rule-sets committed twice (30 + 30 files) | Open |
-| CI-7 | Low | release | Root `LICENSE` not uploaded although `release-process.md` says it is | Open |
-| CI-8 | Low | scripts | `fetch-geoip.sh` downloads without checksum verification | Open |
+| CI-6 | Low | repo | GeoIP rule-sets committed twice (30 + 30 files) | Done (unreleased) |
+| CI-7 | Low | release | Root `LICENSE` not uploaded although `release-process.md` says it is | Done (unreleased) |
+| CI-8 | Low | scripts | `fetch-geoip.sh` downloads without checksum verification | Done (unreleased) |
 | CI-9 | Low | CI | Windows job skips `ice-proxy-sys` tests; local gate excludes `ice-box` | Done (unreleased) |
-| DOC-1…9 | Low | docs | Spec/implementation drift (see §4.12) | Open; DOC-3 and DOC-9 resolved with SEC-4 / CI-5 |
+| DOC-1…9 | Low | docs | Spec/implementation drift (see §4.12) | Done (unreleased) |
 
 ---
 
@@ -329,6 +328,9 @@ Record process start time at adopt and re-check it before any kill.
 `subtle::ConstantTimeEq`, or pad. Low value since token length is fixed, but
 cheap.
 
+**Done (unreleased)** Both sides are SHA-256 hashed, then the 32-byte digests
+are compared with `subtle::ConstantTimeEq` (`crates/ice-helper/src/lib.rs`).
+
 #### SEC-8 (Low) Test hook exposed in the production API
 
 **Where** `crates/ice-config/src/lib.rs:86-91` — `pub fn force_tun_gate_ready()`
@@ -427,6 +429,10 @@ image path (`QueryFullProcessImageNameW`) is our bundled or protected
 config path (command line via `NtQueryInformationProcess`, or fall back to
 image-path match only). Low priority; document the limitation until done.
 
+**Done (unreleased)** Windows enumerates with `CreateToolhelp32Snapshot` and
+reads the command line (`ProcessCommandLineInformation`), then applies the
+same `sing-box run -c <config>` matcher as Unix.
+
 #### CORE-7 (Medium) Logs never rotate; core logs at `info`
 
 **Where** `crates/ice-core/src/process.rs:102-106` opens `sing-box.log` in
@@ -480,6 +486,11 @@ polling (see PERF-2).
 **Verify** Test: hold `core` in one thread for 3 s while `collect_status`
 returns within 50 ms in another.
 
+**Done (unreleased)** `CoreSnapshotHub` publishes an immutable snapshot;
+`collect_status` never takes `core`. The shell emits `core://status-changed`
+on publish (`apps/desktop/src-tauri/src/core_snapshot.rs`).
+`collect_status_does_not_block_on_core_lock` covers the verify case.
+
 #### ORCH-2 (Low) Error classification by message substring
 
 **Where** `apps/desktop/src-tauri/src/shutdown.rs:136-139`.
@@ -501,6 +512,11 @@ the race class entirely.
 
 **Verify** Concurrent save from two callers changing different fields → both
 persist.
+
+**Done (unreleased)** `save_settings` takes `SettingsPatch`; omitted fields
+keep the on-disk value. Home and Settings send partial patches so they cannot
+clobber each other. `proxy_service_enabled` is still not patchable from the
+settings page.
 
 ### 4.4 TUN / capture
 
@@ -619,6 +635,11 @@ Fix DOC-4.
 **Verify** Fetch against a server using a locally-trusted private CA
 succeeds; a gzip-forcing server returns readable JSON.
 
+**Done (unreleased)** `tls_fetch.rs` caches `Arc<ClientConfig>` from
+`rustls-platform-verifier` (OS trust store) and decodes `Content-Encoding:
+gzip`. Gzip decode is covered by a unit test; a private-CA live fetch is
+not run in CI.
+
 #### SUB-4 (Medium) Fetch worker panics on a poisoned queue
 
 **Where** `crates/ice-subscription/src/lib.rs:1743,1751` (`.expect(…)` on
@@ -713,6 +734,15 @@ point and `ENGINE_COMPAT_CORE_VERSION` lives in `ice-config`.
 **Verify** `cargo tree -p ice-config` shows no platform crates;
 `rg "cfg\(target_os" crates/ice-config crates/ice-subscription` is empty.
 
+**Done (unreleased)** `crates/ice-types` holds `ErrorCode`, `AppError`,
+`HostPlatform`, and `ENGINE_COMPAT_CORE_VERSION` (no I/O, no
+`cfg(target_os)`). `ice-config` / `ice-subscription` take `HostPlatform` as
+an argument; `ice-engine::host_platform()` is the compile-time mapping.
+`src-tauri` depends on `ice-engine` for config generation. `AppPaths` /
+`AppSettings` and pid/logging stay in `ice-config` so `ice-core` can use
+them without depending on `ice-engine` (which would pull in
+`ice-subscription`).
+
 #### ARCH-2 (Low) Library depends on a binary crate
 
 **Where** `crates/ice-tun-sys/Cargo.toml` → `ice-tun-launcher` for the
@@ -721,6 +751,9 @@ host-free pin helpers.
 **Fix** Extract `crates/ice-tun-pin` (sha256, XML render/parse,
 `command_matches_launcher`); both `ice-tun-sys` and `ice-tun-launcher`
 depend on it.
+
+**Done (unreleased)** `crates/ice-tun-pin` holds the host-free helpers;
+`ice-tun-sys` and `ice-tun-launcher` both depend on it.
 
 #### ARCH-3 (Medium) Three error-code systems
 
@@ -739,6 +772,12 @@ frontend against it. Closes ORCH-2 and SUB-5.
 **Verify** `rg '"[a-z]+\.[a-z_]+"' apps/desktop/src-tauri/src --type rust`
 returns no error-code literals.
 
+**Done (unreleased)** `ErrorCode` includes `tun.*` / `update.*` / helper
+codes; `AppError::with_code` takes `ErrorCode`. Frontend
+`apps/desktop/src/api/errorCodes.ts` is checked against `ErrorCode::ALL`.
+`TunErrorCode` still exists in `ice-tun-sys` (orphan-rule `From` cannot live
+in the shell); capture maps at the boundary.
+
 #### ARCH-4 (Low) File sizes and inlined tests
 
 **Where** `commands.rs` 3315 lines, `capture.rs` 2844, `ice-config/lib.rs`
@@ -753,12 +792,24 @@ modules into sibling `*_tests.rs` files or `tests/`. Consider splitting
 `ice-tun-sys` into `ice-tun-journal`, `ice-tun-sys` (backends) and
 `ice-tun-helper-proto`.
 
+**Done (unreleased)** Desktop IPC is `commands/{common,status,core,tun,logs,
+settings,subscription,nodes}.rs` plus sibling `tests.rs`. Capture is
+`capture/{mod,journal,transition,recovery}.rs` plus sibling `tests.rs`.
+`ice-config/lib.rs`, `ice-subscription/lib.rs`, and `ice-tun-sys/windows.rs`
+were left unsplit (optional in the original note).
+
 #### ARCH-5 (Low) Four `start_with_config` implementations
 
 **Where** `crates/ice-tun-sys/src/coordinator.rs:50-54, 203-207, 553-557, 1092-1096`.
 
 **Fix** One `CoreCoordinator` trait with a shared `verify_then_start` path;
 fakes implement only the spawn seam.
+
+**Done (unreleased)** Child-based runners (dev sudo / Windows elevated)
+share `verify_then_start_child`; the scheduled-task path shares
+`wait_for_pid_liveness`. `DeferredCoreCoordinator` stays fail-closed
+without a spawn. The helper IPC runner in `ice-helper` is a different
+protocol and is unchanged.
 
 ### 4.8 Performance
 
@@ -771,6 +822,12 @@ serialises each rule with `serde_json::to_string`.
 **Fix** Cache the set of available GeoIP codes keyed by the directory mtime;
 hash rules by streaming `serde_json::to_writer` into a `Sha256`/xxhash
 hasher (or fingerprint the profile revision); pass outbounds as `Arc<Value>`.
+
+**Done (unreleased)** GeoIP codes are cached by directory mtime;
+`rule_fingerprint` streams canonical JSON into SHA-256 (`sha256:…`) and
+still matches legacy canonical-JSON entries in `rules.json`. Outbound
+`Value`s are still cloned when tags are applied (the generated config owns
+a distinct object per outbound).
 
 #### PERF-2 (Medium) Uncoordinated frontend polling
 
@@ -790,9 +847,18 @@ the generation guard centrally (FE-1).
 **Verify** DevTools: zero IPC calls while the window is hidden; ≤1 status
 call per 10 s when idle and visible.
 
+**Done (unreleased)** `RuntimeStoreProvider` is the single 10 s fallback
+poller; it pauses on `visibilitychange` and `window://hidden`, and refreshes
+on `core://status-changed`. Home/Nodes skip their own `getStatus` interval
+when the store is present. Traffic still uses a ~1 s delta fetch (PERF-3)
+while visible.
+
 #### PERF-3 (Low) Traffic chart refetches the full window
 
 **Fix** `get_traffic_since(cursor)` returns only new samples; chart appends.
+
+**Done (unreleased)** `get_traffic_since` + `traffic://sample`; the chart
+appends new samples and keeps a ~1 s poll as a fallback while visible.
 
 ### 4.9 Frontend
 
@@ -802,11 +868,20 @@ call per 10 s when idle and visible.
 its own `pollGenRef`; Settings has no guard. Fix with the store from PERF-2;
 every write goes through it, every response is generation-checked.
 
+**Done (unreleased)** `RuntimeStore` owns `bumpGeneration` / `isStale` and
+the status snapshot. Home/Nodes bump on writes; Settings helper-install
+polling is still local (install progress), not the idle 2 s loop.
+
 #### FE-2 (Low) `Settings.tsx` (993 lines) reads status once
 
 Split into `settings/{Ports,Tun,Helper,Update,Appearance}.tsx`; subscribe to
 the store so `preparing`/`stopping` TUN states render
 (`Settings.tsx:717-719`).
+
+**Done (unreleased)** Settings is split into
+`settings/{Appearance,Update,Tun,Helper,Ports}.tsx` and subscribes to
+`RuntimeStore` so `preparing` / `stopping` update without reopening the
+page. Helper install polling stays local.
 
 #### FE-3 (Low) `useCallback(fn, [])` over changing props
 
@@ -830,10 +905,22 @@ English backend diagnostics rendered inside the zh UI. Fix: route all
 user-visible strings through `t()`; backend returns `code` + structured
 params, frontend formats.
 
+**Done (unreleased)** Outbound labels, DNS badge, and core status go
+through `t()`. Known IPC codes use `error.*` keys (`formatInvokeError`
+shows the localized summary plus the stable code). Backend `message`
+strings stay English for logs / unknown codes.
+
 #### FE-6 (Low) Tests assert on copy and classNames
 
 Prefer `data-testid`/roles and message keys so copy/style changes do not
 break ~2400 lines of page tests.
+
+**Done (unreleased)** Page roots expose `data-testid` (`home-panel`,
+`settings-panel`, …, `log-view`, `app-main`). Delay tones and the rules
+pager use test ids / `data-visible` instead of Tailwind classes. Page
+tests look up copy through `t(key)` rather than zh literals. Settings
+form tests still mix some remaining zh labels with `t()`; converting
+every leftover string is follow-up, not a gate.
 
 #### FE-7 (Low) `browser-api.ts` mirrors `api/tauri.ts` by hand
 
@@ -866,6 +953,9 @@ counts on both macOS and Windows.
 Add a job running `cargo audit` (or `cargo deny check advisories licenses
 bans`) and `npm audit --audit-level=high` in `apps/desktop`, plus a weekly
 `schedule:` trigger.
+
+**Done (unreleased)** `.github/workflows/audit.yml` runs `cargo deny` and
+`npm audit --audit-level=high` on PR/push to `main` and weekly Mondays.
 
 #### CI-3 (Low) Toolchain and release profile
 
@@ -906,6 +996,9 @@ outbound starts.
 tracked. Keep `third_party/` as the source, copy in `beforeBuildCommand`, and
 gitignore `resources/geoip`.
 
+**Done (unreleased)** `resources/geoip/` is gitignored; `build.rs` and
+`prepare-singbox-resource.sh` still copy from `third_party/sing-geoip`.
+
 #### CI-7 (Low) Root `LICENSE` not uploaded
 
 `.github/workflows/release.yml:191-194` uploads `NOTICE` and
@@ -931,18 +1024,19 @@ know desktop-crate tests only run in CI. `acceptance.rs` is fully
 
 | ID | Document says | Code does | Fix |
 |---|---|---|---|
-| DOC-1 | `architecture.md:880` (§21): reload is `PUT /configs?force=true` | `ice-core/src/lib.rs:364-390`: `SIGHUP` on Unix, restart on Windows; `ReloadOutcome::HotReloaded` comment (`lib.rs:109`) also says "Clash API PUT" | Rewrite §21 line and the enum comment |
-| DOC-2 | `architecture.md:395` (§9.1): mode switch is *not* a reload (`PATCH /configs`) | `architecture.md:551` (§12.4) and code: always rebuild + reload on 1.13.19 | Fix §9.1 |
+| DOC-1 | `architecture.md:880` (§21): reload is `PUT /configs?force=true` | `ice-core/src/lib.rs:364-390`: `SIGHUP` on Unix, restart on Windows; `ReloadOutcome::HotReloaded` comment (`lib.rs:109`) also says "Clash API PUT" | Done (unreleased): §9.1 / §21 and the enum comment describe SIGHUP + `GET /version` |
+| DOC-2 | `architecture.md:395` (§9.1): mode switch is *not* a reload (`PATCH /configs`) | `architecture.md:551` (§12.4) and code: always rebuild + reload on 1.13.19 | Done (unreleased): §9.1 matches §12.4 |
 | DOC-3 | `tun.md:90`: helper only starts/stops the core; examples use `"v": 1` (`tun.md:95-97`) | `helper_protocol.rs:33` `PROTOCOL_VERSION = 2`; `SetDns` command exists | Done (unreleased): tun.md documents v2, `SetDns`, and daemon validation |
-| DOC-4 | `architecture.md:842,1155`: "reqwest / system roots" | `ureq` + custom rustls fetch with webpki roots (`tls_fetch.rs`) | Update after SUB-3 |
-| DOC-5 | `architecture.md:201`: `nodes.json` cache in the runtime dir | `ice-subscription/src/lib.rs:223`: "legacy duplicate, no longer written" | Remove from §6 |
-| DOC-6 | `architecture.md:494`: over-limit → truncate + warning | Clash path hard-fails (`proxies.rs:33`) | Resolved by SUB-2 |
-| DOC-7 | `architecture.md:586`: validation checks non-empty inbounds/outbounds | `validate_config` checks key existence only | Resolved by CFG-1 |
-| DOC-8 | `release-process.md:126`: release uploads `LICENSE` | `release.yml` does not | Resolved by CI-7 |
+| DOC-4 | `architecture.md:842,1155`: "reqwest / system roots" | `ureq` + custom rustls fetch with webpki roots (`tls_fetch.rs`) | Done (unreleased): §18 describes rustls-platform-verifier + gzip |
+| DOC-5 | `architecture.md:201`: `nodes.json` cache in the runtime dir | `ice-subscription/src/lib.rs:223`: "legacy duplicate, no longer written" | Done (unreleased): §6 / §11.2 keep `profile.json` only |
+| DOC-6 | `architecture.md:494`: over-limit → truncate + warning | Clash path hard-fails (`proxies.rs:33`) | Done (unreleased): SUB-2 truncate + warning |
+| DOC-7 | `architecture.md:586`: validation checks non-empty inbounds/outbounds | `validate_config` checks key existence only | Done (unreleased): CFG-1 |
+| DOC-8 | `release-process.md:126`: release uploads `LICENSE` | `release.yml` does not | Done (unreleased): CI-7 uploads root `LICENSE` |
 | DOC-9 | `CHANGELOG.md`: `libcronet.dll` ships on Windows | Not in `bundle.resources` | Done (unreleased): bundled + CHANGELOG correction |
 
-Also: §22 (`ice-engine`) describes a façade nothing uses (ARCH-1), and §5's
-"extract `ice-types` when DTOs grow" threshold has been passed.
+Also: §22 (`ice-engine`) is used by the desktop shell (ARCH-1); `ice-types`
+holds `ErrorCode` / `HostPlatform` / the engine pin. `AppPaths` / `AppSettings`
+remain in `ice-config`.
 
 ---
 
@@ -963,7 +1057,7 @@ Phase 1 — privileged boundary (target: next minor release; release notes must 
 - SEC-2 protected binaries, in-memory XML, `Command` verification.
 - SEC-3 config path check; SEC-5 token mode; SEC-6 adopt identity; SEC-8 test hook gating.
 
-Phase 2 — correctness and robustness
+Phase 2 — correctness and robustness — **done (unreleased)**
 
 - CORE-2 HTTP health; CORE-3/CORE-4 liveness semantics; CORE-5 traffic
   supervisor; CORE-7 log rotation; CORE-8 error type.
@@ -971,19 +1065,21 @@ Phase 2 — correctness and robustness
 - CFG-1 real validation; CFG-2 settings fallback; CFG-3 atomic restore.
 - PROXY-1 tri-state backup; TUN-2 journal errors.
 
-Phase 3 — responsiveness
+Phase 3 — responsiveness — **done (unreleased)**
 
 - ORCH-1 snapshot lock + status events; ORCH-3 settings patch.
 - PERF-2/FE-1 shared store with visibility-aware polling; PERF-3 delta traffic.
 - ARCH-3 single error-code enum + generated TS codes.
+- SEC-7 helper token compare (SHA-256 + `subtle::ConstantTimeEq`).
 
-Phase 4 — structure and hygiene
+Phase 4 — structure and hygiene — **done (unreleased)**
 
-- ARCH-1 `ice-types` / pure `ice-config` / decide `ice-engine`; ARCH-2 `ice-tun-pin`;
-  ARCH-4 file splits; ARCH-5 coordinator trait.
-- SUB-3 platform verifier + cached TLS config; SUB-6 `Arc` profile cache; PERF-1; PROXY-2; CORE-6.
-- FE-2…FE-7; CI-2, CI-3, CI-4, CI-6, CI-7, CI-8.
-- DOC-1…DOC-9 (fix each alongside the code change that resolves it).
+- ARCH-2 `ice-tun-pin`; ARCH-5 shared start liveness; SUB-3 TLS + DOC-4;
+  SUB-6 Arc cache; PROXY-2 primary-service live probe; CORE-6 Windows orphan
+  reclaim; PERF-1 GeoIP cache / SHA-256 fingerprints; FE-2/3/4/5/6/7;
+  CI-2/3/4/6/7/8; DOC-5/8.
+- ARCH-1 `ice-types` / `HostPlatform` / `ice-engine` in the shell; ARCH-4
+  `commands/` + `capture/` splits.
 
 ## 6. Definition of done for this review
 

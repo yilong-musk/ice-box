@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   actually executes. The local pre-commit gate keeps `--lib` and adds
   `cargo test -p ice-tun-sys --tests`. The Windows CI job runs
   `ice-proxy-sys` tests.
+- Config generation no longer uses `cfg(target_os)` inside `ice-config` /
+  `ice-subscription`: callers pass `HostPlatform` (`crates/ice-types`).
+  `ice-engine` maps the compile-time target and is used by the desktop
+  shell. IPC commands and capture live in domain modules instead of two
+  oversized files. Page tests look up copy through `t(key)` and
+  `data-testid`, not zh literals or layout classNames.
+- Desktop `build.rs` no longer emits cargo warnings on a successful
+  sing-box / GeoIP copy, and skips the copy when the bundled file is
+  already current (avoids a `tauri dev` rebuild loop).
 
 ### Fixed
 
@@ -55,6 +64,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a message substring.
 - TUN network CIDR helper rejects IPv4 prefix > 32 and IPv6 prefix > 128
   instead of underflowing the mask.
+- Core health after reload requires Clash API `GET /version` as well as TCP
+  (CORE-2). Adopted pid liveness treats zombies as exited and Windows
+  `ACCESS_DENIED` as alive (CORE-3/CORE-4). The traffic supervisor recovers
+  from a panicking stream (CORE-5). Clash API errors are `core.api_failed`
+  (CORE-8).
+- App and core logs rotate at 20 MiB (keep 5 / 3). Generated core `log.level`
+  defaults to `warn`, with a Settings toggle for `info`. The Logs page can
+  truncate files in place (CORE-7).
+- Subscription profile commit renames the previous dir aside instead of
+  deleting it; a leftover `.old-*` is restored on load (SUB-1). Node/group/
+  rule caps truncate with a warning instead of hard-failing (SUB-2). Fetch
+  workers survive a poisoned queue and a panicking job (SUB-4). Missing
+  subscription / IO errors use `sub.not_found` / `sub.io` (SUB-5).
+- `validate_config` checks non-empty arrays, unique tags, and outbound
+  references (CFG-1). Corrupt `settings.json` is quarantined and replaced
+  with defaults plus a `settings.reset` banner (CFG-2). Runtime config
+  restore from `.bak` is atomic (CFG-3).
+- Corrupt `proxy-backup.json` is `Unknown` and takes the live-probe restore
+  path instead of reading as "not applied" (PROXY-1). TUN recovery that
+  cannot persist the journal returns `tun.recovery_required` (TUN-2).
+- Helper token compare hashes both sides with SHA-256 and uses
+  `subtle::ConstantTimeEq`, so a length mismatch cannot take an early return
+  (SEC-7).
+- Status polling reads an immutable core snapshot and never waits on
+  start/stop; the shell emits `core://status-changed` (ORCH-1). `save_settings`
+  merges a `SettingsPatch` so Home and Settings cannot clobber each other
+  (ORCH-3).
+- The UI uses one visibility-aware status poller (10 s fallback, pauses when
+  hidden) plus core/traffic events (PERF-2 / FE-1). The traffic chart fetches
+  only new samples (`get_traffic_since`) (PERF-3).
+- IPC error codes live in `ice_config::ErrorCode` (including `tun.*` /
+  `update.*`); the desktop types them from `errorCodes.ts` (ARCH-3).
+- Windows TUN pin helpers live in `ice-tun-pin`; `ice-tun-sys` no longer
+  depends on the launcher binary crate (ARCH-2). Elevated start liveness
+  is shared across child and pid-file coordinators (ARCH-5).
+- Subscription profile cache returns `Arc` on hit instead of cloning the
+  profile body (SUB-6). macOS live proxy checks probe only the primary
+  service (PROXY-2). Windows orphan-core reclaim enumerates processes the
+  same way Unix already did (CORE-6).
+- GeoIP rule-set presence is cached by directory mtime; rule fingerprints
+  are SHA-256 of canonical JSON and still match older `rules.json` keys
+  (PERF-1).
+- Desktop drops unused `@tanstack/react-virtual`; `tailwindcss` is a
+  devDependency. Website `api` is typed with `satisfies typeof tauri.api`
+  (FE-4 / FE-7). Toolchain is pinned in `rust-toolchain.toml`; CI workflows
+  share concurrency and action majors; GitHub Releases attach the root
+  `LICENSE` (CI-3 / CI-4 / CI-7). `scripts/fetch-geoip.sh` pins a git ref
+  and verifies SHA-256 (CI-8). Weekly `audit.yml` runs `cargo deny` and
+  `npm audit --audit-level=high` (CI-2). GeoIP rule-sets are sourced only
+  from `third_party/sing-geoip` (CI-6). Subscription TLS uses the OS trust
+  store and a cached rustls config; gzip bodies are decoded (SUB-3). Settings
+  is split into `settings/*` cards and follows `RuntimeStore` TUN transitions
+  (FE-2). Known IPC errors are localized; outbound labels and core status go
+  through `t()` (FE-5).
 
 ## [0.1.6] - 2026-09-06
 

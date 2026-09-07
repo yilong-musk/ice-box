@@ -382,6 +382,25 @@ fn recovery_failure_partial_cleanup_then_retry_converges() {
 }
 
 #[test]
+fn journal_write_failure_during_recovery_returns_recovery_required() {
+    let dir = temp_dir("journal-write-fail");
+    let (mut bk, _applied) = apply_ok(&dir);
+    bk.faults.fail_restore_after_mutations = Some(1);
+    bk.faults.sabotage_journal_after_recover_err = true;
+
+    let err = RecoveryDriver::new(&journal_path(&dir), &mut bk, OWNER)
+        .recover()
+        .expect_err("unwritable journal must fail closed");
+    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+
+    let jp = journal_path(&dir);
+    if jp.is_dir() {
+        let _ = fs::remove_dir(&jp);
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn stuck_resource_fails_closed_until_explicit_retry() {
     let dir = temp_dir("stuck");
     let (mut bk, _applied) = apply_ok(&dir);

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  npm-audit:
+    name: npm audit (desktop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+      - name: Audit high and critical advisories
+        run: npm audit --audit-level=high
+        working-directory: apps/desktop

@@ -45,16 +45,32 @@ pub struct TrafficSnapshot {
     pub peak: Option<TrafficSample>,
 }
 
+/// Incremental traffic window for the chart (PERF-3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrafficDelta {
+    /// Incremented when history is cleared (retarget / stop).
+    pub generation: u64,
+    /// Timestamp of the newest retained sample; `None` when the window is empty.
+    pub cursor: Option<u64>,
+    pub points: Vec<TimedTrafficSample>,
+    pub latest: Option<TrafficSample>,
+    pub peak: Option<TrafficSample>,
+}
+
 struct Inner {
     desired: Option<HealthEndpoints>,
     points: VecDeque<TimedTrafficSample>,
     latest: Option<TrafficSample>,
+    generation: u64,
 }
+
+type SampleCallback = Arc<dyn Fn(TimedTrafficSample) + Send + Sync>;
 
 struct Shared {
     inner: Mutex<Inner>,
     changed: Condvar,
     shutdown: AtomicBool,
+    on_sample: Mutex<Option<SampleCallback>>,
 }
 
 /// App-lifetime collector: idle until endpoints are set, then one `/traffic` stream.
@@ -71,9 +87,11 @@ impl TrafficMonitor {
                     desired: None,
                     points: VecDeque::new(),
                     latest: None,
+                    generation: 0,
                 }),
                 changed: Condvar::new(),
                 shutdown: AtomicBool::new(false),
+                on_sample: Mutex::new(None),
             }),
             thread: Mutex::new(None),
         }
@@ -91,6 +109,7 @@ impl TrafficMonitor {
             inner.desired = endpoints.clone();
             inner.points.clear();
             inner.latest = None;
+            inner.generation = inner.generation.saturating_add(1);
         }
         if endpoints.is_some() {
             self.ensure_thread();
@@ -112,6 +131,33 @@ impl TrafficMonitor {
         }
     }
 
+    /// Samples newer than `cursor` (exclusive). `cursor == None` returns the
+    /// full window. `generation` changes when history is dropped.
+    pub fn snapshot_since(&self, cursor: Option<u64>) -> TrafficDelta {
+        let inner = lock_inner(&self.shared);
+        let points: Vec<TimedTrafficSample> = match cursor {
+            Some(c) => inner.points.iter().copied().filter(|p| p.t > c).collect(),
+            None => inner.points.iter().copied().collect(),
+        };
+        TrafficDelta {
+            generation: inner.generation,
+            cursor: inner.points.back().map(|p| p.t),
+            points,
+            latest: inner.latest,
+            peak: window_peak(&inner.points),
+        }
+    }
+
+    /// Called from the supervisor thread after each accepted sample.
+    pub fn set_on_sample(&self, cb: impl Fn(TimedTrafficSample) + Send + Sync + 'static) {
+        let mut slot = self
+            .shared
+            .on_sample
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = Some(Arc::new(cb));
+    }
+
     #[cfg(test)]
     fn seed_history_for_test(&self, sample: TrafficSample) {
         let mut inner = lock_inner(&self.shared);
@@ -120,8 +166,13 @@ impl TrafficMonitor {
 
     fn ensure_thread(&self) {
         let mut slot = self.thread.lock().unwrap_or_else(|e| e.into_inner());
-        if slot.is_some() {
-            return;
+        if let Some(handle) = slot.as_ref() {
+            if !handle.is_finished() {
+                return;
+            }
+            if let Some(handle) = slot.take() {
+                let _ = handle.join();
+            }
         }
         let shared = self.shared.clone();
         *slot = Some(
@@ -186,6 +237,17 @@ fn push_sample(inner: &mut Inner, sample: TrafficSample, now_ms: u64) {
     retain_window(&mut inner.points, now_ms);
 }
 
+fn notify_sample(shared: &Shared, sample: TimedTrafficSample) {
+    let cb = shared
+        .on_sample
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(cb) = cb {
+        cb(sample);
+    }
+}
+
 /// Highest up/down rate among the samples currently inside the rolling
 /// window; `None` when the window is empty.
 fn window_peak(points: &VecDeque<TimedTrafficSample>) -> Option<TrafficSample> {
@@ -222,39 +284,71 @@ fn wait_for_desired(shared: &Shared) -> Option<HealthEndpoints> {
 }
 
 fn run_stream(endpoints: &HealthEndpoints, shared: &Shared) -> Result<TrafficStreamEnd, CoreError> {
+    #[cfg(test)]
+    if PANIC_NEXT_STREAM.swap(false, Ordering::SeqCst) {
+        panic!("injected traffic stream panic");
+    }
     traffic_foreach(endpoints, STREAM_READ_TIMEOUT, |sample| {
         if shared.shutdown.load(Ordering::SeqCst) {
             return false;
+        }
+        #[cfg(test)]
+        if PANIC_NEXT_STREAM.swap(false, Ordering::SeqCst) {
+            panic!("injected traffic stream panic");
         }
         let mut inner = lock_inner(shared);
         if inner.desired.as_ref() != Some(endpoints) {
             return false;
         }
         push_sample(&mut inner, sample, now_ms());
+        let emitted = inner.points.back().copied();
+        drop(inner);
+        if let Some(emitted) = emitted {
+            notify_sample(shared, emitted);
+        }
         true
     })
 }
 
+#[cfg(test)]
+static PANIC_NEXT_STREAM: AtomicBool = AtomicBool::new(false);
+
 fn supervisor_loop(shared: Arc<Shared>) {
+    let mut backoff = RECONNECT_BACKOFF;
     while !shared.shutdown.load(Ordering::SeqCst) {
         let Some(endpoints) = wait_for_desired(&shared) else {
             break;
         };
-        match run_stream(&endpoints, &shared) {
-            Ok(TrafficStreamEnd::Stopped) => {}
-            Ok(TrafficStreamEnd::Eof) => {
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_stream(&endpoints, &shared)
+        }));
+        match run {
+            Ok(Ok(TrafficStreamEnd::Stopped)) => {
+                backoff = RECONNECT_BACKOFF;
+            }
+            Ok(Ok(TrafficStreamEnd::Eof)) => {
                 tracing::debug!("traffic stream ended; backing off before reconnect");
                 if shared.shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(RECONNECT_BACKOFF);
+                thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_secs(30));
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::debug!(error = %err, "traffic stream interrupted");
                 if shared.shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(RECONNECT_BACKOFF);
+                thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
+            Err(_) => {
+                tracing::error!("traffic supervisor panicked; restarting stream");
+                if shared.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_secs(30));
             }
         }
     }
@@ -338,6 +432,7 @@ mod tests {
             desired: None,
             points: VecDeque::new(),
             latest: None,
+            generation: 0,
         };
         let high = TrafficSample {
             up: 2_000,
@@ -419,5 +514,65 @@ mod tests {
         assert!(snap.latest.is_none());
         assert!(snap.peak.is_none());
         assert!(monitor.has_target());
+    }
+
+    #[test]
+    fn snapshot_since_returns_only_newer_samples() {
+        let monitor = TrafficMonitor::new();
+        {
+            let mut inner = lock_inner(&monitor.shared);
+            inner.points.push_back(TimedTrafficSample {
+                up: 1,
+                down: 1,
+                t: 1_000,
+            });
+            inner.points.push_back(TimedTrafficSample {
+                up: 2,
+                down: 2,
+                t: 2_000,
+            });
+            inner.latest = Some(TrafficSample { up: 2, down: 2 });
+            inner.generation = 3;
+        }
+        let full = monitor.snapshot_since(None);
+        assert_eq!(full.points.len(), 2);
+        assert_eq!(full.generation, 3);
+        let delta = monitor.snapshot_since(Some(1_000));
+        assert_eq!(delta.points.len(), 1);
+        assert_eq!(delta.points[0].t, 2_000);
+        assert_eq!(delta.cursor, Some(2_000));
+    }
+
+    #[test]
+    fn supervisor_recovers_after_injected_panic() {
+        let server = MockClashApi::start(200, "Rule");
+        let monitor = TrafficMonitor::new();
+        monitor.set_endpoints(Some(server.endpoints()));
+
+        let started = Instant::now();
+        loop {
+            if !monitor.snapshot().points.is_empty() {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "timed out waiting for first sample"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        PANIC_NEXT_STREAM.store(true, Ordering::SeqCst);
+        let after_panic = Instant::now();
+        let before = monitor.snapshot().points.len();
+        loop {
+            if monitor.snapshot().points.len() > before {
+                break;
+            }
+            assert!(
+                after_panic.elapsed() < Duration::from_secs(5),
+                "monitor did not recover after injected panic"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }

@@ -25,6 +25,29 @@ fn binary_name() -> &'static str {
     }
 }
 
+/// Copy `src` to `dest` only when the destination is missing, a different
+/// size, or older than the source. Unconditional `fs::copy` refreshes mtime
+/// and makes `tauri dev` rebuild in a loop because it watches `resources/`.
+fn copy_if_stale(src: &Path, dest: &Path) -> std::io::Result<bool> {
+    if let Ok(dest_meta) = fs::metadata(dest) {
+        if let Ok(src_meta) = fs::metadata(src) {
+            let same_len = src_meta.len() == dest_meta.len();
+            let dest_fresh = match (src_meta.modified(), dest_meta.modified()) {
+                (Ok(src_mtime), Ok(dest_mtime)) => dest_mtime >= src_mtime,
+                _ => false,
+            };
+            if same_len && dest_fresh {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(src, dest)?;
+    Ok(true)
+}
+
 fn copy_singbox_resource(manifest_dir: &Path) {
     let repo_root = manifest_dir
         .join("../../..")
@@ -42,17 +65,12 @@ fn copy_singbox_resource(manifest_dir: &Path) {
         return;
     }
 
+    println!("cargo:rerun-if-changed={}", src.display());
     if src.is_file() {
-        if let Err(err) = fs::copy(&src, &dest) {
+        if let Err(err) = copy_if_stale(&src, &dest) {
             println!(
                 "cargo:warning=copy sing-box resource {} → {}: {err}",
                 src.display(),
-                dest.display()
-            );
-        } else {
-            println!("cargo:rerun-if-changed={}", src.display());
-            println!(
-                "cargo:warning=bundled sing-box resource → {}",
                 dest.display()
             );
         }
@@ -81,6 +99,7 @@ fn copy_geoip_resources(manifest_dir: &Path) {
     let src = repo_root.join("third_party/sing-geoip/rule-set");
     let dest_dir = manifest_dir.join("resources").join("geoip");
 
+    println!("cargo:rerun-if-changed={}", src.display());
     if !src.is_dir() {
         println!(
             "cargo:warning=geoip rule-sets missing at {}; run scripts/fetch-geoip.sh before release build",
@@ -92,7 +111,6 @@ fn copy_geoip_resources(manifest_dir: &Path) {
         println!("cargo:warning=create geoip resources dir: {err}");
         return;
     }
-    let mut copied = 0usize;
     if let Ok(entries) = fs::read_dir(&src) {
         for entry in entries.flatten() {
             let name = entry.file_name();
@@ -100,15 +118,15 @@ fn copy_geoip_resources(manifest_dir: &Path) {
                 continue;
             }
             let dest = dest_dir.join(&name);
-            if fs::copy(entry.path(), &dest).is_ok() {
-                copied += 1;
+            if let Err(err) = copy_if_stale(&entry.path(), &dest) {
+                println!(
+                    "cargo:warning=copy geoip {} → {}: {err}",
+                    entry.path().display(),
+                    dest.display()
+                );
             }
         }
     }
-    println!(
-        "cargo:warning=bundled {copied} geoip rule-sets → {}",
-        dest_dir.display()
-    );
 }
 
 /// Ensure `resources/ice-helper` exists for the Tauri bundle (plan §5 T5).

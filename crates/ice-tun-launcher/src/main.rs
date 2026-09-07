@@ -118,7 +118,7 @@ fn install_task(xml: &Path) -> i32 {
     }
     silent_schtasks(
         Command::new("schtasks.exe")
-            .args(["/Create", "/TN", ice_tun_launcher::TUN_TASK_NAME, "/XML"])
+            .args(["/Create", "/TN", ice_tun_pin::TUN_TASK_NAME, "/XML"])
             .arg(xml)
             .arg("/F"),
     )
@@ -129,11 +129,11 @@ fn delete_task() -> i32 {
     let code = silent_schtasks(Command::new("schtasks.exe").args([
         "/Delete",
         "/TN",
-        ice_tun_launcher::TUN_TASK_NAME,
+        ice_tun_pin::TUN_TASK_NAME,
         "/F",
     ]));
-    let program_data = ice_tun_launcher::program_data_dir();
-    let install_dir = ice_tun_launcher::protected_install_dir(&program_data);
+    let program_data = ice_tun_pin::program_data_dir();
+    let install_dir = ice_tun_pin::protected_install_dir(&program_data);
     let _ = std::fs::remove_dir_all(&install_dir);
     code
 }
@@ -156,13 +156,13 @@ fn install_protected(data_dir: &Path) -> i32 {
         eprintln!("sing-box.exe not found next to {}", exe.display());
         return 2;
     }
-    let program_data = ice_tun_launcher::program_data_dir();
-    let bin_dir = ice_tun_launcher::protected_bin_dir(&program_data);
-    let run_dir = ice_tun_launcher::protected_run_dir(&program_data);
+    let program_data = ice_tun_pin::program_data_dir();
+    let bin_dir = ice_tun_pin::protected_bin_dir(&program_data);
+    let run_dir = ice_tun_pin::protected_run_dir(&program_data);
     if std::fs::create_dir_all(&bin_dir).is_err() || std::fs::create_dir_all(&run_dir).is_err() {
         return 2;
     }
-    let dest_launcher = ice_tun_launcher::protected_launcher_path(&program_data);
+    let dest_launcher = ice_tun_pin::protected_launcher_path(&program_data);
     let dest_core = bin_dir.join("sing-box.exe");
     if copy_protected_file(&exe, &dest_launcher).is_err() {
         return 2;
@@ -185,16 +185,16 @@ fn install_protected(data_dir: &Path) -> i32 {
     if write_resources_pointer(&program_data, &src_dir).is_err() {
         return 2;
     }
-    let Ok(launcher_sha) = ice_tun_launcher::sha256_of_file(&dest_launcher) else {
+    let Ok(launcher_sha) = ice_tun_pin::sha256_of_file(&dest_launcher) else {
         return 2;
     };
-    let Ok(core_sha) = ice_tun_launcher::sha256_of_file(&dest_core) else {
+    let Ok(core_sha) = ice_tun_pin::sha256_of_file(&dest_core) else {
         return 2;
     };
-    let pin = ice_tun_launcher::format_tun_task_pin(&launcher_sha, &core_sha);
-    let xml = ice_tun_launcher::render_tun_task_xml(&dest_launcher, data_dir, &pin);
-    let xml_path = ice_tun_launcher::protected_install_dir(&program_data).join("ice-box-tun.xml");
-    let bytes = ice_tun_launcher::encode_utf16_le_bom(&xml);
+    let pin = ice_tun_pin::format_tun_task_pin(&launcher_sha, &core_sha);
+    let xml = ice_tun_pin::render_tun_task_xml(&dest_launcher, data_dir, &pin);
+    let xml_path = ice_tun_pin::protected_install_dir(&program_data).join("ice-box-tun.xml");
+    let bytes = ice_tun_pin::encode_utf16_le_bom(&xml);
     if std::fs::write(&xml_path, bytes).is_err() {
         return 2;
     }
@@ -245,14 +245,14 @@ fn icacls(path: &Path, extra: &[String]) -> Result<(), ()> {
 
 #[cfg(target_os = "windows")]
 fn write_resources_pointer(program_data: &Path, resources: &Path) -> Result<(), ()> {
-    let path = ice_tun_launcher::protected_install_dir(program_data).join("resources-dir.txt");
+    let path = ice_tun_pin::protected_install_dir(program_data).join("resources-dir.txt");
     std::fs::write(&path, resources.to_string_lossy().as_bytes()).map_err(|_| ())?;
     apply_acl(&path, false, false)
 }
 
 #[cfg(target_os = "windows")]
 fn read_resources_pointer(program_data: &Path) -> Option<PathBuf> {
-    let path = ice_tun_launcher::protected_install_dir(program_data).join("resources-dir.txt");
+    let path = ice_tun_pin::protected_install_dir(program_data).join("resources-dir.txt");
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -265,13 +265,11 @@ fn read_resources_pointer(program_data: &Path) -> Option<PathBuf> {
 #[cfg(target_os = "windows")]
 fn run() -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    match ice_tun_launcher::parse_launcher_command(&argv) {
-        Some(ice_tun_launcher::LauncherCommand::Install { data_dir }) => {
-            install_protected(&data_dir)
-        }
-        Some(ice_tun_launcher::LauncherCommand::InstallTask { xml }) => install_task(&xml),
-        Some(ice_tun_launcher::LauncherCommand::DeleteTask) => delete_task(),
-        Some(ice_tun_launcher::LauncherCommand::Run { data_dir }) => {
+    match ice_tun_pin::parse_launcher_command(&argv) {
+        Some(ice_tun_pin::LauncherCommand::Install { data_dir }) => install_protected(&data_dir),
+        Some(ice_tun_pin::LauncherCommand::InstallTask { xml }) => install_task(&xml),
+        Some(ice_tun_pin::LauncherCommand::DeleteTask) => delete_task(),
+        Some(ice_tun_pin::LauncherCommand::Run { data_dir }) => {
             let Some(args) = args_from_data_dir(data_dir) else {
                 return 2;
             };
@@ -287,12 +285,42 @@ fn run() -> i32 {
 }
 
 #[cfg(target_os = "windows")]
+fn rotate_core_log(path: &std::path::Path) {
+    const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    const KEEP: u32 = 3;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() <= MAX_BYTES {
+        return;
+    }
+    let rotated = |n: u32| {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{n}"));
+        match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+            _ => std::path::PathBuf::from(name),
+        }
+    };
+    let _ = std::fs::remove_file(rotated(KEEP));
+    for i in (1..KEEP).rev() {
+        let from = rotated(i);
+        if from.exists() {
+            let _ = std::fs::rename(&from, rotated(i + 1));
+        }
+    }
+    if path.exists() {
+        let _ = std::fs::rename(path, rotated(1));
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn run_core(args: Args) -> i32 {
-    let program_data = ice_tun_launcher::program_data_dir();
+    let program_data = ice_tun_pin::program_data_dir();
     let Ok(exe) = std::env::current_exe() else {
         return 2;
     };
-    if !ice_tun_launcher::path_is_protected_launcher(&exe, &program_data) {
+    if !ice_tun_pin::path_is_protected_launcher(&exe, &program_data) {
         eprintln!(
             "refusing to run {} (not the protected ProgramData launcher)",
             exe.display()
@@ -320,6 +348,7 @@ fn run_core(args: Args) -> i32 {
             return 2;
         }
     }
+    rotate_core_log(&args.log);
 
     use std::os::windows::process::CommandExt;
 
@@ -426,7 +455,7 @@ fn sanitize_user_config(
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| data_dir.clone())
     });
-    let run_dir = ice_tun_launcher::protected_run_dir(program_data);
+    let run_dir = ice_tun_pin::protected_run_dir(program_data);
     std::fs::create_dir_all(&run_dir)
         .map_err(|err| format!("create {}: {err}", run_dir.display()))?;
     let dest = run_dir.join("config.json");
@@ -448,11 +477,11 @@ fn sanitize_user_config(
 #[cfg(target_os = "windows")]
 fn verify_pinned_core(core: &std::path::Path) -> Result<(), String> {
     let xml = query_task_xml()?;
-    let pin = ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
+    let pin = ice_tun_pin::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
         "TUN scheduled task is missing the binary pin; refusing to start".to_string()
     })?;
     let exe = std::env::current_exe().map_err(|err| format!("current exe: {err}"))?;
-    if !ice_tun_launcher::pin_matches_files(&pin, &exe, core)? {
+    if !ice_tun_pin::pin_matches_files(&pin, &exe, core)? {
         return Err(format!(
             "launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
             core.display()
@@ -465,7 +494,7 @@ fn verify_pinned_core(core: &std::path::Path) -> Result<(), String> {
 fn query_task_xml() -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     let output = Command::new("schtasks")
-        .args(["/Query", "/TN", ice_tun_launcher::TUN_TASK_NAME, "/XML"])
+        .args(["/Query", "/TN", ice_tun_pin::TUN_TASK_NAME, "/XML"])
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -476,7 +505,7 @@ fn query_task_xml() -> Result<String, String> {
             output.status.code().unwrap_or(-1)
         ));
     }
-    Ok(ice_tun_launcher::decode_schtasks_output(&output.stdout))
+    Ok(ice_tun_pin::decode_schtasks_output(&output.stdout))
 }
 
 #[cfg(target_os = "windows")]

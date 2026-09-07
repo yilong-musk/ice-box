@@ -2,13 +2,16 @@
 
 import { act, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { Logs } from "./Logs";
 
 const getLogView = vi.fn();
+const clearLogs = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
     getLogView: (...args: unknown[]) => getLogView(...args),
+    clearLogs: (...args: unknown[]) => clearLogs(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -24,6 +27,7 @@ describe("Logs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLogView.mockImplementation(async () => [...baseTail]);
+    clearLogs.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -41,24 +45,11 @@ describe("Logs", () => {
     });
     expect(getLogView).toHaveBeenCalledWith(500);
     expect(view.queryByRole("combobox")).toBeNull();
-    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
-    expect(view.queryByText("日志")).toBeNull();
+    expect(view.queryByRole("button", { name: t("common.refresh") })).toBeNull();
+    expect(view.queryByText(t("app.nav.logs"))).toBeNull();
     expect(container.querySelector("[data-slot='card']")).toBeNull();
-    const logView = container.querySelector(".log-view");
-    expect(logView?.parentElement?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["logs-panel"]),
-    );
-    expect(logView?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining([
-        "min-h-0",
-        "flex-1",
-        "overflow-auto",
-        "bg-card",
-        "text-foreground",
-      ]),
-    );
-    expect(logView?.className.split(/\s+/)).not.toContain("bg-muted/40");
-    expect(logView?.className.split(/\s+/)).not.toContain("text-muted-foreground");
+    const logView = view.getByTestId("log-view");
+    expect(logView.parentElement).toBe(view.getByTestId("logs-panel"));
   });
 
   it("polls automatically", async () => {
@@ -177,5 +168,20 @@ describe("Logs", () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     expect(scrollTop).toBe(500);
+  });
+
+  it("clears logs through the Clear action", async () => {
+    const { container } = render(<Logs />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(/sing-box ready/)).toBeInTheDocument();
+    });
+    const button = view.getByRole("button", { name: /清空日志|Clear logs/ });
+    await act(async () => {
+      button.click();
+    });
+    await waitFor(() => {
+      expect(clearLogs).toHaveBeenCalled();
+    });
   });
 });

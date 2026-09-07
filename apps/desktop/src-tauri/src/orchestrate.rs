@@ -3,24 +3,25 @@
 //! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
 
 use ice_config::{
-    build_direct_only_config, build_runtime_config, clash_mode_name, config_to_pretty_json,
-    load_group_selections, load_rule_overrides, load_settings, restore_runtime_config_from_bak,
-    save_settings, write_runtime_config_bytes, AppError, AppPaths, AppSettings, BuildInput,
-    CaptureIntent, ErrorCode, NormalizedProfile,
+    clash_mode_name, config_to_pretty_json, load_group_selections, load_rule_overrides,
+    load_settings, restore_runtime_config_from_bak, save_settings_for, write_runtime_config_bytes,
+    AppError, AppPaths, AppSettings, BuildInput, CaptureIntent, ErrorCode, NormalizedProfile,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
     ReloadOutcome,
 };
+use ice_engine::{
+    build_config, build_direct_only_config, host_platform, load_active_profile_with_default_rules,
+    load_index, resolve_selected_tag,
+};
 use ice_proxy_sys::{
-    apply_and_record, is_proxy_applied_on_disk, is_proxy_live_applied, restore_and_clear_flag,
-    ProxyEndpoints, SystemProxy,
+    apply_and_record, disk_proxy_state, is_proxy_live_applied, restore_and_clear_flag,
+    DiskProxyState, ProxyEndpoints, SystemProxy,
 };
-use ice_subscription::{
-    load_active_profile_with_default_rules, load_index, resolve_selected_tag, SubscriptionError,
-    SubscriptionPaths,
-};
+use ice_subscription::{SubscriptionError, SubscriptionPaths};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub fn repo_third_party_singbox() -> PathBuf {
     // apps/desktop/src-tauri → repo root
@@ -134,7 +135,7 @@ pub fn reconcile_selected_tag_in_settings(
 ) -> Result<AppSettings, AppError> {
     let updated = reconcile_selected_tag(settings, profile);
     if updated.selected_tag != settings.selected_tag {
-        save_settings(&app_paths.settings(), &updated)?;
+        save_settings_for(&app_paths.settings(), &updated, host_platform())?;
     }
     Ok(updated)
 }
@@ -235,17 +236,20 @@ pub fn generate_config(
 ) -> Result<bool, AppError> {
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
+    let platform = host_platform();
     let profile = match load_active_profile_with_default_rules(
         &sub_paths,
         &index,
         settings.auto_default_rules,
+        platform,
     ) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => {
             // First-run / all subscriptions removed: fall back to a direct-only
             // config so Start keeps working (system proxy + inbound, all traffic
             // direct) until a subscription is imported.
-            let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
+            let config =
+                build_direct_only_config(&settings.to_local_template(), capture_intent, platform)?;
             return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
         }
         Err(err) => return Err(AppError::from(err)),
@@ -254,7 +258,8 @@ pub fn generate_config(
         // Active subscription exists but yields no leaf outbounds (e.g. groups-only, or a
         // hand-edited profile): nothing usable to route through — direct-only fallback so
         // Start/Apply keep working (build_runtime_config errors on empty nodes).
-        let config = build_direct_only_config(&settings.to_local_template(), capture_intent)?;
+        let config =
+            build_direct_only_config(&settings.to_local_template(), capture_intent, platform)?;
         return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
     }
     let settings = reconcile_selected_tag_in_settings(app_paths, settings, &profile)?;
@@ -262,14 +267,15 @@ pub fn generate_config(
     let geoip_dir = ensure_geoip_rule_sets(app_paths, resource_dir);
     let group_selections = load_group_selections(&app_paths.group_selections());
     let rule_overrides = load_rule_overrides(&app_paths.rule_overrides());
-    let config = build_runtime_config(&BuildInput {
+    let config = build_config(&BuildInput {
         template: settings.to_local_template(),
-        profile,
+        profile: Arc::unwrap_or_clone(profile),
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
         group_selections,
         rule_overrides,
         capture_intent,
+        platform,
     })?;
     write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config)
 }
@@ -462,8 +468,14 @@ fn sync_system_proxy_after_reload(
     new_endpoints: &ProxyEndpoints,
     inbound_changed: bool,
 ) -> Result<(), AppError> {
-    if !is_proxy_applied_on_disk(&app_paths.proxy_backup()) {
-        return Ok(());
+    match disk_proxy_state(&app_paths.proxy_backup()) {
+        DiskProxyState::NotApplied => return Ok(()),
+        DiskProxyState::Applied => {}
+        DiskProxyState::Unknown => {
+            if !is_proxy_live_applied(proxy, &app_paths.proxy_backup(), new_endpoints) {
+                return Ok(());
+            }
+        }
     }
     if !inbound_changed {
         return Ok(());

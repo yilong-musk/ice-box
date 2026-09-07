@@ -1,0 +1,12 @@
+[package]
+name = "ice-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared DTOs: errors, host platform, and the sing-box version pin"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::atomic::write_json_atomic;
 use crate::error::{AppError, ErrorCode};
 use crate::listen::is_loopback_host;
-use crate::LocalTemplate;
+use crate::{HostPlatform, LocalTemplate};
 
 /// Routing mode: rule-based routing, all traffic through the selected proxy, or all direct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -54,6 +54,26 @@ pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
         ProxyMode::Rule => "Rule",
         ProxyMode::Global => "Global",
         ProxyMode::Direct => "Direct",
+    }
+}
+
+/// sing-box `log.level` baked into generated config (CORE-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreLogLevel {
+    /// Production default: per-connection chatter stays off.
+    #[default]
+    Warn,
+    /// Verbose core logs for debug sessions.
+    Info,
+}
+
+impl CoreLogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warn => "warn",
+            Self::Info => "info",
+        }
     }
 }
 
@@ -171,9 +191,13 @@ impl Default for TunSettings {
 impl TunSettings {
     /// Validate addresses, prefixes, MTU, stack, and interface name without
     /// mutating or writing disk (plan §4.1). Platform-exact interface rules
-    /// (e.g. macOS `utun<N>`) are enforced per compile-time target; further
+    /// (e.g. macOS `utun<N>`) are enforced for [`HostPlatform::MacOs`]; further
     /// host checks belong to the platform backend (`ice-tun-sys`, T2).
     pub fn validate(&self) -> Result<(), AppError> {
+        self.validate_for(HostPlatform::Linux)
+    }
+
+    pub fn validate_for(&self, platform: HostPlatform) -> Result<(), AppError> {
         validate_cidr("tun.ipv4_address", &self.ipv4_address, false)?;
         validate_cidr("tun.ipv6_address", &self.ipv6_address, true)?;
         if !(1280..=TUN_DEFAULT_MTU).contains(&self.mtu) {
@@ -195,7 +219,7 @@ impl TunSettings {
             ));
         }
         if let Some(name) = &self.interface_name {
-            if !tun_interface_name_valid(name) {
+            if !tun_interface_name_valid(name, platform.is_macos()) {
                 return Err(AppError::new(
                     ErrorCode::ConfigInvalid,
                     format!("tun.interface_name is invalid: {name}"),
@@ -251,7 +275,7 @@ fn validate_cidr(field: &str, cidr: &str, ipv6: bool) -> Result<(), AppError> {
 ///
 /// macOS (locked by the T0 spike): sing-tun parses the name with
 /// `fmt.Sscanf("utun%d")`, so a bare `utun` is FATAL and only `utun<N>` works.
-fn tun_interface_name_valid(name: &str) -> bool {
+fn tun_interface_name_valid(name: &str, macos: bool) -> bool {
     if name.is_empty() || name.len() > 64 {
         return false;
     }
@@ -261,8 +285,7 @@ fn tun_interface_name_valid(name: &str) -> bool {
     {
         return false;
     }
-    #[cfg(target_os = "macos")]
-    {
+    if macos {
         if !name.starts_with("utun") {
             return false;
         }
@@ -315,6 +338,9 @@ pub struct AppSettings {
     /// for existing `settings.json` files; the Settings page can turn it off.
     #[serde(default = "default_check_app_updates")]
     pub check_app_updates: bool,
+    /// Core `log.level` (`warn` default; `info` for debug sessions).
+    #[serde(default)]
+    pub core_log_level: CoreLogLevel,
 }
 
 fn default_auto_default_rules() -> bool {
@@ -341,6 +367,7 @@ impl Default for AppSettings {
             auto_default_rules: true,
             language: LanguagePreference::System,
             check_app_updates: true,
+            core_log_level: CoreLogLevel::Warn,
         }
     }
 }
@@ -348,6 +375,10 @@ impl Default for AppSettings {
 impl AppSettings {
     /// Reject wildcard / non-loopback listens. Does not mutate or write disk.
     pub fn validate(&self) -> Result<(), AppError> {
+        self.validate_for(HostPlatform::Linux)
+    }
+
+    pub fn validate_for(&self, platform: HostPlatform) -> Result<(), AppError> {
         validate_listen_addr("clash_api_listen", &self.clash_api_listen)?;
         if !is_loopback_host(&self.clash_api_listen) {
             return Err(AppError::new(
@@ -384,7 +415,7 @@ impl AppSettings {
                 "mixed_port must differ from clash_api_port",
             ));
         }
-        self.tun.validate()?;
+        self.tun.validate_for(platform)?;
         Ok(())
     }
 
@@ -397,8 +428,153 @@ impl AppSettings {
             allow_lan: self.allow_lan,
             proxy_mode: self.proxy_mode,
             tun: self.tun.clone(),
+            log_level: self.core_log_level,
         }
     }
+
+    /// Apply a partial IPC patch. Omitted fields keep `self`.
+    ///
+    /// `proxy_service_enabled` is owned by start/stop, not this merge.
+    pub fn apply_patch(&self, patch: &SettingsPatch) -> AppSettings {
+        let mut next = self.clone();
+        if let Some(v) = patch.mixed_listen.clone() {
+            next.mixed_listen = v;
+        }
+        if let Some(v) = patch.mixed_port {
+            next.mixed_port = v;
+        }
+        if let Some(v) = patch.clash_api_listen.clone() {
+            next.clash_api_listen = v;
+        }
+        if let Some(v) = patch.clash_api_port {
+            next.clash_api_port = v;
+        }
+        if let Some(v) = patch.selected_tag.clone() {
+            next.selected_tag = v;
+        }
+        if let Some(v) = patch.auto_set_system_proxy {
+            next.auto_set_system_proxy = v;
+        }
+        if let Some(v) = patch.allow_lan {
+            next.allow_lan = v;
+        }
+        if let Some(v) = patch.proxy_mode {
+            next.proxy_mode = v;
+        }
+        if let Some(tun) = &patch.tun {
+            next.tun = tun.apply(&self.tun);
+        }
+        if let Some(v) = patch.auto_default_rules {
+            next.auto_default_rules = v;
+        }
+        if let Some(v) = patch.language {
+            next.language = v;
+        }
+        if let Some(v) = patch.check_app_updates {
+            next.check_app_updates = v;
+        }
+        if let Some(v) = patch.core_log_level {
+            next.core_log_level = v;
+        }
+        next
+    }
+}
+
+/// Partial `settings.json` write (ORCH-3). Every field is optional; `null`
+/// on `selected_tag` / TUN `interface_name` clears the value.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed_listen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash_api_listen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash_api_port: Option<u16>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub selected_tag: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_set_system_proxy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_lan: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_mode: Option<ProxyMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tun: Option<TunSettingsPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_default_rules: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<LanguagePreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_app_updates: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_log_level: Option<CoreLogLevel>,
+}
+
+/// Nested TUN patch; omitted fields keep the current `TunSettings`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub interface_name: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv4_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_route: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_route: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_hijack: Option<bool>,
+}
+
+impl TunSettingsPatch {
+    pub fn apply(&self, base: &TunSettings) -> TunSettings {
+        TunSettings {
+            enabled: self.enabled.unwrap_or(base.enabled),
+            interface_name: match &self.interface_name {
+                Some(v) => v.clone(),
+                None => base.interface_name.clone(),
+            },
+            ipv4_address: self
+                .ipv4_address
+                .clone()
+                .unwrap_or_else(|| base.ipv4_address.clone()),
+            ipv6_address: self
+                .ipv6_address
+                .clone()
+                .unwrap_or_else(|| base.ipv6_address.clone()),
+            mtu: self.mtu.unwrap_or(base.mtu),
+            auto_route: self.auto_route.unwrap_or(base.auto_route),
+            strict_route: self.strict_route.unwrap_or(base.strict_route),
+            stack: self.stack.clone().unwrap_or_else(|| base.stack.clone()),
+            dns_hijack: self.dns_hijack.unwrap_or(base.dns_hijack),
+        }
+    }
+}
+
+/// Distinguish omitted (`None` / keep) from JSON `null` (`Some(None)` / clear).
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 fn is_unspecified(addr: &str) -> bool {
@@ -415,26 +591,87 @@ fn validate_listen_addr(field: &str, addr: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Result of loading `settings.json`, including a one-shot recovery diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadSettingsOutcome {
+    pub settings: AppSettings,
+    /// Set when a corrupt / invalid file was renamed aside and defaults loaded.
+    pub reset_reason: Option<String>,
+}
+
 /// Missing file → architecture §6.1 defaults (does not create the file).
+/// Parse / validation failure: rename to `settings.json.invalid-<timestamp>`
+/// and return defaults plus `reset_reason` (`settings.reset`).
 pub fn load_settings(path: &Path) -> Result<AppSettings, AppError> {
+    Ok(load_settings_detailed(path).settings)
+}
+
+/// Like [`load_settings`], but surfaces whether the file was reset.
+pub fn load_settings_detailed(path: &Path) -> LoadSettingsOutcome {
     if !path.exists() {
-        return Ok(AppSettings::default());
+        return LoadSettingsOutcome {
+            settings: AppSettings::default(),
+            reset_reason: None,
+        };
     }
-    let raw = fs::read_to_string(path).map_err(|e| {
-        AppError::new(
-            ErrorCode::ConfigInvalid,
-            format!("read settings {}: {e}", path.display()),
-        )
-    })?;
-    let settings: AppSettings = serde_json::from_str(&raw)
-        .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("parse settings: {e}")))?;
-    settings.validate()?;
+    match try_load_settings(path) {
+        Ok(settings) => LoadSettingsOutcome {
+            settings,
+            reset_reason: None,
+        },
+        Err(reason) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let backup_name = format!("settings.json.invalid-{ts}");
+            let backup = path.with_file_name(backup_name);
+            match fs::rename(path, &backup) {
+                Ok(()) => tracing::warn!(
+                    path = %path.display(),
+                    backup = %backup.display(),
+                    reason = %reason,
+                    "invalid settings.json reset to defaults"
+                ),
+                Err(err) => tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    reason = %reason,
+                    "failed to quarantine invalid settings.json"
+                ),
+            }
+            LoadSettingsOutcome {
+                settings: AppSettings::default(),
+                reset_reason: Some(reason),
+            }
+        }
+    }
+}
+
+fn try_load_settings(path: &Path) -> Result<AppSettings, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("read settings: {e}"))?;
+    let settings: AppSettings =
+        serde_json::from_str(&raw).map_err(|e| format!("parse settings: {e}"))?;
+    settings
+        .validate()
+        .map_err(|e| format!("validate settings: {e}"))?;
     Ok(settings)
 }
 
 /// Validate then atomically write. Invalid listens are rejected (no disk write).
+///
+/// Generic (non-macOS) interface-name rules. Prefer [`save_settings_for`] when
+/// the host platform is known so macOS `utun<N>` is enforced.
 pub fn save_settings(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
-    settings.validate()?;
+    save_settings_for(path, settings, HostPlatform::Linux)
+}
+
+pub fn save_settings_for(
+    path: &Path,
+    settings: &AppSettings,
+    platform: HostPlatform,
+) -> Result<(), AppError> {
+    settings.validate_for(platform)?;
     write_json_atomic(path, settings).map_err(AppError::from)
 }
 
@@ -696,7 +933,6 @@ mod tests {
 
     /// The WinInet backend (slice 4b) made the Windows system proxy real, so the flag must
     /// be accepted on every platform (settings files carrying it must load).
-    #[cfg(target_os = "windows")]
     #[test]
     fn windows_accepts_auto_set_system_proxy() {
         let path = temp_settings_path("win-proxy");
@@ -801,9 +1037,35 @@ mod tests {
             "auto_set_system_proxy": false
         }"#;
         fs::write(&path, json).expect("write");
-        let err = load_settings(&path).expect_err("out of range port");
-        assert_eq!(err.code, "config.invalid");
-        assert!(err.message.contains("parse settings"));
+        let loaded = load_settings_detailed(&path);
+        assert_eq!(loaded.settings, AppSettings::default());
+        assert!(
+            loaded
+                .reset_reason
+                .as_ref()
+                .is_some_and(|r| r.contains("parse settings")),
+            "reset reason: {:?}",
+            loaded.reset_reason
+        );
+        assert!(
+            path.parent().unwrap().read_dir().unwrap().any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("settings.json.invalid-")),
+            "corrupt file must be quarantined"
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn corrupt_settings_json_resets_to_defaults() {
+        let path = temp_settings_path("corrupt");
+        fs::write(&path, b"{not-json").expect("write");
+        let loaded = load_settings_detailed(&path);
+        assert_eq!(loaded.settings.mixed_port, 17890);
+        assert!(loaded.reset_reason.is_some());
+        assert!(!path.exists() || load_settings(&path).unwrap() == AppSettings::default());
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -955,7 +1217,6 @@ mod tests {
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn macos_tun_interface_name_requires_utun_numeric_suffix() {
         let path = temp_settings_path("tun-macos-iface");
@@ -969,26 +1230,28 @@ mod tests {
         };
         for name in ["tun0", "utun", "utunx", "utun-1", "Utun4"] {
             settings.tun.interface_name = Some(name.into());
-            let err = save_settings(&path, &settings).expect_err("reject non-utun<N>");
+            let err = save_settings_for(&path, &settings, HostPlatform::MacOs)
+                .expect_err("reject non-utun<N>");
             assert_eq!(err.code, "config.invalid", "case: {name}");
         }
         for name in ["utun0", "utun420", "utun0007"] {
             settings.tun.interface_name = Some(name.into());
-            save_settings(&path, &settings).expect("accept utun<N>");
+            save_settings_for(&path, &settings, HostPlatform::MacOs).expect("accept utun<N>");
         }
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn non_macos_accepts_arbitrary_sane_interface_names() {
         // Platform-exact checks belong to each platform backend (T2); the shared
-        // validator only enforces the sanity rules.
-        assert!(tun_interface_name_valid("utun420"));
-        assert!(tun_interface_name_valid("wintun-ice-box"));
-        assert!(tun_interface_name_valid("Tun0"));
-        assert!(!tun_interface_name_valid("with space"));
-        assert!(!tun_interface_name_valid("a/b"));
+        // validator only enforces the sanity rules off-macOS.
+        assert!(tun_interface_name_valid("utun420", false));
+        assert!(tun_interface_name_valid("wintun-ice-box", false));
+        assert!(tun_interface_name_valid("Tun0", false));
+        assert!(!tun_interface_name_valid("with space", false));
+        assert!(!tun_interface_name_valid("a/b", false));
+        assert!(!tun_interface_name_valid("tun0", true));
+        assert!(tun_interface_name_valid("utun420", true));
     }
 
     #[test]
@@ -1001,5 +1264,53 @@ mod tests {
         assert_eq!(d.stack, TUN_DEFAULT_STACK);
         assert!(d.auto_route && d.strict_route);
         assert!(d.dns_hijack, "dns hijack is the locked default");
+    }
+
+    #[test]
+    fn settings_patch_merges_disjoint_fields() {
+        let base = AppSettings {
+            mixed_port: 17890,
+            allow_lan: false,
+            selected_tag: Some("a".into()),
+            proxy_service_enabled: true,
+            tun: TunSettings {
+                enabled: false,
+                ..TunSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        let from_home = SettingsPatch {
+            tun: Some(TunSettingsPatch {
+                enabled: Some(true),
+                ..TunSettingsPatch::default()
+            }),
+            ..SettingsPatch::default()
+        };
+        let from_settings = SettingsPatch {
+            mixed_port: Some(18080),
+            allow_lan: Some(true),
+            ..SettingsPatch::default()
+        };
+        let after_home = base.apply_patch(&from_home);
+        let merged = after_home.apply_patch(&from_settings);
+        assert!(merged.tun.enabled);
+        assert_eq!(merged.mixed_port, 18080);
+        assert!(merged.allow_lan);
+        assert_eq!(merged.selected_tag.as_deref(), Some("a"));
+        assert!(
+            merged.proxy_service_enabled,
+            "start/stop flag is not part of the patch"
+        );
+    }
+
+    #[test]
+    fn settings_patch_null_clears_selected_tag() {
+        let base = AppSettings {
+            selected_tag: Some("keep".into()),
+            ..AppSettings::default()
+        };
+        let patch: SettingsPatch = serde_json::from_str(r#"{"selected_tag":null}"#).expect("patch");
+        let next = base.apply_patch(&patch);
+        assert_eq!(next.selected_tag, None);
     }
 }

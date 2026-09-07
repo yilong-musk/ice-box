@@ -14,10 +14,6 @@
 use ice_config::NormalizedProfile;
 use serde_json::{json, Value};
 
-pub fn parse_dns(doc: &Value) -> (Option<Value>, Vec<String>) {
-    parse_dns_on(doc, cfg!(target_os = "windows"))
-}
-
 /// Platform-selectable DNS builder so the Windows shape is testable on any
 /// host.
 pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<String>) {

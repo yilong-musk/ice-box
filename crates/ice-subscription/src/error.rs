@@ -35,7 +35,8 @@ impl SubscriptionError {
             Self::InvalidSingBox(_) | Self::ParseFailed(_) | Self::Json(_) => {
                 ErrorCode::SubParseFailed
             }
-            Self::Io(_) | Self::NoActiveSubscription => ErrorCode::SubFetchFailed,
+            Self::Io(_) => ErrorCode::SubIo,
+            Self::NoActiveSubscription => ErrorCode::SubNotFound,
             Self::ProfileParseFailed(_) => ErrorCode::SubParseFailed,
         }
     }

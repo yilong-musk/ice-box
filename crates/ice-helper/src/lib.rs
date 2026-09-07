@@ -58,6 +58,36 @@ mod imp {
     /// concurrent-connection cap).
     const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
+    /// Rotate `sing-box.log` to `.1..3` when it exceeds 20 MiB (CORE-7).
+    fn rotate_core_log(path: &std::path::Path) {
+        const MAX_BYTES: u64 = 20 * 1024 * 1024;
+        const KEEP: u32 = 3;
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        if meta.len() <= MAX_BYTES {
+            return;
+        }
+        let rotated = |n: u32| {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".{n}"));
+            match path.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+                _ => std::path::PathBuf::from(name),
+            }
+        };
+        let _ = std::fs::remove_file(rotated(KEEP));
+        for i in (1..KEEP).rev() {
+            let from = rotated(i);
+            if from.exists() {
+                let _ = std::fs::rename(&from, rotated(i + 1));
+            }
+        }
+        if path.exists() {
+            let _ = std::fs::rename(path, rotated(1));
+        }
+    }
+
     /// Immutable daemon configuration, set by the installer.
     #[derive(Debug, Clone)]
     pub struct ServerConfig {
@@ -139,17 +169,18 @@ mod imp {
         }
     }
 
-    /// Constant-time string compare (token check).
+    /// Constant-time token compare (SEC-7).
+    ///
+    /// Both sides are hashed to a fixed 32-byte SHA-256 digest before
+    /// `subtle::ConstantTimeEq`, so a length mismatch cannot take an early
+    /// return. The installer token is already 64 hex chars; hashing also
+    /// covers tests that use shorter fixtures.
     fn constant_time_eq(a: &str, b: &str) -> bool {
-        let a = a.as_bytes();
-        let b = b.as_bytes();
-        if a.len() != b.len() {
-            return false;
-        }
-        a.iter()
-            .zip(b.iter())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
+        use sha2::{Digest, Sha256};
+        use subtle::ConstantTimeEq;
+        let ha = Sha256::digest(a.as_bytes());
+        let hb = Sha256::digest(b.as_bytes());
+        ha.ct_eq(&hb).into()
     }
 
     /// Authenticate a connection: peer uid (when configured) and request token.
@@ -461,6 +492,7 @@ mod imp {
                     )
                 })?;
             }
+            rotate_core_log(log);
             let log_file = OpenOptions::new()
                 .create(true)
                 .append(true)

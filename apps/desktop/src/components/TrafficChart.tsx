@@ -45,6 +45,8 @@ export function TrafficChart({ running, paused = false, className }: Props) {
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   const failCountRef = useRef(0);
+  const cursorRef = useRef<number | null>(null);
+  const generationRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!running) {
@@ -54,6 +56,8 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       setError(null);
       failCountRef.current = 0;
       inFlightRef.current = false;
+      cursorRef.current = null;
+      generationRef.current = null;
       return;
     }
 
@@ -69,13 +73,26 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
       try {
-        const snap = await api.getTrafficSnapshot();
+        const snap = await api.getTrafficSince(cursorRef.current);
         if (cancelled) return;
         failCountRef.current = 0;
         setError(null);
         setLatest(snap.latest);
-        setPoints(snap.points);
         setPeak(snap.peak ?? null);
+        if (
+          generationRef.current !== snap.generation ||
+          cursorRef.current == null
+        ) {
+          generationRef.current = snap.generation;
+          setPoints(snap.points);
+        } else if (snap.points.length > 0) {
+          setPoints((prev) => {
+            const merged = [...prev, ...snap.points];
+            const cutoff = Date.now() - WINDOW_SECONDS * 1000;
+            return merged.filter((p) => p.t >= cutoff);
+          });
+        }
+        cursorRef.current = snap.cursor;
       } catch (e) {
         if (cancelled) return;
         // Brief Clash API drops are skipped; only surface after sustained failure.
@@ -89,11 +106,29 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     };
 
     void tick();
-    const id = window.setInterval(() => void tick(), 1000);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void tick();
+    }, 1000);
+    let unlisten = () => {};
+    if (typeof api.listenTrafficSample === "function") {
+      void api.listenTrafficSample((sample) => {
+        if (cancelled || document.visibilityState === "hidden") return;
+        cursorRef.current = sample.t;
+        setLatest({ up: sample.up, down: sample.down });
+        setPoints((prev) => {
+          const merged = [...prev, sample];
+          const cutoff = Date.now() - WINDOW_SECONDS * 1000;
+          return merged.filter((p) => p.t >= cutoff);
+        });
+      }).then((u) => {
+        unlisten = u;
+      });
+    }
     return () => {
       cancelled = true;
       window.clearInterval(id);
-      // Allow the next effect run to sample even if this invoke never settles.
+      unlisten();
       inFlightRef.current = false;
     };
   }, [running, paused]);

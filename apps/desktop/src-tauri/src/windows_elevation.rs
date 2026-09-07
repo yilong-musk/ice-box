@@ -13,4 +13,5 @@
 /// Stable error code when a UAC prompt was cancelled (or the elevated
 /// invocation could not be started). Nothing was modified.
 #[cfg(target_os = "windows")]
-pub const ERR_ELEVATION_CANCELLED: &str = "tun.elevation_cancelled";
+pub const ERR_ELEVATION_CANCELLED: ice_config::ErrorCode =
+    ice_config::ErrorCode::TunElevationCancelled;

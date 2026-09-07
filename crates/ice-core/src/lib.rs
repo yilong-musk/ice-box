@@ -24,14 +24,15 @@ pub use health::{
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
 pub use process::{
-    stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, PidProcess,
-    ProcessSpawner, STOP_GRACE_TIMEOUT,
+    pid_is_alive, stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner,
+    PidProcess, ProcessSpawner, STOP_GRACE_TIMEOUT,
 };
 pub use reload::{
     ConfigReloader, MockReloadMode, MockReloader, SignalReloader, WINDOWS_PORT_RELEASE_WAIT,
 };
 pub use traffic::{
-    TimedTrafficSample, TrafficMonitor, TrafficSnapshot, TRAFFIC_HISTORY_MAX, TRAFFIC_WINDOW_MS,
+    TimedTrafficSample, TrafficDelta, TrafficMonitor, TrafficSnapshot, TRAFFIC_HISTORY_MAX,
+    TRAFFIC_WINDOW_MS,
 };
 
 // CoreHandle is defined below with CoreController.
@@ -106,7 +107,8 @@ impl CorePaths {
 /// How reload finished when `Ok`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReloadOutcome {
-    /// Clash API PUT succeeded and post-reload healthcheck passed; process kept.
+    /// SIGHUP (Unix) succeeded, the pid was unchanged, and post-reload health
+    /// (TCP + Clash `GET /version`) passed; process kept.
     HotReloaded,
     /// Hot reload failed; process was restarted from `config.json` and is healthy.
     Restarted,
@@ -389,11 +391,22 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         match signal_result {
             Ok(()) => {
+                let pid_before = self.child.as_ref().map(|c| c.id());
                 if self.wait_health(&paths.health_endpoints()).is_ok() {
-                    tracing::info!("sing-box hot reload ok");
-                    return Ok(ReloadOutcome::HotReloaded);
+                    let still_same = self.child.as_mut().is_some_and(|child| {
+                        child.id() == pid_before.unwrap_or(child.id())
+                            && matches!(child.try_wait(), Ok(None))
+                    });
+                    if still_same {
+                        tracing::info!("sing-box hot reload ok");
+                        return Ok(ReloadOutcome::HotReloaded);
+                    }
+                    tracing::warn!(
+                        "reload signal ok but pid changed or exited; restarting process"
+                    );
+                } else {
+                    tracing::warn!("reload signal ok but healthcheck failed; restarting process");
                 }
-                tracing::warn!("reload signal ok but healthcheck failed; restarting process");
             }
             Err(err) => {
                 tracing::warn!(error = %err, "signal reload failed; restarting process");
@@ -488,7 +501,10 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             let probe = self.health.clone();
             let ep = endpoints.clone();
             let timeout = self.health_timeout;
-            let handle = std::thread::spawn(move || probe.wait_ready(&ep, timeout));
+            let handle = std::thread::spawn(move || {
+                probe.wait_ready(&ep, timeout)?;
+                probe.probe_http(&ep)
+            });
             loop {
                 if let Some(err) = self.early_exit_health_error(paths) {
                     // Leave the probe thread to finish on its own (at most health_timeout).
@@ -529,7 +545,10 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
 
             match try_tcp_connect_once(&endpoints) {
-                Ok(()) => return Ok(()),
+                Ok(()) => match self.health.probe_http(&endpoints) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last_err = e.to_string(),
+                },
                 Err(e) => last_err = e,
             }
             std::thread::sleep(HEALTHCHECK_POLL_INTERVAL);
@@ -581,9 +600,17 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         match &self.health_cancel {
             // Cancel-aware path used by the desktop shell so quit can abort the 5s probe.
             Some(cancel) => {
-                health::wait_tcp_ready_until(endpoints, self.health_timeout, Some(cancel.as_ref()))
+                health::wait_tcp_ready_until(
+                    endpoints,
+                    self.health_timeout,
+                    Some(cancel.as_ref()),
+                )?;
+                self.health.probe_http(endpoints)
             }
-            None => self.health.wait_ready(endpoints, self.health_timeout),
+            None => {
+                self.health.wait_ready(endpoints, self.health_timeout)?;
+                self.health.probe_http(endpoints)
+            }
         }
     }
 
@@ -753,20 +780,7 @@ pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
                 continue;
             };
             let command = fields.next().unwrap_or("");
-            // Match the app's spawn shape (`sing-box run -c <config>`), with
-            // the config path as a whitespace-delimited argument. `ps -o
-            // command=` joins argv with single spaces, so the config path may
-            // itself contain spaces (e.g. macOS "Application Support") and
-            // still match; only its boundaries must be argument delimiters. A
-            // process whose command line merely *embeds* the path in a longer
-            // argument (e.g. `<config>.bak` or `--dir <parent dir>`) is not a
-            // leftover core and must not be terminated.
-            let args: Vec<&str> = command.split_whitespace().collect();
-            let is_core = args.iter().any(|a| a.contains("sing-box"))
-                && args.contains(&"run")
-                && args.contains(&"-c")
-                && config_is_own_argument(command, config.as_ref());
-            if !is_core {
+            if !is_reclaimable_core_command(command, config.as_ref()) {
                 continue;
             }
             // Only processes this user may signal (kill(pid, 0) == 0) are
@@ -795,19 +809,21 @@ pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
         }
         reclaimed
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        reclaim_orphan_cores_windows(config_path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = config_path;
         0
     }
 }
 
-/// Whether `config` appears in `command` as a whitespace-delimited argument,
-/// as `ps -o command=` renders it (argv joined with single spaces). The path
-/// itself may contain spaces; only the boundaries around the match must be
-/// argument delimiters, so an occurrence embedded in a longer argument is
-/// not treated as an own argument.
-#[cfg(unix)]
+/// Whether `config` appears in `command` as a whitespace- or quote-delimited
+/// argument. The path itself may contain spaces; only the boundaries around
+/// the match must be argument delimiters, so an occurrence embedded in a
+/// longer argument is not treated as an own argument.
 fn config_is_own_argument(command: &str, config: &str) -> bool {
     let mut search_from = 0;
     while let Some(rel) = command[search_from..].find(config) {
@@ -815,20 +831,129 @@ fn config_is_own_argument(command: &str, config: &str) -> bool {
         let end = start + config.len();
         let before = command[..start].chars().next_back();
         let after = command[end..].chars().next();
-        let before_ok = match before {
+        let delim_ok = |c: Option<char>| match c {
             None => true,
-            Some(c) => c.is_whitespace(),
+            Some(ch) => ch.is_whitespace() || ch == '"' || ch == '\'',
         };
-        let after_ok = match after {
-            None => true,
-            Some(c) => c.is_whitespace(),
-        };
-        if before_ok && after_ok {
+        if delim_ok(before) && delim_ok(after) {
             return true;
         }
         search_from = end;
     }
     false
+}
+
+/// `sing-box run -c <config>` (Unix `ps` or a Windows process command line).
+fn is_reclaimable_core_command(command: &str, config: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("sing-box")
+        && command.split_whitespace().any(|a| a == "run")
+        && command.split_whitespace().any(|a| a == "-c")
+        && config_is_own_argument(command, config)
+}
+
+#[cfg(windows)]
+fn reclaim_orphan_cores_windows(config_path: &Path) -> usize {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let config = config_path.to_string_lossy();
+    let self_pid = std::process::id();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == (-1isize as _) {
+            return 0;
+        }
+        let mut entry = std::mem::zeroed::<PROCESSENTRY32W>();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut reclaimed = 0;
+        let mut ok = Process32FirstW(snap, &mut entry);
+        while ok != 0 {
+            let pid = entry.th32ProcessID;
+            if pid != 0 && pid != self_pid {
+                if let Some(command) = process_command_line(pid) {
+                    if is_reclaimable_core_command(&command, config.as_ref()) && pid_is_alive(pid) {
+                        tracing::warn!(
+                            pid,
+                            "reclaiming orphan sing-box core running this installation's config (no pid file)"
+                        );
+                        if force_kill_pid(pid) {
+                            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                            while std::time::Instant::now() < deadline && pid_is_alive(pid) {
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                            reclaimed += 1;
+                        }
+                    }
+                }
+            }
+            ok = Process32NextW(snap, &mut entry);
+        }
+        CloseHandle(snap);
+        reclaimed
+    }
+}
+
+#[cfg(windows)]
+fn process_command_line(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        NtQueryInformationProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    const PROCESS_COMMAND_LINE_INFORMATION: i32 = 60;
+
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16,
+        maximum_length: u16,
+        buffer: *const u16,
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut needed: u32 = 0;
+        let _ = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            CloseHandle(handle);
+            return None;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let status = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            buf.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        CloseHandle(handle);
+        if status < 0 {
+            return None;
+        }
+        if buf.len() < std::mem::size_of::<UnicodeString>() {
+            return None;
+        }
+        let us = &*(buf.as_ptr() as *const UnicodeString);
+        if us.buffer.is_null() || us.length == 0 {
+            return None;
+        }
+        let units = (us.length as usize) / 2;
+        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
+            us.buffer, units,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -969,40 +1094,6 @@ fn strip_ansi_light(s: &str) -> String {
         }
     }
     out
-}
-
-fn pid_is_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        // `kill(pid, 0)` probes liveness only. EPERM means the process
-        // exists but belongs to another user (e.g. an elevated root core);
-        // it is alive, just not signalable by us.
-        let rc = unsafe { libc::kill(pid as i32, 0) };
-        if rc == 0 {
-            return true;
-        }
-        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    }
-    #[cfg(windows)]
-    {
-        unsafe {
-            let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                0,
-                pid,
-            );
-            if handle.is_null() {
-                return false;
-            }
-            windows_sys::Win32::Foundation::CloseHandle(handle);
-            true
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        false
-    }
 }
 
 fn looks_like_singbox_process(pid: u32) -> bool {
@@ -1529,6 +1620,24 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn reclaim_command_match_requires_own_config_argument() {
+        let unix = "/opt/ice-box/sing-box run -c /tmp/ice-box/config.json";
+        assert!(is_reclaimable_core_command(
+            unix,
+            "/tmp/ice-box/config.json"
+        ));
+        assert!(
+            !is_reclaimable_core_command(unix, "/tmp/ice-box/config.json.bak"),
+            "embedded suffix must not match"
+        );
+        let quoted = r#""C:\Program Files\ice-box\sing-box.exe" run -c "C:\Users\me\AppData\Roaming\ice-box\config.json""#;
+        assert!(is_reclaimable_core_command(
+            quoted,
+            r"C:\Users\me\AppData\Roaming\ice-box\config.json"
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn reclaim_orphan_cores_with_config_kills_matching_user_owned_process() {
@@ -1740,6 +1849,35 @@ mod tests {
     }
 
     #[test]
+    fn reload_tcp_ok_http_fail_takes_restart_path() {
+        let dir = temp_root("g3-http-fail");
+        let bin = marker_binary(&dir);
+        let paths = paths_in(&dir, bin);
+        fs::write(&paths.config, br#"{"ok":true}"#).unwrap();
+
+        let health = SequenceHealthProbe::new(vec![
+            Ok(()), // start TCP
+            Ok(()), // reload TCP
+            Ok(()), // restart TCP
+        ])
+        .with_http(vec![
+            Ok(()), // start HTTP
+            Err(CoreError::HealthcheckFailed("http probe fail".into())),
+            Ok(()), // restart HTTP
+        ]);
+        let spawner = MockSpawner::with_start_pid(700);
+        let killed = spawner.killed_pids.clone();
+        let mut core = mock_ctrl(spawner, health, MockReloader::new(MockReloadMode::Ok));
+        core.start(&paths).expect("start");
+
+        let outcome = core.reload(&paths).expect("restart after http fail");
+        assert_eq!(outcome, ReloadOutcome::Restarted);
+        assert!(killed.lock().unwrap().contains(&700));
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn g3_5_stopped_reload_invalid_state() {
         let mut core = mock_ctrl(
             MockSpawner::default(),
@@ -1765,14 +1903,18 @@ mod tests {
         };
 
         let dir = temp_root("g3-real");
+        let inbound_port = free_loopback_port();
+        let mut clash_api_port = free_loopback_port();
+        while clash_api_port == inbound_port {
+            clash_api_port = free_loopback_port();
+        }
         let mut cfg: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo.join("configs/examples/minimal-direct.json")).unwrap(),
         )
         .unwrap();
-        // Unique ports to avoid clash with other tests / apps.
-        cfg["inbounds"][0]["listen_port"] = serde_json::json!(27891);
+        cfg["inbounds"][0]["listen_port"] = serde_json::json!(inbound_port);
         cfg["experimental"]["clash_api"]["external_controller"] =
-            serde_json::json!("127.0.0.1:29091");
+            serde_json::json!(format!("127.0.0.1:{clash_api_port}"));
         let config = dir.join("config.json");
         fs::write(&config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
         fs::create_dir_all(dir.join("logs")).unwrap();
@@ -1783,9 +1925,9 @@ mod tests {
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
             inbound_host: "127.0.0.1".into(),
-            inbound_port: 27891,
+            inbound_port,
             clash_api_host: "127.0.0.1".into(),
-            clash_api_port: 29091,
+            clash_api_port,
             allow_lan: false,
         };
 

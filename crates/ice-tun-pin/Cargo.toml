@@ -1,0 +1,9 @@
+[package]
+name = "ice-tun-pin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host-free Windows TUN scheduled-task pin (sha256, XML render/parse)"
+
+[dependencies]
+sha2 = "0.10"

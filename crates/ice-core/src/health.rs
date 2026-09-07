@@ -16,8 +16,9 @@ pub const HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(5000);
 /// Poll interval while waiting for the port to accept connections.
 pub const HEALTHCHECK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Endpoints used after spawn. v1 probes **TCP connect** to clash API listen address
-/// (not HTTP yet; sufficient to know sing-box bound the controller port).
+/// Endpoints used after spawn. v1 probes **TCP connect** then **HTTP GET /version**
+/// on the Clash API listen address so a stray process holding the port is not
+/// treated as a healthy core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthEndpoints {
     pub host: String,
@@ -32,6 +33,13 @@ impl HealthEndpoints {
 
 pub trait HealthProbe: Send + Clone + 'static {
     fn wait_ready(&self, endpoints: &HealthEndpoints, timeout: Duration) -> Result<(), CoreError>;
+
+    /// One-shot HTTP probe (`GET /version`). Default succeeds so test fakes that
+    /// only model TCP still compile; production [`TcpHealthProbe`] overrides.
+    fn probe_http(&self, endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+        let _ = endpoints;
+        Ok(())
+    }
 }
 
 /// TCP connect probe against clash API (or any listen port).
@@ -41,6 +49,11 @@ pub struct TcpHealthProbe;
 impl HealthProbe for TcpHealthProbe {
     fn wait_ready(&self, endpoints: &HealthEndpoints, timeout: Duration) -> Result<(), CoreError> {
         wait_tcp_ready(endpoints, timeout)
+    }
+
+    fn probe_http(&self, endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+        crate::clash_api::probe_version(endpoints)
+            .map_err(|err| CoreError::HealthcheckFailed(format!("clash api GET /version: {err}")))
     }
 }
 
@@ -171,6 +184,12 @@ impl HealthProbe for FailingHealthProbe {
             "mock healthcheck failure".into(),
         ))
     }
+
+    fn probe_http(&self, _endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+        Err(CoreError::HealthcheckFailed(
+            "mock healthcheck failure".into(),
+        ))
+    }
 }
 
 /// Probe that always succeeds immediately.
@@ -187,17 +206,26 @@ impl HealthProbe for ImmediateHealthProbe {
     }
 }
 
-/// Pops queued results in order (for restart-fallback tests).
+/// Pops queued TCP results in order (for restart-fallback tests).
+/// HTTP results default to `Ok` when the queue is empty so existing tests
+/// keep a single pop per `wait_ready`.
 #[derive(Debug, Clone)]
 pub struct SequenceHealthProbe {
     results: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Result<(), CoreError>>>>,
+    http: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Result<(), CoreError>>>>,
 }
 
 impl SequenceHealthProbe {
     pub fn new(results: Vec<Result<(), CoreError>>) -> Self {
         Self {
             results: std::sync::Arc::new(std::sync::Mutex::new(results.into())),
+            http: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         }
+    }
+
+    pub fn with_http(self, http: Vec<Result<(), CoreError>>) -> Self {
+        *self.http.lock().expect("lock") = http.into();
+        self
     }
 }
 
@@ -208,6 +236,14 @@ impl HealthProbe for SequenceHealthProbe {
         _timeout: Duration,
     ) -> Result<(), CoreError> {
         let mut q = self.results.lock().expect("lock");
+        match q.pop_front() {
+            Some(r) => r,
+            None => Ok(()),
+        }
+    }
+
+    fn probe_http(&self, _endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+        let mut q = self.http.lock().expect("lock");
         match q.pop_front() {
             Some(r) => r,
             None => Ok(()),

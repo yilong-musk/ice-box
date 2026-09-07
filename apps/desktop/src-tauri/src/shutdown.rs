@@ -230,9 +230,11 @@ mod tests {
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
         let system_proxy_available = proxy.is_available();
+        let (core, core_snapshot) = crate::core_snapshot::wrap_core(core);
         AppState {
             paths: paths.clone(),
-            core: Mutex::new(core),
+            core,
+            core_snapshot,
             proxy: Mutex::new(proxy),
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),

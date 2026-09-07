@@ -5,6 +5,7 @@
 use crate::commands;
 use crate::orchestrate::current_settings;
 use crate::AppState;
+use ice_engine::host_platform;
 use ice_subscription::{
     AutoUpdateInterval, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
@@ -68,7 +69,7 @@ pub(crate) fn due_auto_update_ids(
 /// may retry shortly.
 pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths);
+    let mgr = SubscriptionManager::open(paths, host_platform());
     let items = match mgr.list() {
         Ok(items) => items,
         Err(err) => {

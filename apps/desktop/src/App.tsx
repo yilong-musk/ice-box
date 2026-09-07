@@ -48,6 +48,7 @@ import {
   type MessageKey,
 } from "./lib/i18n";
 import { useThemePreference } from "./lib/theme";
+import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import logo from "./assets/logo.png";
 
 type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
@@ -71,6 +72,7 @@ function TabPane({
         active ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"
       }
       aria-hidden={!active}
+      data-active={active ? "true" : "false"}
     >
       {children}
     </div>
@@ -120,11 +122,21 @@ function TitleBar({ label }: { label: string }) {
 }
 
 function App() {
+  return (
+    <RuntimeStoreProvider>
+      <AppShell />
+    </RuntimeStoreProvider>
+  );
+}
+
+function AppShell() {
   const [tab, setTab] = useState<Tab>("home");
   const [visited, setVisited] = useState<ReadonlySet<Tab>>(
     () => new Set<Tab>(["home"]),
   );
+  const runtime = useRuntimeStore();
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
+  const status = runtime?.status ?? globalStatus;
   const [languageReady, setLanguageReady] = useState(false);
   const [availableUpdate, setAvailableUpdate] =
     useState<CheckAppUpdateResponse | null>(null);
@@ -199,31 +211,6 @@ function App() {
       return next;
     });
   }
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const status = await api.getStatus();
-        if (!cancelled) setGlobalStatus(status);
-      } catch {
-        // Background poll; tab pages surface their own errors.
-      }
-    };
-    // Home already polls status every 2s and reports it via `onStatus`.
-    // Skip a duplicate startup getStatus while Home is the active tab.
-    if (tab === "home") {
-      return () => {
-        cancelled = true;
-      };
-    }
-    void poll();
-    const id = window.setInterval(() => void poll(), 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [tab]);
 
   const current = NAV_ITEMS.find((item) => item.id === tab);
 
@@ -307,15 +294,18 @@ function App() {
           </Sidebar>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {globalStatus?.proxy_recovery_warning && (
+            {status?.proxy_recovery_warning && (
               <div className="px-4 pt-3">
                 <ErrorAlert>
-                  {globalStatus.proxy_recovery_warning}
+                  {status.proxy_recovery_warning}
                 </ErrorAlert>
               </div>
             )}
 
-            <main className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4">
+            <main
+              className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
+              data-testid="app-main"
+            >
               {visited.has("home") && (
                 <TabPane active={tab === "home"}>
                   <Home

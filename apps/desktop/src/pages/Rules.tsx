@@ -232,7 +232,7 @@ export function Rules({ onNavigate, active = true }: Props) {
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
 
   return (
-    <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3">
+    <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="rules-panel">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {applyWarning && (
         <WarnAlert className="shrink-0" role="alert">
@@ -406,6 +406,8 @@ export function Rules({ onNavigate, active = true }: Props) {
           )}
           {showList ? (
             <div
+              data-testid="rules-pager"
+              data-visible={nearBottom ? "true" : "false"}
               className={cn(
                 "absolute inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 border-t border-border bg-background/95 px-3 py-2 backdrop-blur-sm transition-opacity duration-200",
                 nearBottom

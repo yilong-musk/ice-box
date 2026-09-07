@@ -13,21 +13,43 @@
 
 pub use ice_config::{
     build_direct_only_config, build_runtime_config, clash_mode_name, config_to_pretty_json,
-    minimal_dns_block, redact_config_str, rule_type_of, tun_gate, tun_reserved_rules,
+    minimal_dns_block, redact_config_str, rule_type_of, tun_gate_for, tun_reserved_rules,
     validate_config_for_intent, validate_template, AppSettings, BuildInput, CaptureIntent,
-    ConfigError, GroupSelections, LocalTemplate, NormalizedOutbound, NormalizedProfile,
-    NormalizedRoute, ProxyMode, RuleOverrides, TunGate, TunSettings, ENGINE_COMPAT_CORE_VERSION,
+    ConfigError, GroupSelections, HostPlatform, LocalTemplate, NormalizedOutbound,
+    NormalizedProfile, NormalizedRoute, ProxyMode, RuleOverrides, TunGate, TunSettings,
     RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
-    apply_builtin_default_rules, detect_format, maybe_decode_base64, normalize_raw_body,
-    parse_clash_profile, parse_profile, parse_singbox, parse_singbox_profile, parse_subscription,
-    DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager, SubscriptionError,
-    SubscriptionFormat, SubscriptionIndex, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths,
+    apply_builtin_default_rules, detect_format, load_active_profile_with_default_rules, load_index,
+    maybe_decode_base64, normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox,
+    parse_singbox_profile, parse_subscription, resolve_selected_tag, DirectFetcher, FetchResponse,
+    HttpFetcher, MemorySubscriptionManager, SubscriptionError, SubscriptionFormat,
+    SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
+pub use ice_types::{AppError, ENGINE_COMPAT_CORE_VERSION};
 
 use std::path::PathBuf;
+
+/// Compile-time host mapped onto [`HostPlatform`]. Lives here (not in
+/// `ice-config` / `ice-subscription`) so those crates stay target-agnostic.
+pub fn host_platform() -> HostPlatform {
+    if cfg!(target_os = "macos") {
+        HostPlatform::MacOs
+    } else if cfg!(target_os = "windows") {
+        HostPlatform::Windows
+    } else if cfg!(target_os = "ios") {
+        HostPlatform::Ios
+    } else if cfg!(target_os = "android") {
+        HostPlatform::Android
+    } else {
+        HostPlatform::Linux
+    }
+}
+
+/// T0 TUN gate for the compile-time host.
+pub fn tun_gate() -> TunGate {
+    tun_gate_for(host_platform())
+}
 
 /// Unified engine error: config build or subscription parse failures.
 #[derive(Debug, thiserror::Error)]
@@ -38,12 +60,28 @@ pub enum EngineError {
     Subscription(#[from] SubscriptionError),
 }
 
+impl From<EngineError> for AppError {
+    fn from(err: EngineError) -> Self {
+        match err {
+            EngineError::Config(e) => e.into(),
+            EngineError::Subscription(e) => e.into(),
+        }
+    }
+}
+
 /// Detect + parse a raw subscription body (base64 wrapper, Clash YAML, or
-/// sing-box JSON) into a normalized profile.
+/// sing-box JSON) into a normalized profile for the compile-time host.
 pub fn import_subscription(
     raw: &str,
 ) -> Result<(SubscriptionFormat, NormalizedProfile), EngineError> {
-    Ok(normalize_raw_body(raw)?)
+    import_subscription_for(raw, host_platform())
+}
+
+pub fn import_subscription_for(
+    raw: &str,
+    platform: HostPlatform,
+) -> Result<(SubscriptionFormat, NormalizedProfile), EngineError> {
+    Ok(normalize_raw_body(raw, platform)?)
 }
 
 /// Build the final sing-box JSON config from a validated input.
@@ -62,11 +100,12 @@ pub fn subscription_to_config(
     template: LocalTemplate,
     geoip_rule_set_dir: Option<PathBuf>,
     capture_intent: CaptureIntent,
+    platform: HostPlatform,
 ) -> Result<String, EngineError> {
-    let (_, mut profile) = normalize_raw_body(raw)?;
+    let (_, mut profile) = normalize_raw_body(raw, platform)?;
     // Rule-less bodies get the built-in split-routing defaults (same default
     // the desktop app applies via `auto_default_rules`).
-    apply_builtin_default_rules(&mut profile);
+    apply_builtin_default_rules(&mut profile, platform);
     let input = BuildInput {
         template,
         profile,
@@ -75,6 +114,7 @@ pub fn subscription_to_config(
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent,
+        platform,
     };
     let config = build_runtime_config(&input)?;
     Ok(config_to_pretty_json(&config)?)
@@ -115,6 +155,7 @@ proxies:
             LocalTemplate::default(),
             None,
             CaptureIntent::Diagnostic,
+            HostPlatform::MacOs,
         )
         .expect("pipeline");
         let value: serde_json::Value = serde_json::from_str(&json).expect("json");
@@ -140,6 +181,7 @@ proxies:
             LocalTemplate::default(),
             Some(geoip_dir),
             CaptureIntent::Diagnostic,
+            HostPlatform::MacOs,
         )
         .expect("pipeline");
         let value: serde_json::Value = serde_json::from_str(&json).expect("json");
@@ -210,13 +252,9 @@ proxies:
             .unwrap()
             .iter()
             .any(|r| r["server"] == "cn-dns"));
-        #[cfg(target_os = "windows")]
-        assert_eq!(value["route"]["default_domain_resolver"], "remote-dns");
-        #[cfg(not(target_os = "windows"))]
         assert_eq!(value["route"]["default_domain_resolver"], "local");
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn subscription_to_config_honors_tun_intent() {
         let json = subscription_to_config(
@@ -231,26 +269,17 @@ proxies:
             },
             None,
             CaptureIntent::Tun,
+            HostPlatform::MacOs,
         )
         .expect("tun pipeline");
         let value: serde_json::Value = serde_json::from_str(&json).expect("json");
         validate_config_for_intent(&value, CaptureIntent::Tun).expect("intent structural check");
         assert_eq!(value["inbounds"][1]["type"], "tun");
         assert_eq!(value["inbounds"][1]["tag"], "tun-in");
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
-            assert_eq!(value["route"]["rules"][1]["action"], "hijack-dns");
-        }
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(value["route"]["rules"][0]["port"][0], 53);
-            assert_eq!(value["route"]["rules"][0]["action"], "hijack-dns");
-            assert_eq!(value["route"]["rules"][1]["process_name"][0], "ice-box");
-        }
+        assert_eq!(value["route"]["rules"][0]["process_name"][0], "ice-box");
+        assert_eq!(value["route"]["rules"][1]["action"], "hijack-dns");
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn subscription_to_config_rejects_tun_intent_off_green_platforms() {
         let err = subscription_to_config(
@@ -265,6 +294,7 @@ proxies:
             },
             None,
             CaptureIntent::Tun,
+            HostPlatform::Linux,
         )
         .expect_err("tun gate not green");
         assert!(matches!(
@@ -275,11 +305,11 @@ proxies:
 
     #[test]
     fn engine_exposes_tun_gate_for_preflight() {
+        assert!(tun_gate_for(HostPlatform::MacOs).ready);
+        assert!(tun_gate_for(HostPlatform::Windows).ready);
+        assert!(!tun_gate_for(HostPlatform::Linux).ready);
         let gate: TunGate = tun_gate();
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        assert!(gate.ready);
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert!(!gate.ready);
+        assert_eq!(gate.ready, host_platform().tun_ready());
     }
 
     #[test]
@@ -303,6 +333,7 @@ proxies:
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect("build");
         let first = &value["route"]["rules"][0];
@@ -336,6 +367,7 @@ proxies:
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect_err("empty profile");
         assert!(matches!(

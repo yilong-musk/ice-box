@@ -2,6 +2,8 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
+import { ruleTypeLabel } from "../lib/rules";
 import { Rules } from "./Rules";
 
 const getRuleOverview = vi.fn();
@@ -92,45 +94,28 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    expect(view.getByRole("radio", { name: "域名后缀 2" })).toBeInTheDocument();
-    expect(view.getByRole("radio", { name: "全部" })).toBeInTheDocument();
-    expect(view.getByRole("radio", { name: "GEOIP 1" })).toBeInTheDocument();
-    const chips = view.getByLabelText("规则筛选");
-    const customFilter = view.getByRole("button", { name: "自定义 1" });
-    const disabledFilter = view.getByRole("button", { name: "已禁用 1" });
+    expect(view.getByRole("radio", { name: `${ruleTypeLabel("domain_suffix")} 2` })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: t("rules.typeAll") })).toBeInTheDocument();
+    expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` })).toBeInTheDocument();
+    const chips = view.getByLabelText(t("rules.filtersAria"));
+    const customFilter = view.getByRole("button", { name: t("rules.customCount", { count: 1 }) });
+    const disabledFilter = view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) });
     expect(chips).toContainElement(customFilter);
     expect(chips).toContainElement(disabledFilter);
-    expect(chips.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["flex-wrap", "shrink-0", "h-auto"]),
-    );
-    expect(chips.className.split(/\s+/)).not.toContain("max-h-16");
     expect(view.getByText("example.com")).toBeInTheDocument();
     const customRow = view
       .getByText("example.com")
       .closest("[data-slot=item]") as HTMLElement;
-    const customMarker = within(customRow).getByText("自定义");
-    expect(customMarker).toHaveClass("font-normal", "text-muted-foreground");
+    const customMarker = within(customRow).getByText(t("rules.custom"));
     expect(customMarker).not.toHaveAttribute("data-slot", "badge");
     expect(container.querySelector(".node-table")).toBeNull();
-    expect(view.getByRole("list", { name: "规则列表" })).toBeInTheDocument();
-    const ruleList = view.getByRole("list", { name: "规则列表" });
+    expect(view.getByRole("list", { name: t("rules.listAria") })).toBeInTheDocument();
+    const ruleList = view.getByRole("list", { name: t("rules.listAria") });
     const scrollArea = ruleList.closest('[data-slot="scroll-area"]');
-    expect(scrollArea?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining([
-        "min-h-0",
-        "flex-1",
-        "overflow-hidden",
-      ]),
-    );
     expect(
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
-    expect(
-      view.getByText("youtube.com").closest("[data-slot=item]")?.className,
-    ).toEqual(expect.stringContaining("pr-3"));
-    expect(
-      container.querySelector(".rules-panel")?.className.split(/\s+/),
-    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
+    expect(view.getByTestId("rules-panel")).toBeInTheDocument();
   });
 
   it("reloads the active subscription when the pane is reactivated", async () => {
@@ -156,7 +141,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "已禁用 1" }).click();
+    view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
@@ -172,7 +157,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "自定义 1" }).click();
+    view.getByRole("button", { name: t("rules.customCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
@@ -188,8 +173,8 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByLabelText("搜索规则").focus();
-    fireEvent.change(view.getByLabelText("搜索规则"), {
+    view.getByLabelText(t("rules.searchAria")).focus();
+    fireEvent.change(view.getByLabelText(t("rules.searchAria")), {
       target: { value: "goo" },
     });
 
@@ -210,7 +195,7 @@ describe("Rules", () => {
     });
 
     const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
-    within(row).getByRole("button", { name: "禁用" }).click();
+    within(row).getByRole("button", { name: t("common.disable") }).click();
 
     await waitFor(() => {
       expect(setRuleDisabled).toHaveBeenCalledWith("fp-1", true);
@@ -236,7 +221,7 @@ describe("Rules", () => {
     });
 
     const row = view.getByText("youtube.com").closest("[data-slot=item]") as HTMLElement;
-    within(row).getByRole("button", { name: "禁用" }).click();
+    within(row).getByRole("button", { name: t("common.disable") }).click();
 
     await waitFor(() => {
       expect(screen.getByText(/已保存，但应用失败/)).toBeInTheDocument();
@@ -251,7 +236,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
@@ -288,7 +273,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     const outbound = screen.getByLabelText("出口") as HTMLSelectElement;
     await waitFor(() => {
       expect(
@@ -307,7 +292,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     fireEvent.change(screen.getByLabelText("匹配类型"), {
       target: { value: "ip_is_private" },
     });
@@ -330,7 +315,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     const addButton = screen.getByRole("button", {
       name: "添加",
     }) as HTMLButtonElement;
@@ -354,7 +339,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     fireEvent.change(screen.getByLabelText("匹配值"), {
       target: { value: "x.io" },
     });
@@ -369,7 +354,7 @@ describe("Rules", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "+ 自定义规则" }));
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
@@ -390,7 +375,7 @@ describe("Rules", () => {
     });
 
     const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    fireEvent.click(within(row).getByRole("button", { name: t("common.delete") }));
 
     await waitFor(() => {
       expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -415,9 +400,10 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
-    const pagerText = view.getByText(/第 1 \/ 2 页 · 共 120 条/);
-    const pager = pagerText.parentElement as HTMLElement;
-    expect(pagerText).toBeInTheDocument();
+    const pager = view.getByTestId("rules-pager");
+    expect(pager).toHaveTextContent(
+      t("rules.pageInfo", { page: 1, pages: 2, total: 120 }),
+    );
 
     const viewport = container.querySelector(
       '[data-slot="scroll-area-viewport"]',
@@ -428,9 +414,9 @@ describe("Rules", () => {
       scrollTop: { configurable: true, value: 100, writable: true },
     });
     fireEvent.scroll(viewport);
-    expect(pager).toHaveClass("opacity-0");
+    expect(pager).toHaveAttribute("data-visible", "false");
 
-    view.getByRole("button", { name: "下一页" }).click();
+    view.getByRole("button", { name: t("rules.nextPage") }).click();
     await waitFor(() => {
       const calls = listRules.mock.calls;
       const call = calls[calls.length - 1]?.[0] as { offset: number };

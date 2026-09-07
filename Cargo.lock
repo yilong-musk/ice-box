@@ -1659,6 +1659,7 @@ dependencies = [
  "ice-config",
  "ice-core",
  "ice-elevate",
+ "ice-engine",
  "ice-proxy-sys",
  "ice-subscription",
  "ice-tun-sys",
@@ -1682,10 +1683,13 @@ version = "0.1.6"
 dependencies = [
  "anyhow",
  "ice-config-guard",
+ "ice-types",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
 ]
 
@@ -1726,6 +1730,7 @@ version = "0.1.6"
 dependencies = [
  "ice-config",
  "ice-subscription",
+ "ice-types",
  "serde_json",
  "thiserror 2.0.20",
 ]
@@ -1740,6 +1745,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tracing",
 ]
 
@@ -1765,10 +1771,12 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "ice-config",
  "ice-config-guard",
  "percent-encoding",
  "rustls",
+ "rustls-platform-verifier 0.6.2",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1777,7 +1785,6 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -1785,9 +1792,16 @@ name = "ice-tun-launcher"
 version = "0.1.6"
 dependencies = [
  "ice-config-guard",
+ "ice-tun-pin",
  "serde_json",
- "sha2",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ice-tun-pin"
+version = "0.1.6"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
@@ -1797,7 +1811,7 @@ dependencies = [
  "chrono",
  "ice-config-guard",
  "ice-helper",
- "ice-tun-launcher",
+ "ice-tun-pin",
  "libc",
  "serde",
  "serde_json",
@@ -1805,6 +1819,14 @@ dependencies = [
  "tracing",
  "uuid",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ice-types"
+version = "0.1.6"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3144,7 +3166,7 @@ dependencies = [
  "pin-project-lite",
  "rustls",
  "rustls-pki-types",
- "rustls-platform-verifier",
+ "rustls-platform-verifier 0.7.0",
  "serde",
  "serde_json",
  "sync_wrapper",
@@ -3237,6 +3259,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
  "zeroize",
+]
+
+[[package]]
+name = "rustls-platform-verifier"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d99feebc72bae7ab76ba994bb5e121b8d83d910ca40b36e0921f53becc41784"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "jni 0.21.1",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier-android",
+ "rustls-webpki",
+ "security-framework",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3774,6 +3817,12 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
@@ -4561,6 +4610,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.20",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]

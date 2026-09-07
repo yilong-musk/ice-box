@@ -26,6 +26,10 @@ pub fn apply_and_record(
                     .into(),
             ));
         }
+    } else if backup_path.exists() {
+        return Err(ProxySysError::RestoreFailed(
+            "proxy-backup.json is corrupt; recover before applying".into(),
+        ));
     }
 
     let backup = proxy.backup()?;
@@ -93,7 +97,10 @@ pub fn restore_and_clear_flag(
     if !backup_path.exists() {
         return Ok(false);
     }
-    let mut record = ProxyBackupFile::load(backup_path)?;
+    let mut record = match ProxyBackupFile::load(backup_path) {
+        Ok(record) => record,
+        Err(_) => return crate::recover_if_applied(backup_path, proxy),
+    };
     if !record.applied && !record.pending_apply {
         return Ok(false);
     }

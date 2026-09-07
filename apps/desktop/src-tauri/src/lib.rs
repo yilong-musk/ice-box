@@ -4,6 +4,7 @@ mod acceptance;
 mod app_update;
 mod capture;
 mod commands;
+mod core_snapshot;
 mod core_watch;
 mod helper_install;
 mod instance;
@@ -16,9 +17,10 @@ mod tray;
 mod windows_elevation;
 
 use crate::capture::CaptureController;
+use crate::core_snapshot::{wrap_core, CoreSnapshotHub};
 use crate::orchestrate::current_settings;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
-use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
+use ice_config::{init_logging, load_settings_detailed, purge_invalid_pid_file, AppPaths};
 use ice_core::{CoreController, CoreHandle, TrafficMonitor};
 use ice_proxy_sys::{create_system_proxy, ProxyEndpoints, SystemProxy};
 use std::io::Write;
@@ -26,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 /// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
 /// written here so a crash on Windows (where the release binary has no console and
@@ -67,6 +69,8 @@ fn install_panic_hook() {
 pub struct AppState {
     pub paths: AppPaths,
     pub core: Mutex<Box<dyn CoreHandle>>,
+    /// Published on every core transition; `collect_status` never takes `core`.
+    pub core_snapshot: Arc<CoreSnapshotHub>,
     pub proxy: Mutex<Box<dyn SystemProxy>>,
     /// Serializes config mutations (subscriptions, settings, start/stop, node select).
     pub orchestrate: Mutex<()>,
@@ -159,16 +163,21 @@ pub fn run() {
             let paths_for_focus = paths.clone();
             let shutdown_requested = Arc::new(AtomicBool::new(false));
             let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
+            let (core, core_snapshot) = wrap_core(core);
+            let settings_reset_warning = load_settings_detailed(&paths.settings())
+                .reset_reason
+                .map(|reason| format!("settings.reset: {reason}"));
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
             let resource_dir = app.path().resource_dir().ok();
             let capture = CaptureController::new(paths.clone(), resource_dir.clone());
             app.manage(AppState {
                 paths,
-                core: Mutex::new(core),
+                core,
+                core_snapshot,
                 proxy: Mutex::new(proxy),
                 orchestrate: Mutex::new(()),
-                proxy_recovery_warning: Mutex::new(None),
+                proxy_recovery_warning: Mutex::new(settings_reset_warning),
                 proxy_applied_cache: Mutex::new(None),
                 system_proxy_available,
                 shutdown_requested,
@@ -182,6 +191,17 @@ pub fn run() {
                 clash_live_mode_cache: Mutex::new(true),
                 launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
             });
+            {
+                let handle = app.handle().clone();
+                let state = app.state::<AppState>();
+                state.core_snapshot.bind_emitter(handle.clone());
+                state.traffic.set_on_sample({
+                    let handle = handle.clone();
+                    move |sample| {
+                        let _ = handle.emit(crate::core_snapshot::TRAFFIC_SAMPLE, sample);
+                    }
+                });
+            }
             // Overlap geoip copy and the bundled-core SHA-256 with leftover
             // reclaim / TUN recovery and the first UI status poll.
             {
@@ -236,11 +256,18 @@ pub fn run() {
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
+                let _ = window.emit(crate::core_snapshot::WINDOW_HIDDEN, ());
             }
+            WindowEvent::Focused(focused) => {
+                if *focused {
+                    let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
@@ -255,6 +282,7 @@ pub fn run() {
             commands::ensure_tun_elevation,
             commands::remove_tun_elevation,
             commands::get_log_view,
+            commands::clear_logs,
             commands::get_runtime_config,
             commands::reveal_data_dir,
             commands::get_settings,
@@ -277,6 +305,7 @@ pub fn run() {
             commands::add_custom_rule,
             commands::remove_custom_rule,
             commands::get_traffic_snapshot,
+            commands::get_traffic_since,
             app_update::check_app_update,
             app_update::record_update_prompt,
             app_update::skip_app_update,
@@ -450,5 +479,17 @@ mod tests {
         assert!(paths.proxy_backup().exists());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn error_codes_ts_lists_every_rust_variant() {
+        let ts = include_str!("../../src/api/errorCodes.ts");
+        for code in ice_config::ErrorCode::ALL {
+            let needle = format!("\"{}\"", code.as_str());
+            assert!(
+                ts.contains(&needle),
+                "apps/desktop/src/api/errorCodes.ts missing {needle}"
+            );
+        }
     }
 }

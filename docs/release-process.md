@@ -153,6 +153,12 @@ than CI:
 - Skips the desktop Vite production build (`npm run build`); CI
   `scripts/gate.sh` runs it.
 
+The Rust toolchain is pinned in `rust-toolchain.toml` (CI-3). GeoIP rule-set
+fetches (`scripts/fetch-geoip.sh`) pin `third_party/sing-geoip/REF` and
+verify SHA-256 against `third_party/sing-geoip/CHECKSUMS.sha256` (CI-8);
+the committed checksum file is the trust root, as with
+`third_party/sing-box/CHECKSUMS.sha256`.
+
 CI `scripts/gate.sh` runs `cargo test --workspace` (lib + integration +
 doc). The Windows job also runs `cargo test -p ice-proxy-sys` (macOS has
 the same named step). Ignored live tests and how to run them are listed in

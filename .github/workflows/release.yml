@@ -13,7 +13,7 @@ jobs:
     name: Build macOS (arm64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -24,7 +24,7 @@ jobs:
           shared-key: ice-box-${{ runner.os }}
           cache-on-failure: true
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -88,7 +88,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -99,7 +99,7 @@ jobs:
           shared-key: ice-box-${{ runner.os }}
           cache-on-failure: true
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -184,7 +184,7 @@ jobs:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -222,6 +222,7 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             release-assets/* \
             NOTICE \
+            LICENSE \
             third_party/sing-box/LICENSE \
             --title "ice-box ${{ github.ref_name }}" \
             --notes-file RELEASE_NOTES.md

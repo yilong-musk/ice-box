@@ -79,6 +79,7 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
     let mut nodes: Vec<NormalizedOutbound> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut skipped = 0usize;
+    let mut truncated = 0usize;
     let mut line_count = 0usize;
 
     for (idx, line) in raw.lines().enumerate() {
@@ -88,9 +89,8 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
         }
         line_count += 1;
         if line_count > MAX_URI_LINES {
-            return Err(SubscriptionError::ParseFailed(format!(
-                "uri list exceeds line limit {MAX_URI_LINES}"
-            )));
+            truncated += 1;
+            continue;
         }
         match parse_uri_line(line, idx) {
             Ok(node) => nodes.push(node),
@@ -121,6 +121,10 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
         final_outbound: "proxy".into(),
         ..Default::default()
     };
+
+    if truncated > 0 {
+        warnings.push(crate::limits::Limits::warning("nodes", truncated));
+    }
 
     Ok(NormalizedProfile {
         nodes,

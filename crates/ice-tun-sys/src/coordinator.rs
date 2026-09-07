@@ -102,6 +102,71 @@ const LIVENESS_POLL: Duration = Duration::from_millis(100);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
+/// Shared verify path for Child-based coordinators (ARCH-5): callers implement
+/// only the spawn seam; this waits until the process is still alive after
+/// [`STARTUP_LIVENESS_WAIT`].
+fn verify_then_start_child(
+    spawn: impl FnOnce() -> Result<Child, TunError>,
+    log_path: &Path,
+) -> Result<Child, TunError> {
+    let mut child = spawn()?;
+    wait_for_child_liveness(&mut child, log_path)?;
+    Ok(child)
+}
+
+fn wait_for_child_liveness(child: &mut Child, log_path: &Path) -> Result<(), TunError> {
+    let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(code)) => {
+                return Err(TunError::new(
+                    TunErrorCode::HealthcheckFailed,
+                    format!(
+                        "elevated sing-box exited during startup (code {code}); check {}",
+                        log_path.display()
+                    ),
+                ));
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return Err(TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!("poll elevated core: {err}"),
+                ));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        std::thread::sleep(LIVENESS_POLL);
+    }
+}
+
+/// Pid-file / scheduled-task handshake: the process is not a local `Child`.
+/// Compiled on every host so unit tests can cover the wait; Windows TUN
+/// start is the production caller.
+#[allow(dead_code)]
+fn wait_for_pid_liveness(
+    pid: u32,
+    log_hint: &Path,
+    is_alive: impl Fn(u32) -> bool,
+) -> Result<(), TunError> {
+    let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
+    while Instant::now() < deadline {
+        if !is_alive(pid) {
+            return Err(TunError::new(
+                TunErrorCode::HealthcheckFailed,
+                format!(
+                    "elevated sing-box exited during startup (pid {pid}); check {}",
+                    log_hint.display()
+                ),
+            ));
+        }
+        std::thread::sleep(LIVENESS_POLL);
+    }
+    Ok(())
+}
+
 impl SudoCoreCoordinator {
     pub fn new(binary: PathBuf, log_path: PathBuf) -> Self {
         Self {
@@ -202,45 +267,20 @@ impl SudoCoreCoordinator {
 impl CoreCoordinator for SudoCoreCoordinator {
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
         self.check_permission()?;
-        let child = self.spawn_elevated(config_path)?;
-        let launcher_pid = child.id();
-        self.launcher_pid = Some(launcher_pid);
-        self.child = Some(child);
-
-        // Bounded liveness wait: catch immediate config/bind errors so the
-        // backend's interface verification is not the only signal. `sudo`
-        // execs sing-box, so this pid is the core process.
-        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
-        loop {
-            match self.child.as_mut().expect("child stored").try_wait() {
-                Ok(Some(code)) => {
-                    self.pid = None;
-                    self.launcher_pid = None;
-                    self.child = None;
-                    return Err(TunError::new(
-                        TunErrorCode::HealthcheckFailed,
-                        format!(
-                            "elevated sing-box exited during startup (code {code}); check {}",
-                            self.log_path.display()
-                        ),
-                    ));
-                }
-                Ok(None) => {}
+        let child =
+            match verify_then_start_child(|| self.spawn_elevated(config_path), &self.log_path) {
+                Ok(child) => child,
                 Err(err) => {
                     self.pid = None;
                     self.launcher_pid = None;
                     self.child = None;
-                    return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
-                        format!("poll elevated core: {err}"),
-                    ));
+                    return Err(err);
                 }
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(LIVENESS_POLL);
-        }
+            };
+        let launcher_pid = child.id();
+        self.launcher_pid = Some(launcher_pid);
+        self.child = Some(child);
+
         // Depending on the host sudo policy, sudo may remain as a monitor
         // process while sing-box runs as its root-owned child. Track the
         // actual sing-box pid so TERM/KILL cannot leave that child behind.
@@ -553,39 +593,16 @@ impl WindowsElevatedCoreCoordinator {
 impl CoreCoordinator for WindowsElevatedCoreCoordinator {
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
         self.check_elevation()?;
-        let child = self.spawn_elevated(config_path)?;
-        let pid = child.id();
-        self.child = Some(child);
-
-        // Bounded liveness wait: catch immediate config/bind errors so the
-        // backend's interface verification is not the only signal.
-        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
-        loop {
-            match self.child.as_mut().expect("child stored").try_wait() {
-                Ok(Some(code)) => {
-                    self.child = None;
-                    return Err(TunError::new(
-                        TunErrorCode::HealthcheckFailed,
-                        format!(
-                            "elevated sing-box exited during startup (code {code}); check {}",
-                            self.log_path.display()
-                        ),
-                    ));
-                }
-                Ok(None) => {}
+        let child =
+            match verify_then_start_child(|| self.spawn_elevated(config_path), &self.log_path) {
+                Ok(child) => child,
                 Err(err) => {
                     self.child = None;
-                    return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
-                        format!("poll elevated core: {err}"),
-                    ));
+                    return Err(err);
                 }
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(LIVENESS_POLL);
-        }
+            };
+        let pid = child.id();
+        self.child = Some(child);
         tracing::info!(pid, "elevated sing-box started via the dev Windows runner");
         Ok(pid)
     }
@@ -734,7 +751,7 @@ pub fn process_is_elevated() -> bool {
 /// highest-privilege flag (the creating moment is the only elevation the
 /// user ever sees); afterwards `schtasks /Run` / `/End` start and stop the
 /// elevated core without any UAC prompt.
-pub const TUN_TASK_NAME: &str = ice_tun_launcher::TUN_TASK_NAME;
+pub const TUN_TASK_NAME: &str = ice_tun_pin::TUN_TASK_NAME;
 
 /// Run `schtasks` with `CREATE_NO_WINDOW` (the calls come from the GUI app /
 /// the status poll; without it every invocation flashes a console window).
@@ -775,7 +792,7 @@ pub fn tun_task_has_pin() -> bool {
     {
         query_tun_task_xml()
             .as_deref()
-            .and_then(ice_tun_launcher::extract_tun_task_pin_from_xml)
+            .and_then(ice_tun_pin::extract_tun_task_pin_from_xml)
             .is_some()
     }
     #[cfg(not(target_os = "windows"))]
@@ -792,8 +809,8 @@ pub fn write_tun_task_xml(
     data_dir: &Path,
     pin: &str,
 ) -> std::io::Result<()> {
-    let xml = ice_tun_launcher::render_tun_task_xml(launcher, data_dir, pin);
-    std::fs::write(xml_path, ice_tun_launcher::encode_utf16_le_bom(&xml))
+    let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, pin);
+    std::fs::write(xml_path, ice_tun_pin::encode_utf16_le_bom(&xml))
 }
 
 /// The argv of the `schtasks /Create /XML` invocation that installs the TUN
@@ -928,7 +945,7 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
         )
     })?;
-    let pin = ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
+    let pin = ice_tun_pin::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
         TunError::new(
             TunErrorCode::PermissionRequired,
             format!(
@@ -936,11 +953,11 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             ),
         )
     })?;
-    let program_data = ice_tun_launcher::program_data_dir();
-    let protected = ice_tun_launcher::protected_launcher_path(&program_data);
-    ice_tun_launcher::verify_task_command(&xml, &protected)
+    let program_data = ice_tun_pin::program_data_dir();
+    let protected = ice_tun_pin::protected_launcher_path(&program_data);
+    ice_tun_pin::verify_task_command(&xml, &protected)
         .map_err(|msg| TunError::new(TunErrorCode::PermissionRequired, msg))?;
-    let protected_core = ice_tun_launcher::core_beside_launcher(&protected).ok_or_else(|| {
+    let protected_core = ice_tun_pin::core_beside_launcher(&protected).ok_or_else(|| {
         TunError::new(
             TunErrorCode::ApplyFailed,
             format!(
@@ -949,7 +966,7 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             ),
         )
     })?;
-    match ice_tun_launcher::pin_matches_files(&pin, &protected, &protected_core) {
+    match ice_tun_pin::pin_matches_files(&pin, &protected, &protected_core) {
         Ok(true) => {}
         Ok(false) => {
             return Err(TunError::new(
@@ -964,8 +981,8 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
     }
     // User-install drift: a replaced per-user copy must trigger re-elevation
     // so the protected copies are refreshed.
-    if !ice_tun_launcher::path_is_protected_launcher(launcher, &program_data) {
-        let core = ice_tun_launcher::core_beside_launcher(launcher).ok_or_else(|| {
+    if !ice_tun_pin::path_is_protected_launcher(launcher, &program_data) {
+        let core = ice_tun_pin::core_beside_launcher(launcher).ok_or_else(|| {
             TunError::new(
                 TunErrorCode::ApplyFailed,
                 format!(
@@ -974,7 +991,7 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
                 ),
             )
         })?;
-        match ice_tun_launcher::pin_matches_files(&pin, launcher, &core) {
+        match ice_tun_pin::pin_matches_files(&pin, launcher, &core) {
             Ok(true) => {}
             Ok(false) => {
                 return Err(TunError::new(
@@ -1003,7 +1020,7 @@ fn query_tun_task_xml() -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    Some(ice_tun_launcher::decode_schtasks_output(&output.stdout))
+    Some(ice_tun_pin::decode_schtasks_output(&output.stdout))
 }
 
 /// Elevated runner for the Windows TUN path through the scheduled task
@@ -1145,7 +1162,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
                 format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
             )
         })?;
-        ice_tun_launcher::task_config_path_matches(&xml, config_path)
+        ice_tun_pin::task_config_path_matches(&xml, config_path)
             .map_err(|msg| TunError::new(TunErrorCode::ApplyFailed, msg))?;
         self.end_task();
         self.reset_handshake()?;
@@ -1158,21 +1175,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
                 return Err(err);
             }
         };
-        // Bounded liveness wait: catch immediate config/bind errors so the
-        // backend's interface verification is not the only signal.
-        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
-        while Instant::now() < deadline {
-            if !pid_is_alive_windows(pid) {
-                return Err(TunError::new(
-                    TunErrorCode::HealthcheckFailed,
-                    format!(
-                        "elevated sing-box exited during startup (pid {pid}); check {}",
-                        self.pidfile.display()
-                    ),
-                ));
-            }
-            std::thread::sleep(LIVENESS_POLL);
-        }
+        wait_for_pid_liveness(pid, &self.pidfile, pid_is_alive_windows)?;
         self.pid = Some(pid);
         tracing::info!(pid, "elevated sing-box started via the TUN scheduled task");
         Ok(pid)
@@ -1243,6 +1246,36 @@ mod tests {
     }
 
     #[test]
+    fn wait_for_child_liveness_reports_early_exit() {
+        let mut child = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "1"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn exiting process")
+        } else {
+            Command::new("true")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn exiting process")
+        };
+        let err = wait_for_child_liveness(&mut child, Path::new("sing-box.log"))
+            .expect_err("exited child must fail liveness");
+        assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    }
+
+    #[test]
+    fn wait_for_pid_liveness_reports_dead_pid() {
+        let err = wait_for_pid_liveness(1, Path::new("pidfile"), |_| false)
+            .expect_err("dead pid must fail liveness");
+        assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    }
+
+    #[test]
     fn sudo_coordinator_stop_is_idempotent_before_start() {
         let mut coordinator = SudoCoreCoordinator::new(
             PathBuf::from("/nonexistent/sing-box"),
@@ -1280,7 +1313,7 @@ mod tests {
                 "/F",
             ]
         );
-        assert_eq!(TUN_TASK_NAME, ice_tun_launcher::TUN_TASK_NAME);
+        assert_eq!(TUN_TASK_NAME, ice_tun_pin::TUN_TASK_NAME);
     }
 
     #[test]
@@ -1295,21 +1328,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let xml_path = dir.join("ice-box-tun.xml");
         let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
-        let pin = ice_tun_launcher::format_tun_task_pin(
+        let pin = ice_tun_pin::format_tun_task_pin(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         );
         write_tun_task_xml(&xml_path, launcher, &dir, &pin).expect("write");
         let bytes = std::fs::read(&xml_path).expect("read");
-        let xml = ice_tun_launcher::decode_schtasks_output(&bytes);
+        let xml = ice_tun_pin::decode_schtasks_output(&bytes);
         assert_eq!(
-            ice_tun_launcher::extract_tun_task_pin_from_xml(&xml)
+            ice_tun_pin::extract_tun_task_pin_from_xml(&xml)
                 .expect("pin")
                 .launcher_sha256,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(ice_tun_launcher::command_matches_launcher(
-            &ice_tun_launcher::extract_tun_task_command_from_xml(&xml).expect("command"),
+        assert!(ice_tun_pin::command_matches_launcher(
+            &ice_tun_pin::extract_tun_task_command_from_xml(&xml).expect("command"),
             launcher
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1319,26 +1352,24 @@ mod tests {
     fn task_xml_command_mismatch_is_rejected_even_when_pin_matches() {
         let launcher = Path::new(r"C:\ProgramData\ice-box\bin\ice-tun-launcher.exe");
         let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
-        let pin = ice_tun_launcher::format_tun_task_pin(
+        let pin = ice_tun_pin::format_tun_task_pin(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         );
-        let xml = ice_tun_launcher::render_tun_task_xml(launcher, data_dir, &pin);
-        assert!(ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).is_some());
-        ice_tun_launcher::verify_task_command(&xml, launcher).expect("protected command");
-        let err = ice_tun_launcher::verify_task_command(
+        let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, &pin);
+        assert!(ice_tun_pin::extract_tun_task_pin_from_xml(&xml).is_some());
+        ice_tun_pin::verify_task_command(&xml, launcher).expect("protected command");
+        let err = ice_tun_pin::verify_task_command(
             &xml,
             Path::new(r"C:\Users\admin\ice-tun-launcher.exe"),
         )
         .expect_err("user-dir command");
         assert!(err.to_lowercase().contains("command"), "{err}");
-        ice_tun_launcher::task_config_path_matches(&xml, &data_dir.join("config.json"))
+        ice_tun_pin::task_config_path_matches(&xml, &data_dir.join("config.json"))
             .expect("matching data dir");
-        let mismatch = ice_tun_launcher::task_config_path_matches(
-            &xml,
-            Path::new(r"D:\elsewhere\config.json"),
-        )
-        .expect_err("different data dir");
+        let mismatch =
+            ice_tun_pin::task_config_path_matches(&xml, Path::new(r"D:\elsewhere\config.json"))
+                .expect_err("different data dir");
         assert!(mismatch.contains("different config path"), "{mismatch}");
     }
 

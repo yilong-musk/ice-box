@@ -4,11 +4,13 @@ members = [
   "apps/desktop/src-tauri",
   "crates/ice-core",
   "crates/ice-proxy-sys",
+  "crates/ice-types",
   "crates/ice-config",
   "crates/ice-config-guard",
   "crates/ice-subscription",
   "crates/ice-engine",
   "crates/ice-tun-sys",
+  "crates/ice-tun-pin",
   "crates/ice-tun-launcher",
   "crates/ice-helper",
   "crates/ice-elevate",
@@ -20,6 +22,12 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 authors = ["ice-box"]
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,12 +37,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 ureq = "2.12"
 ice-core = { path = "crates/ice-core" }
 ice-proxy-sys = { path = "crates/ice-proxy-sys" }
+ice-types = { path = "crates/ice-types" }
 ice-config = { path = "crates/ice-config" }
 ice-config-guard = { path = "crates/ice-config-guard" }
 ice-subscription = { path = "crates/ice-subscription" }
 ice-engine = { path = "crates/ice-engine" }
 ice-tun-sys = { path = "crates/ice-tun-sys" }
+ice-tun-pin = { path = "crates/ice-tun-pin" }
 ice-elevate = { path = "crates/ice-elevate" }

@@ -4,6 +4,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { t, type MessageKey } from "../lib/i18n";
+import { isErrorCode, type ErrorCode } from "./errorCodes";
 
 export type CoreStatus =
   | "stopped"
@@ -106,6 +108,8 @@ export type AppSettings = {
   language: "system" | "zh" | "en";
   /** Background update checks and the auto prompt. Defaults to on. */
   check_app_updates: boolean;
+  /** sing-box `log.level`: `warn` (default) or `info` for debug sessions. */
+  core_log_level: "warn" | "info";
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -162,8 +166,32 @@ export type TrafficSnapshot = {
   peak: TrafficSample | null;
 };
 
+export type TrafficDelta = {
+  generation: number;
+  cursor: number | null;
+  points: TrafficPoint[];
+  latest: TrafficSample | null;
+  peak: TrafficSample | null;
+};
+
+export type SettingsPatch = {
+  mixed_listen?: string;
+  mixed_port?: number;
+  clash_api_listen?: string;
+  clash_api_port?: number;
+  selected_tag?: string | null;
+  auto_set_system_proxy?: boolean;
+  allow_lan?: boolean;
+  proxy_mode?: ProxyMode;
+  tun?: Partial<TunSettings> & { interface_name?: string | null };
+  auto_default_rules?: boolean;
+  language?: "system" | "zh" | "en";
+  check_app_updates?: boolean;
+  core_log_level?: "warn" | "info";
+};
+
 export type AppErrorPayload = {
-  code: string;
+  code: ErrorCode | string;
   message: string;
 };
 
@@ -224,16 +252,55 @@ export type ListRulesResponse = {
   items: RuleRow[];
 };
 
+const ERROR_MESSAGE_KEYS = {
+  "core.not_found": "error.core.not_found",
+  "core.spawn_failed": "error.core.spawn_failed",
+  "core.healthcheck_failed": "error.core.healthcheck_failed",
+  "core.invalid_state": "error.core.invalid_state",
+  "core.adopt_rejected": "error.core.adopt_rejected",
+  "core.api_failed": "error.core.api_failed",
+  "config.empty_outbounds": "error.config.empty_outbounds",
+  "config.invalid": "error.config.invalid",
+  "proxy.apply_failed": "error.proxy.apply_failed",
+  "proxy.apply_failed_core_reloaded": "error.proxy.apply_failed_core_reloaded",
+  "proxy.restore_failed": "error.proxy.restore_failed",
+  "sub.fetch_failed": "error.sub.fetch_failed",
+  "sub.unknown_format": "error.sub.unknown_format",
+  "sub.parse_failed": "error.sub.parse_failed",
+  "sub.empty": "error.sub.empty",
+  "sub.not_found": "error.sub.not_found",
+  "sub.io": "error.sub.io",
+  "app.lock_poisoned": "error.app.lock_poisoned",
+  "tun.not_supported": "error.tun.not_supported",
+  "tun.permission_required": "error.tun.permission_required",
+  "tun.apply_failed": "error.tun.apply_failed",
+  "tun.restore_failed": "error.tun.restore_failed",
+  "tun.healthcheck_failed": "error.tun.healthcheck_failed",
+  "tun.recovery_required": "error.tun.recovery_required",
+  "tun.invalid_argument": "error.tun.invalid_argument",
+  "tun.config_rejected": "error.tun.config_rejected",
+  "tun.helper_stale": "error.tun.helper_stale",
+  "tun.helper_install_failed": "error.tun.helper_install_failed",
+  "tun.helper_install_cancelled": "error.tun.helper_install_cancelled",
+  "tun.helper_not_ready": "error.tun.helper_not_ready",
+  "tun.elevation_cancelled": "error.tun.elevation_cancelled",
+  "update.check_failed": "error.update.check_failed",
+  "update.feed_unavailable": "error.update.feed_unavailable",
+  "update.install_failed": "error.update.install_failed",
+  "update.disabled": "error.update.disabled",
+} as const satisfies Record<ErrorCode, MessageKey>;
+
 /**
- * Rust-side errors, warnings, and diagnostics stay in English and pass through
- * verbatim (see `FRIENDLY_ERROR_CODES` history): kernel messages are displayed
- * as-is, and Rust-generated text is authored in English, so no frontend
- * mapping is needed.
+ * Known IPC codes are translated via `t()`. Unknown payloads keep
+ * `code: message` so a new backend code still surfaces.
  */
 export function formatInvokeError(err: unknown): string {
   if (err && typeof err === "object") {
     const o = err as Record<string, unknown>;
     if (typeof o.code === "string" && typeof o.message === "string") {
+      if (isErrorCode(o.code)) {
+        return `${t(ERROR_MESSAGE_KEYS[o.code])} (${o.code})`;
+      }
       return `${o.code}: ${o.message}`;
     }
     if (typeof o.message === "string") return o.message;
@@ -252,6 +319,20 @@ export const api = {
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
   getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),
+  getTrafficSince: (cursor?: number | null) =>
+    invoke<TrafficDelta>("get_traffic_since", { cursor: cursor ?? null }),
+  listenCoreStatusChanged: (handler: () => void) =>
+    listen("core://status-changed", () => handler()),
+  listenWindowHidden: (handler: () => void) =>
+    listen("window://hidden", () => handler()),
+  listenWindowShown: (handler: () => void) =>
+    listen("window://shown", () => handler()),
+  listenTrafficSample: (
+    handler: (payload: TrafficPoint) => void,
+  ) =>
+    listen<TrafficPoint>("traffic://sample", (event) =>
+      handler(event.payload),
+    ),
   start: () => invoke<void>("start"),
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),
@@ -270,13 +351,14 @@ export const api = {
   removeTunElevation: () => invoke<void>("remove_tun_elevation"),
   getLogView: (n: number) =>
     invoke<string[]>("get_log_view", { req: { n } }),
+  clearLogs: () => invoke<void>("clear_logs"),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** First-frame restore of last-session capture. No-op when it was off. */
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
-  saveSettings: (settings: AppSettings) =>
-    invoke<void>("save_settings", { settings }),
+  saveSettings: (patch: SettingsPatch) =>
+    invoke<void>("save_settings", { patch }),
   checkAppUpdate: (background = false) =>
     invoke<CheckAppUpdateResponse>("check_app_update", {
       req: { background },

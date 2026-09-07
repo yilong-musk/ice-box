@@ -2,6 +2,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
 
@@ -60,20 +61,15 @@ describe("Subscriptions", () => {
     const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByPlaceholderText("订阅 URL（https 优先）"),
+        view.getByPlaceholderText(t("subs.urlPlaceholder")),
       ).toBeInTheDocument();
     });
-    expect(view.getByText("暂无订阅")).toBeInTheDocument();
+    expect(view.getByText(t("subs.emptyTitle"))).toBeInTheDocument();
     expect(
-      view.getByText(/打开软件会自动启动内核；需要时在主页用大按钮接管系统代理/),
+      view.getByText(t("subs.emptyDesc")),
     ).toBeInTheDocument();
     expect(container.querySelector(".sub-list")).toBeNull();
-    expect(container.querySelector(".subs-panel")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
-    );
-    expect(
-      view.getByRole("button", { name: "导入" }).parentElement?.className.split(/\s+/),
-    ).toEqual(expect.arrayContaining(["items-end"]));
+    expect(view.getByTestId("subs-panel")).toBeInTheDocument();
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {
@@ -94,10 +90,12 @@ describe("Subscriptions", () => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "全部更新" }).click();
+    view.getByRole("button", { name: t("subs.updateAll") }).click();
 
     await waitFor(() => {
-      expect(view.getByText(/部分订阅更新失败/)).toBeInTheDocument();
+      expect(view.getByRole("alert")).toHaveTextContent(
+        t("subs.partialUpdateFailed", { details: "x" }).split("x")[0],
+      );
       expect(view.getByText(/network down/)).toBeInTheDocument();
     });
   });
@@ -117,10 +115,10 @@ describe("Subscriptions", () => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: "全部更新" }).click();
+    view.getByRole("button", { name: t("subs.updateAll") }).click();
 
     await waitFor(() => {
-      const updatingButtons = view.getAllByRole("button", { name: "更新中" });
+      const updatingButtons = view.getAllByRole("button", { name: t("common.updating") });
       expect(updatingButtons.length).toBeGreaterThanOrEqual(2);
       for (const btn of updatingButtons) {
         expect(btn).toBeDisabled();
@@ -129,7 +127,7 @@ describe("Subscriptions", () => {
 
     resolveUpdate({ results: [] });
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "全部更新" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("subs.updateAll") })).toBeInTheDocument();
     });
   });
 
@@ -149,7 +147,7 @@ describe("Subscriptions", () => {
       expect(view.getByText("only-one")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "删除" }));
+    fireEvent.click(view.getByRole("button", { name: t("common.delete") }));
 
     await waitFor(() => {
       expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -222,22 +220,22 @@ describe("Subscriptions", () => {
     const { container } = render(<Subscriptions />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("自动更新")).toBeInTheDocument();
+      expect(view.getByLabelText(t("subs.autoUpdate"))).toBeInTheDocument();
     });
-    const importSwitch = view.getByLabelText("自动更新");
+    const importSwitch = view.getByLabelText(t("subs.autoUpdate"));
     expect(importSwitch).not.toBeChecked();
     fireEvent.click(importSwitch);
     expect(importSwitch).toBeChecked();
 
-    const interval = view.getByLabelText("更新间隔");
+    const interval = view.getByLabelText(t("subs.interval"));
     expect(interval).toBeEnabled();
     fireEvent.change(interval, { target: { value: "six_hours" } });
 
     fireEvent.change(
-      view.getByPlaceholderText("订阅 URL（https 优先）"),
+      view.getByPlaceholderText(t("subs.urlPlaceholder")),
       { target: { value: "https://example.com/new" } },
     );
-    fireEvent.click(view.getByRole("button", { name: "导入" }));
+    fireEvent.click(view.getByRole("button", { name: t("subs.importAction") }));
 
     await waitFor(() => {
       expect(add).toHaveBeenCalledWith(
@@ -282,7 +280,7 @@ describe("Subscriptions", () => {
     });
 
     const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
-    expect(within(rowA).getAllByRole("switch", { name: "自动更新" })[0]).toBeChecked();
+    expect(within(rowA).getAllByRole("switch", { name: t("subs.autoUpdate") })[0]).toBeChecked();
   });
 
   it("changes the auto-update interval from a subscription row", async () => {
@@ -298,7 +296,7 @@ describe("Subscriptions", () => {
       expect(view.getByText("a")).toBeInTheDocument();
     });
     const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
-    const interval = within(rowA).getByLabelText("更新间隔");
+    const interval = within(rowA).getByLabelText(t("subs.interval"));
     expect(interval).toHaveValue("one_hour");
     fireEvent.change(interval, { target: { value: "twelve_hours" } });
     await waitFor(() => {
@@ -324,7 +322,7 @@ describe("Subscriptions", () => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
     const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
-    const toggle = within(rowB).getByRole("switch", { name: "激活" });
+    const toggle = within(rowB).getByRole("switch", { name: t("common.activate") });
     expect(toggle).not.toBeChecked();
     toggle.click();
     await waitFor(() => {

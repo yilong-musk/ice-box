@@ -8,8 +8,9 @@ use crate::error::CoreError;
 
 /// Bundled sing-box version pin (architecture §21 / `third_party/sing-box/VERSION`).
 ///
-/// Source of truth lives in the config engine (`ice_config::ENGINE_COMPAT_CORE_VERSION`);
-/// the desktop process layer only mirrors it for packaging checks.
+/// Source of truth lives in `ice-types` and is re-exported by `ice-engine`
+/// (`ENGINE_COMPAT_CORE_VERSION`); the desktop process layer only mirrors it
+/// for packaging checks.
 pub const BUNDLED_SINGBOX_VERSION: &str = ice_config::ENGINE_COMPAT_CORE_VERSION;
 
 /// Current packaging target directory name under `third_party/sing-box/`.

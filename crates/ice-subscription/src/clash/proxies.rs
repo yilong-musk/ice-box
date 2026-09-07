@@ -15,13 +15,13 @@ pub const MAX_CLASH_PROXIES: usize = 500;
 pub struct ProxyParseResult {
     pub nodes: Vec<NormalizedOutbound>,
     pub skipped: usize,
+    pub truncated: usize,
 }
 
 #[derive(Debug)]
 pub(crate) enum SkipReason {
     Unsupported,
     Incomplete,
-    TooMany,
 }
 
 pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
@@ -30,19 +30,14 @@ pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
         .and_then(|v| v.as_array())
         .ok_or(SkipReason::Incomplete)?;
 
-    if proxies.len() > MAX_CLASH_PROXIES {
-        return Err(SkipReason::TooMany);
-    }
-
+    let truncated = proxies.len().saturating_sub(MAX_CLASH_PROXIES);
     let mut nodes = Vec::new();
     let mut skipped = 0usize;
 
-    for (idx, proxy) in proxies.iter().enumerate() {
+    for (idx, proxy) in proxies.iter().enumerate().take(MAX_CLASH_PROXIES) {
         match map_proxy(proxy, idx) {
             Ok(node) => nodes.push(node),
-            Err(SkipReason::Unsupported | SkipReason::Incomplete | SkipReason::TooMany) => {
-                skipped += 1
-            }
+            Err(SkipReason::Unsupported | SkipReason::Incomplete) => skipped += 1,
         }
     }
 
@@ -50,7 +45,11 @@ pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
         return Err(SkipReason::Incomplete);
     }
 
-    Ok(ProxyParseResult { nodes, skipped })
+    Ok(ProxyParseResult {
+        nodes,
+        skipped,
+        truncated,
+    })
 }
 
 pub fn map_proxy(proxy: &Value, idx: usize) -> Result<NormalizedOutbound, SkipReason> {

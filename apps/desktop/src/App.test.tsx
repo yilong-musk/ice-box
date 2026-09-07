@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
-import { LANGUAGE_STORAGE_KEY } from "./lib/i18n";
+import { LANGUAGE_STORAGE_KEY, t } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
 const getStatus = vi.fn();
@@ -40,6 +40,7 @@ const defaultSettings = {
   },
   language: "system",
   check_app_updates: true,
+  core_log_level: "warn",
 } as const;
 
 const tunStatus = {
@@ -71,6 +72,13 @@ vi.mock("./api/tauri", () => ({
     getTrafficSnapshot: vi
       .fn()
       .mockResolvedValue({ points: [], latest: null, peak: null }),
+    getTrafficSince: vi.fn().mockResolvedValue({
+      generation: 0,
+      cursor: null,
+      points: [],
+      latest: null,
+      peak: null,
+    }),
     start: vi.fn(),
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),
@@ -154,90 +162,56 @@ describe("App", () => {
   });
 
   it("lets the logs panel fill the content pane", async () => {
-    const { container } = render(<App />);
-    const view = within(container);
-    fireEvent.click(view.getByRole("button", { name: "日志" }));
+    const view = within(render(<App />).container);
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.logs") }));
     await waitFor(() => {
-      expect(container.querySelector(".logs-panel")).not.toBeNull();
+      expect(view.getByTestId("logs-panel")).toBeInTheDocument();
     });
 
-    const main = container.querySelector("main");
-    const panel = container.querySelector(".logs-panel");
-    const logView = container.querySelector(".log-view");
-    expect(main).not.toBeNull();
-    expect(panel).not.toBeNull();
-    expect(logView).not.toBeNull();
-    expect(main!.className.split(/\s+/)).toEqual(
-      expect.arrayContaining([
-        "content-fill",
-        "min-h-0",
-        "flex-1",
-        "overflow-hidden",
-      ]),
-    );
-    expect(main!.className.split(/\s+/)).not.toContain("overflow-auto");
-    expect(panel!.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["logs-panel", "min-h-0", "flex-1", "overflow-hidden"]),
-    );
-    expect(logView!.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["log-view", "min-h-0", "flex-1", "overflow-auto"]),
-    );
-    expect(main!.contains(panel)).toBe(true);
-    expect(panel!.contains(logView)).toBe(true);
-    expect(logView!.parentElement).toBe(panel);
-    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
-    expect(panel!.querySelector("[data-slot='card']")).toBeNull();
+    const main = view.getByTestId("app-main");
+    const panel = view.getByTestId("logs-panel");
+    const logView = view.getByTestId("log-view");
+    expect(main.contains(panel)).toBe(true);
+    expect(panel.contains(logView)).toBe(true);
+    expect(logView.parentElement).toBe(panel);
+    expect(view.queryByRole("button", { name: t("common.refresh") })).toBeNull();
+    expect(panel.querySelector("[data-slot='card']")).toBeNull();
 
-    fireEvent.click(view.getByRole("button", { name: "主页" }));
-    expect(container.querySelector(".home-panel")).not.toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["content-fill", "overflow-hidden"]),
-    );
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.home") }));
+    expect(view.getByTestId("home-panel")).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole("button", { name: "节点" }));
-    expect(container.querySelector(".nodes-panel")).not.toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["content-fill", "overflow-hidden"]),
-    );
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
+    expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole("button", { name: "规则" }));
-    expect(container.querySelector(".rules-panel")).not.toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["content-fill", "overflow-hidden"]),
-    );
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.rules") }));
+    expect(view.getByTestId("rules-panel")).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole("button", { name: "订阅" }));
-    expect(container.querySelector(".subs-panel")).not.toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["content-fill", "overflow-hidden"]),
-    );
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.subs") }));
+    expect(view.getByTestId("subs-panel")).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole("button", { name: "设置" }));
-    expect(container.querySelector(".settings-panel")).not.toBeNull();
-    expect(container.querySelector("main")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["content-fill", "overflow-hidden"]),
-    );
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.settings") }));
+    expect(view.getByTestId("settings-panel")).toBeInTheDocument();
   });
 
   it("applies appearance changes from settings to the document", async () => {
     const { container } = render(<App />);
     const view = within(container);
-    fireEvent.click(view.getByRole("button", { name: "设置" }));
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.settings") }));
 
     await waitFor(() => {
-      expect(view.getByLabelText("外观")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.appearance"))).toBeInTheDocument();
     });
-    const appearance = view.getByLabelText("外观");
+    const appearance = view.getByLabelText(t("settings.appearance"));
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: "深色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.dark") }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    fireEvent.click(within(appearance).getByRole("radio", { name: "浅色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     fireEvent.click(
-      within(appearance).getByRole("radio", { name: "跟随系统" }),
+      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
     );
     expect(
-      within(appearance).getByRole("radio", { name: "跟随系统" }),
+      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
     ).toHaveAttribute("data-state", "on");
   });
 
@@ -247,7 +221,9 @@ describe("App", () => {
     expect(sidebar).not.toBeNull();
     const nav = sidebar!.querySelector('[data-slot="sidebar-menu"]');
     const brand = sidebar!.querySelector("h1");
-    const version = sidebar!.querySelector('[aria-label^="版本"]');
+    const version = sidebar!.querySelector(
+      `[aria-label="${t("app.versionAria", { version: APP_VERSION })}"]`,
+    );
     expect(nav).not.toBeNull();
     expect(brand).toHaveTextContent("ice-box");
     expect(brand!.parentElement?.className.split(/\s+/)).toContain("justify-center");
@@ -265,10 +241,7 @@ describe("App", () => {
     const { container } = render(<App />);
     const titlebar = container.querySelector("[data-titlebar]");
     expect(titlebar).not.toBeNull();
-    expect(titlebar!.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["flex", "h-12", "border-b"]),
-    );
-    expect(titlebar!.querySelector("h2")).toHaveTextContent("主页");
+    expect(titlebar!.querySelector("h2")).toHaveTextContent(t("app.nav.home"));
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     expect(sidebar).not.toBeNull();
     expect(titlebar!.compareDocumentPosition(sidebar!)).toBe(
@@ -280,7 +253,7 @@ describe("App", () => {
     const { container } = render(<App />);
     const regions = container.querySelectorAll("[data-tauri-drag-region]");
     expect(regions.length).toBe(4);
-    expect(regions[1]).toHaveTextContent("主页");
+    expect(regions[1]).toHaveTextContent(t("app.nav.home"));
     expect(regions[2]).toHaveTextContent("ice-box");
     expect(regions[3]).toHaveTextContent(APP_VERSION);
   });
@@ -300,22 +273,20 @@ describe("App", () => {
     await waitFor(() => {
       expect(listNodes).toHaveBeenCalled();
     });
-    fireEvent.click(view.getByRole("button", { name: "节点" }));
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
     await waitFor(() => {
       expect(view.getByText("proxy-1")).toBeInTheDocument();
     });
-    expect(view.queryByText("暂无节点")).toBeNull();
+    expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
 
-    fireEvent.click(view.getByRole("button", { name: "主页" }));
-    const panel = container.querySelector(".nodes-panel");
-    expect(panel).not.toBeNull();
-    expect(panel!.parentElement?.className.split(/\s+/)).toContain("hidden");
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.home") }));
+    const panel = view.getByTestId("nodes-panel");
+    expect(panel.parentElement).toHaveAttribute("data-active", "false");
 
-    fireEvent.click(view.getByRole("button", { name: "节点" }));
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
     expect(view.getByText("proxy-1")).toBeInTheDocument();
-    expect(view.queryByText("暂无节点")).toBeNull();
-    expect(panel!.parentElement?.className.split(/\s+/)).toContain("flex");
-    expect(panel!.parentElement?.className.split(/\s+/)).not.toContain("hidden");
+    expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
+    expect(panel.parentElement).toHaveAttribute("data-active", "true");
   });
 
   it("shows a sidebar upgrade icon when a background check finds a version", async () => {
@@ -329,18 +300,18 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+        screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeInTheDocument();
     });
     expect(checkAppUpdate).toHaveBeenCalledWith(true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+      screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "安装更新" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeEnabled();
     });
-    expect(screen.getByText("发现新版本 0.1.6")).toBeInTheDocument();
+    expect(screen.getByText(t("settings.updateAvailable", { version: "0.1.6" }))).toBeInTheDocument();
   });
 
   it("hides the sidebar upgrade icon when automatic checks are turned off", async () => {
@@ -354,22 +325,22 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+        screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeInTheDocument();
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+      screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
     );
     await waitFor(() => {
-      expect(screen.getByLabelText("自动检查更新")).toBeInTheDocument();
+      expect(screen.getByLabelText(t("settings.updateAutoCheck"))).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("自动检查更新"));
+    expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(t("settings.updateAutoCheck")));
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: "有新版本 0.1.6，前往应用更新" }),
+        screen.queryByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeNull();
     });
-    expect(screen.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
   });
 });

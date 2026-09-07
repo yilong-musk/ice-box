@@ -34,7 +34,7 @@ pub fn read_pid(path: &Path) -> Result<Option<u32>, ConfigError> {
 /// Atomically write a pid file.
 pub fn write_pid(path: &Path, pid: u32) -> Result<(), ConfigError> {
     if pid == 0 {
-        return Err(ConfigError::Invalid("pid must be non-zero"));
+        return Err(ConfigError::invalid("pid must be non-zero"));
     }
     write_bytes_atomic(path, format!("{pid}\n").as_bytes())
 }

@@ -34,14 +34,36 @@ impl ProxyBackupFile {
     }
 }
 
+/// On-disk interpretation of `proxy-backup.json` (PROXY-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskProxyState {
+    /// Valid file with `applied` and not `pending_apply`.
+    Applied,
+    /// Missing file, or valid file that is neither applied nor pending.
+    NotApplied,
+    /// File exists but cannot be parsed. Must not be treated as "off".
+    Unknown,
+}
+
 /// Whether on-disk backup indicates system proxy is fully applied (not pending).
 pub fn is_proxy_applied_on_disk(backup_path: &Path) -> bool {
+    disk_proxy_state(backup_path) == DiskProxyState::Applied
+}
+
+/// `Applied` or `Unknown` — fail-closed ownership for TUN exclusivity / restore.
+pub fn proxy_backup_indicates_ownership(backup_path: &Path) -> bool {
+    !matches!(disk_proxy_state(backup_path), DiskProxyState::NotApplied)
+}
+
+pub fn disk_proxy_state(backup_path: &Path) -> DiskProxyState {
     if !backup_path.exists() {
-        return false;
+        return DiskProxyState::NotApplied;
     }
-    ProxyBackupFile::load(backup_path)
-        .map(|r| r.applied && !r.pending_apply)
-        .unwrap_or(false)
+    match ProxyBackupFile::load(backup_path) {
+        Ok(record) if record.applied && !record.pending_apply => DiskProxyState::Applied,
+        Ok(_) => DiskProxyState::NotApplied,
+        Err(_) => DiskProxyState::Unknown,
+    }
 }
 
 /// Whether ice-box has applied system proxy both on disk and in the OS snapshot.
@@ -50,19 +72,21 @@ pub fn is_proxy_live_applied(
     backup_path: &Path,
     endpoints: &ProxyEndpoints,
 ) -> bool {
-    if !is_proxy_applied_on_disk(backup_path) {
-        return false;
-    }
-    let Ok(record) = ProxyBackupFile::load(backup_path) else {
-        return false;
-    };
-    match proxy.backup() {
-        Ok(current) => proxy_backup_matches(&record, &current, endpoints),
-        Err(_) => false,
+    match disk_proxy_state(backup_path) {
+        DiskProxyState::NotApplied => false,
+        DiskProxyState::Unknown => proxy.live_matches_endpoints(endpoints).unwrap_or(false),
+        DiskProxyState::Applied => {
+            let Ok(record) = ProxyBackupFile::load(backup_path) else {
+                return proxy.live_matches_endpoints(endpoints).unwrap_or(false);
+            };
+            proxy
+                .live_matches_applied(&record, endpoints)
+                .unwrap_or(false)
+        }
     }
 }
 
-fn proxy_backup_matches(
+pub(crate) fn proxy_backup_matches(
     record: &ProxyBackupFile,
     current: &ProxyBackup,
     endpoints: &ProxyEndpoints,
@@ -175,7 +199,10 @@ fn proxy_endpoint_matches(actual: Option<&str>, expected_host: &str, expected_po
     normalize_proxy_host(&host) == normalize_proxy_host(expected_host) && port == expected_port
 }
 
-fn proxy_backup_matches_endpoints(backup: &ProxyBackup, expected: &ProxyEndpoints) -> bool {
+pub(crate) fn proxy_backup_matches_endpoints(
+    backup: &ProxyBackup,
+    expected: &ProxyEndpoints,
+) -> bool {
     if !backup.enabled {
         return false;
     }
@@ -200,16 +227,33 @@ fn proxy_backup_matches_endpoints(backup: &ProxyBackup, expected: &ProxyEndpoint
 /// If `proxy-backup.json` exists with `applied == true`, call `restore` once,
 /// then set `applied = false` and keep the file. Never calls `apply`.
 ///
+/// A corrupt file is `Unknown`: probe live state and, when it still looks like
+/// ice-box's proxy (or is enabled with no hint), restore to defaults and replace
+/// the file. Never treated as "not applied".
+///
 /// Returns `true` when a restore was performed.
 pub fn recover_if_applied(
     backup_path: &Path,
     proxy: &dyn SystemProxy,
 ) -> Result<bool, ProxySysError> {
+    recover_if_applied_hinted(backup_path, proxy, None)
+}
+
+/// Like [`recover_if_applied`], using `endpoints` to decide whether a corrupt
+/// backup still points at this installation.
+pub fn recover_if_applied_hinted(
+    backup_path: &Path,
+    proxy: &dyn SystemProxy,
+    endpoints: Option<&ProxyEndpoints>,
+) -> Result<bool, ProxySysError> {
     if !backup_path.exists() {
         return Ok(false);
     }
 
-    let mut record = ProxyBackupFile::load(backup_path)?;
+    let mut record = match ProxyBackupFile::load(backup_path) {
+        Ok(record) => record,
+        Err(_) => return recover_unknown_backup(backup_path, proxy, endpoints),
+    };
     if !record.applied && !record.pending_apply {
         return Ok(false);
     }
@@ -218,6 +262,41 @@ pub fn recover_if_applied(
     record.applied = false;
     record.pending_apply = false;
     record.save(backup_path)?;
+    Ok(true)
+}
+
+fn write_clean_not_applied(backup_path: &Path) -> Result<(), ProxySysError> {
+    ProxyBackupFile {
+        applied: false,
+        pending_apply: false,
+        applied_at: None,
+        endpoints: ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        },
+        backup: ProxyBackup::default(),
+    }
+    .save(backup_path)
+}
+
+fn recover_unknown_backup(
+    backup_path: &Path,
+    proxy: &dyn SystemProxy,
+    endpoints: Option<&ProxyEndpoints>,
+) -> Result<bool, ProxySysError> {
+    let current = proxy.backup()?;
+    let ours = match endpoints {
+        Some(ep) => current.enabled && proxy_backup_matches_endpoints(&current, ep),
+        None => current.enabled,
+    };
+    if !ours {
+        write_clean_not_applied(backup_path)?;
+        return Ok(false);
+    }
+    proxy.restore(&ProxyBackup::default())?;
+    write_clean_not_applied(backup_path)?;
     Ok(true)
 }
 
@@ -662,6 +741,54 @@ mod tests {
 
         let after = ProxyBackupFile::load(&path).expect("reload");
         assert!(!after.applied);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn truncated_backup_is_unknown_and_restore_path_runs() {
+        let path = temp_backup_path("truncated");
+        fs::write(&path, b"{\"applied\":true").expect("truncate json");
+        assert_eq!(disk_proxy_state(&path), DiskProxyState::Unknown);
+        assert!(!is_proxy_applied_on_disk(&path));
+        assert!(proxy_backup_indicates_ownership(&path));
+
+        struct LiveProxy {
+            restore_calls: Cell<usize>,
+        }
+        impl SystemProxy for LiveProxy {
+            fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+                Ok(ProxyBackup {
+                    enabled: true,
+                    http: Some("127.0.0.1:17890".into()),
+                    https: Some("127.0.0.1:17890".into()),
+                    socks: Some("127.0.0.1:17890".into()),
+                    extra: serde_json::json!({}),
+                })
+            }
+            fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+                Ok(())
+            }
+            fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+                self.restore_calls.set(self.restore_calls.get() + 1);
+                Ok(())
+            }
+        }
+
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        let proxy = LiveProxy {
+            restore_calls: Cell::new(0),
+        };
+        assert!(is_proxy_live_applied(&proxy, &path, &endpoints));
+        let did = recover_if_applied_hinted(&path, &proxy, Some(&endpoints)).expect("recover");
+        assert!(did);
+        assert_eq!(proxy.restore_calls.get(), 1);
+        assert_eq!(disk_proxy_state(&path), DiskProxyState::NotApplied);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

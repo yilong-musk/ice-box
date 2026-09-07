@@ -8,6 +8,7 @@ mod clash;
 mod decode;
 mod error;
 mod fetch;
+mod limits;
 mod merge;
 mod store;
 mod tls_fetch;
@@ -16,6 +17,9 @@ mod url;
 
 /// Upper bound for simultaneous subscription network fetches.
 const MAX_FETCH_CONCURRENCY: usize = 8;
+
+#[cfg(test)]
+static PANIC_NEXT_FETCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests_g5 {
@@ -31,7 +35,8 @@ mod tests_g5 {
     use base64::Engine;
     use chrono::{Duration as ChronoDuration, Utc};
     use ice_config::{
-        build_runtime_config, BuildInput, LocalTemplate, NormalizedOutbound, NormalizedProfile,
+        build_runtime_config, BuildInput, HostPlatform, LocalTemplate, NormalizedOutbound,
+        NormalizedProfile,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -623,14 +628,14 @@ mod tests_g5 {
         let active: Vec<_> = index.items.iter().filter(|m| m.active).collect();
         assert_eq!(active.len(), 1, "exactly one active subscription");
         assert_eq!(active[0].id, ids[0], "first import becomes active");
-        let profile = load_active_profile(&paths, &index).unwrap();
+        let profile = load_active_profile(&paths, &index, HostPlatform::MacOs).unwrap();
         assert_eq!(profile.nodes.len(), 1);
         assert_eq!(profile.nodes[0].tag, "same");
 
         set_active(&paths, ids[1], true).unwrap();
         let index = load_index(&paths).unwrap();
         assert_eq!(index.items.iter().filter(|m| m.active).count(), 1);
-        let profile = load_active_profile(&paths, &index).unwrap();
+        let profile = load_active_profile(&paths, &index, HostPlatform::MacOs).unwrap();
         assert_eq!(profile.nodes.len(), 1, "switch loads the other profile");
         let _ = fs::remove_dir_all(paths.root());
     }
@@ -658,6 +663,7 @@ mod tests_g5 {
             group_selections: Default::default(),
             rule_overrides: Default::default(),
             capture_intent: Default::default(),
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
         assert!(cfg["outbounds"].as_array().unwrap().len() >= 3);
@@ -800,7 +806,7 @@ mod tests_g5 {
         let inner =
             fs::read_to_string(fixtures_dir().join("subscription-singbox-outbounds.json")).unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode(inner.as_bytes());
-        let (format, profile) = normalize_raw_body(&encoded).unwrap();
+        let (format, profile) = normalize_raw_body(&encoded, HostPlatform::MacOs).unwrap();
         assert_eq!(format, SubscriptionFormat::SingBox);
         assert!(!profile.nodes.is_empty());
     }
@@ -819,7 +825,7 @@ mod tests_g5 {
     #[test]
     fn g6_1_clash_ss() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-ss.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 1);
         assert_node_shape(&result.profile.nodes[0], "shadowsocks");
         assert_eq!(result.profile.nodes[0].outbound["method"], "aes-256-gcm");
@@ -828,7 +834,7 @@ mod tests_g5 {
     #[test]
     fn g6_2_clash_vmess() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-vmess.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 1);
         assert_node_shape(&result.profile.nodes[0], "vmess");
         assert_eq!(result.profile.nodes[0].outbound["transport"]["type"], "ws");
@@ -838,7 +844,7 @@ mod tests_g5 {
     fn g6_3_clash_trojan() {
         let raw =
             fs::read_to_string(fixtures_dir().join("subscription-clash-trojan.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 1);
         assert_node_shape(&result.profile.nodes[0], "trojan");
         assert_eq!(result.profile.nodes[0].outbound["tls"]["enabled"], true);
@@ -847,7 +853,7 @@ mod tests_g5 {
     #[test]
     fn g6_4_clash_socks() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-socks.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 1);
         assert_node_shape(&result.profile.nodes[0], "socks");
     }
@@ -855,7 +861,7 @@ mod tests_g5 {
     #[test]
     fn g6_5_clash_http() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-http.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 1);
         assert_node_shape(&result.profile.nodes[0], "http");
     }
@@ -863,7 +869,7 @@ mod tests_g5 {
     #[test]
     fn g6_6_mixed_ignores_proxy_groups() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-mixed.yaml")).unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 5);
         let types: Vec<_> = result
             .profile
@@ -888,7 +894,7 @@ mod tests_g5 {
     fn g6_7_unknown_only_empty() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-unknown-only.yaml"))
             .unwrap();
-        let err = parse_clash_with_stats(&raw).expect_err("empty");
+        let err = parse_clash_with_stats(&raw, HostPlatform::MacOs).expect_err("empty");
         assert!(matches!(err, SubscriptionError::EmptyNodes));
         assert_eq!(err.code().as_str(), "sub.empty");
     }
@@ -897,21 +903,46 @@ mod tests_g5 {
     fn g6_8_known_plus_unknown_skip_count() {
         let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-mixed-unknown.yaml"))
             .unwrap();
-        let result = parse_clash_with_stats(&raw).unwrap();
+        let result = parse_clash_with_stats(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(result.profile.nodes.len(), 2);
         assert!(result.profile.parse_stats.skipped_proxies >= 1);
     }
 
     #[test]
-    fn g6_8b_clash_rejects_too_many_proxies() {
+    fn g6_8b_clash_truncates_too_many_proxies() {
         let mut raw = String::from("proxies:\n");
         for i in 0..=MAX_CLASH_PROXIES {
             raw.push_str(&format!(
                 "  - {{ type: ss, name: n{i}, server: 1.1.1.1, port: 443, cipher: aes-128-gcm, password: x }}\n"
             ));
         }
-        let err = parse_clash_with_stats(&raw).expect_err("too many proxies");
-        assert!(err.to_string().contains("exceeds limit"));
+        let result =
+            parse_clash_with_stats(&raw, HostPlatform::MacOs).expect("truncate, do not hard-fail");
+        assert_eq!(result.profile.nodes.len(), MAX_CLASH_PROXIES);
+        assert!(result
+            .profile
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.contains("truncated nodes")));
+    }
+
+    #[test]
+    fn singbox_truncates_too_many_nodes() {
+        let mut outbounds = Vec::new();
+        for i in 0..=MAX_CLASH_PROXIES {
+            outbounds.push(format!(
+                r#"{{"type":"socks","tag":"n{i}","server":"1.1.1.1","server_port":1080}}"#
+            ));
+        }
+        let raw = format!(r#"{{"outbounds":[{}]}}"#, outbounds.join(","));
+        let profile = parse_singbox_profile(&raw).expect("truncate, do not hard-fail");
+        assert_eq!(profile.nodes.len(), MAX_CLASH_PROXIES);
+        assert!(profile
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.contains("truncated nodes")));
     }
 
     #[test]
@@ -972,7 +1003,7 @@ mod tests_g5 {
 
         // Detection: raw body and base64-wrapped body both resolve to UriList.
         assert_eq!(detect_format(&raw), SubscriptionFormat::UriList);
-        let (format, profile) = normalize_raw_body(&raw).unwrap();
+        let (format, profile) = normalize_raw_body(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(format, SubscriptionFormat::UriList);
         assert_eq!(profile.nodes.len(), 14, "15 lines, only ssr:// skipped");
         assert_eq!(profile.parse_stats.skipped_proxies, 1);
@@ -1080,7 +1111,8 @@ mod tests_g5 {
         assert_eq!(meta.name, "liangxin");
         assert_eq!(meta.format, SubscriptionFormat::UriList);
         assert_eq!(meta.node_count, 14);
-        let profile = load_active_profile(&paths, &load_index(&paths).unwrap()).unwrap();
+        let profile =
+            load_active_profile(&paths, &load_index(&paths).unwrap(), HostPlatform::MacOs).unwrap();
         assert_eq!(profile.nodes.len(), 14);
         // Load-time defaults: 3 split-routing rules + built-in DNS.
         assert_eq!(profile.route.rules.len(), 3);
@@ -1089,7 +1121,7 @@ mod tests_g5 {
             .as_array()
             .is_some_and(|a| a.len() > 100));
         assert_eq!(profile.route.final_outbound, "proxy");
-        let dns = profile.dns.expect("built-in dns block");
+        let dns = profile.dns.clone().expect("built-in dns block");
         let dns_tags: Vec<&str> = dns["servers"]
             .as_array()
             .unwrap()
@@ -1100,9 +1132,13 @@ mod tests_g5 {
         assert!(dns_tags.contains(&"remote-dns"));
         assert_eq!(dns["final"], "remote-dns");
         // Disabling the setting keeps the cached profile pure.
-        let raw_profile =
-            load_active_profile_with_default_rules(&paths, &load_index(&paths).unwrap(), false)
-                .unwrap();
+        let raw_profile = load_active_profile_with_default_rules(
+            &paths,
+            &load_index(&paths).unwrap(),
+            false,
+            HostPlatform::MacOs,
+        )
+        .unwrap();
         assert!(raw_profile.route.rules.is_empty());
         assert!(raw_profile.dns.is_none());
         let _ = fs::remove_dir_all(paths.root());
@@ -1120,8 +1156,49 @@ mod tests_g5 {
         for _ in 0..=MAX_URI_LINES {
             raw.push_str("vless://u@h:443?encryption=none#n\n");
         }
-        let err = parse_uri_list_profile(&raw).expect_err("too many lines");
-        assert!(err.to_string().contains("exceeds"));
+        let profile = parse_uri_list_profile(&raw).expect("truncate, do not hard-fail");
+        assert_eq!(profile.nodes.len(), MAX_URI_LINES);
+        assert!(profile
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.contains("truncated nodes")));
+    }
+
+    #[test]
+    fn fetch_ids_continues_after_injected_panic() {
+        let paths = temp_subs("panic-worker");
+        let body =
+            r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1080}]}"#;
+        let fetcher = MockFetcher {
+            bypasses_proxy: true,
+            mode: MockFetchMode::Ok(FetchResponse {
+                body: body.into(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                content_disposition: None,
+            }),
+        };
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+        let a = mgr.add("https://example.com/a", None, false, None).unwrap();
+        let b = mgr.add("https://example.com/b", None, false, None).unwrap();
+        super::PANIC_NEXT_FETCH.store(true, Ordering::SeqCst);
+        let results = mgr.fetch_ids(vec![a.id, b.id]);
+        assert_eq!(results.len(), 2);
+        assert!(
+            results.iter().any(|(_, r)| {
+                r.as_ref()
+                    .err()
+                    .is_some_and(|e| e.to_string().contains("panicked"))
+            }),
+            "one job must surface the injected panic"
+        );
+        assert!(
+            results.iter().any(|(_, r)| r.is_ok()),
+            "the next job must still run after a panic"
+        );
+        let _ = fs::remove_dir_all(paths.root());
     }
 }
 
@@ -1142,8 +1219,9 @@ pub use merge::{
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
     commit_subscription_success, load_index, mark_refreshed_in_index, mark_subscription_refreshed,
-    read_nodes, read_profile, remove_subscription, save_index, set_active, set_auto_update,
-    set_enabled, write_subscription_error, write_subscription_success, SubscriptionPaths,
+    read_nodes, read_profile, recover_subscription_dirs, remove_subscription, save_index,
+    set_active, set_auto_update, set_enabled, write_subscription_error, write_subscription_success,
+    SubscriptionPaths,
 };
 pub use uri::{
     apply_builtin_default_rules, looks_like_uri_list, parse_uri_list_profile, MAX_URI_LINES,
@@ -1153,8 +1231,11 @@ pub use url::{
 };
 
 use chrono::{DateTime, Utc};
-use ice_config::{NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats};
+use ice_config::{
+    HostPlatform, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
+};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::decode::maybe_decode_base64 as decode_body;
@@ -1298,29 +1379,31 @@ pub fn parse_subscription(
 /// Decode optional base64 wrapper, detect format, parse full profile.
 pub fn normalize_raw_body(
     raw: &str,
+    platform: HostPlatform,
 ) -> Result<(SubscriptionFormat, NormalizedProfile), SubscriptionError> {
     let decoded = decode_body(raw)?;
     let format = detect_format(&decoded);
     if format == SubscriptionFormat::Unknown {
         return Err(SubscriptionError::UnknownFormat);
     }
-    let profile = parse_profile(&decoded, format)?;
+    let profile = parse_profile(&decoded, format, platform)?;
     Ok((format, profile))
 }
 
 pub fn parse_profile(
     raw: &str,
     format: SubscriptionFormat,
+    platform: HostPlatform,
 ) -> Result<NormalizedProfile, SubscriptionError> {
     match format {
         SubscriptionFormat::SingBox => parse_singbox_profile(raw),
-        SubscriptionFormat::Clash => parse_clash_profile(raw),
+        SubscriptionFormat::Clash => parse_clash_profile(raw, platform),
         SubscriptionFormat::UriList => uri::parse_uri_list_profile(raw),
         SubscriptionFormat::Unknown => {
             let detected = detect_format(raw);
             match detected {
                 SubscriptionFormat::Unknown => Err(SubscriptionError::UnknownFormat),
-                other => parse_profile(raw, other),
+                other => parse_profile(raw, other, platform),
             }
         }
     }
@@ -1435,15 +1518,39 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         return Err(SubscriptionError::EmptyNodes);
     }
 
+    let limits = crate::limits::Limits::default();
+    if nodes.len() > limits.max_nodes {
+        let dropped = nodes.len() - limits.max_nodes;
+        nodes.truncate(limits.max_nodes);
+        parse_stats
+            .warnings
+            .push(crate::limits::Limits::warning("nodes", dropped));
+    }
+    if groups.len() > limits.max_groups {
+        let dropped = groups.len() - limits.max_groups;
+        groups.truncate(limits.max_groups);
+        parse_stats
+            .warnings
+            .push(crate::limits::Limits::warning("groups", dropped));
+    }
+
     let default_outbound = groups.first().map(|g| g.tag.clone());
 
     let route = if let Some(r) = value.get("route") {
+        let mut rules = r
+            .get("rules")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if rules.len() > limits.max_rules {
+            let dropped = rules.len() - limits.max_rules;
+            rules.truncate(limits.max_rules);
+            parse_stats
+                .warnings
+                .push(crate::limits::Limits::warning("rules", dropped));
+        }
         NormalizedRoute {
-            rules: r
-                .get("rules")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default(),
+            rules,
             final_outbound: r
                 .get("final")
                 .and_then(|v| v.as_str())
@@ -1480,7 +1587,7 @@ pub fn parse_singbox(raw: &str) -> Result<Vec<NormalizedOutbound>, SubscriptionE
 }
 
 fn parse_clash(raw: &str) -> Result<Vec<NormalizedOutbound>, SubscriptionError> {
-    Ok(parse_clash_profile(raw)?.nodes)
+    Ok(parse_clash_profile(raw, HostPlatform::MacOs)?.nodes)
 }
 
 fn name_from_disposition(cd: Option<&str>) -> Option<String> {
@@ -1532,6 +1639,7 @@ pub fn resolve_subscription_name(
 pub struct SubscriptionManager<F: HttpFetcher = DirectFetcher> {
     paths: SubscriptionPaths,
     fetcher: F,
+    platform: HostPlatform,
 }
 
 /// Result of the network phase of an update; the disk phase consumes it via
@@ -1555,17 +1663,26 @@ pub struct FetchedAdd {
 }
 
 impl SubscriptionManager<DirectFetcher> {
-    pub fn open(paths: SubscriptionPaths) -> Self {
+    pub fn open(paths: SubscriptionPaths, platform: HostPlatform) -> Self {
         Self {
             paths,
             fetcher: DirectFetcher,
+            platform,
         }
     }
 }
 
 impl<F: HttpFetcher> SubscriptionManager<F> {
     pub fn with_fetcher(paths: SubscriptionPaths, fetcher: F) -> Self {
-        Self { paths, fetcher }
+        Self::with_fetcher_on(paths, fetcher, HostPlatform::MacOs)
+    }
+
+    pub fn with_fetcher_on(paths: SubscriptionPaths, fetcher: F, platform: HostPlatform) -> Self {
+        Self {
+            paths,
+            fetcher,
+            platform,
+        }
     }
 
     pub fn paths(&self) -> &SubscriptionPaths {
@@ -1624,7 +1741,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             auto_update_interval,
             fetched,
         } = add;
-        match normalize_raw_body(&fetched.body) {
+        match normalize_raw_body(&fetched.body, self.platform) {
             Ok((format, profile)) => {
                 let index = load_index(&self.paths)?;
                 let make_active = index.items.iter().all(|m| !m.active);
@@ -1667,6 +1784,10 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Network fetch phase of an update: load meta, validate URL, GET (no disk writes).
     pub fn fetch_update(&self, id: Uuid) -> Result<FetchedUpdate, SubscriptionError> {
+        #[cfg(test)]
+        if PANIC_NEXT_FETCH.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("injected fetch panic");
+        }
         assert!(self.fetcher.bypasses_system_proxy());
 
         let index = load_index(&self.paths)?;
@@ -1704,7 +1825,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         if upd.fetched.not_modified {
             return mark_subscription_refreshed(&self.paths, upd.meta.id);
         }
-        match normalize_raw_body(&upd.fetched.body) {
+        match normalize_raw_body(&upd.fetched.body, self.platform) {
             Ok((format, profile)) => {
                 let updated = meta_from_fetched_profile(&current, &upd.fetched, format, &profile);
                 write_subscription_success(&self.paths, &updated, &upd.fetched.body, &profile)?;
@@ -1773,17 +1894,22 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 let queue = std::sync::Arc::clone(&queue);
                 let sender = sender.clone();
                 scope.spawn(move || loop {
-                    let job = queue
-                        .lock()
-                        .expect("subscription fetch queue poisoned")
-                        .pop_front();
+                    let job = queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
                     let Some((index, id)) = job else {
                         break;
                     };
-                    let result = self.fetch_update(id);
-                    sender
-                        .send((index, id, result))
-                        .expect("subscription fetch receiver dropped");
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.fetch_update(id)
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err(SubscriptionError::FetchFailed(
+                            "fetch worker panicked".into(),
+                        ))
+                    });
+                    if sender.send((index, id, result)).is_err() {
+                        tracing::error!("subscription fetch receiver dropped; worker exiting");
+                        break;
+                    }
                 });
             }
             drop(sender);
@@ -1840,7 +1966,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                         out.push((id, Ok(updated)));
                         continue;
                     }
-                    match normalize_raw_body(&upd.fetched.body) {
+                    match normalize_raw_body(&upd.fetched.body, self.platform) {
                         Ok((format, profile)) => {
                             let updated =
                                 meta_from_fetched_profile(&current, &upd.fetched, format, &profile);
@@ -1908,7 +2034,11 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     pub fn active_profile(&self) -> Result<NormalizedProfile, SubscriptionError> {
         let index = load_index(&self.paths)?;
-        load_active_profile(&self.paths, &index)
+        Ok(Arc::unwrap_or_clone(load_active_profile(
+            &self.paths,
+            &index,
+            self.platform,
+        )?))
     }
 }
 

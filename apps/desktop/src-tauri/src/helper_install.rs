@@ -25,7 +25,7 @@
 
 use crate::capture::{TrafficCapture, TunStatus};
 use crate::AppState;
-use ice_config::AppError;
+use ice_config::{AppError, ErrorCode};
 use ice_elevate::{ElevateError, ElevateOutcome};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -37,8 +37,8 @@ use tauri::Manager;
 const HELPER_RESOURCE_NAME: &str = "ice-helper";
 
 /// Stable error codes surfaced to the UI (plan §4.5 extension).
-pub const ERR_HELPER_INSTALL_FAILED: &str = "tun.helper_install_failed";
-pub const ERR_HELPER_INSTALL_CANCELLED: &str = "tun.helper_install_cancelled";
+pub const ERR_HELPER_INSTALL_FAILED: ErrorCode = ErrorCode::TunHelperInstallFailed;
+pub const ERR_HELPER_INSTALL_CANCELLED: ErrorCode = ErrorCode::TunHelperInstallCancelled;
 /// The elevated install reported OK but the daemon did not accept status
 /// probes within the readiness window. The helper *is* installed; this is a
 /// transient "not ready yet" state, distinct from an install failure so the
@@ -46,7 +46,7 @@ pub const ERR_HELPER_INSTALL_CANCELLED: &str = "tun.helper_install_cancelled";
 /// needless reinstall + password re-prompt). Created only on unix hosts (the
 /// readiness wait itself is unix-only).
 #[cfg(unix)]
-pub const ERR_HELPER_NOT_READY: &str = "tun.helper_not_ready";
+pub const ERR_HELPER_NOT_READY: ErrorCode = ErrorCode::TunHelperNotReady;
 
 /// Refuse install/uninstall while TUN capture is active *or* a transition is
 /// in flight: the elevated modes restart (or remove) the launchd daemon,
@@ -285,8 +285,8 @@ fn cores_differ(bundle: &Option<String>, installed: &Option<String>) -> bool {
 /// dialog is authorized, and cancellation leaves the system untouched.
 pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     if !cfg!(target_os = "macos") {
-        return Err(AppError::with_code(
-            "tun.not_supported",
+        return Err(AppError::new(
+            ErrorCode::TunNotSupported,
             "helper install is only supported on macOS",
         ));
     }
@@ -324,8 +324,8 @@ pub fn install_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
 /// Uninstall the privileged helper through the system authorization dialog.
 pub fn uninstall_helper_inner(app: &tauri::AppHandle) -> Result<(), AppError> {
     if !cfg!(target_os = "macos") {
-        return Err(AppError::with_code(
-            "tun.not_supported",
+        return Err(AppError::new(
+            ErrorCode::TunNotSupported,
             "helper uninstall is only supported on macOS",
         ));
     }
@@ -368,7 +368,7 @@ mod tests {
             output: "ERROR: core binary is group/world-writable\n".into(),
         };
         let app_err = parse_outcome(err).expect_err("error line");
-        assert_eq!(app_err.code, ERR_HELPER_INSTALL_FAILED);
+        assert_eq!(app_err.code, ERR_HELPER_INSTALL_FAILED.as_str());
         assert!(app_err.message.contains("group/world-writable"));
     }
 
@@ -378,7 +378,7 @@ mod tests {
             output: String::new(),
         })
         .expect_err("empty");
-        assert_eq!(err.code, ERR_HELPER_INSTALL_FAILED);
+        assert_eq!(err.code, ERR_HELPER_INSTALL_FAILED.as_str());
     }
 
     #[test]

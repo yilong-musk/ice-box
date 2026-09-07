@@ -210,9 +210,12 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let paths = temp_app("shutdown-lock");
+        let (core, core_snapshot) =
+            crate::core_snapshot::wrap_core(Box::new(mock_core_ok()) as Box<dyn CoreHandle>);
         let state = Arc::new(AppState {
             paths: paths.clone(),
-            core: Mutex::new(Box::new(mock_core_ok()) as Box<dyn CoreHandle>),
+            core,
+            core_snapshot,
             proxy: Mutex::new(Box::new(TrackProxy::default())),
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(None),
@@ -669,6 +672,7 @@ mod live {
     #[test]
     #[ignore = "live: real sing-box + Clash API group state"]
     fn g9_10_live_group_exits_listable_and_switchable() {
+        use ice_config::HostPlatform;
         use ice_core::{proxy_groups, select_group, GroupState, HealthEndpoints};
         use ice_subscription::{list_profile_outbounds, load_active_profile, load_index};
 
@@ -723,7 +727,7 @@ mod live {
 
         let sub = SubscriptionPaths::from_app(&paths);
         let index = load_index(&sub).expect("index");
-        let profile = load_active_profile(&sub, &index).expect("profile");
+        let profile = load_active_profile(&sub, &index, HostPlatform::MacOs).expect("profile");
         let static_groups: Vec<_> = list_profile_outbounds(&profile)
             .into_iter()
             .filter(|o| {

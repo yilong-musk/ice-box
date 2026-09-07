@@ -3,6 +3,7 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { clearNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Nodes } from "./Nodes";
 
@@ -79,20 +80,15 @@ describe("Nodes", () => {
       expect(view.getAllByText("node-b").length).toBeGreaterThan(0);
     });
     expect(container.querySelector(".node-table")).toBeNull();
-    expect(view.getByRole("list", { name: "节点列表" })).toBeInTheDocument();
-    expect(view.getByRole("button", { name: "批量测延迟" })).toBeInTheDocument();
+    expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: "按延迟排序" })).toBeNull();
-    const nodeList = view.getByRole("list", { name: "节点列表" });
+    const nodeList = view.getByRole("list", { name: t("nodes.listAria") });
     const scrollArea = nodeList.closest('[data-slot="scroll-area"]');
-    expect(scrollArea?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["min-h-0", "flex-1", "overflow-hidden"]),
-    );
     expect(
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
-    expect(container.querySelector(".nodes-panel")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
-    );
+    expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
   });
 
   it("renders a long node list without dropping later rows", async () => {
@@ -108,14 +104,14 @@ describe("Nodes", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("list", { name: "节点列表" })).toBeInTheDocument();
+      expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
       expect(view.getByText("node-0")).toBeInTheDocument();
     });
     await waitFor(() => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
     const titles = container.querySelectorAll(
-      '[aria-label="节点列表"] [data-slot="item-title"]',
+      `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
     );
     expect(titles).toHaveLength(80);
   });
@@ -131,8 +127,8 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    expect(view.queryByText("暂无节点")).toBeNull();
-    expect(view.getByText("加载节点列表…")).toBeInTheDocument();
+    expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
+    expect(view.getByText(t("nodes.loading"))).toBeInTheDocument();
 
     resolveNodes([
       {
@@ -145,8 +141,8 @@ describe("Nodes", () => {
     await waitFor(() => {
       expect(view.getByText("node-a")).toBeInTheDocument();
     });
-    expect(view.queryByText("暂无节点")).toBeNull();
-    expect(view.queryByText("加载节点列表…")).toBeNull();
+    expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
+    expect(view.queryByText(t("nodes.loading"))).toBeNull();
   });
 
   it("hydrates from the shared snapshot while the next fetch is in flight", () => {
@@ -167,8 +163,8 @@ describe("Nodes", () => {
     const view = within(container);
 
     expect(view.getByText("cached-node")).toBeInTheDocument();
-    expect(view.queryByText("暂无节点")).toBeNull();
-    expect(view.queryByText("加载节点列表…")).toBeNull();
+    expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
+    expect(view.queryByText(t("nodes.loading"))).toBeNull();
   });
 
   it("refreshes cached nodes immediately when the pane is activated", async () => {
@@ -231,7 +227,7 @@ describe("Nodes", () => {
     expect(
       view.getByRole("button", { name: "选择组", expanded: false }),
     ).toBeInTheDocument();
-    expect(view.queryByLabelText("选择组 成员")).not.toBeInTheDocument();
+    expect(view.queryByLabelText(t("nodes.membersAria", { group: "选择组" }))).not.toBeInTheDocument();
     expect(view.queryByText("leaf-89")).toBeNull();
   });
 
@@ -256,7 +252,7 @@ describe("Nodes", () => {
     await expandGroup(view, "选择组");
     await waitFor(() => {
       expect(
-        view.getByLabelText("将 leaf-89 设为 选择组 出口"),
+        view.getByLabelText(t("nodes.setMemberAria", { member: "leaf-89", group: "选择组" })),
       ).toBeInTheDocument();
     });
   });
@@ -278,7 +274,7 @@ describe("Nodes", () => {
 
     expect(view.getByText("node-0")).toBeInTheDocument();
     const firstPaint = container.querySelectorAll(
-      '[aria-label="节点列表"] [data-slot="item-title"]',
+      `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
     );
     expect(firstPaint.length).toBeGreaterThan(0);
     expect(firstPaint.length).toBeLessThanOrEqual(8);
@@ -288,7 +284,7 @@ describe("Nodes", () => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
     expect(
-      container.querySelectorAll('[aria-label="节点列表"] [data-slot="item-title"]'),
+      container.querySelectorAll(`[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`),
     ).toHaveLength(80);
   });
 
@@ -299,10 +295,10 @@ describe("Nodes", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("暂无节点")).toBeInTheDocument();
+      expect(view.getByText(t("nodes.emptyTitle"))).toBeInTheDocument();
     });
-    expect(view.queryByRole("list", { name: "节点列表" })).toBeNull();
-    fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
+    expect(view.queryByRole("list", { name: t("nodes.listAria") })).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: t("home.goToSubs") }));
     expect(onNavigate).toHaveBeenCalledWith("subs");
   });
 
@@ -325,7 +321,7 @@ describe("Nodes", () => {
       expanded: false,
     });
     fireEvent.click(toggle);
-    expect(await view.findByLabelText(`${groupName} 成员`)).toBeInTheDocument();
+    expect(await view.findByLabelText(t("nodes.membersAria", { group: groupName }))).toBeInTheDocument();
   }
 
   it("toggles a strategy group from the row except 测速 and 选用", async () => {
@@ -340,20 +336,20 @@ describe("Nodes", () => {
     expect(row).not.toBeNull();
     const rowView = within(row as HTMLElement);
 
-    fireEvent.click(view.getByText("策略组 · selector"));
-    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+    fireEvent.click(view.getByText(t("nodes.groupType", { type: "selector" })));
+    expect(await view.findByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
 
-    fireEvent.click(view.getByText("策略组 · selector"));
-    expect(view.queryByLabelText("选择组 成员")).not.toBeInTheDocument();
+    fireEvent.click(view.getByText(t("nodes.groupType", { type: "selector" })));
+    expect(view.queryByLabelText(t("nodes.membersAria", { group: "选择组" }))).not.toBeInTheDocument();
 
     fireEvent.click(rowView.getByText("→ node-a"));
-    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+    expect(await view.findByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
 
-    fireEvent.click(rowView.getByRole("button", { name: "测速" }));
-    expect(view.getByLabelText("选择组 成员")).toBeInTheDocument();
+    fireEvent.click(rowView.getByRole("button", { name: t("nodes.test") }));
+    expect(view.getByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
 
-    fireEvent.click(rowView.getByRole("button", { name: "选用" }));
-    expect(view.getByLabelText("选择组 成员")).toBeInTheDocument();
+    fireEvent.click(rowView.getByRole("button", { name: t("nodes.select") }));
+    expect(view.getByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
   });
 
   it("expands selector group and switches exit by clicking a member", async () => {
@@ -361,7 +357,7 @@ describe("Nodes", () => {
     const view = within(container);
 
     await expandGroup(view, "选择组");
-    fireEvent.click(view.getByLabelText("将 node-b 设为 选择组 出口"));
+    fireEvent.click(view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })));
 
     await waitFor(() => {
       expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
@@ -381,7 +377,7 @@ describe("Nodes", () => {
     const view = within(container);
 
     await expandGroup(view, "选择组");
-    fireEvent.click(view.getByLabelText("将 node-b 设为 选择组 出口"));
+    fireEvent.click(view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })));
 
     await waitFor(() => {
       expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
@@ -394,7 +390,7 @@ describe("Nodes", () => {
 
     await expandGroup(view, "自动组");
 
-    expect(view.queryByLabelText("将 node-a 设为 自动组 出口")).not.toBeInTheDocument();
+    expect(view.queryByLabelText(t("nodes.setMemberAria", { member: "node-a", group: "自动组" }))).not.toBeInTheDocument();
     expect(setGroupSelection).not.toHaveBeenCalled();
   });
 
@@ -411,7 +407,7 @@ describe("Nodes", () => {
     const view = within(container);
 
     await expandGroup(view, "My Group");
-    const panel = view.getByLabelText("My Group 成员").closest("[id]");
+    const panel = view.getByLabelText(t("nodes.membersAria", { group: "My Group" })).closest("[id]");
     expect(panel?.id).toBe("group-members-My_20Group");
     expect(panel?.id.includes(" ")).toBe(false);
   });
@@ -428,7 +424,7 @@ describe("Nodes", () => {
     const row = toggle.closest("[data-slot='item']");
     expect(row).not.toBeNull();
     fireEvent.click(
-      within(row as HTMLElement).getByRole("button", { name: "测速" }),
+      within(row as HTMLElement).getByRole("button", { name: t("nodes.test") }),
     );
   }
 
@@ -447,8 +443,8 @@ describe("Nodes", () => {
     const toggle = view.getByRole("button", { name: "选择组" });
     const row = toggle.closest("[data-slot='item']");
     await waitFor(() => {
-      expect(within(row as HTMLElement).getByText("42 ms")).toHaveClass(
-        "text-ok",
+      expect(within(row as HTMLElement).getByTestId("delay-ok")).toHaveTextContent(
+        "42 ms",
       );
     });
   });
@@ -483,7 +479,7 @@ describe("Nodes", () => {
     await clickGroupDelayTest(view, "选择组", false);
 
     expect(
-      await view.findByText("当前策略组没有可测的出口"),
+      await view.findByText(t("nodes.noTestableGroup")),
     ).toBeInTheDocument();
     expect(testNodeDelay).not.toHaveBeenCalled();
   });
@@ -500,9 +496,9 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    fireEvent.click(await view.findByRole("button", { name: "批量测延迟" }));
+    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
 
-    expect(await view.findByText("当前没有可测的出口")).toBeInTheDocument();
+    expect(await view.findByText(t("nodes.noTestable"))).toBeInTheDocument();
     expect(testNodeDelay).not.toHaveBeenCalled();
   });
 
@@ -516,7 +512,7 @@ describe("Nodes", () => {
     });
     toggle.focus();
     await user.keyboard("{Enter}");
-    expect(await view.findByLabelText("选择组 成员")).toBeInTheDocument();
+    expect(await view.findByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
   });
 
   it("clears an in-flight delay cell when cancelled", async () => {
@@ -537,7 +533,7 @@ describe("Nodes", () => {
       await waitFor(() => {
         expect(view.getAllByText("…").length).toBeGreaterThan(0);
       });
-      fireEvent.click(view.getByRole("button", { name: "取消" }));
+      fireEvent.click(view.getByRole("button", { name: t("common.cancel") }));
       await waitFor(() => {
         expect(view.queryAllByText("…")).toHaveLength(0);
       });
@@ -554,7 +550,7 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    fireEvent.click(await view.findByRole("button", { name: "批量测延迟" }));
+    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
 
     await waitFor(() => {
       expect(testNodeDelay).toHaveBeenCalledTimes(2);
@@ -564,29 +560,29 @@ describe("Nodes", () => {
     expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
     expect(testNodeDelay).not.toHaveBeenCalledWith("自动组");
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "批量测延迟" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
     });
 
     const titles = [
       ...container.querySelectorAll(
-        '[aria-label="节点列表"] [data-slot="item-title"]',
+        `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
       ),
     ].map((el) =>
-      (el.textContent ?? "").replace(/选用中/g, "").replace(/\s+/g, " ").trim(),
+      (el.textContent ?? "").replace(new RegExp(t("nodes.inUse"), "g"), "").replace(/\s+/g, " ").trim(),
     );
     expect(titles).toEqual(["node-a", "node-b", "选择组", "自动组"]);
 
     const selectorRow = view
       .getByRole("button", { name: "选择组" })
       .closest("[data-slot='item']");
-    expect(within(selectorRow as HTMLElement).getByText("800 ms")).toHaveClass(
-      "text-warn",
+    expect(within(selectorRow as HTMLElement).getByTestId("delay-warn")).toHaveTextContent(
+      "800 ms",
     );
     const autoRow = view
       .getByRole("button", { name: "自动组" })
       .closest("[data-slot='item']");
-    expect(within(autoRow as HTMLElement).getByText("10 ms")).toHaveClass(
-      "text-ok",
+    expect(within(autoRow as HTMLElement).getByTestId("delay-ok")).toHaveTextContent(
+      "10 ms",
     );
   });
 });

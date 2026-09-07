@@ -10,6 +10,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10"
+subtle = "2.6"
 ice-tun-sys = { workspace = true }
 ice-config-guard = { workspace = true }
 

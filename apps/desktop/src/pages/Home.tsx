@@ -6,6 +6,7 @@ import {
   api,
   formatInvokeError,
   type AppSettings,
+  type CoreStatus,
   type CoreState,
   type NodeInfo,
   type ProxyMode,
@@ -14,6 +15,7 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
+import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import { resolveSelectedTag, writeNodesSnapshot } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 import { Button } from "@/components/ui/button";
@@ -58,17 +60,38 @@ const PROXY_MODE_KEYS = [
 function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   const node = nodes.find((n) => n.tag === tag);
   if (!node) return tag;
-  if (GROUP_TYPES.includes(node.outbound_type)) {
-    return node.group_now
-      ? `${node.tag} → ${node.group_now}`
-      : `${node.tag}（${node.outbound_type}）`;
+  if (GROUP_TYPES.includes(node.outbound_type) && node.group_now) {
+    return t("home.outboundGroupNow", { tag: node.tag, now: node.group_now });
   }
-  return `${node.tag}（${node.outbound_type}）`;
+  return t("home.outboundTyped", {
+    tag: node.tag,
+    type: node.outbound_type,
+  });
+}
+
+function formatCoreStatus(status: CoreStatus | undefined): string {
+  switch (status) {
+    case "running":
+      return t("home.coreStatus.running");
+    case "stopped":
+      return t("home.coreStatus.stopped");
+    case "starting":
+      return t("home.coreStatus.starting");
+    case "stopping":
+      return t("home.coreStatus.stopping");
+    case "error":
+      return t("home.coreStatus.error");
+    default:
+      return t("common.dash");
+  }
 }
 
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
   useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
+  const runtime = useRuntimeStore();
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
@@ -78,10 +101,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
-  /** Optimistic TUN-toggle state while a settings save is in flight: the
-   * toggle reflects the user's intent immediately instead of waiting for the
-   * 2s status poll; cleared whenever fresh status arrives, so the control
-   * always snaps back to the committed setting on failure. */
+  /** Optimistic TUN-toggle state while a settings save is in flight. Cleared
+   * when fresh status arrives so the control snaps back on failure. */
   const [tunOverride, setTunOverride] = useState<boolean | null>(null);
   const tunInstall = useTunInstallDialog(onInstallHelperThenEnableTun);
   const modeBusyRef = useRef(false);
@@ -90,22 +111,32 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
   const settingsRef = useRef<AppSettings | null>(null);
+  const statusRef = useRef<StatusResponse | null>(null);
 
   const refresh = useCallback(
-    async (pollGen?: number, opts?: { settings?: boolean }) => {
+    async (
+      pollGen?: number,
+      opts?: { settings?: boolean; status?: boolean },
+    ) => {
       const gen = pollGen ?? pollGenRef.current;
       const wantSettings = opts?.settings === true || settingsRef.current === null;
+      const wantStatus = opts?.status !== false;
       try {
-        const statusPromise = api.getStatus();
+        const statusPromise = wantStatus
+          ? api.getStatus()
+          : Promise.resolve(null);
         const nodesPromise = api.listNodes();
         const settingsPromise = wantSettings
           ? api.getSettings()
           : Promise.resolve(null);
 
-        const s = await statusPromise;
+        const s = wantStatus ? await statusPromise : null;
         if (gen !== pollGenRef.current || !activeRef.current) return;
-        setStatus(s);
-        onStatus?.(s);
+        if (s) {
+          statusRef.current = s;
+          setStatus(s);
+          onStatus?.(s);
+        }
 
         const [n, nextSettings] = await Promise.all([
           nodesPromise,
@@ -124,10 +155,12 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         }
         setTunOverride(null);
         setSelectedTag(selected);
+        const coreStatus =
+          s?.core.status ?? statusRef.current?.core.status ?? "stopped";
         writeNodesSnapshot({
           nodes: n,
           selectedTag: selected,
-          running: s.core.status === "running",
+          running: coreStatus === "running",
         });
         setError(null);
       } catch (e) {
@@ -147,24 +180,36 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   );
 
   useEffect(() => {
+    if (!runtime?.status) return;
+    statusRef.current = runtime.status;
+    setStatus(runtime.status);
+    onStatus?.(runtime.status);
+    setTunOverride(null);
+  }, [runtime?.status, onStatus]);
+
+  useEffect(() => {
     activeRef.current = active;
     pollGenRef.current += 1;
     if (!active) return;
     const gen = pollGenRef.current;
-    void refresh(gen, { settings: true });
+    const shareStatus = runtime != null;
+    void refresh(gen, { settings: true, status: !shareStatus });
     const id = window.setInterval(() => {
       if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
         return;
       }
+      if (document.visibilityState === "hidden") return;
+      const rt = runtimeRef.current;
+      if (rt && !rt.visible) return;
       pollGenRef.current += 1;
-      void refresh(pollGenRef.current);
-    }, 2000);
+      void refresh(pollGenRef.current, { status: !shareStatus });
+    }, RUNTIME_STATUS_FALLBACK_MS);
     return () => {
       activeRef.current = false;
       pollGenRef.current += 1;
       window.clearInterval(id);
     };
-  }, [active, refresh]);
+  }, [active, refresh, runtime != null]);
 
   const core: CoreState | undefined = status?.core;
   const tunTransitioning =
@@ -182,6 +227,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   async function run(action: () => Promise<void>) {
     // Invalidate in-flight poll so mid-start API misses cannot flash a red error.
     pollGenRef.current += 1;
+    runtime?.bumpGeneration();
     pendingRef.current = true;
     setPending(true);
     setError(null);
@@ -205,6 +251,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
    * on the current service state. */
   async function persistTunDesire(action: () => Promise<void>) {
     pollGenRef.current += 1;
+    runtime?.bumpGeneration();
     tunSaveRef.current = true;
     setTunSaving(true);
     setError(null);
@@ -228,6 +275,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     const gen = nextGeneration();
     // Invalidate in-flight poll so a mid-reload sample cannot flash a red error.
     pollGenRef.current += 1;
+    runtime?.bumpGeneration();
     modeBusyRef.current = true;
     setModeBusy(true);
     setError(null);
@@ -281,10 +329,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     nodes.length === 0
       ? running
         ? t("home.outboundDirect")
-        : "—"
+        : t("common.dash")
       : selectedTag
         ? formatOutbound(selectedTag, nodes)
-        : "—";
+        : t("common.dash");
 
   function onToggleProxy() {
     if (proxyOn) {
@@ -303,8 +351,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     setTunOverride(enabled);
     void persistTunDesire(async () => {
       await api.saveSettings({
-        ...settings,
-        tun: { ...settings.tun, enabled },
+        tun: { enabled },
       });
     });
   }
@@ -314,8 +361,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     void persistTunDesire(async () => {
       await api.installHelper();
       await api.saveSettings({
-        ...settings,
-        tun: { ...settings.tun, enabled: true },
+        tun: { enabled: true },
       });
     });
   }
@@ -327,8 +373,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     if (!settings) return;
     void run(async () => {
       await api.saveSettings({
-        ...settings,
-        tun: { ...settings.tun, enabled: false },
+        tun: { enabled: false },
       });
       await api.start();
     });
@@ -360,7 +405,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const inboundLabel =
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
-      : "—";
+      : t("common.dash");
   const emptyTitle = running
     ? t("home.empty.runningTitle")
     : t("home.empty.idleTitle");
@@ -380,7 +425,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const infoRows: { label: string; value: string; valueClassName?: string }[] = [
     {
       label: t("home.info.core"),
-      value: core?.status ?? "—",
+      value: formatCoreStatus(core?.status),
       valueClassName: `status status-${core?.status ?? "unknown"}`,
     },
     { label: t("home.info.capture"), value: captureLabel },
@@ -416,7 +461,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const recoveryRequired = status?.tun_status === "recovery_required";
 
   return (
-    <div className="home-panel flex min-h-0 flex-1 flex-col gap-3">
+    <div className="home-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="home-panel">
       {proxyAvailable &&
         running &&
         proxyRecorded &&
@@ -579,8 +624,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                           await api.ensureTunElevation();
                         }
                         await api.saveSettings({
-                          ...s,
-                          tun: { ...s.tun, enabled: true },
+                          tun: { enabled: true },
                         });
                       });
                       return;

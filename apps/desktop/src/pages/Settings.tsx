@@ -5,6 +5,7 @@ import {
   api,
   formatInvokeError,
   type AppSettings,
+  type SettingsPatch,
   type StatusResponse,
   type CheckAppUpdateResponse,
 } from "../api/tauri";
@@ -15,41 +16,17 @@ import {
   isLoopbackListenHost,
   parsePortInput,
   portsConflict,
-} from "../lib/generationGuard";
+} from "../lib/listenValidation";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
-import { formatProgress } from "../components/UpdateAvailableDialog";
-import { APP_VERSION } from "../lib/appVersion";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  t,
-  useLanguagePreference,
-  type LanguagePreference,
-  type MessageKey,
-} from "../lib/i18n";
-import { useThemePreference, type ThemePreference } from "../lib/theme";
+import { t, useLanguagePreference } from "../lib/i18n";
+import { useThemePreference } from "../lib/theme";
+import { useRuntimeStore } from "../lib/runtimeStore";
+import { AppearanceCard } from "./settings/Appearance";
+import { PortsCard } from "./settings/Ports";
+import { TunCard } from "./settings/Tun";
+import { UpdateCard } from "./settings/Update";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -64,6 +41,7 @@ const defaults: AppSettings = {
   auto_default_rules: true,
   language: "system",
   check_app_updates: true,
+  core_log_level: "warn",
   tun: {
     enabled: false,
     interface_name: null,
@@ -77,41 +55,26 @@ const defaults: AppSettings = {
   },
 };
 
-const APPEARANCE_OPTIONS = [
-  ["system", "settings.appearance.system"],
-  ["light", "settings.appearance.light"],
-  ["dark", "settings.appearance.dark"],
-] as const satisfies ReadonlyArray<
-  readonly [ThemePreference, MessageKey]
->;
-
-const LANGUAGE_OPTIONS = [
-  ["system", "settings.language.system"],
-  ["zh", "settings.language.zh"],
-  ["en", "settings.language.en"],
-] as const satisfies ReadonlyArray<
-  readonly [LanguagePreference, MessageKey]
->;
-
-/** TUN lifecycle labels shown in the settings card while a transition runs. */
-const TUN_TRANSITION_KEYS: Record<string, MessageKey> = {
-  preparing: "settings.tunTransition.preparing",
-  stopping: "settings.tunTransition.stopping",
-};
-
-function formatUpdateError(raw: string): string {
-  if (raw.includes("update.feed_unavailable")) {
-    return t("settings.updateFeedUnavailable");
-  }
-  if (raw.includes("update.check_failed")) {
-    return t("settings.updateCheckFailed");
-  }
-  return raw;
-}
-
 /// Debounce before persisting a changed setting (typing coalesces; switches
 /// and radios feel instant).
 const SAVE_DEBOUNCE_MS = 500;
+
+/** Fields this page owns. Omitting Home-owned keys avoids last-writer races (ORCH-3). */
+function settingsOwnedPatch(form: AppSettings): SettingsPatch {
+  return {
+    mixed_listen: form.mixed_listen,
+    mixed_port: form.mixed_port,
+    clash_api_listen: form.clash_api_listen,
+    clash_api_port: form.clash_api_port,
+    auto_set_system_proxy: form.auto_set_system_proxy,
+    allow_lan: form.allow_lan,
+    tun: form.tun,
+    auto_default_rules: form.auto_default_rules,
+    language: form.language,
+    check_app_updates: form.check_app_updates,
+    core_log_level: form.core_log_level,
+  };
+}
 
 export function Settings({
   active = true,
@@ -135,6 +98,7 @@ export function Settings({
   const { preference, setPreference } = useLanguagePreference();
   const { preference: themePreference, setPreference: setThemePreference } =
     useThemePreference();
+  const runtime = useRuntimeStore();
   const saveTimerRef = useRef<number | null>(null);
   const scheduledSaveRef = useRef<AppSettings | null>(null);
   const saveInFlightRef = useRef(false);
@@ -157,6 +121,12 @@ export function Settings({
   } | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const updateCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (runtime?.status) {
+      setStatus(runtime.status);
+    }
+  }, [runtime?.status]);
 
   useEffect(() => {
     if (availableUpdate?.available && availableUpdate.version) {
@@ -337,6 +307,7 @@ export function Settings({
         s = await api.getStatus();
       }
       setStatus(s);
+      void runtime?.refreshStatus();
       if (s.helper_installed !== expectedInstalled) {
         setError(t("settings.helperStatusUnconfirmed"));
         return;
@@ -362,7 +333,7 @@ export function Settings({
     if (Object.keys(errs).length > 0) {
       throw new Error(t("settings.tunNotSaved"));
     }
-    await api.saveSettings(candidate);
+    await api.saveSettings(settingsOwnedPatch(candidate));
     setForm(candidate);
   }
 
@@ -422,7 +393,7 @@ export function Settings({
         return;
       }
       setError(null);
-      await api.saveSettings(candidate);
+      await api.saveSettings(settingsOwnedPatch(candidate));
       flashSaved();
     } catch (err) {
       setError(formatInvokeError(err));
@@ -489,7 +460,7 @@ export function Settings({
   const tunUiHidden = status?.tun_ui_hidden === true;
 
   return (
-    <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3">
+    <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="settings-panel">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {saved && <OkAlert className="shrink-0">{t("common.saved")}</OkAlert>}
 
@@ -499,484 +470,76 @@ export function Settings({
         className="min-h-0 flex-1 overflow-hidden"
       >
         <div className="flex w-full flex-col gap-3">
-          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-        <CardHeader>
-          <CardTitle>{t("settings.appearance")}</CardTitle>
-          <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            spacing={2}
-            value={themePreference}
-            onValueChange={(value) => {
-              if (
-                value === "system" ||
-                value === "light" ||
-                value === "dark"
-              ) {
-                setThemePreference(value);
-              }
+          <AppearanceCard
+            themePreference={themePreference}
+            setThemePreference={setThemePreference}
+            language={form.language}
+            busy={busy}
+            loaded={loaded}
+            onLanguageChange={(value) => {
+              setPreference(value);
+              setForm({ ...form, language: value });
             }}
-            className="w-full"
-            aria-label={t("settings.appearance")}
-          >
-            {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
-              <ToggleGroupItem key={value} value={value} className="flex-1">
-                {t(labelKey)}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </CardContent>
-      </Card>
-
-          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-        <CardHeader>
-          <CardTitle>{t("settings.language")}</CardTitle>
-          <CardDescription>{t("settings.languageDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Field>
-            <NativeSelect
-              id="settings-language"
-              aria-label={t("settings.language")}
-              size="sm"
-              className="w-full max-w-60"
-              value={form.language}
-              disabled={busy || !loaded}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (value === "system" || value === "zh" || value === "en") {
-                  // Apply immediately (localStorage cache + live re-render);
-                  // the auto-save pipeline persists it in settings.json.
-                  setPreference(value);
-                  setForm({ ...form, language: value });
-                }
-              }}
-            >
-              {LANGUAGE_OPTIONS.map(([value, labelKey]) => (
-                <NativeSelectOption key={value} value={value}>
-                  {t(labelKey)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </Field>
-        </CardContent>
-      </Card>
+          />
 
           <div ref={updateCardRef} id="settings-app-update">
-          <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-        <CardHeader>
-          <CardTitle>{t("settings.update")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <Field orientation="horizontal" className="w-auto gap-2">
-              <Switch
-                id="settings-check-app-updates"
-                size="sm"
-                checked={form.check_app_updates}
-                disabled={busy || !loaded}
-                aria-label={t("settings.updateAutoCheck")}
-                onCheckedChange={(checked) => {
-                  const enabled = checked === true;
-                  setForm({
-                    ...form,
-                    check_app_updates: enabled,
-                  });
-                  if (enabled) {
-                    publishSidebarUpdate(updateInfo, true);
-                  } else {
-                    onAvailableUpdate?.(null);
-                  }
-                }}
-              />
-              <FieldLabel htmlFor="settings-check-app-updates">
-                {t("settings.updateAutoCheck")}
-              </FieldLabel>
-            </Field>
-            <p className="text-xs text-muted-foreground">
-              {t("settings.updateCurrent", { version: APP_VERSION })}
-            </p>
-            {updateInfo?.available && updateInfo.version ? (
-              <p className="text-xs">
-                {t("settings.updateAvailable", {
-                  version: updateInfo.version,
-                })}
-              </p>
-            ) : updateInfo && !updateInfo.available ? (
-              <p className="text-xs text-muted-foreground">
-                {t("settings.updateUpToDate")}
-              </p>
-            ) : null}
-            {updateBusy && updateProgress ? (
-              <p className="text-xs text-muted-foreground">
-                {formatProgress(
-                  updateProgress.downloaded,
-                  updateProgress.contentLength,
-                )}
-              </p>
-            ) : null}
-            {updateError ? (
-              <FieldError>
-                {formatUpdateError(updateError)}
-              </FieldError>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy || updateBusy || !loaded}
-                onClick={() => void runUpdateCheck()}
-              >
-                {t("settings.updateCheck")}
-              </Button>
-              {updateInfo?.available ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={busy || updateBusy || !loaded}
-                  onClick={() => void runUpdateInstall()}
-                >
-                  {t("settings.updateInstall")}
-                </Button>
-              ) : null}
-            </div>
-          </FieldGroup>
-        </CardContent>
-      </Card>
+            <UpdateCard
+              checkAppUpdates={form.check_app_updates}
+              busy={busy}
+              loaded={loaded}
+              updateBusy={updateBusy}
+              updateInfo={updateInfo}
+              updateProgress={updateProgress}
+              updateError={updateError}
+              onCheckAppUpdatesChange={(enabled) => {
+                setForm({
+                  ...form,
+                  check_app_updates: enabled,
+                });
+                if (enabled) {
+                  publishSidebarUpdate(updateInfo, true);
+                } else {
+                  onAvailableUpdate?.(null);
+                }
+              }}
+              onCheck={() => void runUpdateCheck()}
+              onInstall={() => void runUpdateInstall()}
+            />
           </div>
 
-      {tunUiHidden ? null : (
-        <Card size="sm" className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
-          <CardHeader>
-            <CardTitle>{t("settings.tun")}</CardTitle>
-            <CardDescription>{t("settings.tunDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-3">
-            <Field orientation="horizontal" className="w-auto gap-2">
-              <Switch
-                id="settings-tun-enabled"
-                size="sm"
-                checked={form.tun.enabled}
-                disabled={
-                  busy ||
-                  !loaded ||
-                  status?.tun_available === false ||
-                  status?.tun_status === "preparing" ||
-                  status?.tun_status === "stopping" ||
-                  status?.helper_stale === true
-                }
-                aria-label={t("settings.tunEnable")}
-                onCheckedChange={(checked) => {
-                  if (
-                    checked === true &&
-                    status?.helper_supported === true &&
-                    status?.helper_installed !== true
-                  ) {
-                    // No authorized helper (macOS): guide the user to install
-                    // it first; the TUN-on setting is persisted only after a
-                    // successful install (cancel leaves the switch off).
-                    tunInstall.setOpen(true);
-                    return;
-                  }
-                  if (checked === true && status?.helper_supported === false) {
-                    // Windows (plan B): a one-time elevation component (a
-                    // scheduled task) makes TUN work without any further
-                    // prompt. The first enable triggers a single UAC to
-                    // install it, then persists the next-start desire.
-                    // Never start/stop the proxy service from this switch.
-                    setError(null);
-                    void (async () => {
-                      try {
-                        if (status?.tun_elevation_ready !== true) {
-                          await api.ensureTunElevation();
-                        }
-                        await persistTunEnabled(true);
-                        flashSaved();
-                      } catch (e) {
-                        setError(formatInvokeError(e));
-                      }
-                    })();
-                    return;
-                  }
-                  setForm({
-                    ...form,
-                    tun: { ...form.tun, enabled: checked === true },
-                  });
-                }}
-              />
-              <FieldLabel htmlFor="settings-tun-enabled">
-                {t("settings.tunEnable")}
-              </FieldLabel>
-            </Field>
-            {TUN_TRANSITION_KEYS[status?.tun_status ?? ""] ? (
-              <FieldDescription>
-                {t(TUN_TRANSITION_KEYS[status?.tun_status ?? ""])}
-              </FieldDescription>
-            ) : status?.tun_status === "recovery_required" ? (
-              <FieldDescription>
-                {t("settings.tunRecoveryRequired")}
-              </FieldDescription>
-            ) : status?.tun_available === false ? (
-              <FieldDescription>
-                {status?.tun_unavailable_reason ??
-                  t("settings.tunNotSupported")}
-              </FieldDescription>
-            ) : status?.traffic_capture === "tun" ? (
-              <FieldDescription>
-                {t("settings.tunActiveWithIface", {
-                  interface: status.tun_interface
-                    ? `（${t("common.withIfaceLabel", {
-                        iface: status.tun_interface,
-                      })}）`
-                    : "",
-                })}
-              </FieldDescription>
-            ) : status?.helper_stale === true ? (
-              <FieldDescription>{t("settings.helperStale")}</FieldDescription>
-            ) : status?.helper_supported === true ? (
-              <FieldDescription>
-                {status?.helper_installed
-                  ? t("settings.helperReady")
-                  : t("settings.helperNeeded")}
-              </FieldDescription>
-            ) : (
-              <FieldDescription>{t("settings.tunElevationDesc")}</FieldDescription>
-            )}
-            {status?.helper_supported === true && (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void runHelperAction(() => api.installHelper(), true)}
-                disabled={
-                  busy ||
-                  (status?.helper_installed === true &&
-                    status?.helper_stale !== true) ||
-                  status?.tun_status === "preparing" ||
-                  status?.tun_status === "stopping" ||
-                  status?.traffic_capture === "tun"
-                }
-              >
-                {status?.helper_stale === true
-                  ? t("settings.updateHelper")
-                  : t("settings.installHelper")}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                    void runHelperAction(() => api.uninstallHelper(), false, () => {
-                      // The helper is gone: the TUN-on setting can no longer be
-                      // applied, so persist it off with the uninstall.
-                      if (!form.tun.enabled) return;
-                      return persistTunEnabled(false);
-                    })
-                  }
-                disabled={
-                  busy ||
-                  status?.helper_installed !== true ||
-                  status?.tun_status === "preparing" ||
-                  status?.tun_status === "stopping" ||
-                  status?.traffic_capture === "tun"
-                }
-              >
-                {t("settings.uninstallHelper")}
-              </Button>
-            </div>
-            )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+          {tunUiHidden ? null : (
+            <TunCard
+              form={form}
+              setForm={setForm}
+              status={status}
+              busy={busy}
+              loaded={loaded}
+              persistTunEnabled={persistTunEnabled}
+              flashSaved={flashSaved}
+              setError={setError}
+              onRequestHelperInstall={() => tunInstall.setOpen(true)}
+              onInstallHelper={() =>
+                void runHelperAction(() => api.installHelper(), true)
+              }
+              onUninstallHelper={() =>
+                void runHelperAction(() => api.uninstallHelper(), false, () => {
+                  if (!form.tun.enabled) return;
+                  return persistTunEnabled(false);
+                })
+              }
+            />
+          )}
 
-      <Card size="sm" className="w-full">
-        <CardHeader className="shrink-0">
-          <CardTitle>{t("settings.inbound")}</CardTitle>
-          <CardDescription>{t("settings.inboundDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-3">
-            <FieldGroup className="grid grid-cols-1 gap-3 min-[560px]:grid-cols-2">
-              <Field data-invalid={!!fieldErrors.mixed_listen || undefined}>
-                <FieldLabel htmlFor="settings-mixed-listen">
-                  {t("settings.mixedListen")}
-                </FieldLabel>
-                <Input
-                  id="settings-mixed-listen"
-                  value={form.mixed_listen}
-                  aria-invalid={!!fieldErrors.mixed_listen || undefined}
-                  onChange={(e) => {
-                    clearFieldError("mixed_listen");
-                    setForm({ ...form, mixed_listen: e.target.value });
-                  }}
-                  disabled={busy || !loaded || form.allow_lan}
-                />
-                {fieldErrors.mixed_listen ? (
-                  <FieldError>{fieldErrors.mixed_listen}</FieldError>
-                ) : null}
-              </Field>
-              <Field data-invalid={!!fieldErrors.mixed_port || undefined}>
-                <FieldLabel htmlFor="settings-mixed-port">
-                  {t("settings.mixedPort")}
-                </FieldLabel>
-                <Input
-                  id="settings-mixed-port"
-                  type="number"
-                  min={1024}
-                  max={65535}
-                  value={Number.isFinite(form.mixed_port) ? form.mixed_port : ""}
-                  aria-invalid={!!fieldErrors.mixed_port || undefined}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    clearFieldError("mixed_port");
-                    if (raw.trim() === "") {
-                      setFieldErrors((prev) => ({
-                        ...prev,
-                        mixed_port: formatPortValidationError(
-                          t("settings.mixedPort"),
-                        ),
-                      }));
-                      setForm({ ...form, mixed_port: Number.NaN });
-                      return;
-                    }
-                    const n = Number(raw);
-                    if (Number.isFinite(n)) {
-                      setForm({ ...form, mixed_port: n });
-                    }
-                  }}
-                  disabled={busy || !loaded}
-                />
-                {fieldErrors.mixed_port ? (
-                  <FieldError>{fieldErrors.mixed_port}</FieldError>
-                ) : null}
-              </Field>
-              <Field data-invalid={!!fieldErrors.clash_api_listen || undefined}>
-                <FieldLabel htmlFor="settings-clash-listen">
-                  {t("settings.clashListen")}
-                </FieldLabel>
-                <Input
-                  id="settings-clash-listen"
-                  value={form.clash_api_listen}
-                  aria-invalid={!!fieldErrors.clash_api_listen || undefined}
-                  onChange={(e) => {
-                    clearFieldError("clash_api_listen");
-                    setForm({ ...form, clash_api_listen: e.target.value });
-                  }}
-                  disabled={busy || !loaded}
-                />
-                {fieldErrors.clash_api_listen ? (
-                  <FieldError>{fieldErrors.clash_api_listen}</FieldError>
-                ) : null}
-              </Field>
-              <Field data-invalid={!!fieldErrors.clash_api_port || undefined}>
-                <FieldLabel htmlFor="settings-clash-port">
-                  {t("settings.clashPort")}
-                </FieldLabel>
-                <Input
-                  id="settings-clash-port"
-                  type="number"
-                  min={1024}
-                  max={65535}
-                  value={
-                    Number.isFinite(form.clash_api_port)
-                      ? form.clash_api_port
-                      : ""
-                  }
-                  aria-invalid={!!fieldErrors.clash_api_port || undefined}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    clearFieldError("clash_api_port");
-                    if (raw.trim() === "") {
-                      setFieldErrors((prev) => ({
-                        ...prev,
-                        clash_api_port: formatPortValidationError(
-                          t("settings.clashPort"),
-                        ),
-                      }));
-                      setForm({ ...form, clash_api_port: Number.NaN });
-                      return;
-                    }
-                    const n = Number(raw);
-                    if (Number.isFinite(n)) {
-                      setForm({ ...form, clash_api_port: n });
-                    }
-                  }}
-                  disabled={busy || !loaded}
-                />
-                {fieldErrors.clash_api_port ? (
-                  <FieldError>{fieldErrors.clash_api_port}</FieldError>
-                ) : null}
-              </Field>
-            </FieldGroup>
-            <Field orientation="horizontal" className="w-auto gap-2">
-              <Switch
-                id="settings-allow-lan"
-                size="sm"
-                checked={form.allow_lan}
-                disabled={busy || !loaded}
-                aria-label={t("settings.allowLan")}
-                onCheckedChange={(checked) => {
-                  clearFieldError("mixed_listen");
-                  setForm({ ...form, allow_lan: checked === true });
-                }}
-              />
-              <FieldLabel htmlFor="settings-allow-lan">
-                {t("settings.allowLan")}
-              </FieldLabel>
-            </Field>
-            {form.allow_lan ? (
-              <FieldDescription>
-                {t("settings.allowLanDesc")}
-              </FieldDescription>
-            ) : null}
-            <Field orientation="horizontal" className="w-auto gap-2">
-              <Switch
-                id="settings-auto-default-rules"
-                size="sm"
-                checked={form.auto_default_rules}
-                disabled={busy || !loaded}
-                aria-label={t("settings.autoDefaultRules")}
-                onCheckedChange={(checked) => {
-                  setForm({
-                    ...form,
-                    auto_default_rules: checked === true,
-                  });
-                }}
-              />
-              <FieldLabel htmlFor="settings-auto-default-rules">
-                {t("settings.autoDefaultRules")}
-              </FieldLabel>
-            </Field>
-            {form.auto_default_rules ? (
-              <FieldDescription>
-                {t("settings.autoDefaultRulesDesc")}
-              </FieldDescription>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy || !loaded}
-                onClick={() =>
-                  void api
-                    .revealDataDir()
-                    .catch((err) => setError(formatInvokeError(err)))
-                }
-              >
-                {t("settings.openDataDir")}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          <PortsCard
+            form={form}
+            setForm={setForm}
+            fieldErrors={fieldErrors}
+            busy={busy}
+            loaded={loaded}
+            clearFieldError={clearFieldError}
+            setFieldErrors={setFieldErrors}
+            setError={setError}
+          />
         </div>
       </ScrollArea>
 

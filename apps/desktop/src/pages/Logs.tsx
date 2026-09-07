@@ -5,6 +5,7 @@ import { api, formatInvokeError } from "../api/tauri";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { ErrorAlert } from "../components/StatusAlert";
 import { t, useLanguagePreference } from "../lib/i18n";
+import { Button } from "@/components/ui/button";
 
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
@@ -15,6 +16,7 @@ export function Logs({ active = true }: { active?: boolean }) {
   const { nextGeneration, isStale } = useGenerationGuard();
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [stickToBottom, setStickToBottom] = useState(true);
   const boxRef = useRef<HTMLPreElement | null>(null);
   const lastTextRef = useRef("");
@@ -36,6 +38,22 @@ export function Logs({ active = true }: { active?: boolean }) {
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
   }, [active, isStale, nextGeneration]);
+
+  const clearLogs = useCallback(async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      await api.clearLogs();
+      lastTextRef.current = "";
+      setLines([]);
+      setError(null);
+      await refresh();
+    } catch (e) {
+      setError(formatInvokeError(e));
+    } finally {
+      setClearing(false);
+    }
+  }, [clearing, refresh]);
 
   useEffect(() => {
     if (!active) return;
@@ -63,11 +81,26 @@ export function Logs({ active = true }: { active?: boolean }) {
   }, []);
 
   return (
-    <div className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3">
+    <div
+      className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3"
+      data-testid="logs-panel"
+    >
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      <div className="flex shrink-0 justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={clearing}
+          onClick={() => void clearLogs()}
+        >
+          {t("logs.clear")}
+        </Button>
+      </div>
       <pre
         ref={boxRef}
         className="log-view min-h-0 flex-1 overflow-auto bg-card p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+        data-testid="log-view"
         onScroll={handleScroll}
         aria-live="polite"
       >

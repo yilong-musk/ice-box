@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
@@ -24,6 +25,7 @@ vi.mock("../api/tauri", () => ({
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
     getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
+    getTrafficSince: (...args: unknown[]) => getTrafficSnapshot(...args),
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     start: (...args: unknown[]) => start(...args),
     stopSystemProxy: (...args: unknown[]) => stopSystemProxy(...args),
@@ -143,30 +145,28 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("当前出站")).toBeInTheDocument();
+      expect(view.getByText(t("home.info.outbound"))).toBeInTheDocument();
     });
     expect(view.getByText("Proxies → HK-1")).toBeInTheDocument();
-    expect(view.getByText("流量")).toBeInTheDocument();
-    expect(view.getByText("代理状态")).toBeInTheDocument();
-    expect(view.getByText("信息")).toBeInTheDocument();
-    expect(view.queryByText("系统代理")).toBeNull();
-    expect(container.querySelector(".home-panel")?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]),
-    );
+    expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
+    expect(view.getByText(t("home.proxyStatus"))).toBeInTheDocument();
+    expect(view.getByText(t("home.infoTitle"))).toBeInTheDocument();
+    expect(view.queryByText(t("home.capture.systemProxy"))).toBeNull();
+    expect(view.getByTestId("home-panel")).toBeInTheDocument();
     // The mode switch lives inside the 代理状态 card, below the power button.
     const statusCard = view
-      .getByText("代理状态")
+      .getByText(t("home.proxyStatus"))
       .closest("[data-slot=card]") as HTMLElement;
     expect(
-      within(statusCard).getByRole("radiogroup", { name: "模式" }),
+      within(statusCard).getByRole("radiogroup", { name: t("home.modeAria") }),
     ).toBeInTheDocument();
-    expect(view.getByRole("radio", { name: "规则" })).toHaveAttribute("data-state", "on");
-    expect(view.getByRole("radio", { name: "全局" })).toHaveAttribute("data-state", "off");
-    expect(view.getByRole("radio", { name: "直连" })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("radio", { name: t("home.mode.rule") })).toHaveAttribute("data-state", "on");
+    expect(view.getByRole("radio", { name: t("home.mode.global") })).toHaveAttribute("data-state", "off");
+    expect(view.getByRole("radio", { name: t("home.mode.direct") })).toHaveAttribute("data-state", "off");
     expect(
-      within(statusCard).getByRole("button", { name: "停止代理服务" }),
+      within(statusCard).getByRole("button", { name: t("home.power.stop") }),
     ).toBeInTheDocument();
-    expect(view.queryByRole("button", { name: "测延迟" })).toBeNull();
+    expect(view.queryByRole("button", { name: t("nodes.batchTest") })).toBeNull();
   });
 
   it("ignores a poll response that finishes after the pane is deactivated", async () => {
@@ -199,7 +199,7 @@ describe("Home", () => {
     expect(readNodesSnapshot()).toBeUndefined();
   });
 
-  it("does not refetch settings on the 2s status poll", async () => {
+  it("does not refetch settings on the fallback status poll", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       render(<Home />);
@@ -210,7 +210,7 @@ describe("Home", () => {
       const statusCalls = getStatus.mock.calls.length;
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
+        await vi.advanceTimersByTimeAsync(10000);
       });
 
       expect(getSettings.mock.calls.length).toBe(settingsCalls);
@@ -260,8 +260,8 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
 
-    const globalButton = () => view.getByRole("radio", { name: "全局" });
-    const directButton = () => view.getByRole("radio", { name: "直连" });
+    const globalButton = () => view.getByRole("radio", { name: t("home.mode.global") });
+    const directButton = () => view.getByRole("radio", { name: t("home.mode.direct") });
 
     await waitFor(() => {
       expect(globalButton()).toBeInTheDocument();
@@ -293,15 +293,15 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("还没有可用节点")).toBeInTheDocument();
+      expect(view.getByText(t("home.empty.idleTitle"))).toBeInTheDocument();
     });
-    expect(view.getByText("当前出站").parentElement).toHaveTextContent(/当前出站\s*—/);
-    expect(view.getByText("流量")).toBeInTheDocument();
-    const power = view.getByRole("button", { name: "启动代理服务" });
+    expect(view.getByText(t("home.info.outbound")).parentElement).toHaveTextContent(new RegExp(`${t("home.info.outbound")}\\s*${t("common.dash")}`));
+    expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
+    const power = view.getByRole("button", { name: t("home.power.start") });
     expect(power).not.toBeDisabled();
     expect(power).toHaveAttribute("aria-pressed", "false");
-    expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
-    fireEvent.click(view.getByRole("button", { name: "前往订阅页导入" }));
+    expect(view.queryByRole("button", { name: t("home.power.stop") })).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: t("home.goToSubs") }));
     expect(onNavigate).toHaveBeenCalledWith("subs");
   });
 
@@ -328,10 +328,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
     });
-    expect(view.queryByText("系统代理未接管或已不同步")).toBeNull();
-    const power = view.getByRole("button", { name: "启动代理服务" });
+    expect(view.queryByText(t("home.warn.proxyOutOfSync"))).toBeNull();
+    const power = view.getByRole("button", { name: t("home.power.start") });
     expect(power).not.toBeDisabled();
     expect(power).toHaveAttribute("aria-pressed", "false");
   });
@@ -360,7 +360,7 @@ describe("Home", () => {
 
     await waitFor(() => {
       expect(view.getByRole("alert")).toHaveTextContent(
-        "系统代理未接管或已不同步",
+        t("home.warn.proxyOutOfSync"),
       );
     });
   });
@@ -386,10 +386,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText("当前平台不支持系统代理或 TUN 接管")).toBeInTheDocument();
+      expect(view.getByText(t("home.unsupported"))).toBeInTheDocument();
     });
-    expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
-    expect(view.queryByRole("button", { name: "停止代理服务" })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.stop") })).toBeNull();
   });
 
   it("shows stop on the power toggle when disk recorded but live check is false", async () => {
@@ -415,13 +415,13 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "停止代理服务" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.stop") })).not.toBeDisabled();
     });
-    const power = view.getByRole("button", { name: "停止代理服务" });
+    const power = view.getByRole("button", { name: t("home.power.stop") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(view.queryByRole("button", { name: "启动代理服务" })).toBeNull();
-    expect(view.getByRole("alert")).toHaveTextContent("系统代理未接管或已不同步");
-    expect(view.queryByText("系统代理")).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
+    expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.proxyOutOfSync"));
+    expect(view.queryByText(t("home.capture.systemProxy"))).toBeNull();
   });
 
   it("does not flash poll errors while power toggle start is pending", async () => {
@@ -439,10 +439,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "启动代理服务" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.power.start") }));
     await waitFor(() => {
       expect(start).toHaveBeenCalled();
     });
@@ -453,7 +453,7 @@ describe("Home", () => {
 
     const statusCalls = getStatus.mock.calls.length;
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(10000);
     });
 
     expect(getStatus.mock.calls.length).toBe(statusCalls);
@@ -537,13 +537,23 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "停止代理服务" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.stop") })).not.toBeDisabled();
     });
-    const power = view.getByRole("button", { name: "停止代理服务" });
+    const power = view.getByRole("button", { name: t("home.power.stop") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(power).toHaveTextContent("TUN 已接管（utun42）");
-    expect(view.getByText("捕获")).toBeInTheDocument();
-    expect(view.getByText("TUN（utun42）")).toBeInTheDocument();
+    expect(power).toHaveTextContent(
+      t("home.power.tunActive", {
+        iface: t("common.withIface", { iface: "utun42" }),
+      }),
+    );
+    expect(view.getByText(t("home.info.capture"))).toBeInTheDocument();
+    expect(
+      view.getByText(
+        t("home.capture.tun", {
+          iface: t("common.withIface", { iface: "utun42" }),
+        }),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows TUN-configured subtitle when service is off", async () => {
@@ -570,8 +580,8 @@ describe("Home", () => {
     // the status-dependent subtitle so the assertion cannot race the mocked
     // status resolution.
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
-        "将启用 TUN 模式接管流量",
+      expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(
+        t("home.power.tunReady"),
       );
     });
   });
@@ -604,7 +614,7 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
     });
-    const power = view.getByRole("button", { name: "启动代理服务" });
+    const power = view.getByRole("button", { name: t("home.power.start") });
     expect(power).toBeDisabled();
   });
 
@@ -632,15 +642,15 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "启动代理服务" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
     });
     // No TUN switch on the home page, no TUN reason text anywhere.
-    expect(view.queryByRole("button", { name: "TUN 模式" })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("home.tunMode") })).not.toBeInTheDocument();
     expect(container.textContent).not.toContain("Windows TUN gate pending");
     // The power control ignores the hidden TUN desire: system proxy stays usable.
-    expect(view.getByRole("button", { name: "启动代理服务" })).not.toBeDisabled();
-    expect(view.getByRole("button", { name: "启动代理服务" })).toHaveTextContent(
-      "点击接管系统代理",
+    expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(
+      t("home.power.clickToCapture"),
     );
   });
 
@@ -679,16 +689,16 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("alert")).toHaveTextContent("启用 TUN 需要系统权限");
+      expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.permissionRequired"));
     });
     installHelper.mockResolvedValue(undefined);
     start.mockResolvedValue(undefined);
-    fireEvent.click(view.getByRole("button", { name: "安装辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.installHelper") }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalled();
       expect(start).toHaveBeenCalled();
     });
-    fireEvent.click(view.getByRole("button", { name: "停用 TUN，改用系统代理" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.fallbackToSystemProxy") }));
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -739,10 +749,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("alert")).toHaveTextContent("一次性管理员授权");
+      expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.permissionRequiredNoHelper"));
     });
-    expect(view.queryByRole("button", { name: "安装辅助组件" })).not.toBeInTheDocument();
-    fireEvent.click(view.getByRole("button", { name: "完成一次性权限设置" }));
+    expect(view.queryByRole("button", { name: t("home.installHelper") })).not.toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: t("home.ensureTunElevation") }));
     await waitFor(() => {
       expect(ensureTunElevation).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalled();
@@ -772,12 +782,12 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("alert")).toHaveTextContent("TUN 清理未确认");
+      expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.recoveryRequired"));
     });
     expect(
-      view.queryByRole("button", { name: "停用 TUN，改用系统代理" }),
+      view.queryByRole("button", { name: t("home.fallbackToSystemProxy") }),
     ).toBeNull();
-    fireEvent.click(view.getByRole("button", { name: "重试恢复" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.retryRecovery") }));
     await waitFor(() => {
       expect(recoverTun).toHaveBeenCalled();
     });
@@ -817,9 +827,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
     expect(tunToggle).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(tunToggle);
@@ -871,9 +881,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
     expect(tunToggle).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(tunToggle);
@@ -928,22 +938,22 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "TUN 模式" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.tunMode") }));
 
-    expect(view.getByRole("button", { name: "停止代理服务" })).toBeEnabled();
-    expect(container.textContent).not.toContain("处理中");
-    expect(view.getByRole("button", { name: "TUN 模式" })).toBeDisabled();
+    expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
+    expect(container.textContent).not.toContain(t("home.power.busy"));
+    expect(view.getByRole("button", { name: t("home.tunMode") })).toBeDisabled();
 
     releaseSave?.();
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeEnabled();
     });
-    expect(container.textContent).not.toContain("处理中");
+    expect(container.textContent).not.toContain(t("home.power.busy"));
     expect(start).not.toHaveBeenCalled();
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
@@ -970,9 +980,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
     expect(tunToggle).toHaveAttribute("aria-pressed", "false");
 
     // The toggle reflects the intent immediately instead of waiting for the
@@ -1030,9 +1040,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
 
     // Windows (plan B): the one-time elevation component is installed
     // (single UAC) and the TUN-on next-start desire persists — no dialog,
@@ -1088,9 +1098,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    fireEvent.click(view.getByRole("button", { name: "TUN 模式" }));
+    fireEvent.click(view.getByRole("button", { name: t("home.tunMode") }));
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1138,9 +1148,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
 
     // Cancelled: nothing was persisted or started, the error surfaces.
     fireEvent.click(tunToggle);
@@ -1185,9 +1195,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "TUN 模式" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: "TUN 模式" });
+    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
 
     // No helper: dialog appears, nothing is saved.
     fireEvent.click(tunToggle);
@@ -1195,7 +1205,7 @@ describe("Home", () => {
     expect(saveSettings).not.toHaveBeenCalled();
 
     // Cancel: dialog closes, still nothing saved.
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: t("common.cancel") }));
     await waitFor(() => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
@@ -1203,7 +1213,7 @@ describe("Home", () => {
 
     // Confirm: install runs, then the TUN-on setting is saved.
     fireEvent.click(tunToggle);
-    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    fireEvent.click(screen.getByRole("button", { name: t("tunDialog.installAndEnable") }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalledTimes(1);
       expect(saveSettings).toHaveBeenCalledWith(

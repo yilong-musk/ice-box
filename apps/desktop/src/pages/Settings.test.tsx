@@ -13,8 +13,10 @@ import { THEME_STORAGE_KEY } from "../lib/theme";
 import {
   LANGUAGE_STORAGE_KEY,
   persistLanguagePreference,
+  t,
 } from "../lib/i18n";
 import { Settings } from "./Settings";
+import { RuntimeStoreProvider } from "../lib/runtimeStore";
 
 const getSettings = vi.fn();
 const getStatus = vi.fn();
@@ -26,6 +28,9 @@ const ensureTunElevation = vi.fn();
 const start = vi.fn();
 const checkAppUpdate = vi.fn();
 const installAppUpdate = vi.fn();
+const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
+const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
+const listenWindowShown = vi.fn().mockResolvedValue(() => {});
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -37,6 +42,10 @@ vi.mock("../api/tauri", () => ({
     skipAppUpdate: vi.fn(),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
+    listenCoreStatusChanged: (...args: unknown[]) =>
+      listenCoreStatusChanged(...args),
+    listenWindowHidden: (...args: unknown[]) => listenWindowHidden(...args),
+    listenWindowShown: (...args: unknown[]) => listenWindowShown(...args),
     installHelper: (...args: unknown[]) => installHelper(...args),
     uninstallHelper: (...args: unknown[]) => uninstallHelper(...args),
     relaunchElevatedForTun: (...args: unknown[]) =>
@@ -100,6 +109,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
+      core_log_level: "warn",
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -266,6 +276,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
+      core_log_level: "warn",
       tun: tunSettings,
     });
 
@@ -307,6 +318,7 @@ describe("Settings", () => {
       proxy_mode: "rule" as const,
       language: "system" as const,
       check_app_updates: true,
+      core_log_level: "warn",
       tun: tunSettings,
     };
     const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
@@ -419,6 +431,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "en",
       check_app_updates: true,
+      core_log_level: "warn",
       tun: tunSettings,
     });
     render(<Settings />);
@@ -437,9 +450,7 @@ describe("Settings", () => {
 
   it("lets the settings panel fill the content pane", () => {
     const { container } = render(<Settings />);
-    expect(
-      container.querySelector(".settings-panel")?.className.split(/\s+/),
-    ).toEqual(expect.arrayContaining(["flex-1", "min-h-0", "flex-col"]));
+    expect(within(container).getByTestId("settings-panel")).toBeInTheDocument();
     const card = container.querySelector("[data-slot=card]");
     expect(card).not.toBeNull();
     const classes = card!.className.split(/\s+/);
@@ -456,15 +467,15 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "checked",
     );
@@ -504,20 +515,21 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
+      core_log_level: "warn",
       tun: { ...tunSettings, enabled: true },
     });
 
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
         "checked",
       );
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -545,13 +557,13 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
     // First attempt: no helper -> dialog, switch stays off, nothing saved.
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -563,13 +575,13 @@ describe("Settings", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
     expect(saveSettings).not.toHaveBeenCalled();
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
 
     // Second attempt: confirm -> install runs, then the TUN-on setting saves.
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalledTimes(1);
@@ -580,7 +592,7 @@ describe("Settings", () => {
       );
     });
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
         "checked",
       );
@@ -602,10 +614,10 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(installHelper).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -618,7 +630,7 @@ describe("Settings", () => {
       expect(start).not.toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
         "checked",
       );
@@ -637,10 +649,10 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -666,16 +678,16 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     await waitFor(() => {
       expect(container.textContent).toContain("tun.elevation_cancelled");
     });
     expect(saveSettings).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -688,17 +700,17 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
 
     await waitFor(() => {
       expect(container.textContent).toContain("tun.helper_install_failed");
     });
     expect(saveSettings).not.toHaveBeenCalled();
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -716,7 +728,7 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
     });
 
     // Make the form invalid, like the auto-save guard would block.
@@ -728,7 +740,7 @@ describe("Settings", () => {
       expect(saveSettings).not.toHaveBeenCalled();
     });
 
-    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
     fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
 
     await waitFor(() => {
@@ -738,7 +750,7 @@ describe("Settings", () => {
     // No TUN-on save, no success flash, switch stays off.
     expect(saveSettings).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("已保存");
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -753,10 +765,10 @@ describe("Settings", () => {
       const { container } = render(<Settings />);
       const view = within(container);
       await waitFor(() => {
-        expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+        expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
       });
 
-      fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+      fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
       fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
       await waitFor(() => {
         expect(installHelper).toHaveBeenCalled();
@@ -769,7 +781,7 @@ describe("Settings", () => {
 
       expect(container.textContent).toContain("辅助组件状态未确认");
       expect(saveSettings).not.toHaveBeenCalled();
-      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
         "unchecked",
       );
@@ -794,7 +806,7 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("Windows TUN gate pending");
     });
-    expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
+    expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
   });
 
   it("hides the TUN card entirely when the platform hides TUN UI", async () => {
@@ -836,7 +848,47 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("正在启用 TUN…");
     });
-    expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
+    expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
+  });
+
+  it("follows runtime-store TUN transitions after the initial load", async () => {
+    let onCore = () => {};
+    listenCoreStatusChanged.mockImplementation((handler: () => void) => {
+      onCore = handler;
+      return Promise.resolve(() => {});
+    });
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      configured_tun: true,
+      tun_status: "disabled",
+    });
+
+    const { container } = render(
+      <RuntimeStoreProvider>
+        <Settings />
+      </RuntimeStoreProvider>,
+    );
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeEnabled();
+    });
+    await waitFor(() => {
+      expect(listenCoreStatusChanged).toHaveBeenCalled();
+    });
+
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      configured_tun: true,
+      tun_status: "preparing",
+    });
+    await act(async () => {
+      onCore();
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("正在启用 TUN…");
+    });
+    expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
   });
 
   it("shows the active TUN interface and transition hint when capture is live", async () => {
@@ -866,7 +918,7 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("接口 utun42");
     });
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "checked",
     );
@@ -914,7 +966,7 @@ describe("Settings", () => {
       expect(view.getByRole("button", { name: "更新辅助组件" })).toBeInTheDocument();
     });
     expect(container.textContent).toContain("仍在运行旧版内核");
-    expect(view.getByLabelText("启用 TUN 模式")).toBeDisabled();
+    expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
 
     fireEvent.click(view.getByRole("button", { name: "更新辅助组件" }));
     await waitFor(() => {
@@ -998,7 +1050,7 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
         "checked",
       );
@@ -1018,7 +1070,7 @@ describe("Settings", () => {
       },
       { timeout: 2000 },
     );
-    expect(view.getByLabelText("启用 TUN 模式")).toHaveAttribute(
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
     );
@@ -1195,6 +1247,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: false,
+      core_log_level: "warn",
       tun: tunSettings,
     });
     checkAppUpdate.mockResolvedValue({

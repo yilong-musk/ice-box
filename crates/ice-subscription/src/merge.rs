@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use ice_config::{NormalizedOutbound, NormalizedProfile};
+use ice_config::{HostPlatform, NormalizedOutbound, NormalizedProfile};
 
 use crate::clash::normalize_dns_on;
 use crate::error::SubscriptionError;
@@ -26,6 +26,7 @@ struct ProfileLoadCache {
     profile_sig: Option<(SystemTime, u64)>,
     nodes_sig: Option<(SystemTime, u64)>,
     auto_default_rules: bool,
+    platform: HostPlatform,
     profile: Arc<NormalizedProfile>,
 }
 
@@ -44,8 +45,9 @@ pub fn active_subscription(index: &SubscriptionIndex) -> Option<&SubscriptionMet
 pub fn load_active_profile(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
-) -> Result<NormalizedProfile, SubscriptionError> {
-    load_active_profile_with_default_rules(paths, index, true)
+    platform: HostPlatform,
+) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
+    load_active_profile_with_default_rules(paths, index, true, platform)
 }
 
 /// Like [`load_active_profile`], honoring the app's `auto_default_rules`
@@ -56,11 +58,14 @@ pub fn load_active_profile(
 /// an older binary), so the platform DNS shape is re-applied at load time:
 /// [`normalize_dns_on`] drops fakeip / `local` / UDP upstreams and pins the
 /// anchor (no-op off-Windows).
+///
+/// Cache hits return a cloned `Arc` (SUB-6); the profile body is not copied.
 pub fn load_active_profile_with_default_rules(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
     auto_default_rules: bool,
-) -> Result<NormalizedProfile, SubscriptionError> {
+    platform: HostPlatform,
+) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
     let meta = active_subscription(index).ok_or(SubscriptionError::NoActiveSubscription)?;
     if !paths.sub_dir(meta.id).exists() {
         return Err(SubscriptionError::ParseFailed(format!(
@@ -81,15 +86,16 @@ pub fn load_active_profile_with_default_rules(
             && entry.profile_sig == profile_sig
             && entry.nodes_sig == nodes_sig
             && entry.auto_default_rules == auto_default_rules
+            && entry.platform == platform
         {
-            return Ok((*entry.profile).clone());
+            return Ok(Arc::clone(&entry.profile));
         }
     }
 
     let mut profile = read_profile(paths, meta.id)?;
-    normalize_dns_on(&mut profile, cfg!(target_os = "windows"));
+    normalize_dns_on(&mut profile, platform.is_windows());
     if auto_default_rules {
-        apply_builtin_default_rules(&mut profile);
+        apply_builtin_default_rules(&mut profile, platform);
     }
     let profile = Arc::new(profile);
     *cache = Some(ProfileLoadCache {
@@ -97,9 +103,10 @@ pub fn load_active_profile_with_default_rules(
         profile_sig,
         nodes_sig,
         auto_default_rules,
+        platform,
         profile: profile.clone(),
     });
-    Ok((*profile).clone())
+    Ok(profile)
 }
 
 /// Resolve `selected_tag`: keep if present in outbounds/groups, else default_outbound or first tag.
@@ -207,10 +214,18 @@ mod tests {
         )
         .expect("seed");
         let index = load_index(&paths).expect("index");
-        let first = load_active_profile_with_default_rules(&paths, &index, false).expect("first");
+        let first =
+            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+                .expect("first");
         assert_eq!(first.nodes[0].tag, "n1");
-        let again = load_active_profile_with_default_rules(&paths, &index, false).expect("cache");
+        let again =
+            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+                .expect("cache");
         assert_eq!(again.nodes[0].tag, "n1");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "cache hit must reuse the Arc instead of cloning the profile"
+        );
 
         write_subscription_success(
             &paths,
@@ -221,7 +236,8 @@ mod tests {
         .expect("rewrite");
         let index = load_index(&paths).expect("index");
         let updated =
-            load_active_profile_with_default_rules(&paths, &index, false).expect("invalidated");
+            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+                .expect("invalidated");
         assert_eq!(updated.nodes[0].tag, "n2-longer-tag");
         let _ = std::fs::remove_dir_all(&dir);
     }

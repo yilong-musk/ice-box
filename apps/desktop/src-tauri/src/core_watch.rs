@@ -90,6 +90,30 @@ fn heal_tun_dns(state: &AppState) {
     }
 }
 
+fn check_oversized_logs(state: &AppState) {
+    let oversized =
+        ice_config::log_file_oversized(&state.paths.core_log(), ice_config::CORE_LOG_MAX_BYTES)
+            || ice_config::log_file_oversized(
+                &state.paths.app_log(),
+                ice_config::SIZED_LOG_MAX_BYTES,
+            );
+    if !oversized {
+        return;
+    }
+    let Ok(mut slot) = state.proxy_recovery_warning.lock() else {
+        return;
+    };
+    if slot.as_ref().is_some_and(|s| s.contains("logs.oversized")) {
+        return;
+    }
+    let warning =
+        "logs.oversized: log files exceeded 20 MiB; clear logs on the Logs page".to_string();
+    *slot = Some(match slot.take() {
+        Some(existing) if !existing.is_empty() => format!("{existing}；{warning}"),
+        _ => warning,
+    });
+}
+
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
 pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
@@ -99,6 +123,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
         };
         reconcile_unexpected_core_exit(state.inner());
         heal_tun_dns(state.inner());
+        check_oversized_logs(state.inner());
     });
 }
 
@@ -209,9 +234,14 @@ mod tests {
         ));
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
+        let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
+            MockExitedCore::running(),
+        )
+            as Box<dyn CoreHandle>);
         Arc::new(AppState {
             paths: paths.clone(),
-            core: Mutex::new(Box::new(MockExitedCore::running()) as Box<dyn CoreHandle>),
+            core,
+            core_snapshot,
             proxy: Mutex::new(Box::new(TrackProxy {
                 restore_calls: restore_calls.clone(),
             })),

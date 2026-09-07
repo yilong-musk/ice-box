@@ -18,8 +18,12 @@ mod settings;
 
 pub use atomic::{write_bytes_atomic, write_json_atomic};
 pub use error::{AppError, ErrorCode};
+pub use ice_types::{HostPlatform, ENGINE_COMPAT_CORE_VERSION};
 pub use listen::{is_fake_ip, is_loopback_host, is_restricted_fetch_host, is_restricted_ip};
-pub use logging::init_logging;
+pub use logging::{
+    init_logging, log_file_oversized, rotate_sized_log, truncate_log_file, APP_LOG_KEEP,
+    CORE_LOG_KEEP, CORE_LOG_MAX_BYTES, SIZED_LOG_MAX_BYTES,
+};
 pub use paths::AppPaths;
 pub use pid::{clear_pid, parse_pid_contents, purge_invalid_pid_file, read_pid, write_pid};
 pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
@@ -32,22 +36,20 @@ pub use selections::{
     apply_group_selections, load_group_selections, save_group_selections, GroupSelections,
 };
 pub use settings::{
-    clash_mode_name, default_auto_set_system_proxy, load_settings, save_settings,
-    set_proxy_service_enabled, AppSettings, LanguagePreference, ProxyMode, TunSettings,
-    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+    clash_mode_name, default_auto_set_system_proxy, load_settings, load_settings_detailed,
+    save_settings, save_settings_for, set_proxy_service_enabled, AppSettings, CoreLogLevel,
+    LanguagePreference, LoadSettingsOutcome, ProxyMode, SettingsPatch, TunSettings,
+    TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU,
+    TUN_DEFAULT_STACK,
 };
-
-/// sing-box core version the config generator targets (architecture §12 / §22).
-///
-/// Bundled desktop binaries (`third_party/sing-box/VERSION`) must match this pin;
-/// generated config features (e.g. rule options, removed in sing-box 1.13) are
-/// only tested against this version range.
-pub const ENGINE_COMPAT_CORE_VERSION: &str = "1.13.19";
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 /// The runtime capture intent for a generated config (plan §4.1).
 ///
@@ -87,13 +89,13 @@ pub fn force_tun_gate_ready() {
     let _ = TEST_TUN_GATE_READY.set(());
 }
 
-/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready`);
-/// Windows is green (`windows_tun_ready`, `docs/tun.md`); other platforms are
-/// out of scope for the first release.
+/// T0 gate for an explicit [`HostPlatform`]. macOS and Windows are green
+/// (`macos_tun_ready` / `windows_tun_ready`); other platforms are out of
+/// scope for the first release.
 ///
 /// Host-free controller tests force the gate green via
 /// `force_tun_gate_ready` (`test-hooks` / `cfg(test)` only).
-pub fn tun_gate() -> TunGate {
+pub fn tun_gate_for(platform: HostPlatform) -> TunGate {
     #[cfg(any(test, feature = "test-hooks"))]
     if TEST_TUN_GATE_READY.get().is_some() {
         return TunGate {
@@ -101,18 +103,12 @@ pub fn tun_gate() -> TunGate {
             reason: None,
         };
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        // Both gates are green: macOS T0–T5 landed (macos_tun_ready); Windows
-        // landed behind the §1.2 working shape (windows_tun_ready, flipped
-        // 2026-09-03 after the V1–V11 host spike).
+    if platform.tun_ready() {
         TunGate {
             ready: true,
             reason: None,
         }
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
+    } else {
         TunGate {
             ready: false,
             reason: Some("TUN is supported on macOS and Windows only in the first release"),
@@ -137,6 +133,9 @@ pub struct LocalTemplate {
     /// alone.
     #[serde(default)]
     pub tun: TunSettings,
+    /// sing-box `log.level` (`warn` by default).
+    #[serde(default)]
+    pub log_level: CoreLogLevel,
 }
 
 impl Default for LocalTemplate {
@@ -149,6 +148,7 @@ impl Default for LocalTemplate {
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
+            log_level: CoreLogLevel::Warn,
         }
     }
 }
@@ -181,6 +181,10 @@ pub struct BuildInput {
     /// `tun.enabled` alone (plan §4.1).
     #[serde(default)]
     pub capture_intent: CaptureIntent,
+    /// Target OS for DNS / TUN reserved-rule emission. Never inferred from
+    /// the compile-time target inside this crate (ARCH-1).
+    #[serde(default)]
+    pub platform: HostPlatform,
 }
 
 /// Legacy helper: build from flat node list (tests / fallback).
@@ -197,6 +201,7 @@ pub fn build_input_from_nodes(
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        platform: HostPlatform::MacOs,
     }
 }
 
@@ -211,10 +216,11 @@ pub fn build_input_from_nodes(
 pub fn build_direct_only_config(
     template: &LocalTemplate,
     capture_intent: CaptureIntent,
+    platform: HostPlatform,
 ) -> Result<Value, ConfigError> {
     validate_template(template)?;
     if capture_intent == CaptureIntent::Tun {
-        validate_tun_capture(template)?;
+        validate_tun_capture(template, platform)?;
     }
 
     let outbounds = vec![
@@ -228,7 +234,7 @@ pub fn build_direct_only_config(
     // direct-only fallback.
     let mut rules = Vec::new();
     if capture_intent == CaptureIntent::Tun {
-        rules.extend(tun_reserved_rules(&template.tun));
+        rules.extend(tun_reserved_rules(&template.tun, platform));
     }
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -236,7 +242,7 @@ pub fn build_direct_only_config(
         "final": "direct",
         "auto_detect_interface": true,
         "rules": rules,
-        "default_domain_resolver": minimal_default_domain_resolver(),
+        "default_domain_resolver": minimal_default_domain_resolver(platform),
     });
 
     let mut inbounds = vec![json!({
@@ -254,8 +260,8 @@ pub fn build_direct_only_config(
     }
 
     let config = json!({
-        "log": { "level": "info", "timestamp": true },
-        "dns": minimal_dns_block(),
+        "log": { "level": template.log_level.as_str(), "timestamp": true },
+        "dns": minimal_dns_block(platform),
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": route,
@@ -281,22 +287,22 @@ pub fn build_direct_only_config(
 /// Validate listen ports before build (architecture §12.3).
 pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
     if template.mixed_port < 1024 || template.clash_api_port < 1024 {
-        return Err(ConfigError::Invalid("port must be in 1024..=65535"));
+        return Err(ConfigError::invalid("port must be in 1024..=65535"));
     }
     if template.mixed_port == template.clash_api_port {
-        return Err(ConfigError::Invalid(
+        return Err(ConfigError::invalid(
             "mixed port must differ from clash api port",
         ));
     }
     // With allow_lan the mixed inbound binds 0.0.0.0; the stored mixed_listen only
     // matters for loopback mode.
     if !template.allow_lan && !is_loopback_host(&template.mixed_listen) {
-        return Err(ConfigError::Invalid(
+        return Err(ConfigError::invalid(
             "mixed_listen must be a loopback address",
         ));
     }
     if !is_loopback_host(&template.clash_api_listen) {
-        return Err(ConfigError::Invalid(
+        return Err(ConfigError::invalid(
             "clash_api_listen must be a loopback address",
         ));
     }
@@ -309,9 +315,8 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
 /// be used — its queries dial the TUN peer and re-enter the engine — and UDP
 /// upstreams are captured by the core's own TUN. The minimal block instead
 /// ships two DoT resolvers and `ipv4_only` (the IPv6 path is broken, #4178).
-pub fn minimal_dns_block() -> Value {
-    #[cfg(target_os = "windows")]
-    {
+pub fn minimal_dns_block(platform: HostPlatform) -> Value {
+    if platform.is_windows() {
         json!({
             "servers": [
                 { "type": "tls", "tag": "dns-remote-0", "server": "223.5.5.5", "server_port": 853 },
@@ -320,9 +325,7 @@ pub fn minimal_dns_block() -> Value {
             "final": "dns-remote-0",
             "strategy": "ipv4_only",
         })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
+    } else {
         json!({
             "servers": [
                 {
@@ -356,13 +359,10 @@ fn dns_final_tag(dns: &Value) -> Option<String> {
 
 /// The route `default_domain_resolver` matching [`minimal_dns_block`]: `local`
 /// everywhere, the DoT `final` tag on Windows.
-fn minimal_default_domain_resolver() -> String {
-    #[cfg(target_os = "windows")]
-    {
+fn minimal_default_domain_resolver(platform: HostPlatform) -> String {
+    if platform.is_windows() {
         "dns-remote-0".to_string()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
+    } else {
         "local".to_string()
     }
 }
@@ -372,7 +372,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     validate_template(&input.template)?;
     let capture_intent = input.capture_intent;
     if capture_intent == CaptureIntent::Tun {
-        validate_tun_capture(&input.template)?;
+        validate_tun_capture(&input.template, input.platform)?;
     }
 
     if input.profile.nodes.is_empty() {
@@ -501,7 +501,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             // the control path, private/loopback/link-local/multicast
             // destinations, and the TUN endpoint are never captured or
             // sniffed, even in Global/Direct mode.
-            final_rules.extend(tun_reserved_rules(&input.template.tun));
+            final_rules.extend(tun_reserved_rules(&input.template.tun, input.platform));
         }
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
@@ -510,7 +510,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             .route
             .rules
             .iter()
-            .filter(|r| !input.rule_overrides.is_disabled(&rule_fingerprint(r)))
+            .filter(|r| !input.rule_overrides.is_rule_disabled(r))
             .cloned()
             .collect();
         let (sub_rules, sub_sets) = expand_geoip_rules(
@@ -532,7 +532,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             .rule_overrides
             .custom
             .iter()
-            .filter(|r| !input.rule_overrides.is_disabled(&rule_fingerprint(r)))
+            .filter(|r| !input.rule_overrides.is_rule_disabled(r))
             .fold(
                 (Vec::new(), Vec::new()),
                 |(mut usable, mut dropped), rule| {
@@ -575,7 +575,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
             .insert("rule_set".into(), Value::Array(rule_sets));
     }
 
-    let mut dns = input.profile.dns.clone().unwrap_or_else(minimal_dns_block);
+    let mut dns = input
+        .profile
+        .dns
+        .clone()
+        .unwrap_or_else(|| minimal_dns_block(input.platform));
 
     // Legacy profiles parsed before the `dns.listen` removal may still carry the
     // internal listen key; strip it defensively so cached profiles keep building.
@@ -589,7 +593,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     // backs the OS resolver. Windows: `local` re-enters the TUN, so the route
     // default points at the DNS `final` tag — guaranteed TCP-capable by the
     // Windows emission (no UDP upstreams, no fakeip).
-    if cfg!(target_os = "windows") {
+    if input.platform.is_windows() {
         if let Some(final_tag) = dns_final_tag(&dns) {
             route
                 .as_object_mut()
@@ -620,7 +624,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
     }
 
     let config = json!({
-        "log": { "level": "info", "timestamp": true },
+        "log": { "level": input.template.log_level.as_str(), "timestamp": true },
         "dns": dns,
         "inbounds": inbounds,
         "outbounds": outbounds,
@@ -651,8 +655,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<Value, ConfigError> {
 /// Gate + TUN parameter validation shared by both builders. `Tun` configs must
 /// not be generated on a platform whose T0 gate is not green, and the emitted
 /// inbound needs a valid explicit interface name (locked macOS schema).
-fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
-    let gate = tun_gate();
+fn validate_tun_capture(
+    template: &LocalTemplate,
+    platform: HostPlatform,
+) -> Result<(), ConfigError> {
+    let gate = tun_gate_for(platform);
     if !gate.ready {
         return Err(ConfigError::TunUnavailable(
             gate.reason
@@ -662,7 +669,7 @@ fn validate_tun_capture(template: &LocalTemplate) -> Result<(), ConfigError> {
     }
     template
         .tun
-        .validate()
+        .validate_for(platform)
         .map_err(|e| ConfigError::TunInvalid(e.message))?;
     if template.tun.interface_name.is_none() {
         return Err(ConfigError::TunInvalid(
@@ -711,8 +718,8 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// `lh3.googleusercontent.com`, Telegram Web) until the QUIC timer expires, and
 /// some subresources never fall back. ICMP makes the browser fail the h3 probe
 /// immediately and reuse the proven IPv4 TCP path.
-pub fn tun_reserved_rules(tun: &TunSettings) -> Vec<Value> {
-    tun_reserved_rules_for(tun, cfg!(target_os = "windows"))
+pub fn tun_reserved_rules(tun: &TunSettings, platform: HostPlatform) -> Vec<Value> {
+    tun_reserved_rules_for(tun, platform.is_windows())
 }
 
 /// Platform-selectable reserved-rule builder so the Windows shape is testable
@@ -844,6 +851,34 @@ fn tun_inbound(tun: &TunSettings) -> Value {
 /// `geoip` rule option). Rules whose `geoip-{code}.srs` file is missing from
 /// `geoip_rule_set_dir` are dropped (counted via tracing warn) instead of failing the build.
 /// Rules using the removed `geosite` option are dropped the same way.
+type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, HashSet<String>)>;
+
+fn geoip_codes_present(dir: &Path) -> HashSet<String> {
+    static CACHE: Mutex<GeoipCodeCache> = Mutex::new(None);
+    let mtime = fs::metadata(dir).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached_dir, cached_mtime, codes)) = cache.as_ref() {
+        if cached_dir == dir && *cached_mtime == mtime {
+            return codes.clone();
+        }
+    }
+    let mut codes = HashSet::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(code) = name
+                .strip_prefix("geoip-")
+                .and_then(|rest| rest.strip_suffix(".srs"))
+            {
+                codes.insert(code.to_string());
+            }
+        }
+    }
+    *cache = Some((dir.to_path_buf(), mtime, codes.clone()));
+    codes
+}
+
 fn expand_geoip_rules(
     rules: &[Value],
     rule_sets: &[Value],
@@ -852,6 +887,7 @@ fn expand_geoip_rules(
     let mut kept = Vec::with_capacity(rules.len());
     let mut sets = rule_sets.to_vec();
     let mut dropped: Vec<String> = Vec::new();
+    let present = geoip_rule_set_dir.map(geoip_codes_present);
 
     for rule in rules {
         // sing-box 1.13 also removed the `geosite` rule option; emitting it verbatim
@@ -868,10 +904,7 @@ fn expand_geoip_rules(
 
         let mut resolvable = true;
         for code in &codes {
-            let path = geoip_rule_set_dir
-                .map(|dir| dir.join(format!("geoip-{code}.srs")))
-                .filter(|p| p.is_file());
-            if path.is_none() {
+            if present.as_ref().is_none_or(|set| !set.contains(*code)) {
                 dropped.push(code.to_string());
                 resolvable = false;
                 break;
@@ -1008,12 +1041,118 @@ fn custom_rule_is_usable(
 pub fn validate_config(config: &Value) -> Result<(), ConfigError> {
     let obj = config
         .as_object()
-        .ok_or(ConfigError::Invalid("root must be an object"))?;
-    if !obj.contains_key("inbounds") {
-        return Err(ConfigError::Invalid("missing inbounds"));
+        .ok_or_else(|| ConfigError::invalid("/: root must be an object"))?;
+    let inbounds = obj
+        .get("inbounds")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ConfigError::invalid("/inbounds: missing or not an array"))?;
+    if inbounds.is_empty() {
+        return Err(ConfigError::invalid("/inbounds: must be non-empty"));
     }
-    if !obj.contains_key("outbounds") {
-        return Err(ConfigError::Invalid("missing outbounds"));
+    let mut inbound_tags = std::collections::HashSet::new();
+    let mut mixed_wildcard = false;
+    for (idx, inbound) in inbounds.iter().enumerate() {
+        let tag = inbound
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if tag.is_empty() {
+            return Err(ConfigError::invalid(format!(
+                "/inbounds/{idx}/tag: missing"
+            )));
+        }
+        if !inbound_tags.insert(tag.to_string()) {
+            return Err(ConfigError::invalid(format!(
+                "/inbounds/{idx}/tag: duplicate tag {tag}"
+            )));
+        }
+        if inbound.get("type").and_then(|v| v.as_str()) == Some("mixed")
+            && inbound.get("listen").and_then(|v| v.as_str()) == Some("0.0.0.0")
+        {
+            mixed_wildcard = true;
+        }
+    }
+
+    let outbounds = obj
+        .get("outbounds")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ConfigError::invalid("/outbounds: missing or not an array"))?;
+    if outbounds.is_empty() {
+        return Err(ConfigError::invalid("/outbounds: must be non-empty"));
+    }
+    let mut outbound_tags = std::collections::HashSet::new();
+    for (idx, outbound) in outbounds.iter().enumerate() {
+        let tag = outbound
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if tag.is_empty() {
+            return Err(ConfigError::invalid(format!(
+                "/outbounds/{idx}/tag: missing"
+            )));
+        }
+        if !outbound_tags.insert(tag.to_string()) {
+            return Err(ConfigError::invalid(format!(
+                "/outbounds/{idx}/tag: duplicate tag {tag}"
+            )));
+        }
+    }
+
+    if let Some(final_tag) = config.pointer("/route/final").and_then(|v| v.as_str()) {
+        if !outbound_tags.contains(final_tag) {
+            return Err(ConfigError::invalid(format!(
+                "/route/final: unknown outbound {final_tag}"
+            )));
+        }
+    }
+    if let Some(rules) = config.pointer("/route/rules").and_then(|v| v.as_array()) {
+        for (idx, rule) in rules.iter().enumerate() {
+            if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
+                if !outbound_tags.contains(out) {
+                    return Err(ConfigError::invalid(format!(
+                        "/route/rules/{idx}/outbound: unknown outbound {out}"
+                    )));
+                }
+            }
+        }
+    }
+
+    for (idx, outbound) in outbounds.iter().enumerate() {
+        let ty = outbound.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if !matches!(ty, "selector" | "urltest") {
+            continue;
+        }
+        let Some(members) = outbound.get("outbounds").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for (j, member) in members.iter().enumerate() {
+            let Some(tag) = member.as_str() else {
+                continue;
+            };
+            if !outbound_tags.contains(tag) {
+                return Err(ConfigError::invalid(format!(
+                    "/outbounds/{idx}/outbounds/{j}: unknown outbound {tag}"
+                )));
+            }
+        }
+    }
+
+    if let Some(controller) = config
+        .pointer("/experimental/clash_api/external_controller")
+        .and_then(|v| v.as_str())
+    {
+        let host = controller
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(controller);
+        let host = host.trim().trim_matches(|c| c == '[' || c == ']');
+        if !mixed_wildcard && !is_loopback_host(host) {
+            return Err(ConfigError::invalid(format!(
+                "/experimental/clash_api/external_controller: must be loopback, got {controller}"
+            )));
+        }
     }
     Ok(())
 }
@@ -1030,7 +1169,7 @@ pub fn validate_config_for_intent(
     let inbounds = config
         .get("inbounds")
         .and_then(|v| v.as_array())
-        .ok_or(ConfigError::Invalid("missing inbounds array"))?;
+        .ok_or_else(|| ConfigError::invalid("/inbounds: missing inbounds array"))?;
     let tun_count = inbounds
         .iter()
         .filter(|i| i.get("type").and_then(|v| v.as_str()) == Some("tun"))
@@ -1042,19 +1181,19 @@ pub fn validate_config_for_intent(
     match intent {
         CaptureIntent::Diagnostic => {
             if tun_count != 0 {
-                return Err(ConfigError::Invalid(
+                return Err(ConfigError::invalid(
                     "Diagnostic config must not contain a tun inbound",
                 ));
             }
         }
         CaptureIntent::Tun => {
             if tun_count != 1 {
-                return Err(ConfigError::Invalid(
+                return Err(ConfigError::invalid(
                     "Tun config must contain exactly one tun inbound",
                 ));
             }
             if mixed_count != 1 {
-                return Err(ConfigError::Invalid(
+                return Err(ConfigError::invalid(
                     "Tun config must keep the mixed inbound (diagnostic access)",
                 ));
             }
@@ -1106,7 +1245,8 @@ pub fn restore_runtime_config_from_bak(
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(bak_path, config_path)?;
+    let bytes = fs::read(bak_path)?;
+    write_bytes_atomic(config_path, &bytes)?;
     Ok(true)
 }
 
@@ -1115,7 +1255,7 @@ pub enum ConfigError {
     #[error("no outbounds to build config from")]
     EmptyOutbounds,
     #[error("invalid config: {0}")]
-    Invalid(&'static str),
+    Invalid(String),
     #[error("invalid route: {0}")]
     RouteInvalid(String),
     #[error("tun unavailable: {0}")]
@@ -1126,6 +1266,12 @@ pub enum ConfigError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl ConfigError {
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::Invalid(message.into())
+    }
 }
 
 #[cfg(test)]
@@ -1179,8 +1325,12 @@ mod build_tests {
 
     #[test]
     fn direct_only_config_has_builtin_outbounds_and_direct_final() {
-        let cfg = build_direct_only_config(&LocalTemplate::default(), CaptureIntent::Diagnostic)
-            .expect("build");
+        let cfg = build_direct_only_config(
+            &LocalTemplate::default(),
+            CaptureIntent::Diagnostic,
+            HostPlatform::MacOs,
+        )
+        .expect("build");
         let outbounds = cfg["outbounds"].as_array().unwrap();
         let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
         assert_eq!(tags, ["direct", "block"]);
@@ -1193,6 +1343,58 @@ mod build_tests {
             "mode switching stays wired; every mode routes direct"
         );
         assert_eq!(cfg["experimental"]["clash_api"]["default_mode"], "Rule");
+        assert_eq!(cfg["log"]["level"], "warn");
+        validate_config(&cfg).expect("generated config must pass CFG-1");
+    }
+
+    #[test]
+    fn validate_config_rejects_empty_arrays_duplicate_tags_and_bad_refs() {
+        let empty = json!({"inbounds": [], "outbounds": [{"type":"direct","tag":"direct"}]});
+        let err = validate_config(&empty).unwrap_err();
+        assert!(err.to_string().contains("/inbounds"), "{err}");
+
+        let dup = json!({
+            "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],
+            "outbounds": [
+                {"type":"direct","tag":"x"},
+                {"type":"block","tag":"x"}
+            ]
+        });
+        let err = validate_config(&dup).unwrap_err();
+        assert!(err.to_string().contains("/outbounds/1/tag"), "{err}");
+
+        let bad_final = json!({
+            "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],
+            "outbounds": [{"type":"direct","tag":"direct"}],
+            "route": {"final": "missing"}
+        });
+        let err = validate_config(&bad_final).unwrap_err();
+        assert!(err.to_string().contains("/route/final"), "{err}");
+
+        let bad_member = json!({
+            "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],
+            "outbounds": [
+                {"type":"direct","tag":"direct"},
+                {"type":"selector","tag":"proxy","outbounds":["nope"]}
+            ]
+        });
+        let err = validate_config(&bad_member).unwrap_err();
+        assert!(
+            err.to_string().contains("/outbounds/1/outbounds/0"),
+            "{err}"
+        );
+
+        let bad_clash = json!({
+            "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],
+            "outbounds": [{"type":"direct","tag":"direct"}],
+            "experimental": {"clash_api": {"external_controller": "0.0.0.0:19090"}}
+        });
+        let err = validate_config(&bad_clash).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("/experimental/clash_api/external_controller"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1201,7 +1403,10 @@ mod build_tests {
             mixed_port: 80,
             ..LocalTemplate::default()
         };
-        assert!(build_direct_only_config(&invalid, CaptureIntent::Diagnostic).is_err());
+        assert!(
+            build_direct_only_config(&invalid, CaptureIntent::Diagnostic, HostPlatform::MacOs)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1249,6 +1454,7 @@ mod build_tests {
             group_selections: selections,
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect("build");
         let group = cfg["outbounds"]
@@ -1325,6 +1531,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect_err("empty");
         assert!(matches!(err, ConfigError::EmptyOutbounds));
@@ -1344,9 +1551,6 @@ mod build_tests {
 
         assert_eq!(cfg["inbounds"][0]["listen"], "0.0.0.0");
         assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
-        #[cfg(target_os = "windows")]
-        assert_eq!(cfg["route"]["default_domain_resolver"], "dns-remote-0");
-        #[cfg(not(target_os = "windows"))]
         assert_eq!(cfg["route"]["default_domain_resolver"], "local");
     }
 
@@ -1371,6 +1575,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1418,6 +1623,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1461,6 +1667,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1516,6 +1723,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1547,17 +1755,17 @@ mod build_tests {
             None,
         ))
         .unwrap();
-        #[cfg(target_os = "windows")]
-        {
-            assert_eq!(cfg["dns"]["final"], "dns-remote-0");
-            assert_eq!(cfg["dns"]["servers"][0]["type"], "tls");
-            assert_eq!(cfg["dns"]["strategy"], "ipv4_only");
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert_eq!(cfg["dns"]["final"], "local");
-            assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
-        }
+        assert_eq!(cfg["dns"]["final"], "local");
+        assert_eq!(cfg["dns"]["servers"][0]["type"], "local");
+
+        let mut windows_input =
+            build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
+        windows_input.platform = HostPlatform::Windows;
+        let win = build_runtime_config(&windows_input).unwrap();
+        assert_eq!(win["dns"]["final"], "dns-remote-0");
+        assert_eq!(win["dns"]["servers"][0]["type"], "tls");
+        assert_eq!(win["dns"]["strategy"], "ipv4_only");
+        assert_eq!(win["route"]["default_domain_resolver"], "dns-remote-0");
     }
 
     #[test]
@@ -1588,6 +1796,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1637,6 +1846,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1675,6 +1885,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: overrides,
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
 
@@ -1711,6 +1922,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect_err("subscription rule with unknown outbound must still fail");
         assert!(matches!(err, ConfigError::RouteInvalid(_)));
@@ -1732,6 +1944,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "direct");
@@ -1779,6 +1992,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
         assert_eq!(
@@ -1813,6 +2027,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "direct");
@@ -1847,6 +2062,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .unwrap();
         assert_eq!(cfg["route"]["final"], "a", "final stays at rule-mode value");
@@ -1926,32 +2142,26 @@ mod build_tests {
 
     #[test]
     fn tun_gate_status_is_stable_per_platform() {
-        let gate = tun_gate();
-        #[cfg(target_os = "macos")]
-        {
-            assert!(gate.ready, "macos_tun_ready is green after the T0 spike");
-            assert_eq!(gate.reason, None);
-        }
-        #[cfg(target_os = "windows")]
-        {
-            assert!(
-                gate.ready,
-                "windows_tun_ready is green after the V1-V13 host spike"
-            );
-            assert_eq!(gate.reason, None);
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            assert!(
-                !gate.ready,
-                "TUN must stay fail-closed off-macOS/off-Windows until its gate is green"
-            );
-            assert!(gate.reason.is_some());
-        }
+        let macos = tun_gate_for(HostPlatform::MacOs);
+        assert!(macos.ready, "macos_tun_ready is green after the T0 spike");
+        assert_eq!(macos.reason, None);
+
+        let windows = tun_gate_for(HostPlatform::Windows);
+        assert!(
+            windows.ready,
+            "windows_tun_ready is green after the V1-V13 host spike"
+        );
+        assert_eq!(windows.reason, None);
+
+        let linux = tun_gate_for(HostPlatform::Linux);
+        assert!(
+            !linux.ready,
+            "TUN must stay fail-closed off-macOS/off-Windows until its gate is green"
+        );
+        assert!(linux.reason.is_some());
     }
 
     /// TUN parameters with an explicit interface name (required at build time).
-    #[cfg(target_os = "macos")]
     fn tun_template() -> LocalTemplate {
         LocalTemplate {
             tun: TunSettings {
@@ -1982,6 +2192,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            platform: HostPlatform::MacOs,
         })
         .expect("diagnostic build");
         assert_eq!(
@@ -1991,13 +2202,13 @@ mod build_tests {
         );
         assert_eq!(cfg["inbounds"][0]["type"], "mixed");
 
-        let direct = build_direct_only_config(&template, CaptureIntent::Diagnostic)
-            .expect("diagnostic direct-only");
+        let direct =
+            build_direct_only_config(&template, CaptureIntent::Diagnostic, HostPlatform::MacOs)
+                .expect("diagnostic direct-only");
         assert_eq!(direct["inbounds"].as_array().unwrap().len(), 1);
         validate_config_for_intent(&cfg, CaptureIntent::Diagnostic).expect("structural check");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn tun_config_has_both_inbounds_and_locked_shape() {
         let cfg = build_runtime_config(&BuildInput {
@@ -2008,6 +2219,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::MacOs,
         })
         .expect("tun build");
         validate_config_for_intent(&cfg, CaptureIntent::Tun).expect("structural check");
@@ -2053,7 +2265,6 @@ mod build_tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn tun_config_reserved_rules_precede_clash_mode_and_sniff_precedes_domain_rules() {
         let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
@@ -2069,6 +2280,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::MacOs,
         })
         .expect("tun build");
         let rules = cfg["route"]["rules"].as_array().unwrap();
@@ -2096,7 +2308,6 @@ mod build_tests {
         assert_eq!(rules[5]["outbound"], "proxy");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn tun_config_works_for_every_proxy_mode_and_direct_only_keeps_tun() {
         for mode in [ProxyMode::Rule, ProxyMode::Global, ProxyMode::Direct] {
@@ -2112,6 +2323,7 @@ mod build_tests {
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Tun,
+                platform: HostPlatform::MacOs,
             })
             .expect("tun build per mode");
             validate_config_for_intent(&cfg, CaptureIntent::Tun).expect("structural check");
@@ -2120,8 +2332,9 @@ mod build_tests {
                 clash_mode_name(mode)
             );
 
-            let direct = build_direct_only_config(&template, CaptureIntent::Tun)
-                .expect("tun direct-only per mode");
+            let direct =
+                build_direct_only_config(&template, CaptureIntent::Tun, HostPlatform::MacOs)
+                    .expect("tun direct-only per mode");
             validate_config_for_intent(&direct, CaptureIntent::Tun)
                 .expect("direct-only Tun keeps the tun inbound");
             let rules = direct["route"]["rules"].as_array().unwrap();
@@ -2134,7 +2347,6 @@ mod build_tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn tun_config_requires_interface_name_at_build_time() {
         let template = LocalTemplate {
@@ -2153,13 +2365,15 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::MacOs,
         })
         .expect_err("interface name required");
         assert!(matches!(err, ConfigError::TunInvalid(_)));
-        assert!(build_direct_only_config(&template, CaptureIntent::Tun).is_err());
+        assert!(
+            build_direct_only_config(&template, CaptureIntent::Tun, HostPlatform::MacOs).is_err()
+        );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn tun_config_rejects_invalid_mtu_and_address_at_build_time() {
         let bad_mtu = LocalTemplate {
@@ -2178,6 +2392,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::MacOs,
         })
         .expect_err("bad mtu");
         assert!(matches!(err, ConfigError::TunInvalid(_)));
@@ -2190,10 +2405,11 @@ mod build_tests {
             },
             ..tun_template()
         };
-        assert!(build_direct_only_config(&bad_addr, CaptureIntent::Tun).is_err());
+        assert!(
+            build_direct_only_config(&bad_addr, CaptureIntent::Tun, HostPlatform::MacOs).is_err()
+        );
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
         // Linux / other hosts: Tun generation must fail closed with the stable
@@ -2214,10 +2430,13 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::Linux,
         })
         .expect_err("tun gate not green");
         assert!(matches!(err, ConfigError::TunUnavailable(_)));
-        assert!(build_direct_only_config(&template, CaptureIntent::Tun).is_err());
+        assert!(
+            build_direct_only_config(&template, CaptureIntent::Tun, HostPlatform::Linux).is_err()
+        );
     }
 
     #[test]
@@ -2347,6 +2566,7 @@ mod build_tests {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            platform: HostPlatform::MacOs,
         })
         .expect("serialize");
         assert_eq!(value["capture_intent"], "tun");
@@ -2361,6 +2581,7 @@ mod build_tests {
         });
         let parsed: BuildInput = serde_json::from_value(legacy).expect("legacy input");
         assert_eq!(parsed.capture_intent, CaptureIntent::Diagnostic);
+        assert_eq!(parsed.platform, HostPlatform::MacOs);
         assert_eq!(parsed.template.tun, TunSettings::default());
     }
 
@@ -2383,8 +2604,12 @@ mod build_tests {
 
     #[test]
     fn generated_diagnostic_configs_pass_elevated_guard_unchanged() {
-        let direct = build_direct_only_config(&LocalTemplate::default(), CaptureIntent::Diagnostic)
-            .expect("direct");
+        let direct = build_direct_only_config(
+            &LocalTemplate::default(),
+            CaptureIntent::Diagnostic,
+            HostPlatform::MacOs,
+        )
+        .expect("direct");
         assert_guard_unchanged(direct);
 
         let runtime = build_runtime_config(&build_input_from_nodes(

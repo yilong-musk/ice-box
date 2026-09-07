@@ -59,6 +59,9 @@ pub struct FaultPlan {
     pub fail_restore_after_mutations: Option<usize>,
     /// A route that cannot be removed (unverifiable cleanup).
     pub stuck_route: Option<String>,
+    /// Replace the journal path with a directory after a recover() error so
+    /// the driver's terminal persist cannot write (TUN-2).
+    pub sabotage_journal_after_recover_err: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -609,7 +612,15 @@ impl TunBackend for FakeTunBackend {
                 // report it as the outcome; the driver persists the journal.
                 return Ok(RecoveryOutcome::RecoveryRequired);
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                if self.faults.sabotage_journal_after_recover_err {
+                    if let Some(path) = &self.journal_path {
+                        let _ = std::fs::remove_file(path);
+                        let _ = std::fs::create_dir(path);
+                    }
+                }
+                return Err(err);
+            }
         }
         let health = self.verify(&applied)?;
         if health.nothing_owned {

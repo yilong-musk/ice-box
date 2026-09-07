@@ -8,10 +8,10 @@ import {
   isLoopbackListenHost,
   parsePortInput,
   portsConflict,
-} from "./generationGuard";
+} from "./listenValidation";
 import { formatUpdateFailures } from "./subscriptions";
 
-describe("generationGuard", () => {
+describe("listenValidation", () => {
   it("parsePortInput accepts valid ports", () => {
     expect(parsePortInput("17890")).toBe(17890);
     expect(parsePortInput("1024")).toBe(1024);

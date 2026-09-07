@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use crate::backend::{RecoveryOutcome, TunBackend};
-use crate::error::TunError;
+use crate::error::{TunError, TunErrorCode};
 use crate::journal::{steps, JournalState, TunJournal};
 
 /// Drives one recovery attempt for the active installation.
@@ -102,14 +102,40 @@ impl<'a> RecoveryDriver<'a> {
             Err(err) => {
                 // Uncertain cleanup: persist RecoveryRequired (fail closed),
                 // keep the journal for the next watchdog tick / startup.
-                let mut journal = TunJournal::load(self.journal_path)?.unwrap_or(journal);
+                let mut journal = match TunJournal::load(self.journal_path) {
+                    Ok(Some(j)) => j,
+                    Ok(None) => journal,
+                    Err(load_err) => {
+                        tracing::error!(
+                            error = %err,
+                            load_error = %load_err,
+                            "tun recovery failed and journal could not be re-read"
+                        );
+                        return Err(TunError::new(
+                            TunErrorCode::RecoveryRequired,
+                            format!(
+                                "recovery failed ({err}) and journal reload failed ({load_err})"
+                            ),
+                        ));
+                    }
+                };
                 let step = journal.last_completed_step.clone();
-                let _ = journal.record(
+                if let Err(record_err) = journal.record(
                     self.journal_path,
                     JournalState::RecoveryRequired,
                     &step,
                     |_| {},
-                );
+                ) {
+                    tracing::error!(
+                        error = %err,
+                        record_error = %record_err,
+                        "tun recovery failed and journal could not be persisted"
+                    );
+                    return Err(TunError::new(
+                        TunErrorCode::RecoveryRequired,
+                        format!("recovery failed ({err}) and journal write failed ({record_err})"),
+                    ));
+                }
                 tracing::error!(error = %err, "tun recovery failed; state persisted as recovery_required");
                 Err(err)
             }
