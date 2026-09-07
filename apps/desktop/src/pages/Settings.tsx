@@ -691,7 +691,9 @@ export function Settings({
                     setError(null);
                     void (async () => {
                       try {
-                        await api.ensureTunElevation();
+                        if (status?.tun_elevation_ready !== true) {
+                          await api.ensureTunElevation();
+                        }
                         await persistTunEnabled(true);
                         flashSaved();
                       } catch (e) {

@@ -18,18 +18,23 @@
 //! the launcher tree without cleanup — the coordinator tolerates the stale
 //! pid file and resets it on the next start.
 //!
-//! Usage: `ice-tun-launcher --data <app-data-dir>`
+//! Usage:
+//! - `ice-tun-launcher --data <app-data-dir>` — run the elevated core
+//! - `ice-tun-launcher --install-task --xml <task.xml>` — one-time UAC
+//!   import of the scheduled task (GUI subsystem: no console flash)
+//! - `ice-tun-launcher --delete-task` — remove the scheduled task
 //!
 //! Before spawning sing-box the launcher checks the SHA-256 pin stored in
-//! the `ice-box-tun` scheduled-task description (set at elevated create
-//! time). A replaced `sing-box.exe` is refused.
+//! the `ice-box-tun` scheduled-task description (written via XML import at
+//! elevated create time). A replaced `sing-box.exe` is refused.
 
 // A GUI-subsystem binary: the scheduled task starts it elevated, and a
-// console subsystem would flash a black window on every `schtasks /Run`.
+// console subsystem would flash a black window on every `schtasks /Run`
+// and on the one-time UAC install (which used to wrap `cmd.exe`).
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 #[cfg(target_os = "windows")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::process::{Command, Stdio};
 #[cfg(target_os = "windows")]
@@ -39,6 +44,8 @@ use std::time::{Duration, Instant};
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 #[cfg(target_os = "windows")]
 const TERM_GRACE: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(target_os = "windows")]
 struct Args {
@@ -50,16 +57,7 @@ struct Args {
 }
 
 #[cfg(target_os = "windows")]
-fn parse_args() -> Option<Args> {
-    let mut data_dir = PathBuf::new();
-    let mut it = std::env::args().skip(1);
-    while let Some(flag) = it.next() {
-        let value = it.next()?;
-        if flag != "--data" {
-            return None;
-        }
-        data_dir = PathBuf::from(value);
-    }
+fn args_from_data_dir(data_dir: PathBuf) -> Option<Args> {
     if data_dir.as_os_str().is_empty() {
         return None;
     }
@@ -87,7 +85,7 @@ fn taskkill(pid: u32, forced: bool) {
         .stderr(Stdio::null())
         // CREATE_NO_WINDOW: the launcher is a GUI-subsystem process; a
         // console child would flash a black window on every stop.
-        .creation_flags(0x0800_0000);
+        .creation_flags(CREATE_NO_WINDOW);
     if forced {
         command.arg("/F");
     }
@@ -95,11 +93,66 @@ fn taskkill(pid: u32, forced: bool) {
 }
 
 #[cfg(target_os = "windows")]
-fn run() -> i32 {
-    let Some(args) = parse_args() else {
-        eprintln!("usage: ice-tun-launcher --data <app-data-dir>");
+fn silent_schtasks(command: &mut Command) -> i32 {
+    use std::os::windows::process::CommandExt;
+    match command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+    {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(_) => 1,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_task(xml: &Path) -> i32 {
+    if !xml.is_file() {
         return 2;
-    };
+    }
+    silent_schtasks(
+        Command::new("schtasks.exe")
+            .args(["/Create", "/TN", ice_tun_launcher::TUN_TASK_NAME, "/XML"])
+            .arg(xml)
+            .arg("/F"),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn delete_task() -> i32 {
+    silent_schtasks(Command::new("schtasks.exe").args([
+        "/Delete",
+        "/TN",
+        ice_tun_launcher::TUN_TASK_NAME,
+        "/F",
+    ]))
+}
+
+#[cfg(target_os = "windows")]
+fn run() -> i32 {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    match ice_tun_launcher::parse_launcher_command(&argv) {
+        Some(ice_tun_launcher::LauncherCommand::InstallTask { xml }) => install_task(&xml),
+        Some(ice_tun_launcher::LauncherCommand::DeleteTask) => delete_task(),
+        Some(ice_tun_launcher::LauncherCommand::Run { data_dir }) => {
+            let Some(args) = args_from_data_dir(data_dir) else {
+                return 2;
+            };
+            run_core(args)
+        }
+        None => {
+            eprintln!(
+                "usage: ice-tun-launcher --data <app-data-dir>\n       ice-tun-launcher --install-task --xml <task.xml>\n       ice-tun-launcher --delete-task"
+            );
+            2
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_core(args: Args) -> i32 {
     if !args.binary.is_file() {
         eprintln!("sing-box binary not found at {}", args.binary.display());
         return 2;
@@ -146,7 +199,7 @@ fn run() -> i32 {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
     {
         Ok(child) => child,
@@ -218,7 +271,7 @@ fn query_task_xml() -> Result<String, String> {
     let output = Command::new("schtasks")
         .args(["/Query", "/TN", ice_tun_launcher::TUN_TASK_NAME, "/XML"])
         .stdin(Stdio::null())
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|err| format!("query TUN scheduled task: {err}"))?;
     if !output.status.success() {

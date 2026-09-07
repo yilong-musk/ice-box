@@ -2,9 +2,10 @@
 //!
 //! The per-user install directory is writable, so `ice-tun-launcher.exe` and
 //! `sing-box.exe` can be replaced by the same account. The scheduled task is
-//! created elevated and stores SHA-256 hashes in its description (`/D`);
-//! `schtasks /Run` and this launcher refuse to start when the on-disk files
-//! do not match.
+//! created elevated from UTF-16 XML so the SHA-256 pin lives in
+//! `RegistrationInfo/Description` (`schtasks /D` is a day-of-week flag and
+//! cannot store a description). `schtasks /Run` and this launcher refuse to
+//! start when the on-disk files do not match.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +24,53 @@ pub struct TunTaskPin {
     pub core_sha256: String,
 }
 
-/// Render the `/D` description stored on the TUN scheduled task.
+/// argv modes of `ice-tun-launcher.exe`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LauncherCommand {
+    /// Run the elevated TUN core (`--data <app-data-dir>`).
+    Run { data_dir: PathBuf },
+    /// Import the UTF-16 task XML (`--install-task --xml <path>`).
+    InstallTask { xml: PathBuf },
+    /// Delete the `ice-box-tun` scheduled task (`--delete-task`).
+    DeleteTask,
+}
+
+/// Parse launcher argv (without argv0). Used by the binary and host-free tests.
+pub fn parse_launcher_command(args: &[String]) -> Option<LauncherCommand> {
+    let mut data_dir = None;
+    let mut xml = None;
+    let mut install = false;
+    let mut delete = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--install-task" => install = true,
+            "--delete-task" => delete = true,
+            "--data" => {
+                i += 1;
+                data_dir = Some(PathBuf::from(args.get(i)?));
+            }
+            "--xml" => {
+                i += 1;
+                xml = Some(PathBuf::from(args.get(i)?));
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    match (install, delete, xml, data_dir) {
+        (true, false, Some(xml), None) if !xml.as_os_str().is_empty() => {
+            Some(LauncherCommand::InstallTask { xml })
+        }
+        (false, true, None, None) => Some(LauncherCommand::DeleteTask),
+        (false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
+            Some(LauncherCommand::Run { data_dir })
+        }
+        _ => None,
+    }
+}
+
+/// Render the task description stored in `RegistrationInfo/Description`.
 pub fn format_tun_task_pin(launcher_sha256: &str, core_sha256: &str) -> String {
     format!("{TUN_TASK_PIN_PREFIX}{launcher_sha256}:{core_sha256}")
 }
@@ -58,12 +105,115 @@ pub fn extract_tun_task_pin_from_xml(xml: &str) -> Option<TunTaskPin> {
 }
 
 fn xml_tag_value(xml: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
     let close = format!("</{tag}>");
-    let start = xml.find(&open)?;
-    let rest = &xml[start + open.len()..];
+    let content_start = if let Some(s) = xml.find(&format!("<{tag}>")) {
+        s + tag.len() + 2
+    } else {
+        let s = xml.find(&format!("<{tag} "))?;
+        let rel = xml[s..].find('>')?;
+        s + rel + 1
+    };
+    let rest = xml.get(content_start..)?;
     let end = rest.find(&close)?;
-    Some(rest[..end].trim().to_string())
+    Some(xml_unescape(rest[..end].trim()))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Exec/Command from `schtasks /Query /XML` (the elevated launcher path).
+pub fn extract_tun_task_command_from_xml(xml: &str) -> Option<String> {
+    xml_tag_value(xml, "Command")
+}
+
+/// Whether an Exec/Command value points at `launcher` (quotes and ASCII case
+/// ignored so a Task Scheduler round-trip still matches).
+pub fn command_matches_launcher(command: &str, launcher: &Path) -> bool {
+    let trimmed = command.trim().trim_matches('"');
+    Path::new(trimmed) == launcher || trimmed.eq_ignore_ascii_case(&launcher.display().to_string())
+}
+
+/// Task Scheduler 1.2 XML for `ice-box-tun`. `schtasks /Create /XML` is the
+/// only supported way to persist [`format_tun_task_pin`] — `/D` is a day of
+/// week, not a description. The time trigger is in the past so the task
+/// never auto-starts; `AllowStartOnDemand` keeps `schtasks /Run` working.
+/// `ExecutionTimeLimit` is unlimited so a long-lived TUN core is not killed
+/// at the 72-hour default.
+pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str) -> String {
+    let command = xml_escape(&launcher.display().to_string());
+    let arguments = xml_escape(&format!("--data \"{}\"", data_dir.display()));
+    let description = xml_escape(pin);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>{description}</Description>
+    <URI>\{TUN_TASK_NAME}</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>1999-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <Arguments>{arguments}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#
+    )
+}
+
+/// UTF-16 LE with BOM. `schtasks /Create /XML` requires a Unicode file.
+pub fn encode_utf16_le_bom(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
 }
 
 /// SHA-256 of a file, lowercase hex (pinned in the scheduled-task description).
@@ -153,6 +303,68 @@ mod tests {
             parse_tun_task_pin(&pin).expect("parsed")
         );
         assert!(extract_tun_task_pin_from_xml("<Task/>").is_none());
+        let attributed =
+            format!("<Task><Description xml:space=\"preserve\">{pin}</Description></Task>");
+        assert_eq!(
+            extract_tun_task_pin_from_xml(&attributed).expect("attributed description"),
+            parse_tun_task_pin(&pin).expect("parsed")
+        );
+    }
+
+    #[test]
+    fn render_tun_task_xml_stores_pin_highest_privilege_and_on_demand_action() {
+        let pin = format_tun_task_pin(LAUNCHER, CORE);
+        let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
+        let data = Path::new(r"C:\Users\O'Brien\AppData\Roaming\com.yilong-musk.icebox");
+        let xml = render_tun_task_xml(launcher, data, &pin);
+        assert!(xml.contains(&format!("<Description>{pin}</Description>")));
+        assert!(xml.contains(r"<URI>\ice-box-tun</URI>"));
+        assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
+        assert!(xml.contains("<AllowStartOnDemand>true</AllowStartOnDemand>"));
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains(r"<Command>C:\Program Files\ice-box\ice-tun-launcher.exe</Command>"));
+        assert!(xml.contains(
+            r#"<Arguments>--data &quot;C:\Users\O&apos;Brien\AppData\Roaming\com.yilong-musk.icebox&quot;</Arguments>"#
+        ));
+        assert_eq!(
+            extract_tun_task_pin_from_xml(&xml).expect("pin from rendered xml"),
+            parse_tun_task_pin(&pin).expect("parsed")
+        );
+        assert!(command_matches_launcher(
+            &extract_tun_task_command_from_xml(&xml).expect("command"),
+            launcher
+        ));
+        assert!(!command_matches_launcher(
+            r"C:\other\ice-tun-launcher.exe",
+            launcher
+        ));
+    }
+
+    #[test]
+    fn render_tun_task_xml_escapes_ampersand_paths() {
+        let pin = format_tun_task_pin(LAUNCHER, CORE);
+        let xml = render_tun_task_xml(
+            Path::new(r"C:\a&b\ice-tun-launcher.exe"),
+            Path::new(r"C:\data"),
+            &pin,
+        );
+        assert!(xml.contains(r"<Command>C:\a&amp;b\ice-tun-launcher.exe</Command>"));
+        assert!(command_matches_launcher(
+            &extract_tun_task_command_from_xml(&xml).expect("command"),
+            Path::new(r"C:\a&b\ice-tun-launcher.exe"),
+        ));
+    }
+
+    #[test]
+    fn encode_utf16_le_bom_round_trips_through_schtasks_decoder() {
+        let xml = render_tun_task_xml(
+            Path::new(r"C:\ice-box\ice-tun-launcher.exe"),
+            Path::new(r"C:\data"),
+            &format_tun_task_pin(LAUNCHER, CORE),
+        );
+        let encoded = encode_utf16_le_bom(&xml);
+        assert_eq!(&encoded[..2], [0xFF, 0xFE]);
+        assert_eq!(decode_schtasks_output(&encoded), xml);
     }
 
     #[test]
@@ -217,5 +429,40 @@ mod tests {
         let path = core_beside_launcher(&launcher).expect("parent");
         assert_eq!(path.file_name().unwrap(), "sing-box.exe");
         assert_eq!(path.parent(), launcher.parent());
+    }
+
+    #[test]
+    fn parse_launcher_command_accepts_run_install_and_delete() {
+        assert_eq!(
+            parse_launcher_command(&["--data".into(), r"C:\data".into()]),
+            Some(LauncherCommand::Run {
+                data_dir: PathBuf::from(r"C:\data"),
+            })
+        );
+        assert_eq!(
+            parse_launcher_command(&[
+                "--xml".into(),
+                r"C:\data\ice-box-tun.xml".into(),
+                "--install-task".into(),
+            ]),
+            Some(LauncherCommand::InstallTask {
+                xml: PathBuf::from(r"C:\data\ice-box-tun.xml"),
+            })
+        );
+        assert_eq!(
+            parse_launcher_command(&["--delete-task".into()]),
+            Some(LauncherCommand::DeleteTask)
+        );
+        assert!(parse_launcher_command(&["--install-task".into()]).is_none());
+        assert!(
+            parse_launcher_command(&["--install-task".into(), "--delete-task".into()]).is_none()
+        );
+        assert!(parse_launcher_command(&[
+            "--data".into(),
+            r"C:\data".into(),
+            "--delete-task".into()
+        ])
+        .is_none());
+        assert!(parse_launcher_command(&["--unknown".into()]).is_none());
     }
 }

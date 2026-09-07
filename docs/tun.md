@@ -136,8 +136,12 @@ Adapter creation needs Administrator. There is no installable helper on
 Windows. A per-user scheduled task `ice-box-tun` (highest privilege, never
 auto-triggered) runs `ice-tun-launcher.exe`:
 
-- one-time setup: installer (best-effort; per-user NSIS is not elevated) or
-  `ensure_tun_elevation` (one UAC, no app relaunch);
+- one-time setup: `ensure_tun_elevation` (one UAC, no app relaunch, no
+  console flash). UAC launches the GUI-subsystem `ice-tun-launcher.exe`,
+  which imports the task XML so the SHA-256 pin lives in
+  `RegistrationInfo/Description` (`schtasks /D` is a day-of-week flag and
+  cannot store a description). The per-user NSIS installer does not create
+  the task (it is not elevated); uninstall still deletes it.
 - start = `schtasks /Run`; stop = stop-file + graceful `taskkill /T` (no `/F`)
   then `schtasks /End` fallback;
 - liveness = handshake pid file + `PROCESS_QUERY_LIMITED_INFORMATION`;

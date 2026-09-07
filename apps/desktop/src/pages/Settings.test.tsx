@@ -594,6 +594,7 @@ describe("Settings", () => {
       ...defaultStatus,
       helper_supported: false,
       helper_installed: false,
+      tun_elevation_ready: false,
     });
 
     const { container } = render(<Settings />);
@@ -622,6 +623,33 @@ describe("Settings", () => {
     });
   });
 
+  it("skips the one-time elevation when the scheduled task is already ready", async () => {
+    ensureTunElevation.mockResolvedValue(undefined);
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_supported: false,
+      helper_installed: false,
+      tun_elevation_ready: true,
+    });
+
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText("启用 TUN 模式")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByLabelText("启用 TUN 模式"));
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+    expect(ensureTunElevation).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("reports a cancelled one-time elevation when enabling TUN", async () => {
     // Windows, setup prompt cancelled: nothing was persisted or started, the
     // error surfaces and the switch stays off.
@@ -630,6 +658,7 @@ describe("Settings", () => {
       ...defaultStatus,
       helper_supported: false,
       helper_installed: false,
+      tun_elevation_ready: false,
     });
 
     const { container } = render(<Settings />);

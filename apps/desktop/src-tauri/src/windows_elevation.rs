@@ -2,7 +2,8 @@
 //!
 //! The scheduled task that runs the TUN core elevated must be created once
 //! from an elevated context. The runtime flow does that through a single
-//! `runas`-verb UAC prompt (`ensure_tun_elevation`); afterwards every TUN
+//! `runas`-verb UAC prompt (`ensure_tun_elevation` launches the GUI
+//! `ice-tun-launcher.exe`, so no console window flashes); afterwards every TUN
 //! transition runs unelevated via `schtasks /Run` / `/End` — no further
 //! prompts. The app-level UAC relaunch flow (relaunch the whole app elevated
 //! per session) was removed when the scheduled-task elevation landed.

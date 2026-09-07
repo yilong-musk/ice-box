@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows TUN no longer prompts UAC on every enable: the `ice-box-tun`
+  scheduled-task pin is stored via UTF-16 XML import (`schtasks /D` is a
+  day-of-week flag, not a description).
+- Windows TUN elevation no longer flashes a console window (UAC launches
+  the GUI-subsystem `ice-tun-launcher` instead of `cmd.exe`).
+
 ## [0.1.6] - 2026-09-06
 
 ### Fixed

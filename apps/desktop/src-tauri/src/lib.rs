@@ -96,8 +96,8 @@ pub struct AppState {
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
-    /// Memoized Windows TUN scheduled-task existence probe (TTL'd, invalidated
-    /// by ensure/remove); `schtasks /Query` would otherwise spawn once per
+    /// Memoized Windows TUN scheduled-task pin probe (TTL'd, invalidated
+    /// by ensure/remove); `schtasks /Query /XML` would otherwise spawn once per
     /// status poll.
     pub tun_task_cache: Mutex<Option<(Instant, bool)>>,
     /// Whether the running core supports live mode switches via the Clash API

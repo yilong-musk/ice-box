@@ -573,7 +573,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       // Never start/stop the proxy service from this switch.
                       setTunOverride(true);
                       void persistTunDesire(async () => {
-                        await api.ensureTunElevation();
+                        if (status?.tun_elevation_ready !== true) {
+                          await api.ensureTunElevation();
+                        }
                         await api.saveSettings({
                           ...s,
                           tun: { ...s.tun, enabled: true },
