@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Subscription CRUD, format detection, normalization, fetch, store, merge.
 //!
 //! Format priority: sing-box JSON first, then Clash-compatible YAML/text (slice 6).

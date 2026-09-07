@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Ensure src-tauri/resources has the sing-box binary for the given platform.
 # Usage: scripts/prepare-singbox-resource.sh [host | mac-arm64 | mac-x64 | win]
 set -euo pipefail

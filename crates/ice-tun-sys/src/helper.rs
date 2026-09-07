@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! App-side client for the privileged helper daemon (plan §5 T5).
 //!
 //! [`HelperCoreCoordinator`] implements [`CoreCoordinator`] over the helper

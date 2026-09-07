@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 export function formatRate(bytesPerSec: number): string {
   if (bytesPerSec < 1024) return `${bytesPerSec} B/s`;
   if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;

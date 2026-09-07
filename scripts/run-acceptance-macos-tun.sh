@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # macOS TUN live acceptance (plan §6 "Live macOS acceptance").
 #
 # Two runner modes:

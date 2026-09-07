@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Process lifecycle and status state machine for the sing-box core.
 
 mod binary;

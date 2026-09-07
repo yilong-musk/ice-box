@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Application data directory layout (architecture §6).
 
 use std::fs;

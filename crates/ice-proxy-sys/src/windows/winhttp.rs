@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! WinHTTP default-proxy snapshot / apply / restore.
 
 use serde::{Deserialize, Serialize};

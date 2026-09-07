@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Bypass domain lists for system proxy (architecture §13.1).
 
 /// Domains that must never go through the mixed inbound (all platforms).

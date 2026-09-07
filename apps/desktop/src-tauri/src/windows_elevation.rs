@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Windows one-shot elevation for the TUN scheduled task (plan B).
 //!
 //! The scheduled task that runs the TUN core elevated must be created once

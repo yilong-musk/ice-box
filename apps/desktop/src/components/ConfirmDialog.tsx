@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";

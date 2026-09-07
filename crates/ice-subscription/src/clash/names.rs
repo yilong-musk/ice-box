@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Resolve Clash policy / proxy names against known tags.
 
 use std::collections::HashSet;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Startup / watchdog recovery driver (plan §4.4).
 //!
 //! The driver is the *only* path that resolves an outstanding journal. It

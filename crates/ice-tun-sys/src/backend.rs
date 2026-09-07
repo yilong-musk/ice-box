@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The platform backend contract for TUN capture (plan §4.5).
 //!
 //! `ice-tun-sys` backends expose only intent-level operations; they never

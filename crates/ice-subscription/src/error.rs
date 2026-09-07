@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Subscription errors mapped to architecture §17.
 
 use ice_config::{AppError, ErrorCode};

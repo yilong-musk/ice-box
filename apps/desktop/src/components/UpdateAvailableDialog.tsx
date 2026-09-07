@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { t } from "@/lib/i18n";
 
 function formatProgress(downloaded: number, contentLength: number | null): string {

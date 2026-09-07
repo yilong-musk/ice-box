@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Efficient log file tail (architecture §16: n ≤ 500, avoid full-file read).
 
 use std::fs::File;

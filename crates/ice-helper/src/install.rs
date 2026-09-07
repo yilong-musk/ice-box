@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Privileged install / uninstall modes for the helper daemon.
 //!
 //! These modes run **as root** and are the only thing the unsigned elevation

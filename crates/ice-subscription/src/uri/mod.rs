@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Proxy URI list ("share link") subscription parsing → sing-box leaf outbounds.
 //!
 //! Supports the standard per-protocol share-link schemes emitted by most

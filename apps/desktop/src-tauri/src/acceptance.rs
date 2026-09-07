@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Headless acceptance scenarios (plan G9.1 / G9.6 / G9.7). Live UI/proxy cases are covered by the macOS release gate.
 
 #[cfg(test)]

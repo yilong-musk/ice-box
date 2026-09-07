@@ -1,3 +1,5 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+
 ; Plan B: Windows TUN elevation (scheduled task).
 ;
 ; customInstall: do not create ice-box-tun here. A per-user NSIS installer is

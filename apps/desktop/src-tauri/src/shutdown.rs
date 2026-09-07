@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Graceful shutdown shared by IPC `stop` and tray Quit.
 
 use crate::capture::TrafficCapture;

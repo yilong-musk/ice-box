@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Built-in default routing rules for rule-less (URI list) subscriptions.
 //!
 //! A share-link subscription carries only nodes, so routing is attached here:

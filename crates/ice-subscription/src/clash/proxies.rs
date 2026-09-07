@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Clash `proxies` → sing-box leaf outbounds.
 
 use ice_config::NormalizedOutbound;

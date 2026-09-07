@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Quick local gate before committing: fmt, clippy, lib tests, tsc, vitest,
 # and a Live Demo Home screenshot when the app version or UI files changed.
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).

@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- ice-box is now licensed under GPL-3.0-or-later (previously MIT). `LICENSE`
+  carries the GPLv3 text; `NOTICE`, the Cargo workspace, and the package
+  manifests declare the new license, and every source file carries an
+  `SPDX-License-Identifier: GPL-3.0-or-later` header. Releases up to 0.1.6
+  stay MIT.
+- README redesigned around the product (hero, install, quick start, TUN) with a
+  Simplified Chinese edition in `README.zh-CN.md`; the website tagline is now
+  "Proxy, kept simple."
+
 ### Fixed
 
 - Windows TUN no longer prompts UAC on every enable: the `ice-box-tun`

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Fail-closed backend for platforms whose TUN gate is pending or failed
 //! (plan §3.2 / §5 T2).
 //!

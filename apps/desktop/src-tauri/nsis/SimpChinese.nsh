@@ -1,3 +1,5 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+
 ; Simplified Chinese installer messages. The product name is resolved at
 ; compile time from the NSIS ${PRODUCTNAME} define (set by tauri from
 ; tauri.conf.json > productName), so no runtime placeholder substitution

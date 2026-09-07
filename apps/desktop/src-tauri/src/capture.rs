@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! TUN capture runtime controller (plan §4.3, slice T3).
 //!
 //! `CaptureController` is the single owner of the active capture backend and

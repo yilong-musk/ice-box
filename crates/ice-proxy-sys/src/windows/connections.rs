@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Named WinInet connections: RAS/VPN phonebook plus leftover Connections-key names.
 
 use std::collections::BTreeSet;

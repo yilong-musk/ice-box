@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Normalized subscription routing profile (nodes + groups + route + dns).
 
 use serde::{Deserialize, Serialize};

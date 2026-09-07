@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Privileged-helper wire protocol (plan §5 T5).
 //!
 //! The macOS production path runs the core elevated inside a small

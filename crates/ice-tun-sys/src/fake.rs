@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-free fake backend for orchestration and fault-injection tests
 //! (plan T0 exit gate: "Inject failures after every journaled mutation in
 //! a host-free fake controller and prove that startup recovery is

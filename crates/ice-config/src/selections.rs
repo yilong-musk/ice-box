@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Persisted per-group member selections (`group-selections.json`).
 //!
 //! User picks on a strategy group take effect live via Clash API when the core is

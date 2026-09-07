@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! In-app privileged helper install / uninstall (unsigned elevation path).
 //!
 //! The app never signs or notarizes (documented product decision), so helper

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Stable TUN error codes (`tun.*`), following the dotted snake_case contract
 //! of `ice_config::ErrorCode` (architecture §17). Codes are the stable IPC
 //! identity; the message is for humans.

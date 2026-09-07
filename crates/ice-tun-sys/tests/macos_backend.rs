@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! macOS backend tests (plan §5 T2 shared exit gate).
 //!
 //! Host-free on every CI platform: the backend logic runs against a fake

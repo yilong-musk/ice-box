@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Download pinned sing-box into third_party/sing-box/<target>/
 # Usage: scripts/fetch-singbox.sh [host | mac-arm64 | mac-x64 | win]
 set -euo pipefail

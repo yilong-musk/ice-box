@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Shared platform aliases for ice-box scripts.
 # Source and call ice_resolve_platform <alias>; exports ICE_* variables below.
 #

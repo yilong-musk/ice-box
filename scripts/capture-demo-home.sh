@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Capture the Live Demo Home view into docs/images/home.png.
 # Recaptures when the desktop package version differs from
 # docs/images/home.version, or when Live Demo UI files changed.

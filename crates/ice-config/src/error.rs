@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Unified IPC / UI error shape: `{ code, message }`.
 //!
 //! Codes follow architecture §17 (dotted snake_case segments).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `hysteria://` and `hysteria2://` share link parsing → sing-box outbounds.
 
 use serde_json::{json, Value};

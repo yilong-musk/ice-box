@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Clash API / mixed inbound health probe.
 
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! macOS elevation via AuthorizationServices for the unsigned release.
 //!
 //! The app never supports code signing or notarization (documented product

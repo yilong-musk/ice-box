@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Load the single active subscription profile.
 
 use std::path::{Path, PathBuf};

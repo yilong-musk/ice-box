@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-free helpers for the Windows TUN scheduled-task binary pin.
 //!
 //! The per-user install directory is writable, so `ice-tun-launcher.exe` and

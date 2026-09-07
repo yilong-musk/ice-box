@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Windows TUN backend (`docs/tun.md`; `windows_tun_ready` flipped 2026-09-03).
 //!
 //! Ownership model (locked by the Windows T0 spike): the elevated sing-box

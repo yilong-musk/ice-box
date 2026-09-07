@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Privileged helper daemon entry (plan §5 T5, macOS production path).
 //!
 //! Runs as root under launchd. Binds a Unix socket, authenticates each peer

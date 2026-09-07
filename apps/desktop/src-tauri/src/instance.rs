@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Single-instance lock: second launch requests focus on the running window.
 
 use ice_config::AppPaths;

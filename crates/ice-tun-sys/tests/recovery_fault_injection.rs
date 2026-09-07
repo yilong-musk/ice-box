@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Fault-injection recovery tests (plan T0 exit gate).
 //!
 //! Every test drives the host-free `FakeTunBackend` against a real journal

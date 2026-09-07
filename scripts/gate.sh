@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Workspace gate (plan G9.10): fmt, clippy, tests, frontend typecheck.
 set -euo pipefail
 

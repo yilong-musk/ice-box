@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! WinInet per-connection query / apply / notify.
 
 use std::mem::size_of;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Loopback / listen-address helpers shared across crates.
 
 use std::net::IpAddr;

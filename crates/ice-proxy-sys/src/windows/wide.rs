@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! UTF-16 helpers for WinInet / WinHTTP string buffers.
 
 use windows_sys::core::PWSTR;

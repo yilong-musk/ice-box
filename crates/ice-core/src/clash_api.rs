@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! sing-box Clash API helpers (loopback only; sing-box 1.13.x compatible).
 
 use std::io::{BufRead, BufReader, Read};

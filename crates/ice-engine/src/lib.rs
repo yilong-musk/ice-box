@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Cross-platform sing-box config generation engine (facade, architecture §22).
 //!
 //! Single entry point for the config pipeline: subscription import → normalized

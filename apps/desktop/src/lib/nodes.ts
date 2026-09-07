@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import type { NodeInfo } from "../api/tauri";
 import { t } from "./i18n";
 

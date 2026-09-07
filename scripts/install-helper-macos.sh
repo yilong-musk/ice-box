@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Install the ice-box privileged helper as a launchd daemon (plan §5 T5).
 #
 # Thin wrapper over the helper's own privileged `install` mode: the install

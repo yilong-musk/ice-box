@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Fixed paths and env keys of the privileged helper installation.
 //!
 //! Shared contract between the installer modes of `crates/ice-helper`
