@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! TUN capture platform boundary (plan §4.5, T0 slice).
 //!
 //! `ice-tun-sys` owns the TUN mutation journal, the platform backend

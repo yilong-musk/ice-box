@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Pinned TLS GET (connect to pre-resolved IP, SNI = original hostname).
 
 use std::io::{Read, Write};

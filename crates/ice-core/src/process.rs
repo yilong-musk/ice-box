@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Child process spawn / terminate helpers.
 
 use std::fs::{File, OpenOptions};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Optional base64 outer wrapper decode.
 
 use std::borrow::Cow;

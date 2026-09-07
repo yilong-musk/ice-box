@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-or-later
 /**
  * Capture the Live Demo Home view into docs/images/home.png.
  * Matches the GitHub Pages iframe (1180x690), without the marketing window bar.

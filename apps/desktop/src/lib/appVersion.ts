@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { version } from "../../package.json";
 
 /** Desktop app version from `apps/desktop/package.json`. */

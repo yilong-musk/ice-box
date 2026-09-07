@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! On-disk `proxy-backup.json` and crash-recovery restore.
 
 use std::path::Path;

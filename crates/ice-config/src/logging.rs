@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared tracing setup for the desktop shell and crates.
 //!
 //! Convention: `tracing` + optional file append. Log rotation is deferred to a later slice.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Print the CHANGELOG.md section for a tag like v0.1.1 (or plain 0.1.1).
 # Usage: scripts/release-notes.sh v0.1.1
 set -euo pipefail

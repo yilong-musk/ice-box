@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ErrorAlert, OkAlert, WarnAlert } from "./StatusAlert";

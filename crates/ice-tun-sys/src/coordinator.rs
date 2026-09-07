@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Core coordination for the native sing-box ownership path (plan §5 T2).
 //!
 //! macOS T0 lock (§24.5.2): adapter creation, address assignment, and route

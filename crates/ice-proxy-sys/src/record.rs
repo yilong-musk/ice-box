@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Helpers that apply/restore and update `proxy-backup.json` atomically.
 
 use std::path::Path;

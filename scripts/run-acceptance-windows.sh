@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Run Windows acceptance (Git Bash): automated gate + headless G9 + live (--ignored) tests.
 # Live steps mutate the real WinInet Internet Settings and spawn real sing-box;
 # run only on a Windows host you are willing to let the script restore.

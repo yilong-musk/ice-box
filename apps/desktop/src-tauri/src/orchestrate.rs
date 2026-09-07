@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
 
 use ice_config::{

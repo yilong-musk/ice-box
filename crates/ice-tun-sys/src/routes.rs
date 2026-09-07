@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared auto-route model and route-probe helpers (plan §5 T2).
 //!
 //! The sub-range sets sing-box installs for `auto_route` on macOS (verified

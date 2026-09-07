@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `ss://` share link parsing (SIP002 and legacy formats).
 
 use base64::Engine;

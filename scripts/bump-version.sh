@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Bump the ice-box version across every version source and refresh Cargo.lock.
 # Usage: scripts/bump-version.sh 0.1.1
 set -euo pipefail

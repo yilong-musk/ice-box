@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! macOS system proxy via `/usr/sbin/networksetup`.
 
 use std::process::Command;

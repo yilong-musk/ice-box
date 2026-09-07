@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! AuthorizationServices FFI (macOS only).
 //!
 //! Uses the deprecated-but-functional `AuthorizationExecuteWithPrivileges`

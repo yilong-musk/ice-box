@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Copy platform sing-box into `resources/` for Tauri bundling (architecture §4.3).
 
 use std::env;

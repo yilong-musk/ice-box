@@ -1,75 +1,116 @@
+<div align="center">
+
+<a href="https://yilong-musk.github.io/ice-box/">
+  <img src="apps/desktop/src/assets/logo.png" alt="ice-box logo" width="112">
+</a>
+
 # ice-box
 
-Lightweight proxy client for **macOS** and **Windows**.  
-Tauri 2 + React, with a bundled [sing-box](https://github.com/SagerNet/sing-box) **1.13.19** core.
+**Proxy, kept simple.**
 
-[Live Demo](https://yilong-musk.github.io/ice-box/)
+A lightweight proxy client for macOS and Windows.<br>
+Easy to set up, quick to start, quiet once it runs — with a bundled [sing-box](https://github.com/SagerNet/sing-box) core underneath.
 
-[![ice-box Home](docs/images/home.png)](https://yilong-musk.github.io/ice-box/)
+[![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/github/downloads/yilong-musk/ice-box/total?style=flat-square)](https://github.com/yilong-musk/ice-box/releases)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555555?style=flat-square)](#install)
+[![Core](https://img.shields.io/badge/sing--box-1.13.19-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
+[![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-## Features
+[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
 
-- System proxy or TUN — the switch picks the **next** start, it does not hot-swap
-- Subscriptions: sing-box JSON, Clash, share-link lists; **one active** at a time
-- Rule / Global / Direct, node switch, latency test
-- Rule search, filter, custom rules
-- Live traffic on the home page
-- In-app updates from Settings (after installing 0.1.5 or later once)
+English · [简体中文](README.zh-CN.md)
 
-## Docs
+<br>
 
-- [Architecture](docs/architecture.md) — implementation spec
-- [TUN](docs/tun.md) — capture, elevation, Windows limits
-- [Release](docs/release-process.md)
+<a href="https://yilong-musk.github.io/ice-box/">
+  <img src="docs/images/home.png" alt="ice-box home page: proxy status, mode switches, exit node and a live traffic chart" width="880">
+</a>
 
-## Develop
+<sub>Curious before installing? The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the real desktop UI in your browser against a simulated backend.</sub>
 
-Rust (stable), Node.js 22, Xcode CLT on macOS.
+</div>
 
-```
-apps/desktop    UI + Tauri shell
-crates/         Rust workspace
-docs/
-```
+<br>
+
+## Install
+
+Grab the installer for your platform from the [latest release](https://github.com/yilong-musk/ice-box/releases/latest).
+
+| Platform | Installer | First launch |
+|---|---|---|
+| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | The app is unsigned. Right-click **ice-box.app** and choose **Open**, or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
+| **Windows** (x64) | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. The installer carries no Authenticode signature, so SmartScreen may ask you to confirm. |
+
+**Updating.** Starting with 0.1.5, ice-box checks GitHub Releases in the background (toggle in Settings) and installs signature-verified updates from **Settings → App Updates**. Installations older than 0.1.5 need one manual upgrade first.
+
+## Quick start
+
+1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. Turn on **Auto update** if you like.
+2. **Pick a mode and a node.** On **Home** choose **Rule**, **Global**, or **Direct**. On **Nodes** pick an exit and test its latency.
+3. **Start the proxy service.** Press the power button. The system proxy is applied (or the TUN adapter comes up when TUN Mode is enabled), and the traffic chart starts moving.
+
+No subscription yet? ice-box starts in direct-only mode, so the core, the capture, and the UI can be explored before anything is imported.
+
+## TUN mode
+
+TUN captures traffic at the network layer, covering apps that never read the system proxy. Enable it from Settings or Home. The switch only decides how the *next* start captures traffic; stopping the service always tears down whichever capture is active.
+
+| | macOS | Windows |
+|---|---|---|
+| **Setup** | The first enable installs a small privileged helper through the system authorization dialog. | The first enable shows one UAC prompt to create the `ice-box-tun` scheduled task. Later starts and stops do not prompt. |
+| **Coverage** | Dual-stack IPv4 + IPv6, TCP and UDP. | **IPv4 TCP only** on the current core. |
+
+Windows TUN on the pinned core:
+
+| Works | Does not work |
+|---|---|
+| IPv4 HTTPS and other TCP traffic | UDP / QUIC / HTTP3 |
+| System DNS via DoT / DoH | IPv6 |
+| Mixed inbound for diagnostics | fake-ip DNS |
+
+Need UDP or IPv6 on Windows? Use the system proxy. The full shape, elevation model, and rationale are in [`docs/tun.md`](docs/tun.md).
+
+## Development
+
+Rust (stable), Node.js 22, and the Xcode Command Line Tools on macOS.
 
 ```bash
 cd apps/desktop && npm install && cd ../..
-npm run fetch-singbox
+npm run fetch-singbox   # download the pinned sing-box core for this host
 npm run dev
 ```
 
 | Command | Purpose |
 |---|---|
-| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` | Pin the host |
-| `npm run gate` | fmt, clippy, tests, tsc, vitest |
-| `npm run acceptance` / `acceptance:tun` / `acceptance:win` | Live host gates |
+| `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` | Run against a specific host target |
+| `npm run gate` | fmt, clippy, Rust tests, tsc, vitest |
+| `npm run fetch-singbox && npm run build` | Build the macOS `.dmg` |
+| `npm run fetch-singbox -- win && npm run build:win` | Build the Windows NSIS installer |
+| `npm run acceptance` / `acceptance:tun` / `acceptance:win` | Live acceptance gates on a real host |
 
-## Build
-
-```bash
-npm run fetch-singbox && npm run build              # macOS .dmg
-npm run fetch-singbox -- win && npm run build:win   # Windows NSIS
+```
+apps/desktop    React UI + Tauri shell
+apps/website    GitHub Pages site and Live Demo
+crates/         Rust workspace: subscription, config, engine, proxy-sys, tun-sys, helper
+docs/           Architecture, TUN, release process
 ```
 
-macOS artifacts are **unsigned**. First launch: right-click → Open (or `xattr -dr com.apple.quarantine`).
-After 0.1.5 is installed, later versions can be installed from Settings → App updates.
+## Documentation
 
-## TUN
-
-Settings/Home TUN is the desired backend for the next start. Stopping the service tears down whichever capture is active.
-
-**macOS** — first use installs a privileged helper via the system authorization dialog.
-
-**Windows** — one UAC creates the `ice-box-tun` scheduled task. Capture is **IPv4 TCP only**:
-
-| Works | Does not work |
+| Document | What you will find |
 |---|---|
-| IPv4 HTTPS | UDP / QUIC / HTTP3 |
-| System DNS (DoT/DoH) | IPv6 |
-| Mixed inbound (diagnostics) | fake-ip DNS |
-
-Need UDP or IPv6 on Windows → use system proxy. Shape and limits: [docs/tun.md](docs/tun.md).
+| [`docs/architecture.md`](docs/architecture.md) | Implementation spec: processes, state machine, config generation, IPC contract |
+| [`docs/tun.md`](docs/tun.md) | TUN capture: platform shapes, elevation, known limits, live gates |
+| [`docs/release-process.md`](docs/release-process.md) | Version bump, changelog, gate, tag, release pipeline |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed in every release |
 
 ## License
 
-[MIT](LICENSE). Bundled sing-box remains [GPL-3.0-or-later](third_party/sing-box/LICENSE) (upstream naming restriction). See [NOTICE](NOTICE).
+ice-box is free software, released under the [GNU General Public License v3.0 or later](LICENSE). The bundled sing-box core is also [GPL-3.0-or-later](third_party/sing-box/LICENSE), with its upstream naming restriction; see [NOTICE](NOTICE) for all third-party notices.
+
+<div align="center">
+<br>
+<sub>Built with Tauri, React, and sing-box.</sub>
+</div>

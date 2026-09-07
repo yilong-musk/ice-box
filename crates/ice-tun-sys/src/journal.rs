@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `tun-state.json`: the TUN mutation journal (plan §4.4).
 //!
 //! The journal is a mutation log, not a final-state snapshot. It records

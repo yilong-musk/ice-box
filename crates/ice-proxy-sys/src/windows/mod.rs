@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! WinInet + WinHTTP system proxy (architecture §13.3, plan slice 4b).
 //!
 //! Live hive: per-connection WinInet API is the source of truth. `apply` writes

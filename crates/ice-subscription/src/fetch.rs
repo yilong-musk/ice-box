@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! HTTP fetch: direct (no system proxy), 20s timeout, 8 MiB cap.
 
 use std::io::Read;

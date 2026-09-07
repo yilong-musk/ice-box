@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Redact sensitive fields before exposing runtime config to the UI.
 
 use serde_json::Value;

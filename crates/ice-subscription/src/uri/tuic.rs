@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `tuic://` share link parsing → sing-box tuic outbound.
 
 use serde_json::{json, Value};

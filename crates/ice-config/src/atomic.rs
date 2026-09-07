@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Atomic file replace: write temp sibling → `rename`.
 
 use std::fs::{self, File};

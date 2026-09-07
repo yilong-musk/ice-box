@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! System tray: close → hide; Quit → Stop then exit.
 
 use crate::shutdown::{request_tray_quit, QuitOutcome};

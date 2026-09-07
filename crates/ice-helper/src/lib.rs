@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Privileged helper daemon core (plan §5 T5, macOS production path).
 //!
 //! The daemon runs as root under launchd. It owns exactly one capability:

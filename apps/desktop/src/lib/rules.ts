@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import type { RuleRow } from "../api/tauri";
 import { t, type MessageKey } from "./i18n";
 

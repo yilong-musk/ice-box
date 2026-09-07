@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Subscription URL validation (scheme + SSRF guard for fetch targets).
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};

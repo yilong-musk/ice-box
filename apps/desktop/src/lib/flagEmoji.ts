@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { polyfillCountryFlagEmojis } from "country-flag-emoji-polyfill";
 
 /** Must match the name in `index.css` font stacks. */

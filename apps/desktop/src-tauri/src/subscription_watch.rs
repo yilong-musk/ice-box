@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Background auto-update of subscriptions flagged with `auto_update`.
 
 use crate::commands;

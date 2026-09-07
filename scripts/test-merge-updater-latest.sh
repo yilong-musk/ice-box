@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Fixture tests for scripts/merge-updater-latest.sh.
 set -euo pipefail
 

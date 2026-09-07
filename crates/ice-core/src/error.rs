@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Core errors mapped to architecture §17 codes.
 
 use ice_config::{AppError, ErrorCode};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Resolve sing-box binary path (dev tree → resource).
 
 use std::path::{Path, PathBuf};

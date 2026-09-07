@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Background core health checks: reap exited sing-box and restore capture.
 
 use crate::capture::TrafficCapture;

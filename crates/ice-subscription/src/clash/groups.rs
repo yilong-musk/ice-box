@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Clash `proxy-groups` → sing-box selector / urltest / fallback / loadbalance outbounds.
 
 use std::collections::HashSet;

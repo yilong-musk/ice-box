@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Tauri IPC commands (architecture §14).
 
 use crate::capture::{only_tun_enabled_changed, tun_topology_changed, TrafficCapture, TunStatus};

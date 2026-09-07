@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Merged user-facing log view.
 //!
 //! Display-only concern: merges the app log (ice-box.log, `tracing` format) and the

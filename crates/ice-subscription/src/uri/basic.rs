@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Basic share links: `socks://`, `socks5://`, `http://`, `https://`, `wireguard://`.
 
 use serde_json::{json, Value};

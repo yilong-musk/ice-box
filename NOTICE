@@ -1,8 +1,18 @@
 ice-box
-Copyright (c) 2026 ice-box contributors
+Copyright (C) 2026 ice-box contributors
 
-This product is licensed under the MIT License. See the LICENSE file for the
-full text.
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full text. Each source file carries an
+`SPDX-License-Identifier: GPL-3.0-or-later` header.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Releases up to and including 0.1.6 were published under the MIT License; those
+releases keep that license.
 
 ------------------------------------------------------------------------------
 Third-party components

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Reload strategies for the running sing-box process.
 //!
 //! sing-box 1.13.x does not implement config reload through its Clash API

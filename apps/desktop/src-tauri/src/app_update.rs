@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! In-app update checks and installation (architecture §25).
 //!
 //! Integrity is minisign via `tauri-plugin-updater`. Apple / Authenticode

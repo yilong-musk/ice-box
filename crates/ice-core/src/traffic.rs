@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Persistent Clash `/traffic` stream, a rolling 60-second history, and a
 //! peak recomputed from that rolling window.
 //!

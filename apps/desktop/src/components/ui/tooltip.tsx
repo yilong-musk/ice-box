@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Run macOS acceptance: automated gate + headless G9 + live (--ignored) tests.
 set -euo pipefail
 

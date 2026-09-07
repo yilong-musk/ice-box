@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Build and validate the final sing-box JSON config.
 //!
 //! Also hosts shared DTOs / helpers: `AppError`, paths, settings, atomic IO, pid.

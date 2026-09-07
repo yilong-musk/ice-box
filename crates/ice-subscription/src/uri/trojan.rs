@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `trojan://` share link parsing → sing-box trojan outbound.
 
 use serde_json::{json, Value};

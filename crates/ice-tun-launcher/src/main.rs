@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Elevated launcher for the Windows TUN core (plan B: scheduled-task
 //! elevation).
 //!

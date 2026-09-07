@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Windows backend tests (plan §5 T2 shared exit gate; `windows_tun_ready`
 //! green since 2026-09-03 — host-free on every CI platform).
 //!

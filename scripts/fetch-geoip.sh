@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Fetch sing-box GeoIP rule-sets (sing-geoip, MIT-ish license, see repo LICENSE).
 # The binary .srs files are committed so builds stay offline.
 set -euo pipefail

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-free helper daemon end-to-end test (plan §5 T5).
 //!
 //! Starts the real `ice-helper` server logic (`serve_connection`) on a temp

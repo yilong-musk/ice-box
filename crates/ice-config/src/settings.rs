@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `settings.json` load / save (architecture §6.1).
 
 use std::fs;

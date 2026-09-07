@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Synthesize Tauri updater latest.json from signed release artifacts.
 # Usage: scripts/merge-updater-latest.sh <assets-dir> <tag> [notes-file]
 #

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Rule overrides: disabled subscription rules + user-added custom rules.
 //!
 //! Persisted at `rules.json` in the app data dir (architecture §6). Disabled rules are

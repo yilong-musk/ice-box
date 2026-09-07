@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! macOS TUN backend (architecture §24.5; `docs/tun.md`).
 //!
 //! Native sing-box ownership model (T0 lock): the elevated core — run by the

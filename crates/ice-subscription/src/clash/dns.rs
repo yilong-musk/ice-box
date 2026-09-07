@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Clash `dns` → sing-box `dns` block.
 //!
 //! Windows emission differs (`docs/tun.md`, locked

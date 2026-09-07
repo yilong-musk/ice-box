@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `vmess://` and `vless://` share link parsing → sing-box outbounds.
 
 use base64::Engine;

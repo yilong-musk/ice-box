@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import logoUrl from "../../desktop/src/assets/logo.png";
 import { version as appVersion } from "../../desktop/package.json";
 import "./style.css";
@@ -19,7 +21,7 @@ document.querySelector("#root").innerHTML = `
   <main id="top">
     <section class="hero page-wrap">
       <div class="hero-copy">
-        <h1>Control your<br><em>network, clearly.</em></h1>
+        <h1>Proxy,<br><em>kept simple.</em></h1>
       </div>
       <div class="hero-aside">
         <div class="hero-actions">
@@ -28,7 +30,7 @@ document.querySelector("#root").innerHTML = `
         </div>
         <div class="hero-meta">
           <span><b class="status-dot green"></b> ${displayVersion}</span>
-          <span>MIT licensed</span>
+          <span>GPL-3.0-or-later</span>
           <span>macOS · Windows</span>
         </div>
       </div>

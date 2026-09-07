@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Uninstall the ice-box privileged helper (plan §5 T5). Explicit opt-in,
 # requires root. Thin wrapper over the helper's privileged `uninstall` mode
 # (crates/ice-helper/src/install.rs, shared with the in-app dialog); it

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Ensure src-tauri/resources has the sing-box binary for the given platform.
 # PowerShell mirror of scripts/prepare-singbox-resource.sh for Windows hosts
 # without Git Bash. Usage: scripts/prepare-singbox-resource.ps1 [-Platform win]

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 mod acceptance;
 mod app_update;
 mod capture;

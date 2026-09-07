@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Start Tauri dev for a specific platform target.
 # Usage: scripts/dev.sh [host | mac-arm64 | mac-x64 | win]
 set -euo pipefail
