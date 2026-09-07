@@ -127,6 +127,7 @@ pub fn is_op_allowed(status: CoreStatus, op: CoreOp) -> bool {
         (CoreStatus::Running, CoreOp::Stop) => true,
         (CoreStatus::Starting, CoreOp::Stop) => true,
         (CoreStatus::Error | CoreStatus::Stopped, CoreOp::Stop) => true, // idempotent
+        (CoreStatus::Stopping, CoreOp::Stop) => true,                    // idempotent
         (CoreStatus::Running, CoreOp::Reload) => true,
         (CoreStatus::Starting | CoreStatus::Stopping, _) => false,
         (CoreStatus::Stopped | CoreStatus::Error, CoreOp::Reload) => false,
@@ -228,6 +229,12 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         if !is_op_allowed(self.state.status, CoreOp::Start) {
             return Err(reject_op(self.state.status, CoreOp::Start));
         }
+        if !looks_like_singbox_process(pid) {
+            return Err(CoreError::AdoptRejected(pid));
+        }
+        if paths.binary.is_file() && !process_image_matches_core(pid, &paths.binary) {
+            return Err(CoreError::AdoptRejected(pid));
+        }
 
         self.state.status = CoreStatus::Starting;
         self.state.message = None;
@@ -316,7 +323,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     pub fn stop(&mut self, pid_file: &Path) -> Result<(), CoreError> {
         match self.state.status {
             CoreStatus::Stopping => {
-                return Err(reject_op(self.state.status, CoreOp::Stop));
+                // Spec: stop is best-effort idempotent. An in-flight stop
+                // owns the transition; a second call must not reject.
+                return Ok(());
             }
             CoreStatus::Starting => {
                 self.state.status = CoreStatus::Stopping;
@@ -997,18 +1006,29 @@ fn pid_is_alive(pid: u32) -> bool {
 }
 
 fn looks_like_singbox_process(pid: u32) -> bool {
+    process_image_path(pid)
+        .map(|path| path.to_ascii_lowercase().contains("sing-box"))
+        .unwrap_or(false)
+}
+
+/// Command / image path of `pid`, used for adopt identity checks.
+fn process_image_path(pid: u32) -> Option<String> {
     #[cfg(unix)]
     {
         use std::process::Command;
-        let output = match Command::new("ps")
+        let output = Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "command="])
             .output()
-        {
-            Ok(o) if o.status.success() => o,
-            _ => return false,
-        };
-        let cmd = String::from_utf8_lossy(&output.stdout);
-        cmd.contains("sing-box")
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let cmd = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if cmd.is_empty() {
+            None
+        } else {
+            Some(cmd)
+        }
     }
     #[cfg(windows)]
     {
@@ -1020,24 +1040,39 @@ fn looks_like_singbox_process(pid: u32) -> bool {
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if handle.is_null() {
-                return false;
+                return None;
             }
             let mut buf = [0u16; 512];
             let mut size = buf.len() as u32;
             let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
             CloseHandle(handle);
             if ok == 0 {
-                return false;
+                return None;
             }
-            let path = String::from_utf16_lossy(&buf[..size as usize]);
-            path.to_ascii_lowercase().contains("sing-box")
+            Some(String::from_utf16_lossy(&buf[..size as usize]))
         }
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
-        false
+        None
     }
+}
+
+fn process_image_matches_core(pid: u32, core: &Path) -> bool {
+    let Some(image) = process_image_path(pid) else {
+        return false;
+    };
+    let image_path = Path::new(image.split_whitespace().next().unwrap_or(&image));
+    if let (Ok(left), Ok(right)) = (image_path.canonicalize(), core.canonicalize()) {
+        return left == right;
+    }
+    let image_name = image_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let core_name = core.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    !core_name.is_empty() && image_name.eq_ignore_ascii_case(core_name)
 }
 
 /// Best-effort kill of a pid; returns whether the TERM signal was delivered.
@@ -1163,6 +1198,19 @@ mod tests {
         )
     }
 
+    #[test]
+    fn adopt_external_rejects_this_process_pid() {
+        let dir = temp_root("adopt");
+        let paths = paths_in(&dir, PathBuf::from("/nope"));
+        let mut core = CoreController::new();
+        let err = core
+            .adopt_external(std::process::id(), &paths)
+            .expect_err("test process is not sing-box");
+        assert!(matches!(err, CoreError::AdoptRejected(_)));
+        assert_eq!(err.code(), ice_config::ErrorCode::CoreAdoptRejected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     // --- G2.1 ---
 
     #[test]
@@ -1174,7 +1222,6 @@ mod tests {
             (CoreStatus::Starting, CoreOp::Reload),
             (CoreStatus::Stopping, CoreOp::Start),
             (CoreStatus::Stopping, CoreOp::Reload),
-            (CoreStatus::Stopping, CoreOp::Stop),
             (CoreStatus::Running, CoreOp::Start),
         ];
 
@@ -1215,6 +1262,7 @@ mod tests {
         assert!(is_op_allowed(CoreStatus::Starting, CoreOp::Stop));
         assert!(is_op_allowed(CoreStatus::Stopped, CoreOp::Stop));
         assert!(is_op_allowed(CoreStatus::Error, CoreOp::Stop));
+        assert!(is_op_allowed(CoreStatus::Stopping, CoreOp::Stop));
     }
 
     #[test]
@@ -1316,6 +1364,23 @@ mod tests {
         core.stop(&paths.pid_file).expect("stop2");
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert!(core.state().inbound_host.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stop_while_stopping_is_ok() {
+        let dir = temp_root("stop-stopping");
+        let paths = paths_in(&dir, PathBuf::from("/unused"));
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        core.state.status = CoreStatus::Stopping;
+        core.stop(&paths.pid_file).expect("stop while stopping");
+        core.stop(&paths.pid_file)
+            .expect("stop while stopping again");
+        assert_eq!(core.state().status, CoreStatus::Stopping);
         let _ = fs::remove_dir_all(&dir);
     }
 

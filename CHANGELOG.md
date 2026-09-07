@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README redesigned around the product (hero, install, quick start, TUN) with a
   Simplified Chinese edition in `README.zh-CN.md`; the website tagline is now
   "Proxy, kept simple."
+- CI `scripts/gate.sh` runs `cargo test --workspace` (lib + integration +
+  doc tests), so the TUN integration suite in `crates/ice-tun-sys/tests/`
+  actually executes. The local pre-commit gate keeps `--lib` and adds
+  `cargo test -p ice-tun-sys --tests`. The Windows CI job runs
+  `ice-proxy-sys` tests.
 
 ### Fixed
 
@@ -23,6 +28,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   day-of-week flag, not a description).
 - Windows TUN elevation no longer flashes a console window (UAC launches
   the GUI-subsystem `ice-tun-launcher` instead of `cmd.exe`).
+- Windows NSIS actually bundles `libcronet.dll` next to `sing-box.exe`
+  (NaiveProxy). Earlier notes claimed it shipped, but it was only copied
+  into `resources/` and omitted from `bundle.resources`.
+- Elevated sing-box no longer loads a user-writable config as-is: helper
+  and Windows launcher sanitise JSON (`ice-config-guard`) and start from a
+  root/admin-owned copy (`tun.config_rejected`). Subscription parse skips
+  disallowed outbound types with warnings.
+- Windows TUN copies launcher/core into `%ProgramData%\ice-box\bin`,
+  imports task XML from that directory (not the user data dir), and
+  verifies `Exec/Command` plus the baked `--data` config path.
+- Helper token file is `0600` owned by the installing uid (uid check
+  remains the primary control).
+- `adopt_external` refuses pids that are not the bundled sing-box
+  (`core.adopt_rejected`) and re-checks process start time before kill.
+- `force_tun_gate_ready` is compiled only for tests / the `test-hooks`
+  feature.
+- macOS helper `SetDns` validates the service name and DNS server
+  literals in the daemon before running `networksetup`
+  (`tun.invalid_argument`).
+- macOS TUN verify fails closed when the DNS probe errors instead of
+  treating unknown DNS as consistent.
+- `CoreController::stop` is idempotent while `Stopping` (spec: repeated
+  stops succeed).
+- Tray quit classifies a poisoned lock by `app.lock_poisoned` instead of
+  a message substring.
+- TUN network CIDR helper rejects IPv4 prefix > 32 and IPv6 prefix > 128
+  instead of underflowing the mask.
 
 ## [0.1.6] - 2026-09-06
 

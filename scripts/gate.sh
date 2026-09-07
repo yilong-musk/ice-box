@@ -12,8 +12,8 @@ cargo fmt --check
 echo "== cargo clippy =="
 cargo clippy --workspace --all-targets -- -D warnings
 
-echo "== cargo test (lib) =="
-cargo test --workspace --lib
+echo "== cargo test (workspace: lib + integration + doc) =="
+cargo test --workspace
 
 echo "== tsc --noEmit =="
 cd apps/desktop

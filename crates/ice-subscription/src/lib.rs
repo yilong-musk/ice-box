@@ -21,12 +21,12 @@ const MAX_FETCH_CONCURRENCY: usize = 8;
 mod tests_g5 {
     use super::{
         detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
-        normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_uri_list_profile,
-        resolve_selected_tag, set_active, set_auto_update, write_subscription_error,
-        AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate, HttpFetcher,
-        MockFetchMode, MockFetcher, SubscriptionError, SubscriptionFormat, SubscriptionManager,
-        SubscriptionMeta, SubscriptionPaths, CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES,
-        MAX_URI_LINES,
+        normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
+        parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
+        write_subscription_error, AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate,
+        HttpFetcher, MockFetchMode, MockFetcher, SubscriptionError, SubscriptionFormat,
+        SubscriptionManager, SubscriptionMeta, SubscriptionPaths, CLASH_SUPPORTED_TYPES,
+        MAX_CLASH_PROXIES, MAX_URI_LINES,
     };
     use base64::Engine;
     use chrono::{Duration as ChronoDuration, Utc};
@@ -162,6 +162,25 @@ mod tests_g5 {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].tag, "node-a");
         assert_eq!(nodes[0].outbound["type"], "socks");
+    }
+
+    #[test]
+    fn singbox_parse_skips_disallowed_outbound_types() {
+        let raw = r#"{
+            "outbounds": [
+                { "type": "socks", "tag": "ok", "server": "1.1.1.1", "server_port": 1080 },
+                { "type": "tor", "tag": "evil", "executable_path": "/usr/bin/tor" }
+            ]
+        }"#;
+        let profile = parse_singbox_profile(raw).unwrap();
+        assert_eq!(profile.nodes.len(), 1);
+        assert_eq!(profile.nodes[0].tag, "ok");
+        assert_eq!(profile.parse_stats.skipped_proxies, 1);
+        assert!(profile
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.contains("tor")));
     }
 
     #[test]
@@ -1369,6 +1388,7 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
 
     let mut nodes = Vec::new();
     let mut groups = Vec::new();
+    let mut parse_stats = ProfileParseStats::default();
 
     if let Some(outbounds) = value
         .get("outbounds")
@@ -1382,12 +1402,27 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("outbound-{idx}"));
+            if let Err(err) = ice_config_guard::check_outbound(item) {
+                let is_group = matches!(
+                    ty,
+                    "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance"
+                );
+                if is_group {
+                    parse_stats.skipped_groups += 1;
+                } else {
+                    parse_stats.skipped_proxies += 1;
+                }
+                parse_stats
+                    .warnings
+                    .push(format!("skipped outbound {tag}: {err}"));
+                continue;
+            }
             let entry = NormalizedOutbound {
                 tag: tag.clone(),
                 outbound: item.clone(),
             };
             match ty {
-                "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance" => {
+                "selector" | "urltest" => {
                     groups.push(entry);
                 }
                 "direct" | "block" | "dns" => {}
@@ -1436,7 +1471,7 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         route,
         dns: value.get("dns").cloned(),
         default_outbound,
-        parse_stats: ProfileParseStats::default(),
+        parse_stats,
     })
 }
 

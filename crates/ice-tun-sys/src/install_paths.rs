@@ -36,3 +36,8 @@ pub const ENV_CORE_BIN_SHA256: &str = "ICE_HELPER_CORE_BIN_SHA256";
 pub const ENV_CORE_LOG: &str = "ICE_HELPER_CORE_LOG";
 pub const ENV_ALLOWED_UID: &str = "ICE_HELPER_ALLOWED_UID";
 pub const ENV_SOCKET: &str = "ICE_BOX_TUN_HELPER_SOCKET";
+/// Bundled resources directory (geoip `.srs` files). Recorded at install
+/// from the core source's parent; `Start` sanitises `rule_set` paths against it.
+pub const ENV_RESOURCES_DIR: &str = "ICE_HELPER_RESOURCES_DIR";
+/// Root-owned directory for the sanitised runtime config the helper starts.
+pub const CORE_RUN_DIR: &str = "/Library/PrivilegedHelperTools/com.yilong-musk.icebox/run";

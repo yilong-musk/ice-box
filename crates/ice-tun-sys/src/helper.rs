@@ -31,7 +31,7 @@ use crate::helper_protocol::{
 pub const ENV_HELPER_SOCKET: &str = "ICE_BOX_TUN_HELPER_SOCKET";
 /// Env override for the per-installation token (dev / acceptance). The
 /// production client reads the token file the installer wrote into the app
-/// data dir (`helper-token`, mode 0644, root-owned).
+/// data dir (`helper-token`, mode 0600, owned by the installing uid).
 pub const ENV_HELPER_TOKEN: &str = "ICE_BOX_TUN_HELPER_TOKEN";
 /// Token file name inside the app data dir, written by the installer.
 pub const HELPER_TOKEN_FILE: &str = "helper-token";
@@ -228,6 +228,7 @@ impl CoreCoordinator for HelperCoreCoordinator {
     }
 
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+        crate::helper_protocol::validate_set_dns(service, servers)?;
         let response = self.request(HelperCommand::SetDns {
             service: service.to_string(),
             servers: servers.to_vec(),

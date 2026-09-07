@@ -44,7 +44,7 @@ use uuid::Uuid;
 
 fn lock_poisoned(context: &str) -> AppError {
     AppError::new(
-        ErrorCode::ConfigInvalid,
+        ErrorCode::LockPoisoned,
         format!("internal lock poisoned: {context}"),
     )
 }
@@ -988,38 +988,20 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
             ),
         ));
     }
-    // Recreate when the task is missing *or* the stored pin no longer matches
-    // the bundled launcher/core (app update, or a replaced binary). `/F` on
-    // the create argv overwrites the existing task after one UAC prompt.
+    // Recreate when the task is missing *or* the stored pin / Command no
+    // longer matches the protected copies (app update, or a replaced binary).
     if ice_tun_sys::tun_task_exists() && ice_tun_sys::tun_task_pin_matches(&launcher) {
         return Ok(());
     }
-    let launcher_sha = ice_tun_sys::sha256_of_file(&launcher).map_err(|err| {
-        AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!("hash TUN launcher: {err}"),
-        )
-    })?;
-    let core_sha = ice_tun_sys::sha256_of_file(&core).map_err(|err| {
-        AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!("hash TUN core: {err}"),
-        )
-    })?;
-    let pin = ice_tun_sys::format_tun_task_pin(&launcher_sha, &core_sha);
-    let xml_path = data_dir.join("ice-box-tun.xml");
-    ice_tun_sys::write_tun_task_xml(&xml_path, &launcher, &data_dir, &pin).map_err(|err| {
-        AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!("write TUN task XML: {err}"),
-        )
-    })?;
-    let args = ice_tun_sys::tun_task_xml_create_args(&xml_path);
+    let install_args = vec![
+        "--install".to_string(),
+        "--data".to_string(),
+        data_dir.to_string_lossy().into_owned(),
+    ];
     let create_result = if ice_tun_sys::process_is_elevated() {
-        // Already elevated: run schtasks directly (no UAC prompt).
         use std::os::windows::process::CommandExt;
-        let status = std::process::Command::new("schtasks.exe")
-            .args(&args)
+        let status = std::process::Command::new(&launcher)
+            .args(&install_args)
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
             .map_err(|err| {
@@ -1037,17 +1019,9 @@ fn ensure_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
             Err(err) => Err(err),
         }
     } else {
-        run_elevated_launcher(
-            &launcher,
-            &[
-                "--install-task".to_string(),
-                "--xml".to_string(),
-                xml_path.to_string_lossy().into_owned(),
-            ],
-        )
+        run_elevated_launcher(&launcher, &install_args)
     };
     let pin_ok = ice_tun_sys::tun_task_exists() && ice_tun_sys::tun_task_pin_matches(&launcher);
-    let _ = std::fs::remove_file(&xml_path);
     create_result?;
     if !pin_ok {
         tracing::warn!("TUN scheduled task missing or pin not persisted after the setup run");
@@ -1068,18 +1042,14 @@ fn ensure_tun_elevation_inner(_app: &AppHandle, _state: &AppState) -> Result<(),
 
 #[cfg(target_os = "windows")]
 fn remove_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
-    if !ice_tun_sys::tun_task_exists() {
+    let (launcher, _) = tun_task_paths(app, state)?;
+    if !ice_tun_sys::tun_task_exists() && !launcher.is_file() {
         return Ok(());
     }
-    let args = vec![
-        "/Delete".to_string(),
-        "/TN".to_string(),
-        ice_tun_sys::TUN_TASK_NAME.to_string(),
-        "/F".to_string(),
-    ];
-    if ice_tun_sys::process_is_elevated() {
+    let args = vec!["--delete-task".to_string()];
+    if ice_tun_sys::process_is_elevated() && launcher.is_file() {
         use std::os::windows::process::CommandExt;
-        let status = std::process::Command::new("schtasks.exe")
+        let status = std::process::Command::new(&launcher)
             .args(&args)
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
@@ -1095,9 +1065,10 @@ fn remove_tun_elevation_inner(app: &AppHandle, state: &AppState) -> Result<(), A
                 "the TUN scheduled task could not be deleted",
             ));
         }
+    } else if launcher.is_file() {
+        run_elevated_launcher(&launcher, &args)?;
     } else {
-        let (launcher, _) = tun_task_paths(app, state)?;
-        run_elevated_launcher(&launcher, &["--delete-task".to_string()])?;
+        return Ok(());
     }
     reset_tun_task_cache(state);
     Ok(())

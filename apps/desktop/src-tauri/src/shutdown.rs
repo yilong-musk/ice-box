@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 fn lock_poisoned(context: &str) -> AppError {
     AppError::new(
-        ErrorCode::ConfigInvalid,
+        ErrorCode::LockPoisoned,
         format!("internal lock poisoned: {context}"),
     )
 }
@@ -133,7 +133,7 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
             }
             QuitOutcome::ProxyRestoreFailed
         }
-        Err(err) if err.message.contains("lock poisoned") => {
+        Err(err) if err.code == ErrorCode::LockPoisoned.as_str() => {
             tracing::error!(error = %err, "tray quit: lock poisoned");
             QuitOutcome::LockPoisoned
         }
@@ -415,5 +415,12 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn lock_poisoned_uses_stable_app_code() {
+        let err = lock_poisoned("core");
+        assert_eq!(err.code, ErrorCode::LockPoisoned.as_str());
+        assert!(err.message.contains("lock poisoned"));
     }
 }

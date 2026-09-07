@@ -1,0 +1,9 @@
+[package]
+name = "ice-config-guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Allowlist sanitizer for elevated sing-box JSON configs"
+
+[dependencies]
+serde_json = { workspace = true }

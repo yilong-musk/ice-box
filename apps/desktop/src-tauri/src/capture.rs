@@ -44,7 +44,7 @@ use crate::orchestrate::{
 
 fn lock_poisoned(context: &str) -> AppError {
     AppError::new(
-        ErrorCode::ConfigInvalid,
+        ErrorCode::LockPoisoned,
         format!("internal lock poisoned: {context}"),
     )
 }

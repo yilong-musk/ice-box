@@ -184,7 +184,13 @@ impl MacOsHost for ProcessMacOsHost {
     fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError> {
         let out = run_command("networksetup", &["-getdnsservers", service])?;
         if out.status != Some(0) {
-            return Ok(Vec::new());
+            return Err(TunError::new(
+                TunErrorCode::HealthcheckFailed,
+                format!(
+                    "networksetup -getdnsservers {service} failed: {}",
+                    out.stderr.trim()
+                ),
+            ));
         }
         Ok(parse_dns_servers(&out.stdout))
     }
@@ -605,6 +611,41 @@ impl MacosTunBackend {
         }
         Ok(false)
     }
+
+    /// Probe whether live DNS still matches the journaled `dns_after` snapshot.
+    ///
+    /// `None` means the probe itself failed (unknown). Fail-closed callers
+    /// must not treat unknown as consistent, and must not treat unknown as
+    /// "not owned".
+    fn dns_matches_after(&self, after: &DnsSnapshot) -> Option<bool> {
+        let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+        match self.host.dns_servers(&service) {
+            Ok(current) => Some(current == expected),
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    service = %service,
+                    "macos tun dns probe failed"
+                );
+                None
+            }
+        }
+    }
+
+    /// `(dns_consistent, dns_owned)` for an applied capture.
+    ///
+    /// Unknown probe → not consistent (cannot mark enabled) and still owned
+    /// (cannot mark cleanup complete).
+    fn dns_verify_flags(&self, applied: &AppliedTun) -> (bool, bool) {
+        match &applied.dns_after {
+            None => (true, false),
+            Some(after) => match self.dns_matches_after(after) {
+                Some(true) => (true, true),
+                Some(false) => (false, false),
+                None => (false, true),
+            },
+        }
+    }
 }
 
 impl TunBackend for MacosTunBackend {
@@ -799,17 +840,9 @@ impl TunBackend for MacosTunBackend {
             // No interface was ever claimed: nothing owned — unless DNS is
             // still applied (recovery must restore it before reporting
             // clean, so `nothing_owned` must be false while the platform
-            // still carries the applied `after` snapshot).
-            let dns_owned = match &applied.dns_after {
-                Some(after) => {
-                    let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                    self.host
-                        .dns_servers(&service)
-                        .map(|current| current == expected)
-                        .unwrap_or(false)
-                }
-                None => false,
-            };
+            // still carries the applied `after` snapshot, and a failed DNS
+            // probe must not look clean either).
+            let (_dns_consistent, dns_owned) = self.dns_verify_flags(applied);
             return Ok(TunHealth {
                 interface_up: false,
                 addresses_present: false,
@@ -848,30 +881,11 @@ impl TunBackend for MacosTunBackend {
         // DNS consistency: the primary service must still carry the resolvers
         // the apply recorded (compare against the *after* snapshot; an
         // external DNS change is never silently overwritten by restore).
-        let dns_consistent = match &applied.dns_after {
-            Some(after) => {
-                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                self.host
-                    .dns_servers(&service)
-                    .map(|current| current == expected)
-                    .unwrap_or(true)
-            }
-            None => true,
-        };
+        // A failed probe is unknown: not consistent (fail the enable
+        // transition) and still owned (do not report cleanup complete).
+        let (dns_consistent, dns_owned) = self.dns_verify_flags(applied);
         let interface_gone = state.is_none();
         let owned_routes_remain = self.owned_routes_remain(applied, name)?;
-        // DNS is still "owned" only while the platform carries the applied
-        // `after` snapshot; after a restore (or an external change) it is not.
-        let dns_owned = match &applied.dns_after {
-            Some(after) => {
-                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                self.host
-                    .dns_servers(&service)
-                    .map(|current| current == expected)
-                    .unwrap_or(false)
-            }
-            None => false,
-        };
         let nothing_owned = interface_gone && !owned_routes_remain && !dns_owned;
         let health = TunHealth {
             interface_up,

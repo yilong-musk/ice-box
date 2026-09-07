@@ -18,8 +18,10 @@
 //! - The installed core's SHA-256 is pinned in the launchd plist; the daemon
 //!   refuses to start when the on-disk binary does not match.
 //! - The per-installation token is generated here (inside the elevated
-//!   process, from `/dev/urandom`) and written root-owned 0644 into the app
-//!   data dir.
+//!   process, from `/dev/urandom`) and written `0600` owned by the
+//!   installing uid. The daemon runs as root and can still read it; other
+//!   users cannot. The peer uid check is the primary control; the token is
+//!   secondary.
 //! - Logs are recreated as root-owned fixed files so a stale symlink can
 //!   never become the target of a privileged append.
 
@@ -29,9 +31,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub use ice_tun_sys::install_paths::{
-    CORE_BIN_DEST, CORE_BIN_DEST_DIR, CORE_LOG_DEST, ENV_ALLOWED_UID, ENV_CORE_BIN,
-    ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_SOCKET, ENV_TOKEN, HELPER_BIN_DEST,
-    HELPER_LOG_DEST, LAUNCHD_LABEL, PLIST_DEST, SOCKET_PATH, TOKEN_FILE_NAME,
+    CORE_BIN_DEST, CORE_BIN_DEST_DIR, CORE_LOG_DEST, CORE_RUN_DIR, ENV_ALLOWED_UID, ENV_CORE_BIN,
+    ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_RESOURCES_DIR, ENV_SOCKET, ENV_TOKEN,
+    HELPER_BIN_DEST, HELPER_LOG_DEST, LAUNCHD_LABEL, PLIST_DEST, SOCKET_PATH, TOKEN_FILE_NAME,
 };
 
 /// The installer must be running as root; everything below is a privileged
@@ -99,6 +101,20 @@ fn chown_root(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn chown_uid(path: &Path, uid: u32) -> Result<(), String> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| format!("path contains NUL: {}", path.display()))?;
+    let rc = unsafe { libc::chown(c_path.as_ptr(), uid, 0) };
+    if rc != 0 {
+        return Err(format!(
+            "chown uid {uid} {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
         .map_err(|e| format!("chmod {mode:o} {}: {e}", path.display()))
@@ -134,6 +150,7 @@ pub fn xml_escape(input: &str) -> String {
 
 /// Render the launchd plist that pins token / data dir / core binary (with
 /// SHA-256) / log / authorized uid / socket. Host-free and tested.
+#[allow(clippy::too_many_arguments)]
 pub fn render_plist(
     token: &str,
     data_dir: &Path,
@@ -142,6 +159,7 @@ pub fn render_plist(
     core_log: &str,
     allowed_uid: u32,
     socket: &str,
+    resources_dir: &Path,
 ) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -176,6 +194,8 @@ pub fn render_plist(
     <string>{allowed_uid}</string>
     <key>{ENV_SOCKET}</key>
     <string>{socket}</string>
+    <key>{ENV_RESOURCES_DIR}</key>
+    <string>{}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>{HELPER_LOG_DEST}</string>
@@ -185,7 +205,17 @@ pub fn render_plist(
 </plist>
 "#,
         xml_escape(&data_dir.display().to_string()),
+        xml_escape(&resources_dir.display().to_string()),
     )
+}
+
+/// Bundled resources live next to the source core (app `resources/`), not
+/// next to the root-owned copy the helper executes.
+fn resources_dir_from_core_src(core_src: &Path) -> PathBuf {
+    core_src
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(CORE_BIN_DEST_DIR))
 }
 
 /// `launchctl bootstrap system <plist>`. `bootout` failure is ignored (first
@@ -232,13 +262,13 @@ pub fn install(data_dir: &Path, core_src: &Path, allowed_uid: u32) -> Result<(),
         return Err(format!("helper binary not found: {}", helper_src.display()));
     }
 
-    // 1. Per-installation token (root-owned 0644 in the app data dir).
+    // 1. Per-installation token (installing-uid owned 0600 in the app data dir).
     let token = generate_token()?;
     let token_file = data_dir.join(TOKEN_FILE_NAME);
     fs::write(&token_file, format!("{token}\n"))
         .map_err(|e| format!("write token {}: {e}", token_file.display()))?;
-    chown_root(&token_file)?;
-    set_mode(&token_file, 0o644)?;
+    chown_uid(&token_file, allowed_uid)?;
+    set_mode(&token_file, 0o600)?;
 
     // 2. Helper binary, root-owned 0755.
     copy_root_owned(&helper_src, Path::new(HELPER_BIN_DEST), 0o755)?;
@@ -250,6 +280,12 @@ pub fn install(data_dir: &Path, core_src: &Path, allowed_uid: u32) -> Result<(),
         set_mode(dir, 0o755)?;
     }
     let core_sha256 = sha256_of_file(Path::new(CORE_BIN_DEST))?;
+
+    // 3b. Root-owned run dir for the sanitised config (0700).
+    let run_dir = Path::new(CORE_RUN_DIR);
+    fs::create_dir_all(run_dir).map_err(|e| format!("mkdir {}: {e}", run_dir.display()))?;
+    chown_root(run_dir)?;
+    set_mode(run_dir, 0o700)?;
 
     // 4. Root-owned fixed log files (stale symlink can never be appended to).
     for log in [CORE_LOG_DEST, HELPER_LOG_DEST] {
@@ -268,6 +304,7 @@ pub fn install(data_dir: &Path, core_src: &Path, allowed_uid: u32) -> Result<(),
         CORE_LOG_DEST,
         allowed_uid,
         SOCKET_PATH,
+        &resources_dir_from_core_src(core_src),
     );
     fs::write(PLIST_DEST, plist).map_err(|e| format!("write plist {PLIST_DEST}: {e}"))?;
     chown_root(Path::new(PLIST_DEST))?;
@@ -300,6 +337,8 @@ pub fn uninstall(data_dir: &Path) -> Result<(), String> {
         PathBuf::from(HELPER_LOG_DEST),
         PathBuf::from(SOCKET_PATH),
         data_dir.join(TOKEN_FILE_NAME),
+        PathBuf::from(CORE_RUN_DIR).join("config.json"),
+        PathBuf::from(CORE_RUN_DIR).join("cache.db"),
     ] {
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -309,6 +348,7 @@ pub fn uninstall(data_dir: &Path) -> Result<(), String> {
             }
         }
     }
+    let _ = fs::remove_dir(Path::new(CORE_RUN_DIR));
     let _ = fs::remove_dir(Path::new(CORE_BIN_DEST_DIR));
 
     tracing::info!("ice-helper uninstalled");
@@ -351,6 +391,7 @@ mod tests {
             CORE_LOG_DEST,
             501,
             SOCKET_PATH,
+            Path::new("/Applications/ice-box.app/Contents/Resources"),
         );
         assert!(plist.contains("<string>com.yilong-musk.icebox.helper</string>"));
         assert!(plist.contains("<string>tok123</string>"));
@@ -369,6 +410,7 @@ mod tests {
             ENV_CORE_LOG,
             ENV_ALLOWED_UID,
             ENV_SOCKET,
+            ENV_RESOURCES_DIR,
         ] {
             assert!(plist.contains(&format!("<key>{key}</key>")), "{key}");
         }
@@ -384,6 +426,7 @@ mod tests {
             CORE_LOG_DEST,
             501,
             SOCKET_PATH,
+            Path::new("/Applications/ice-box.app/Contents/Resources"),
         );
         assert!(plist.contains("&amp;"));
         assert!(plist.contains("&lt;"));

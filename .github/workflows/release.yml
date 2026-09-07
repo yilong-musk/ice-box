@@ -43,8 +43,8 @@ jobs:
       - name: Headless macOS acceptance (G9.1 / G9.6 / G9.7)
         run: cargo test -p ice-box --lib 'g9_' -- --nocapture
 
-      - name: macOS proxy-sys unit tests
-        run: cargo test -p ice-proxy-sys --lib
+      - name: macOS proxy-sys tests
+        run: cargo test -p ice-proxy-sys
 
       - name: Build app bundle (tauri build)
         env:
@@ -118,6 +118,9 @@ jobs:
       - name: Headless acceptance (G9.1 / G9.6 / G9.7)
         run: cargo test -p ice-box --lib 'g9_' -- --nocapture
 
+      - name: Windows proxy-sys tests
+        run: cargo test -p ice-proxy-sys
+
       - name: Build app bundle (tauri build, NSIS)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -138,6 +141,34 @@ jobs:
           test -s "${sig[0]}"
           echo "nsis installer: ${exe[0]}"
           echo "updater signature: ${sig[0]}"
+
+      - name: Verify Windows NSIS payload (sing-box, libcronet, launcher)
+        run: |
+          shopt -s nullglob
+          exe=(target/release/bundle/nsis/*-setup.exe)
+          if [[ "${#exe[@]}" -eq 0 ]]; then
+            exe=(target/release/bundle/nsis/*.exe)
+          fi
+          test "${#exe[@]}" -ge 1
+          listing=""
+          if command -v 7z >/dev/null; then
+            listing=$(7z l "${exe[0]}")
+          elif [[ -x "/c/Program Files/7-Zip/7z.exe" ]]; then
+            listing=$("/c/Program Files/7-Zip/7z.exe" l "${exe[0]}")
+          else
+            echo "7z not found; falling back to target/release resources"
+            test -f target/release/sing-box.exe
+            test -f target/release/libcronet.dll
+            test -f target/release/ice-tun-launcher.exe
+            exit 0
+          fi
+          echo "$listing"
+          for name in sing-box.exe libcronet.dll ice-tun-launcher.exe; do
+            echo "$listing" | grep -Fq "$name" || {
+              echo "missing $name in NSIS payload"
+              exit 1
+            }
+          done
 
       - name: Upload NSIS artifacts
         uses: actions/upload-artifact@v6

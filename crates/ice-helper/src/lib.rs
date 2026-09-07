@@ -2,12 +2,12 @@
 
 //! Privileged helper daemon core (plan §5 T5, macOS production path).
 //!
-//! The daemon runs as root under launchd. It owns exactly one capability:
-//! start the bundled sing-box with an allowlisted config path and terminate
-//! it again (TERM→KILL with bounded grace). sing-box owns the adapter /
-//! routes / DNS; `ice-tun-sys` coordinates and verifies (T0 lock §24.5.5),
-//! so the helper never needs route / adapter / DNS primitives and its IPC
-//! surface stays narrow (plan §7).
+//! The daemon runs as root under launchd. It owns a narrow privileged
+//! surface: start the bundled sing-box with an allowlisted config path,
+//! stop it (TERM→KILL with bounded grace), and apply validated `SetDns`
+//! updates via `networksetup`. sing-box owns the adapter / routes; the
+//! helper never accepts a binary path, interface name, or shell string
+//! from the client.
 //!
 //! Security model:
 //!
@@ -16,10 +16,13 @@
 //!   user (the uid the installer recorded). Everything else is rejected
 //!   before the frame is read.
 //! - The request must carry the per-installation token (constant-time
-//!   compare) and protocol version 1.
+//!   compare) and protocol version 2.
 //! - `Start` accepts a config path only when it canonicalizes inside the
-//!   data directory the daemon was installed with. The core binary path is
-//!   fixed at install; the client never supplies it.
+//!   data directory the daemon was installed with. The JSON is then
+//!   sanitised (`ice-config-guard`) and written to a root-owned run dir;
+//!   sing-box is started from that copy, never from the user-writable file.
+//! - The core binary path is fixed at install; the client never supplies it.
+//! - `SetDns` is validated (`validate_set_dns`) before `networksetup` runs.
 //!
 //! The server logic is host-free (inject the peer uid and a fake core
 //! binary), so the same code tests on Linux and macOS CI. On non-unix
@@ -30,7 +33,7 @@
 mod imp {
     use std::fs::OpenOptions;
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
@@ -38,8 +41,8 @@ mod imp {
 
     use ice_tun_sys::error::{TunError, TunErrorCode};
     use ice_tun_sys::helper_protocol::{
-        validate_config_path, HelperCommand, HelperRequest, HelperResponse, MAX_FRAME_BYTES,
-        PROTOCOL_VERSION,
+        validate_config_path, validate_set_dns, HelperCommand, HelperRequest, HelperResponse,
+        MAX_FRAME_BYTES, PROTOCOL_VERSION,
     };
 
     /// How long to wait for the elevated core to stay alive during startup
@@ -69,6 +72,10 @@ mod imp {
         /// Peer uid authorized to talk to the helper. `None` = accept any peer
         /// (dev/test only; the installer always sets it).
         pub allowed_uid: Option<u32>,
+        /// Root-owned directory for the sanitised config the core actually loads.
+        pub protected_run_dir: PathBuf,
+        /// Bundled resources dir; `route.rule_set[].path` must canonicalise here.
+        pub resources_dir: PathBuf,
     }
 
     /// Peer-identity probe. Production uses the real socket credential;
@@ -260,20 +267,84 @@ mod imp {
             }
             HelperCommand::Start { config: path } => {
                 let canonical = validate_config_path(&config.data_dir, path)?;
-                let pid = runner.start(&config.core_bin, &canonical, &config.core_log)?;
+                let protected = sanitize_user_config(config, &canonical)?;
+                let pid = runner.start(&config.core_bin, &protected, &config.core_log)?;
                 Ok(Some(pid))
             }
             HelperCommand::SetDns { service, servers } => {
-                set_system_dns(service, servers)?;
+                validate_set_dns(service, servers)?;
+                runner.set_dns(service, servers)?;
                 Ok(None)
             }
         }
     }
 
+    /// Read the user-writable config, sanitise it, and write a copy under the
+    /// helper-owned run directory. The elevated core is started from that
+    /// copy so a swapped `config.json` cannot pass gadgets through.
+    fn sanitize_user_config(
+        config: &ServerConfig,
+        user_path: &std::path::Path,
+    ) -> Result<PathBuf, TunError> {
+        let raw = std::fs::read(user_path).map_err(|err| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("read config {}: {err}", user_path.display()),
+            )
+        })?;
+        if raw.len() > ice_config_guard::MAX_CONFIG_BYTES {
+            return Err(TunError::new(
+                TunErrorCode::ConfigRejected,
+                format!(
+                    "config exceeds {} bytes",
+                    ice_config_guard::MAX_CONFIG_BYTES
+                ),
+            ));
+        }
+        let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+            TunError::new(
+                TunErrorCode::ConfigRejected,
+                format!("config is not JSON: {err}"),
+            )
+        })?;
+        let ctx = ice_config_guard::GuardContext {
+            data_dir: config.data_dir.clone(),
+            resources_dir: config.resources_dir.clone(),
+            log_output: Some(config.core_log.clone()),
+            cache_file_path: Some(config.protected_run_dir.join("cache.db")),
+        };
+        ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
+            .map_err(|err| TunError::new(TunErrorCode::ConfigRejected, err.to_string()))?;
+        std::fs::create_dir_all(&config.protected_run_dir).map_err(|err| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!(
+                    "create protected run dir {}: {err}",
+                    config.protected_run_dir.display()
+                ),
+            )
+        })?;
+        let dest = config.protected_run_dir.join("config.json");
+        let bytes = serde_json::to_vec(&cfg).map_err(|err| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("encode sanitised config: {err}"),
+            )
+        })?;
+        std::fs::write(&dest, bytes).map_err(|err| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("write sanitised config {}: {err}", dest.display()),
+            )
+        })?;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
+        Ok(dest)
+    }
+
     /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
     /// empty `servers` list clears the override ("Empty" = DHCP fallback).
-    /// The service name and server values were validated by the protocol
-    /// layer; the command runs with an argv list, never a shell.
+    /// Callers must run [`validate_set_dns`] first; the command uses an argv
+    /// list, never a shell.
     fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
         let mut args = vec!["-setdnsservers", service];
         if servers.is_empty() {
@@ -320,6 +391,9 @@ mod imp {
         /// (an unreaped zombie would keep `kill(pid, 0)` reporting alive, and
         /// a stale pid would wrongly reject the next Start).
         fn running_pid(&mut self) -> Option<u32>;
+        /// Apply `networksetup -setdnsservers` for one service. The daemon
+        /// validates arguments before calling this.
+        fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError>;
     }
 
     /// Real runner: spawns the bundled sing-box as root and terminates it with
@@ -554,6 +628,10 @@ mod imp {
                 Err(_) => Some(child.id()),
             }
         }
+
+        fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+            set_system_dns(service, servers)
+        }
     }
 
     impl ProcessCoreRunner {
@@ -687,7 +765,14 @@ mod imp {
                 core_bin: PathBuf::from("/bin/sleep"),
                 core_log: std::env::temp_dir().join("ice-helper-test.log"),
                 allowed_uid: Some(42),
+                protected_run_dir: data_dir.join("protected-run"),
+                resources_dir: data_dir.join("resources"),
             }
+        }
+
+        fn write_allowed_config(path: &std::path::Path) {
+            let json = serde_json::to_vec(&ice_config_guard::minimal_allowed_config()).unwrap();
+            std::fs::write(path, json).unwrap();
         }
 
         /// Build a runner scoped to a fixture config's data dir / core binary.
@@ -721,10 +806,10 @@ mod imp {
         /// In-process roundtrip: `serve_connection` on one end of a socketpair,
         /// the test drives the other end. The runner is shared across
         /// connections like the daemon's accept loop does.
-        fn roundtrip(
+        fn roundtrip<R: CoreRunner + Send + 'static>(
             config: &ServerConfig,
             auth: &'static dyn PeerAuth,
-            runner: Arc<std::sync::Mutex<ProcessCoreRunner>>,
+            runner: Arc<std::sync::Mutex<R>>,
             request: &ice_tun_sys::helper_protocol::HelperRequest,
         ) -> Result<ice_tun_sys::helper_protocol::HelperResponse, TunError> {
             let (client, server) = UnixStream::pair().expect("socketpair");
@@ -817,6 +902,111 @@ mod imp {
             std::fs::remove_dir_all(&dir).unwrap();
         }
 
+        struct RecordingDnsRunner {
+            last_dns: Option<(String, Vec<String>)>,
+        }
+
+        impl CoreRunner for RecordingDnsRunner {
+            fn start(
+                &mut self,
+                _bin: &std::path::Path,
+                _config: &std::path::Path,
+                _log: &std::path::Path,
+            ) -> Result<u32, TunError> {
+                Err(TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    "RecordingDnsRunner does not start a core",
+                ))
+            }
+
+            fn stop(&mut self) -> Result<(), TunError> {
+                Ok(())
+            }
+
+            fn running_pid(&mut self) -> Option<u32> {
+                None
+            }
+
+            fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+                self.last_dns = Some((service.to_string(), servers.to_vec()));
+                Ok(())
+            }
+        }
+
+        fn set_dns_request(
+            service: &str,
+            servers: &[&str],
+        ) -> ice_tun_sys::helper_protocol::HelperRequest {
+            ice_tun_sys::helper_protocol::HelperRequest {
+                v: PROTOCOL_VERSION,
+                token: "tok".into(),
+                command: HelperCommand::SetDns {
+                    service: service.into(),
+                    servers: servers.iter().map(|s| (*s).to_string()).collect(),
+                },
+            }
+        }
+
+        #[test]
+        fn set_dns_rejects_invalid_service_server_and_count() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(RecordingDnsRunner { last_dns: None }));
+
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi; rm -rf /", &["1.1.1.1"]),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &["8.8.8.8 evil"]),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+
+            let five = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"];
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &five),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+        }
+
+        #[test]
+        fn set_dns_accepts_validated_payload() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(RecordingDnsRunner { last_dns: None }));
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &["1.1.1.1"]),
+            )
+            .unwrap();
+            assert!(response.ok, "set_dns failed: {:?}", response.message);
+            assert_eq!(
+                runner.lock().unwrap().last_dns,
+                Some(("Wi-Fi".into(), vec!["1.1.1.1".into()]))
+            );
+        }
+
         #[test]
         fn start_and_stop_roundtrip_with_fake_core() {
             let dir = std::env::temp_dir().join(format!(
@@ -828,7 +1018,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             // The fixture "core" ignores args and sleeps so liveness holds.
             let mut config = fixture_config("tok", &dir);
@@ -851,6 +1041,49 @@ mod imp {
             let response = roundtrip(&config, &PEER42, runner, &stop_req).unwrap();
             assert!(response.ok, "stop failed: {:?}", response.message);
             assert!(!pid_is_alive(pid), "core must be gone after stop");
+
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn start_rejects_tor_outbound() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-tor-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let config_path = dir.join("config.json");
+            let mut cfg = ice_config_guard::minimal_allowed_config();
+            cfg["outbounds"] = serde_json::json!([{
+                "type": "tor",
+                "tag": "evil",
+                "executable_path": "/usr/bin/tor"
+            }]);
+            std::fs::write(&config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+
+            let mut config = fixture_config("tok", &dir);
+            config.core_bin = fixture_core_bin(&dir);
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+
+            let mut req = status_request("tok");
+            req.command = HelperCommand::Start {
+                config: config_path.to_string_lossy().into_owned(),
+            };
+            let response = roundtrip(&config, &PEER42, runner, &req).unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.config_rejected"));
+            assert!(
+                response
+                    .message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("/outbounds/0/type"),
+                "{:?}",
+                response.message
+            );
 
             std::fs::remove_dir_all(&dir).unwrap();
         }
@@ -922,7 +1155,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
@@ -964,7 +1197,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);

@@ -38,6 +38,10 @@ pub enum ErrorCode {
     SubParseFailed,
     #[serde(rename = "sub.empty")]
     SubEmpty,
+    #[serde(rename = "app.lock_poisoned")]
+    LockPoisoned,
+    #[serde(rename = "core.adopt_rejected")]
+    CoreAdoptRejected,
 }
 
 impl ErrorCode {
@@ -56,6 +60,8 @@ impl ErrorCode {
             Self::SubUnknownFormat => "sub.unknown_format",
             Self::SubParseFailed => "sub.parse_failed",
             Self::SubEmpty => "sub.empty",
+            Self::LockPoisoned => "app.lock_poisoned",
+            Self::CoreAdoptRejected => "core.adopt_rejected",
         }
     }
 }
@@ -142,6 +148,8 @@ mod tests {
                 ErrorCode::ProxyApplyFailedCoreReloaded,
                 "proxy.apply_failed_core_reloaded",
             ),
+            (ErrorCode::LockPoisoned, "app.lock_poisoned"),
+            (ErrorCode::CoreAdoptRejected, "core.adopt_rejected"),
         ];
 
         for (code, expected) in samples {

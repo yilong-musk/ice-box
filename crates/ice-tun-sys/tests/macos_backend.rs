@@ -91,6 +91,8 @@ struct HostState {
     interfaces: Vec<(String, MacInterfaceState)>,
     routes: HashMap<String, String>,
     dns: HashMap<String, Vec<String>>,
+    /// When set, `dns_servers` fails instead of returning the live list.
+    dns_probe_error: Option<String>,
 }
 
 /// Fake `MacOsHost` sharing one `HostState` with the fake coordinator.
@@ -121,6 +123,10 @@ impl FakeHost {
             .get(service)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn fail_dns_probe(&self, message: impl Into<String>) {
+        self.state.lock().unwrap().dns_probe_error = Some(message.into());
     }
 }
 
@@ -227,7 +233,14 @@ impl MacOsHost for FakeHost {
     }
 
     fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError> {
-        Ok(self.dns(service))
+        let state = self.state.lock().unwrap();
+        if let Some(message) = &state.dns_probe_error {
+            return Err(TunError::new(
+                TunErrorCode::HealthcheckFailed,
+                message.clone(),
+            ));
+        }
+        Ok(state.dns.get(service).cloned().unwrap_or_default())
     }
 }
 
@@ -623,6 +636,39 @@ fn dns_restore_preserves_external_change_as_recovery_required() {
     let err = bk.restore(&applied).expect_err("external change preserved");
     assert_eq!(err.code, TunErrorCode::RecoveryRequired);
     assert_eq!(host.dns("Wi-Fi"), vec!["8.8.8.8".to_string()]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn verify_fails_closed_when_dns_probe_errors() {
+    let dir = temp_dir("dns-probe-fail");
+    let host = FakeHost::default();
+    host.set_dns("Wi-Fi", vec!["192.168.5.1".into()]);
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host.clone(), coordinator);
+    let mut config = mac_config();
+    config.dns_hijack = true;
+    let prepared = bk.prepare(&config).expect("prepare");
+    let applied = bk.apply(&prepared).expect("apply");
+    assert!(bk.verify(&applied).expect("verify").all_ok());
+
+    host.fail_dns_probe("injected dns probe failure");
+    let health = bk.verify(&applied).expect("verify returns flags, not Err");
+    assert!(
+        !health.dns_consistent,
+        "unknown DNS must not look consistent: {health:?}"
+    );
+    assert!(
+        !health.all_ok(),
+        "enable must fail closed while DNS is unknown: {health:?}"
+    );
+    assert!(
+        !health.nothing_owned,
+        "unknown DNS must not look like cleanup is complete: {health:?}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

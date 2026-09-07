@@ -17,7 +17,9 @@
 //! never accepts a binary path, route target, interface name, or arbitrary
 //! shell input from the client. The `config` path must canonicalize into the
 //! app data directory the daemon was installed with; the `SetDns` service
-//! name is restricted to `[A-Za-z0-9 ._-]` and server values to IP literals.
+//! name is restricted to `[A-Za-z0-9 ._/ -]` and server values to IP
+//! literals (at most [`MAX_DNS_SERVERS`]). An empty `servers` list clears
+//! the DHCP override.
 //! Peer identity is verified by the daemon from the socket credentials;
 //! possession of the per-installation token is the application-level gate.
 
@@ -37,6 +39,9 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 /// the well-known path (root-created under `/var/run`); tests and dev
 /// runners may override via `ICE_BOX_TUN_HELPER_SOCKET`.
 pub const DEFAULT_SOCKET_PATH: &str = "/var/run/ice-box-helper.sock";
+/// Hard cap on `SetDns` server count (defence in depth; macOS typically
+/// uses one or two resolvers).
+pub const MAX_DNS_SERVERS: usize = 4;
 
 /// Commands the helper accepts (plan §7: narrow surface, nothing else).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,18 +64,19 @@ pub enum HelperCommand {
 }
 
 /// Validate the service name the `SetDns` command may target. The daemon
-/// passes argv elements directly (never a shell), so the hard constraints
-/// are protocol framing (`\n` would corrupt the line-based wire format) and
-/// `\0`; everything else is printable ASCII.
+/// passes argv elements directly (never a shell). The allowlist is still
+/// narrow so a same-user client cannot feed `networksetup` punctuation that
+/// would be surprising even as a single argv element (`Wi-Fi; rm -rf /`).
+/// `/` is allowed because macOS ships names like `USB 10/100/1000 LAN`.
 pub fn validate_dns_service(service: &str) -> Result<(), TunError> {
     if service.is_empty()
         || service.len() > 128
-        || service
+        || !service
             .chars()
-            .any(|c| !c.is_ascii() || c == '\n' || c == '\0')
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-' | '/'))
     {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            TunErrorCode::InvalidArgument,
             format!("invalid dns service name: {service:?}"),
         ));
     }
@@ -81,9 +87,28 @@ pub fn validate_dns_service(service: &str) -> Result<(), TunError> {
 pub fn validate_dns_server(server: &str) -> Result<(), TunError> {
     if server.parse::<std::net::IpAddr>().is_err() {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            TunErrorCode::InvalidArgument,
             format!("invalid dns server: {server:?}"),
         ));
+    }
+    Ok(())
+}
+
+/// Validate a complete `SetDns` payload. An empty `servers` list is accepted:
+/// it is the documented way to clear the override and restore DHCP resolvers.
+pub fn validate_set_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
+    validate_dns_service(service)?;
+    if servers.len() > MAX_DNS_SERVERS {
+        return Err(TunError::new(
+            TunErrorCode::InvalidArgument,
+            format!(
+                "at most {MAX_DNS_SERVERS} dns servers allowed, got {}",
+                servers.len()
+            ),
+        ));
+    }
+    for server in servers {
+        validate_dns_server(server)?;
     }
     Ok(())
 }
@@ -142,6 +167,8 @@ impl HelperResponse {
             Some("tun.restore_failed") => TunErrorCode::RestoreFailed,
             Some("tun.healthcheck_failed") => TunErrorCode::HealthcheckFailed,
             Some("tun.recovery_required") => TunErrorCode::RecoveryRequired,
+            Some("tun.invalid_argument") => TunErrorCode::InvalidArgument,
+            Some("tun.config_rejected") => TunErrorCode::ConfigRejected,
             _ => TunErrorCode::ApplyFailed,
         };
         Some(TunError::new(
@@ -292,6 +319,17 @@ mod tests {
     }
 
     #[test]
+    fn config_rejected_maps_to_config_rejected() {
+        let parsed = decode_response(
+            br#"{"ok":false,"code":"tun.config_rejected","message":"/outbounds/0/type: outbound type \"tor\" is not allowed"}"#,
+        )
+        .unwrap();
+        let err = parsed.into_error().unwrap();
+        assert_eq!(err.code, TunErrorCode::ConfigRejected);
+        assert!(err.message.contains("/outbounds/0/type"));
+    }
+
+    #[test]
     fn oversized_frame_is_rejected() {
         let huge = vec![b' '; MAX_FRAME_BYTES + 1];
         assert!(decode_response(&huge).is_err());
@@ -337,9 +375,29 @@ mod tests {
         validate_dns_service("USB 10/100/1000 LAN").expect("argv quoting keeps spaces safe");
         validate_dns_service("").expect_err("empty rejected");
         validate_dns_service("a\nb").expect_err("newline breaks the frame protocol");
+        validate_dns_service("Wi-Fi; rm -rf /").expect_err("shell punctuation rejected");
         validate_dns_server("223.5.5.5").expect("ipv4 ok");
         validate_dns_server("2001:db8::1").expect("ipv6 ok");
         validate_dns_server("not-an-ip").expect_err("hostname rejected");
+        validate_dns_server("8.8.8.8 evil").expect_err("trailing junk rejected");
+
+        validate_set_dns("Wi-Fi", &["1.1.1.1".into()]).expect("one server ok");
+        validate_set_dns("Wi-Fi", &[]).expect("empty list clears DHCP override");
+        let five = vec![
+            "1.1.1.1".into(),
+            "1.0.0.1".into(),
+            "8.8.8.8".into(),
+            "8.8.4.4".into(),
+            "9.9.9.9".into(),
+        ];
+        let err = validate_set_dns("Wi-Fi", &five).expect_err("five servers rejected");
+        assert_eq!(err.code, TunErrorCode::InvalidArgument);
+        let err = validate_set_dns("Wi-Fi; rm -rf /", &["1.1.1.1".into()])
+            .expect_err("metacharacter service rejected");
+        assert_eq!(err.code, TunErrorCode::InvalidArgument);
+        let err = validate_set_dns("Wi-Fi", &["8.8.8.8 evil".into()])
+            .expect_err("non-literal server rejected");
+        assert_eq!(err.code, TunErrorCode::InvalidArgument);
     }
 
     #[test]

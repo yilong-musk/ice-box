@@ -31,7 +31,11 @@ pub struct TunTaskPin {
 pub enum LauncherCommand {
     /// Run the elevated TUN core (`--data <app-data-dir>`).
     Run { data_dir: PathBuf },
-    /// Import the UTF-16 task XML (`--install-task --xml <path>`).
+    /// Copy binaries to `%ProgramData%\ice-box\bin`, render the task XML in
+    /// memory, and import it (`--install --data <app-data-dir>`).
+    Install { data_dir: PathBuf },
+    /// Import the UTF-16 task XML (`--install-task --xml <path>`). Legacy;
+    /// the app now uses [`LauncherCommand::Install`].
     InstallTask { xml: PathBuf },
     /// Delete the `ice-box-tun` scheduled task (`--delete-task`).
     DeleteTask,
@@ -41,14 +45,16 @@ pub enum LauncherCommand {
 pub fn parse_launcher_command(args: &[String]) -> Option<LauncherCommand> {
     let mut data_dir = None;
     let mut xml = None;
+    let mut install_task = false;
     let mut install = false;
     let mut delete = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--install-task" => install = true,
+            "--install-task" => install_task = true,
+            "--install" => install = true,
             "--delete-task" => delete = true,
-            "--data" => {
+            "--data" | "--data-dir" => {
                 i += 1;
                 data_dir = Some(PathBuf::from(args.get(i)?));
             }
@@ -60,12 +66,15 @@ pub fn parse_launcher_command(args: &[String]) -> Option<LauncherCommand> {
         }
         i += 1;
     }
-    match (install, delete, xml, data_dir) {
-        (true, false, Some(xml), None) if !xml.as_os_str().is_empty() => {
+    match (install, install_task, delete, xml, data_dir) {
+        (false, true, false, Some(xml), None) if !xml.as_os_str().is_empty() => {
             Some(LauncherCommand::InstallTask { xml })
         }
-        (false, true, None, None) => Some(LauncherCommand::DeleteTask),
-        (false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
+        (true, false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
+            Some(LauncherCommand::Install { data_dir })
+        }
+        (false, false, true, None, None) => Some(LauncherCommand::DeleteTask),
+        (false, false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
             Some(LauncherCommand::Run { data_dir })
         }
         _ => None,
@@ -143,11 +152,120 @@ pub fn extract_tun_task_command_from_xml(xml: &str) -> Option<String> {
     xml_tag_value(xml, "Command")
 }
 
+/// Exec/Arguments from `schtasks /Query /XML`.
+pub fn extract_tun_task_args_from_xml(xml: &str) -> Option<String> {
+    xml_tag_value(xml, "Arguments")
+}
+
+/// Parse `--data` / `--data-dir` from a scheduled-task Arguments string.
+pub fn parse_data_dir_from_task_args(args: &str) -> Option<PathBuf> {
+    let parts = split_windows_cmd_args(args);
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i] == "--data" || parts[i] == "--data-dir" {
+            let value = parts.get(i + 1)?.as_str();
+            if value.is_empty() {
+                return None;
+            }
+            return Some(PathBuf::from(value));
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_windows_cmd_args(args: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote = false;
+    for ch in args.chars() {
+        match ch {
+            '"' => in_quote = !in_quote,
+            c if c.is_whitespace() && !in_quote => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 /// Whether an Exec/Command value points at `launcher` (quotes and ASCII case
 /// ignored so a Task Scheduler round-trip still matches).
 pub fn command_matches_launcher(command: &str, launcher: &Path) -> bool {
     let trimmed = command.trim().trim_matches('"');
     Path::new(trimmed) == launcher || trimmed.eq_ignore_ascii_case(&launcher.display().to_string())
+}
+
+/// `%ProgramData%`, or `C:\ProgramData` when the env var is unset.
+pub fn program_data_dir() -> PathBuf {
+    std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+}
+
+pub fn protected_install_dir(program_data: &Path) -> PathBuf {
+    program_data.join("ice-box")
+}
+
+pub fn protected_bin_dir(program_data: &Path) -> PathBuf {
+    protected_install_dir(program_data).join("bin")
+}
+
+pub fn protected_run_dir(program_data: &Path) -> PathBuf {
+    protected_install_dir(program_data).join("run")
+}
+
+pub fn protected_launcher_path(program_data: &Path) -> PathBuf {
+    protected_bin_dir(program_data).join("ice-tun-launcher.exe")
+}
+
+pub fn path_is_protected_launcher(exe: &Path, program_data: &Path) -> bool {
+    command_matches_launcher(
+        &exe.display().to_string(),
+        &protected_launcher_path(program_data),
+    )
+}
+
+/// `Command` must be `expected_launcher`. Used by the app-side pin check.
+pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), String> {
+    let command = extract_tun_task_command_from_xml(xml)
+        .ok_or_else(|| "scheduled-task XML is missing Exec/Command".to_string())?;
+    if !command_matches_launcher(&command, expected_launcher) {
+        return Err(
+            "scheduled-task Command does not match the protected launcher; re-run elevation setup"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Compare the task's `--data` directory with `config_path`'s parent.
+/// Mismatch means the task would start a different config than the app wrote.
+pub fn task_config_path_matches(xml: &str, config_path: &Path) -> Result<(), String> {
+    let args = extract_tun_task_args_from_xml(xml)
+        .ok_or_else(|| "scheduled-task XML is missing Exec/Arguments".to_string())?;
+    let data_dir = parse_data_dir_from_task_args(&args)
+        .ok_or_else(|| "scheduled-task Arguments are missing --data".to_string())?;
+    let pinned = data_dir.join("config.json");
+    if !paths_refer_to_same_file(&pinned, config_path) {
+        return Err("task pinned to a different config path; re-run ensure_tun_elevation".into());
+    }
+    Ok(())
+}
+
+fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
+    if let (Ok(left), Ok(right)) = (a.canonicalize(), b.canonicalize()) {
+        return left == right;
+    }
+    let left = a.to_string_lossy().replace('/', "\\");
+    let right = b.to_string_lossy().replace('/', "\\");
+    left.eq_ignore_ascii_case(&right)
 }
 
 /// Task Scheduler 1.2 XML for `ice-box-tun`. `schtasks /Create /XML` is the
@@ -455,6 +573,18 @@ mod tests {
             parse_launcher_command(&["--delete-task".into()]),
             Some(LauncherCommand::DeleteTask)
         );
+        assert_eq!(
+            parse_launcher_command(&["--install".into(), "--data".into(), r"C:\data".into(),]),
+            Some(LauncherCommand::Install {
+                data_dir: PathBuf::from(r"C:\data"),
+            })
+        );
+        assert_eq!(
+            parse_launcher_command(&["--install".into(), "--data-dir".into(), r"C:\data".into(),]),
+            Some(LauncherCommand::Install {
+                data_dir: PathBuf::from(r"C:\data"),
+            })
+        );
         assert!(parse_launcher_command(&["--install-task".into()]).is_none());
         assert!(
             parse_launcher_command(&["--install-task".into(), "--delete-task".into()]).is_none()
@@ -466,5 +596,35 @@ mod tests {
         ])
         .is_none());
         assert!(parse_launcher_command(&["--unknown".into()]).is_none());
+    }
+
+    #[test]
+    fn extract_args_and_verify_command_from_rendered_xml() {
+        let launcher = Path::new(r"C:\ProgramData\ice-box\bin\ice-tun-launcher.exe");
+        let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
+        let xml = render_tun_task_xml(launcher, data_dir, "ice-box-pin:aa:bb");
+        assert!(verify_task_command(&xml, launcher).is_ok());
+        let other = Path::new(r"C:\Users\admin\ice-tun-launcher.exe");
+        let err = verify_task_command(&xml, other).expect_err("command mismatch");
+        assert!(err.contains("Command"), "{err}");
+        assert_eq!(
+            parse_data_dir_from_task_args(&extract_tun_task_args_from_xml(&xml).unwrap())
+                .as_deref(),
+            Some(data_dir)
+        );
+        task_config_path_matches(&xml, &data_dir.join("config.json")).expect("match");
+        let mismatch = task_config_path_matches(&xml, Path::new(r"D:\other\config.json"))
+            .expect_err("mismatch");
+        assert!(mismatch.contains("different config path"), "{mismatch}");
+    }
+
+    #[test]
+    fn protected_launcher_path_joins_programdata() {
+        let pd = Path::new("/programdata");
+        assert_eq!(
+            protected_launcher_path(pd),
+            PathBuf::from("/programdata/ice-box/bin/ice-tun-launcher.exe")
+        );
+        assert!(path_is_protected_launcher(&protected_launcher_path(pd), pd));
     }
 }

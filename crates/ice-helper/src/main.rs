@@ -38,8 +38,8 @@ mod unix_main {
     use ice_tun_sys::error::{TunError, TunErrorCode};
 
     use crate::install::{
-        ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_SOCKET,
-        ENV_TOKEN,
+        ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR,
+        ENV_RESOURCES_DIR, ENV_SOCKET, ENV_TOKEN,
     };
 
     /// Upper bound on concurrently served connections. The socket is
@@ -82,12 +82,22 @@ mod unix_main {
                 core_bin
             ));
         }
+        let resources_dir = std::env::var(ENV_RESOURCES_DIR)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(&core_bin)
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(ice_tun_sys::install_paths::CORE_BIN_DEST_DIR))
+            });
         Ok(ServerConfig {
             token,
             data_dir: PathBuf::from(data_dir),
             core_bin: PathBuf::from(core_bin),
             core_log: PathBuf::from(core_log),
             allowed_uid,
+            protected_run_dir: PathBuf::from(ice_tun_sys::install_paths::CORE_RUN_DIR),
+            resources_dir,
         })
     }
 

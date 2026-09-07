@@ -197,7 +197,8 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
 /// A process the controller did not spawn itself (TUN slice: the elevated
 /// core is started by the `CoreCoordinator` helper/`sudo` path and then
 /// adopted so the normal lifecycle, health probes, reload and watchdog
-/// reaping keep working). Identity is the pid only.
+/// reaping keep working). Identity is the pid plus a platform start-key so a
+/// reused pid is not signalled.
 ///
 /// `try_wait` probes liveness: `kill(pid, 0)` on unix, `OpenProcess` +
 /// `GetExitCodeProcess` on Windows; the exit code is unavailable on unix, so
@@ -205,11 +206,29 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
 #[derive(Debug, Clone)]
 pub struct PidProcess {
     pid: u32,
+    start_key: Option<String>,
 }
 
 impl PidProcess {
     pub fn new(pid: u32) -> Self {
-        Self { pid }
+        Self {
+            pid,
+            start_key: process_start_key(pid),
+        }
+    }
+
+    fn identity_still_holds(&self) -> io::Result<bool> {
+        match (&self.start_key, process_start_key(self.pid)) {
+            (Some(expected), Some(actual)) if expected == &actual => Ok(true),
+            (Some(_), Some(_)) => Err(io::Error::other(format!(
+                "pid {} was reused; refusing to signal the new process",
+                self.pid
+            ))),
+            // Process is gone (or the start key is unavailable): treat as
+            // already exited rather than signalling a stranger.
+            (Some(_), None) => Ok(false),
+            (None, _) => Ok(true),
+        }
     }
 }
 
@@ -219,6 +238,9 @@ impl ManagedProcess for PidProcess {
     }
 
     fn request_terminate(&mut self) -> io::Result<()> {
+        if !self.identity_still_holds()? {
+            return Ok(());
+        }
         #[cfg(unix)]
         {
             let rc = unsafe { libc::kill(self.pid as i32, libc::SIGTERM) };
@@ -274,6 +296,9 @@ impl ManagedProcess for PidProcess {
     }
 
     fn force_kill(&mut self) -> io::Result<()> {
+        if !self.identity_still_holds()? {
+            return Ok(());
+        }
         #[cfg(unix)]
         {
             let rc = unsafe { libc::kill(self.pid as i32, libc::SIGKILL) };
@@ -401,6 +426,77 @@ impl ManagedProcess for PidProcess {
                 "PidProcess liveness requires a unix or windows host",
             ))
         }
+    }
+}
+
+/// Platform start-time token for `pid`. Compared before signalling an adopted
+/// process so a recycled pid is not killed.
+pub(crate) fn process_start_key(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rparen = stat.rfind(')')?;
+        let fields: Vec<&str> = stat[rparen + 1..].split_whitespace().collect();
+        // Field 22 (starttime) is index 19 after `(comm)`.
+        fields.get(19).map(|s| (*s).to_string())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if key.is_empty() {
+            None
+        } else {
+            Some(key)
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+            let mut created = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut exited = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut kernel = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut user = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+            CloseHandle(handle);
+            if ok == 0 {
+                return None;
+            }
+            let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+            Some(ticks.to_string())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        None
     }
 }
 

@@ -329,6 +329,7 @@ impl CoreCoordinator for SudoCoreCoordinator {
         ))
     }
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+        crate::helper_protocol::validate_set_dns(service, servers)?;
         self.check_permission()?;
         let mut args = vec!["-n", "networksetup", "-setdnsservers", service];
         if servers.is_empty() {
@@ -935,26 +936,59 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             ),
         )
     })?;
-    let core = ice_tun_launcher::core_beside_launcher(launcher).ok_or_else(|| {
+    let program_data = ice_tun_launcher::program_data_dir();
+    let protected = ice_tun_launcher::protected_launcher_path(&program_data);
+    ice_tun_launcher::verify_task_command(&xml, &protected)
+        .map_err(|msg| TunError::new(TunErrorCode::PermissionRequired, msg))?;
+    let protected_core = ice_tun_launcher::core_beside_launcher(&protected).ok_or_else(|| {
         TunError::new(
             TunErrorCode::ApplyFailed,
             format!(
-                "TUN task launcher path {} has no parent",
-                launcher.display()
+                "TUN protected launcher path {} has no parent",
+                protected.display()
             ),
         )
     })?;
-    match ice_tun_launcher::pin_matches_files(&pin, launcher, &core) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(TunError::new(
-            TunErrorCode::ApplyFailed,
-            format!(
-                "TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
-                core.display()
-            ),
-        )),
-        Err(err) => Err(TunError::new(TunErrorCode::ApplyFailed, err)),
+    match ice_tun_launcher::pin_matches_files(&pin, &protected, &protected_core) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!(
+                    "protected TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
+                    protected_core.display()
+                ),
+            ))
+        }
+        Err(err) => return Err(TunError::new(TunErrorCode::ApplyFailed, err)),
     }
+    // User-install drift: a replaced per-user copy must trigger re-elevation
+    // so the protected copies are refreshed.
+    if !ice_tun_launcher::path_is_protected_launcher(launcher, &program_data) {
+        let core = ice_tun_launcher::core_beside_launcher(launcher).ok_or_else(|| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!(
+                    "TUN task launcher path {} has no parent",
+                    launcher.display()
+                ),
+            )
+        })?;
+        match ice_tun_launcher::pin_matches_files(&pin, launcher, &core) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(TunError::new(
+                    TunErrorCode::ApplyFailed,
+                    format!(
+                        "TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
+                        core.display()
+                    ),
+                ))
+            }
+            Err(err) => return Err(TunError::new(TunErrorCode::ApplyFailed, err)),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1090,7 +1124,6 @@ impl CoreCoordinator for TaskCoreCoordinator {
     // the runtime path is validated for equality so a moved data dir cannot
     // silently run a stale config.
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
-        let _ = config_path;
         if !tun_task_exists() {
             return Err(TunError::new(
                 TunErrorCode::PermissionRequired,
@@ -1106,6 +1139,14 @@ impl CoreCoordinator for TaskCoreCoordinator {
             ));
         }
         verify_task_binaries(&self.launcher)?;
+        let xml = query_tun_task_xml().ok_or_else(|| {
+            TunError::new(
+                TunErrorCode::ApplyFailed,
+                format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
+            )
+        })?;
+        ice_tun_launcher::task_config_path_matches(&xml, config_path)
+            .map_err(|msg| TunError::new(TunErrorCode::ApplyFailed, msg))?;
         self.end_task();
         self.reset_handshake()?;
         self.run_task()?;
@@ -1272,6 +1313,33 @@ mod tests {
             launcher
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_xml_command_mismatch_is_rejected_even_when_pin_matches() {
+        let launcher = Path::new(r"C:\ProgramData\ice-box\bin\ice-tun-launcher.exe");
+        let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
+        let pin = ice_tun_launcher::format_tun_task_pin(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        );
+        let xml = ice_tun_launcher::render_tun_task_xml(launcher, data_dir, &pin);
+        assert!(ice_tun_launcher::extract_tun_task_pin_from_xml(&xml).is_some());
+        ice_tun_launcher::verify_task_command(&xml, launcher).expect("protected command");
+        let err = ice_tun_launcher::verify_task_command(
+            &xml,
+            Path::new(r"C:\Users\admin\ice-tun-launcher.exe"),
+        )
+        .expect_err("user-dir command");
+        assert!(err.to_lowercase().contains("command"), "{err}");
+        ice_tun_launcher::task_config_path_matches(&xml, &data_dir.join("config.json"))
+            .expect("matching data dir");
+        let mismatch = ice_tun_launcher::task_config_path_matches(
+            &xml,
+            Path::new(r"D:\elsewhere\config.json"),
+        )
+        .expect_err("different data dir");
+        assert!(mismatch.contains("different config path"), "{mismatch}");
     }
 
     #[test]

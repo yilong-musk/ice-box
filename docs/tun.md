@@ -87,22 +87,39 @@ Production runs the bundled core as root via a small launchd daemon
 (`crates/ice-helper`). Native sing-box owns the adapter / addresses / routes /
 DNS; `ice-tun-sys` journals and verifies. No network-extension package.
 
-The helper exists only to start and stop the bundled core with an allowlisted
-config path. IPC is one JSON object per line, 16 KiB cap, one request/response
-per connection (`crates/ice-tun-sys/src/helper_protocol.rs`):
+The helper starts and stops the bundled core with an allowlisted
+config path, and applies validated DNS changes (`SetDns`) so TUN DNS
+hijack can run elevated. IPC is one JSON object per line, 16 KiB cap,
+protocol version **2**, one request/response per connection
+(`crates/ice-tun-sys/src/helper_protocol.rs`):
 
 ```json
-{"v": 1, "token": "...", "cmd": "status"}
-{"v": 1, "token": "...", "cmd": "start", "config": "/abs/path/config.json"}
-{"v": 1, "token": "...", "cmd": "stop"}
+{"v": 2, "token": "...", "cmd": "status"}
+{"v": 2, "token": "...", "cmd": "start", "config": "/abs/path/config.json"}
+{"v": 2, "token": "...", "cmd": "stop"}
+{"v": 2, "token": "...", "cmd": "set_dns", "service": "Wi-Fi", "servers": ["1.1.1.1"]}
 ```
 
-Auth: peer uid (`getpeereid`) + per-installation token (constant-time). `start`
-config must canonicalize inside the data dir. The core binary path is fixed at
-install and pinned by SHA-256 under
+Auth: peer uid (`getpeereid`) is the **primary** control; the per-installation
+token (constant-time) is secondary. `start` config must canonicalize inside
+the data dir. The helper then sanitises the JSON (`ice-config-guard`: inbound
+/ outbound allowlists, no filesystem-referencing keys except bundled geoip
+rule-sets) and starts sing-box from a **root-owned** copy under
+`/Library/PrivilegedHelperTools/com.yilong-musk.icebox/run/`, never from the
+user-writable file. The core binary path is fixed at install and pinned by
+SHA-256 under
 `/Library/PrivilegedHelperTools/com.yilong-musk.icebox/`. Socket
-`/var/run/ice-box-helper.sock` is world-connectable; authorization is on the
-connection.
+`/var/run/ice-box-helper.sock` is world-connectable (`0666`) so the
+unelevated app can connect; authorization is on the connection. The token
+file is `0600` owned by the installing uid (the daemon runs as root and can
+still read it).
+
+`SetDns` is validated in the daemon before `networksetup` runs: the service
+name must match `[A-Za-z0-9 ._/ -]` (letters, digits, space, `.`, `_`, `-`,
+`/`; names like `USB 10/100/1000 LAN` are allowed, shell punctuation is not),
+each server must be an IPv4 or IPv6 literal, at most four servers, and an
+empty `servers` list clears the override ("Empty" / DHCP fallback). Invalid
+input returns `tun.invalid_argument` and does not mutate the OS.
 
 `create_backend` runner order: `ICE_BOX_TUN_DEV_SUDO` → `SudoCoreCoordinator`;
 else helper `status` probe → `HelperCoreCoordinator`; else fail-closed
@@ -137,11 +154,19 @@ Windows. A per-user scheduled task `ice-box-tun` (highest privilege, never
 auto-triggered) runs `ice-tun-launcher.exe`:
 
 - one-time setup: `ensure_tun_elevation` (one UAC, no app relaunch, no
-  console flash). UAC launches the GUI-subsystem `ice-tun-launcher.exe`,
-  which imports the task XML so the SHA-256 pin lives in
-  `RegistrationInfo/Description` (`schtasks /D` is a day-of-week flag and
-  cannot store a description). The per-user NSIS installer does not create
-  the task (it is not elevated); uninstall still deletes it.
+  console flash). UAC launches the GUI-subsystem `ice-tun-launcher.exe`
+  with `--install --data <dir>`. That elevated step copies
+  `ice-tun-launcher.exe`, `sing-box.exe`, and `libcronet.dll` (plus
+  `wintun.dll` if present) to `%ProgramData%\ice-box\bin\` (SYSTEM +
+  Administrators full; Users read/execute), renders the task XML in
+  memory, writes it under `%ProgramData%\ice-box\` with an admin-only ACL,
+  and imports it so the SHA-256 pin of the **protected copies** lives in
+  `RegistrationInfo/Description`. The task `Command` points at the
+  ProgramData launcher; `Run` refuses `current_exe()` outside that
+  directory. Config is sanitised and written to
+  `%ProgramData%\ice-box\run\config.json` before spawn. The per-user NSIS
+  installer does not create the task (it is not elevated); uninstall still
+  deletes it and the protected copies.
 - start = `schtasks /Run`; stop = stop-file + graceful `taskkill /T` (no `/F`)
   then `schtasks /End` fallback;
 - liveness = handshake pid file + `PROCESS_QUERY_LIMITED_INFORMATION`;

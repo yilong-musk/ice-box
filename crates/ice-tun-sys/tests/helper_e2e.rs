@@ -44,6 +44,23 @@ fn fixture_core_bin(dir: &std::path::Path) -> PathBuf {
     bin
 }
 
+fn write_allowed_config(path: &std::path::Path) {
+    let json = serde_json::to_vec(&ice_config_guard::minimal_allowed_config()).unwrap();
+    std::fs::write(path, json).unwrap();
+}
+
+fn server_config(dir: &std::path::Path, token: &str, core_bin: PathBuf) -> ServerConfig {
+    ServerConfig {
+        token: token.into(),
+        data_dir: dir.to_path_buf(),
+        core_bin,
+        core_log: dir.join("core.log"),
+        allowed_uid: Some(42),
+        protected_run_dir: dir.join("protected-run"),
+        resources_dir: dir.join("resources"),
+    }
+}
+
 struct ServerHandle {
     stop: Arc<std::sync::atomic::AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
@@ -98,17 +115,11 @@ fn stop_server(server: ServerHandle) {
 fn helper_coordinator_end_to_end_start_stop() {
     let dir = temp_dir("e2e");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
 
-    let config = Arc::new(ServerConfig {
-        token: "e2e-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
     let server = spawn_server(config, &socket);
 
     // Let the listener come up.
@@ -154,7 +165,7 @@ fn helper_coordinator_end_to_end_start_stop() {
 fn stop_waiting_for_slow_core_does_not_time_out() {
     let dir = temp_dir("slow");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = dir.join("fake-core");
     use std::os::unix::fs::PermissionsExt;
@@ -165,13 +176,7 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
     .unwrap();
     std::fs::set_permissions(&core_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let config = Arc::new(ServerConfig {
-        token: "e2e-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -206,17 +211,11 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
 fn helper_rejects_unauthorized_token() {
     let dir = temp_dir("auth");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
 
-    let config = Arc::new(ServerConfig {
-        token: "right-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "right-token", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -241,13 +240,7 @@ fn helper_rejects_config_outside_data_dir_before_ipc() {
     let dir = temp_dir("outside");
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
-    let config = Arc::new(ServerConfig {
-        token: "tok".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "tok", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -261,6 +254,41 @@ fn helper_rejects_config_outside_data_dir_before_ipc() {
         .start_with_config(std::path::Path::new("/etc/hosts"))
         .expect_err("outside path must fail");
     assert_eq!(err.code, TunErrorCode::PermissionRequired);
+
+    stop_server(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn helper_rejects_tor_outbound_config() {
+    let dir = temp_dir("tor");
+    let config_path = dir.join("config.json");
+    let mut cfg = ice_config_guard::minimal_allowed_config();
+    cfg["outbounds"] = serde_json::json!([
+        { "type": "tor", "tag": "evil", "executable_path": "/usr/bin/tor" }
+    ]);
+    std::fs::write(&config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    let socket = dir.join("helper.sock");
+    let core_bin = fixture_core_bin(&dir);
+    let config = Arc::new(server_config(&dir, "tok", core_bin));
+    let server = spawn_server(config, &socket);
+    for _ in 0..50 {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut coordinator = HelperCoreCoordinator::new(socket.clone(), "tok".into(), dir.clone());
+    let err = coordinator
+        .start_with_config(&config_path)
+        .expect_err("tor outbound must be rejected");
+    assert_eq!(err.code, TunErrorCode::ConfigRejected);
+    assert!(
+        err.message.contains("/outbounds/0/type"),
+        "pointer in message: {}",
+        err.message
+    );
 
     stop_server(server);
     let _ = std::fs::remove_dir_all(&dir);

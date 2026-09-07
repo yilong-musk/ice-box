@@ -23,6 +23,12 @@ pub enum TunErrorCode {
     /// Cleanup could not be verified; capture is fail-closed until an
     /// explicit recovery attempt succeeds.
     RecoveryRequired,
+    /// A helper command argument failed validation before any privileged
+    /// mutation (for example `SetDns` service / server values).
+    InvalidArgument,
+    /// Elevated start refused the config after the content allowlist
+    /// (`ice-config-guard`). The message carries a JSON pointer.
+    ConfigRejected,
 }
 
 impl TunErrorCode {
@@ -34,6 +40,8 @@ impl TunErrorCode {
             Self::RestoreFailed => "tun.restore_failed",
             Self::HealthcheckFailed => "tun.healthcheck_failed",
             Self::RecoveryRequired => "tun.recovery_required",
+            Self::InvalidArgument => "tun.invalid_argument",
+            Self::ConfigRejected => "tun.config_rejected",
         }
     }
 }
@@ -93,5 +101,10 @@ mod tests {
             TunErrorCode::RecoveryRequired.as_str(),
             "tun.recovery_required"
         );
+        assert_eq!(
+            TunErrorCode::InvalidArgument.as_str(),
+            "tun.invalid_argument"
+        );
+        assert_eq!(TunErrorCode::ConfigRejected.as_str(), "tun.config_rejected");
     }
 }

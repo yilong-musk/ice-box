@@ -1681,11 +1681,19 @@ name = "ice-config"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "ice-config-guard",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ice-config-guard"
+version = "0.1.6"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1726,6 +1734,7 @@ dependencies = [
 name = "ice-helper"
 version = "0.1.6"
 dependencies = [
+ "ice-config-guard",
  "ice-tun-sys",
  "libc",
  "serde",
@@ -1757,6 +1766,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ice-config",
+ "ice-config-guard",
  "percent-encoding",
  "rustls",
  "serde",
@@ -1774,6 +1784,8 @@ dependencies = [
 name = "ice-tun-launcher"
 version = "0.1.6"
 dependencies = [
+ "ice-config-guard",
+ "serde_json",
  "sha2",
  "windows-sys 0.59.0",
 ]
@@ -1783,6 +1795,7 @@ name = "ice-tun-sys"
 version = "0.1.6"
 dependencies = [
  "chrono",
+ "ice-config-guard",
  "ice-helper",
  "ice-tun-launcher",
  "libc",

@@ -29,3 +29,4 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 ice-helper = { path = "../ice-helper" }
+ice-config-guard = { workspace = true }

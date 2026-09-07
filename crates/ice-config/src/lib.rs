@@ -75,22 +75,26 @@ pub struct TunGate {
     pub reason: Option<&'static str>,
 }
 
-/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready`);
-/// Windows is green (`windows_tun_ready`, `docs/tun.md`); other platforms are
-/// out of scope for the first release.
-///
-/// Test-only override: the desktop crate's host-free controller tests run on
-/// every CI host and inject fake backends; forcing the gate green there lets
-/// them generate Tun configs on non-macOS runners. Production code never
-/// calls [`force_tun_gate_ready`].
+/// Test-only override: host-free controller tests inject fake backends on
+/// every CI host; forcing the gate green lets them generate Tun configs on
+/// non-macOS runners. Gated so production builds do not export it.
+#[cfg(any(test, feature = "test-hooks"))]
 static TEST_TUN_GATE_READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 /// Test-only escape hatch for host-free controller tests (see [`tun_gate`]).
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn force_tun_gate_ready() {
     let _ = TEST_TUN_GATE_READY.set(());
 }
 
+/// Compile-time T0 gate per platform. macOS is green (`macos_tun_ready`);
+/// Windows is green (`windows_tun_ready`, `docs/tun.md`); other platforms are
+/// out of scope for the first release.
+///
+/// Host-free controller tests force the gate green via
+/// `force_tun_gate_ready` (`test-hooks` / `cfg(test)` only).
 pub fn tun_gate() -> TunGate {
+    #[cfg(any(test, feature = "test-hooks"))]
     if TEST_TUN_GATE_READY.get().is_some() {
         return TunGate {
             ready: true,
@@ -772,6 +776,9 @@ fn tun_network_cidr(address: &str) -> Option<String> {
     let (addr, prefix_str) = address.split_once('/')?;
     let prefix: u8 = prefix_str.parse().ok()?;
     if let Ok(v4) = addr.parse::<std::net::Ipv4Addr>() {
+        if prefix > 32 {
+            return None;
+        }
         let mask = if prefix == 0 {
             0
         } else {
@@ -783,6 +790,9 @@ fn tun_network_cidr(address: &str) -> Option<String> {
             prefix
         ))
     } else if let Ok(v6) = addr.parse::<std::net::Ipv6Addr>() {
+        if prefix > 128 {
+            return None;
+        }
         let mask = if prefix == 0 {
             0
         } else {
@@ -1146,6 +1156,25 @@ mod build_tests {
                 Some((mode, outbound))
             })
             .collect()
+    }
+
+    #[test]
+    fn tun_network_cidr_rejects_out_of_range_prefix() {
+        assert_eq!(tun_network_cidr("10.0.0.1/0").as_deref(), Some("0.0.0.0/0"));
+        assert_eq!(
+            tun_network_cidr("10.0.0.1/32").as_deref(),
+            Some("10.0.0.1/32")
+        );
+        assert_eq!(tun_network_cidr("10.0.0.1/33"), None);
+        assert_eq!(
+            tun_network_cidr("fdfe:dcba:9876::1/128").as_deref(),
+            Some("fdfe:dcba:9876::1/128")
+        );
+        assert_eq!(tun_network_cidr("fdfe:dcba:9876::1/129"), None);
+        assert_eq!(
+            tun_network_cidr("10.0.0.1/30").as_deref(),
+            Some("10.0.0.0/30")
+        );
     }
 
     #[test]
@@ -2333,5 +2362,46 @@ mod build_tests {
         let parsed: BuildInput = serde_json::from_value(legacy).expect("legacy input");
         assert_eq!(parsed.capture_intent, CaptureIntent::Diagnostic);
         assert_eq!(parsed.template.tun, TunSettings::default());
+    }
+
+    fn guard_ctx() -> ice_config_guard::GuardContext {
+        ice_config_guard::GuardContext {
+            data_dir: std::env::temp_dir(),
+            resources_dir: std::env::temp_dir(),
+            log_output: None,
+            cache_file_path: None,
+        }
+    }
+
+    fn assert_guard_unchanged(cfg: Value) {
+        let before = cfg.clone();
+        let mut after = cfg;
+        ice_config_guard::sanitize_for_elevated_core(&mut after, &guard_ctx())
+            .unwrap_or_else(|err| panic!("generated config rejected: {err}"));
+        assert_eq!(before, after, "guard must not rewrite generated configs");
+    }
+
+    #[test]
+    fn generated_diagnostic_configs_pass_elevated_guard_unchanged() {
+        let direct = build_direct_only_config(&LocalTemplate::default(), CaptureIntent::Diagnostic)
+            .expect("direct");
+        assert_guard_unchanged(direct);
+
+        let runtime = build_runtime_config(&build_input_from_nodes(
+            LocalTemplate::default(),
+            vec![socks("a"), socks("b")],
+            None,
+        ))
+        .expect("runtime");
+        assert_guard_unchanged(runtime);
+    }
+
+    #[test]
+    fn example_minimal_direct_passes_elevated_guard() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let raw = std::fs::read_to_string(repo.join("configs/examples/minimal-direct.json"))
+            .expect("example");
+        let cfg: Value = serde_json::from_str(&raw).expect("json");
+        assert_guard_unchanged(cfg);
     }
 }

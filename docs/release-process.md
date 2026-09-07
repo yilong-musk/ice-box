@@ -138,6 +138,26 @@ gh release view v0.1.2 --json assets           # dmg, exe, tar.gz, sigs, latest.
 signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
 (also run from `scripts/gate.sh` / `scripts/gate-local.sh`).
 
+## Local vs CI gates
+
+`scripts/gate-local.sh` is the pre-commit gate. It is intentionally lighter
+than CI:
+
+- Excludes the `ice-box` desktop crate (`cargo clippy` / `cargo test --lib
+  --exclude ice-box`) because GTK/webkit is often missing on developer
+  machines. Desktop-crate tests (`apps/desktop/src-tauri`, including the
+  `g9_*` acceptance filters) run only in CI.
+- Runs `cargo test --workspace --lib` plus `cargo test -p ice-tun-sys
+  --tests` (the host-free TUN integration tests). It does not run the full
+  `cargo test --workspace` (doc tests and other crates' integration tests).
+- Skips the desktop Vite production build (`npm run build`); CI
+  `scripts/gate.sh` runs it.
+
+CI `scripts/gate.sh` runs `cargo test --workspace` (lib + integration +
+doc). The Windows job also runs `cargo test -p ice-proxy-sys` (macOS has
+the same named step). Ignored live tests and how to run them are listed in
+[`testing.md`](testing.md).
+
 ## Known issues and workarounds
 
 ### Network instability to github.com

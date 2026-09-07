@@ -5,6 +5,7 @@ members = [
   "crates/ice-core",
   "crates/ice-proxy-sys",
   "crates/ice-config",
+  "crates/ice-config-guard",
   "crates/ice-subscription",
   "crates/ice-engine",
   "crates/ice-tun-sys",
@@ -32,6 +33,7 @@ ureq = "2.12"
 ice-core = { path = "crates/ice-core" }
 ice-proxy-sys = { path = "crates/ice-proxy-sys" }
 ice-config = { path = "crates/ice-config" }
+ice-config-guard = { path = "crates/ice-config-guard" }
 ice-subscription = { path = "crates/ice-subscription" }
 ice-engine = { path = "crates/ice-engine" }
 ice-tun-sys = { path = "crates/ice-tun-sys" }

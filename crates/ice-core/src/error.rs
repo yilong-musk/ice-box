@@ -14,6 +14,8 @@ pub enum CoreError {
     HealthcheckFailed(String),
     #[error("{0}")]
     InvalidState(String),
+    #[error("refusing to adopt pid {0}: process is not the bundled sing-box")]
+    AdoptRejected(u32),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -27,6 +29,7 @@ impl CoreError {
             Self::SpawnFailed(_) => ErrorCode::CoreSpawnFailed,
             Self::HealthcheckFailed(_) => ErrorCode::CoreHealthcheckFailed,
             Self::InvalidState(_) => ErrorCode::CoreInvalidState,
+            Self::AdoptRejected(_) => ErrorCode::CoreAdoptRejected,
             Self::Io(_) | Self::Other(_) => ErrorCode::CoreSpawnFailed,
         }
     }
