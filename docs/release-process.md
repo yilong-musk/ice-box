@@ -25,7 +25,7 @@ The version lives in exactly three places and **must stay in sync**:
 | File | Key |
 |------|-----|
 | `Cargo.toml` | `[workspace.package] version` (all crates inherit via `version.workspace = true`) |
-| `apps/desktop/package.json` | `"version"` (also displayed in the app UI) |
+| `apps/desktop/package.json` | `"version"` (also displayed in the app UI and GitHub Pages marketing chrome) |
 | `apps/desktop/src-tauri/tauri.conf.json` | `"version"` (installer metadata) |
 
 `Cargo.lock` is refreshed automatically by `cargo check`.
@@ -83,8 +83,10 @@ bash scripts/release-notes.sh v0.1.2
 ### 3. Gate and merge to `main`
 
 ```bash
-bash scripts/gate-local.sh   # fmt, clippy, Rust tests, tsc, vitest
+bash scripts/gate-local.sh   # fmt, clippy, Rust tests, tsc, vitest; recaptures docs/images/home.png when the version changed
 ```
+
+Commit the updated `docs/images/home.png` and `docs/images/home.version` with the release.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,

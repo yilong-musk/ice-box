@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Quick local gate before committing: fmt, clippy, lib tests, tsc, vitest,
-# and a Live Demo Home screenshot when desktop/website UI files changed.
+# and a Live Demo Home screenshot when the app version or UI files changed.
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).
 set -euo pipefail
 
