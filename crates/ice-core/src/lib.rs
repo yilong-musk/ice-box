@@ -50,7 +50,6 @@ use ice_types::UiMessage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -412,20 +411,26 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         match signal_result {
             Ok(()) => {
                 let pid_before = self.child.as_ref().map(|c| c.id());
-                if self.wait_health(&paths.health_endpoints()).is_ok() {
-                    let still_same = self.child.as_mut().is_some_and(|child| {
-                        child.id() == pid_before.unwrap_or(child.id())
-                            && matches!(child.try_wait(), Ok(None))
-                    });
-                    if still_same {
-                        tracing::info!("sing-box hot reload ok");
-                        return Ok(ReloadOutcome::HotReloaded);
+                match self.wait_health(&paths.health_endpoints()) {
+                    Ok(()) => {
+                        let still_same = self.child.as_mut().is_some_and(|child| {
+                            child.id() == pid_before.unwrap_or(child.id())
+                                && matches!(child.try_wait(), Ok(None))
+                        });
+                        if still_same {
+                            tracing::info!("sing-box hot reload ok");
+                            return Ok(ReloadOutcome::HotReloaded);
+                        }
+                        tracing::warn!(
+                            "reload signal ok but pid changed or exited; restarting process"
+                        );
                     }
-                    tracing::warn!(
-                        "reload signal ok but pid changed or exited; restarting process"
-                    );
-                } else {
-                    tracing::warn!("reload signal ok but healthcheck failed; restarting process");
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "reload signal ok but healthcheck failed; restarting process"
+                        );
+                    }
                 }
             }
             Err(err) => {
@@ -521,10 +526,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             let probe = self.health.clone();
             let ep = endpoints.clone();
             let timeout = self.health_timeout;
-            let handle = std::thread::spawn(move || {
-                probe.wait_ready(&ep, timeout)?;
-                probe.probe_http(&ep)
-            });
+            let handle = std::thread::spawn(move || probe.wait_healthy(&ep, timeout));
             loop {
                 if let Some(err) = self.early_exit_health_error(paths) {
                     // Leave the probe thread to finish on its own (at most health_timeout).
@@ -564,7 +566,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 return Err(err);
             }
 
-            match try_tcp_connect_once(&endpoints) {
+            match health::tcp_connect_once(&endpoints) {
                 Ok(()) => match self.health.probe_http(&endpoints) {
                     Ok(()) => return Ok(()),
                     Err(e) => last_err = e.to_string(),
@@ -617,21 +619,11 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     }
 
     fn wait_health(&self, endpoints: &crate::HealthEndpoints) -> Result<(), CoreError> {
-        match &self.health_cancel {
-            // Cancel-aware path used by the desktop shell so quit can abort the 5s probe.
-            Some(cancel) => {
-                health::wait_tcp_ready_until(
-                    endpoints,
-                    self.health_timeout,
-                    Some(cancel.as_ref()),
-                )?;
-                self.health.probe_http(endpoints)
-            }
-            None => {
-                self.health.wait_ready(endpoints, self.health_timeout)?;
-                self.health.probe_http(endpoints)
-            }
-        }
+        self.health.wait_healthy_until(
+            endpoints,
+            self.health_timeout,
+            self.health_cancel.as_deref(),
+        )
     }
 
     /// On app start: if pid file points at a live sing-box process, kill it and enter Stopped.
@@ -1030,31 +1022,6 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
         )));
     }
     Ok(())
-}
-
-fn try_tcp_connect_once(endpoints: &HealthEndpoints) -> Result<(), String> {
-    if !ice_types::is_loopback_host(&endpoints.host) {
-        return Err(format!(
-            "healthcheck host must be loopback, got {}",
-            endpoints.host
-        ));
-    }
-    let addr_str = endpoints.socket_addr_hint();
-    let addrs: Vec<_> = addr_str
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {addr_str}: {e}"))?
-        .collect();
-    if addrs.is_empty() {
-        return Err(format!("no addresses for {addr_str}"));
-    }
-    let mut last = String::from("not attempted");
-    for addr in addrs {
-        match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            Ok(_) => return Ok(()),
-            Err(e) => last = e.to_string(),
-        }
-    }
-    Err(last)
 }
 
 fn singbox_log_failure_excerpt(log_file: &Path) -> String {

@@ -85,7 +85,34 @@ fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreErro
 /// `GET /version` — used by the health probe to prove the Clash API is the
 /// sing-box we started, not some other process that merely owns the port.
 pub fn probe_version(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
-    let _body = clash_get(endpoints, "/version")?;
+    probe_version_timed(endpoints, crate::health::HEALTH_HTTP_TIMEOUT)
+}
+
+/// Like [`probe_version`] with an explicit per-request timeout so the health
+/// loop can retry while the Clash listener is rebuilt.
+pub(crate) fn probe_version_timed(
+    endpoints: &HealthEndpoints,
+    timeout: Duration,
+) -> Result<(), CoreError> {
+    let url = format!("{}/version", base_url(endpoints)?);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .max_idle_connections(0)
+        .build();
+    let response = agent
+        .get(&url)
+        .call()
+        .map_err(|e| clash_api_err("/version", e))?;
+    let status = response.status();
+    let mut body = String::new();
+    response
+        .into_reader()
+        .take(64 * 1024)
+        .read_to_string(&mut body)
+        .map_err(|e| clash_api_err("/version", format!("read: {e}")))?;
+    if !(200..300).contains(&status) {
+        return Err(clash_api_err("/version", format!("HTTP {status}: {body}")));
+    }
     Ok(())
 }
 
