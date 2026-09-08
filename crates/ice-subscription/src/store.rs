@@ -600,4 +600,64 @@ mod tests {
         assert!(!old.exists(), "restored .old dir is consumed");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn recover_uses_old_dir_when_crash_aborts_between_renames() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-store-mid-rename-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: crate::SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let kept = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+            tag: "kept".into(),
+            outbound: serde_json::json!({"type":"direct","tag":"kept"}),
+        }]);
+        write_subscription_success(&paths, &meta, "{}", &kept).unwrap();
+
+        let final_dir = paths.sub_dir(id);
+        let old = paths.root().join(format!("{id}.old-mid-rename"));
+        std::fs::rename(&final_dir, &old).unwrap();
+
+        // Second rename (staging → final) never happened: leftover staging
+        // must not be preferred over the `.old` snapshot.
+        let staging = paths.staging_dir(id);
+        std::fs::create_dir_all(&staging).unwrap();
+        let staging_profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+            tag: "from-staging".into(),
+            outbound: serde_json::json!({"type":"direct","tag":"from-staging"}),
+        }]);
+        std::fs::write(
+            staging.join("profile.json"),
+            serde_json::to_vec(&staging_profile).unwrap(),
+        )
+        .unwrap();
+
+        recover_subscription_dirs(&paths);
+        let loaded = read_profile(&paths, id).expect("profile restored from .old");
+        assert_eq!(loaded.nodes[0].tag, "kept");
+        assert!(!old.exists(), "restored .old dir is consumed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

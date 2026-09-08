@@ -4,18 +4,11 @@
 
 use crate::capture::TrafficCapture;
 use crate::orchestrate::{current_settings, orchestrate_stop};
-use crate::AppState;
+use crate::{lock_poisoned, AppState};
 use ice_config::{AppError, ErrorCode};
 use ice_core::CoreStatus;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
-
-fn lock_poisoned(context: &str) -> AppError {
-    AppError::new(
-        ErrorCode::LockPoisoned,
-        format!("internal lock poisoned: {context}"),
-    )
-}
 
 fn core_is_live(status: CoreStatus) -> bool {
     matches!(status, CoreStatus::Running | CoreStatus::Starting)
@@ -245,6 +238,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: ice_engine::ProfileCache::new(),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),

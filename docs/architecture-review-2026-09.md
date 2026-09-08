@@ -320,6 +320,12 @@ Record process start time at adopt and re-check it before any kill.
 
 **Verify** Unit test adopting the test process's own pid → `Err`.
 
+**Done (unreleased)** `adopt_external` requires `looks_like_singbox_process`
+and matches the live image against `CorePaths::adopt_binaries()` (bundled
+plus protected copies). Empty on-disk candidates fall back to the name
+check. Tests cover rejecting this process and adopting a live `sing-box`-named
+stub (Unix).
+
 #### SEC-7 (Low) `constant_time_eq` length early-return
 
 **Where** `crates/ice-helper/src/lib.rs:136-146`.
@@ -538,6 +544,10 @@ journal design). Log the probe error.
 **Verify** `macos_backend.rs` gains a fault-injected DNS probe failure case;
 runs in CI (CI-1).
 
+**Done (unreleased)** `verify` treats a failed DNS probe as unknown: not
+consistent and still owned. Apply keeps probing until the adapter-appear
+deadline, then fails closed with `tun.healthcheck_failed`.
+
 #### TUN-2 (Medium) Journal record errors ignored in recovery
 
 **Where** `crates/ice-tun-sys/src/recovery.rs:107` (`let _ = journal.record(…)`).
@@ -607,6 +617,11 @@ directories plus an atomically-written `current` pointer file.)
 **Verify** Fault-injection test that aborts between the renames and checks a
 profile still loads.
 
+**Done (unreleased)** Commit is `rename(final, .old-*)` then
+`rename(staging, final)` under a process lock; startup restores `.old-*`
+when `final` is missing. Tests cover leftover `.old` and an abort window
+where staging still exists.
+
 #### SUB-2 (Medium) Node/rule caps inconsistent with spec
 
 **Where** `crates/ice-subscription/src/clash/proxies.rs:33-35` returns
@@ -654,6 +669,11 @@ log and exit the loop while flipping a `worker_alive: AtomicBool` that
 
 **Verify** Test that panics inside one job and asserts the next job still runs.
 
+**Done (unreleased)** Fetch workers recover poisoned queue locks, catch
+per-job panics, and flip `worker_alive` when the result channel closes.
+`subscription_watch.rs` logs a dead pool and the outer watchdog loop
+respawns after `catch_unwind`, publishing `AppState.subscription_watchdog_alive`.
+
 #### SUB-5 (Low) Misleading error mapping
 
 **Where** `crates/ice-subscription/src/error.rs:38` maps `Io` and
@@ -671,6 +691,10 @@ again every 2 s.
 **Fix** Return `Arc<LoadedProfile>`; own the cache in `AppState` (pass
 `&ProfileCache`) instead of a static so tests and multiple instances do not
 share state.
+
+**Done (unreleased)** `ProfileCache` is owned by `AppState` (no process
+static). Loads return `Arc<NormalizedProfile>`; `BuildInput.profile` is
+that `Arc`, so Apply no longer `unwrap_or_clone`s the body.
 
 ### 4.6 System proxy (`ice-proxy-sys`)
 
@@ -705,6 +729,10 @@ so the PROXY-1 fix must let the `Unknown` state reach the live probe.
 with `-getwebproxy`/`-getsecurewebproxy`, or use the `system-configuration`
 crate (SCDynamicStore) to read proxies without spawning processes.
 
+**Done (unreleased)** Live probe maps `route -n get default` → hardware port
+→ network service, then reads only that service's web/secure/SOCKS proxy.
+Falls back to the first enabled service when the route cannot be resolved.
+
 ### 4.7 Architecture and module boundaries
 
 #### ARCH-1 (Medium) `ice-config` is a shared kernel; `ice-engine` is unused
@@ -738,7 +766,8 @@ point and `ENGINE_COMPAT_CORE_VERSION` lives in `ice-config`.
 `HostPlatform`, and `ENGINE_COMPAT_CORE_VERSION` (no I/O, no
 `cfg(target_os)`). `ice-config` / `ice-subscription` take `HostPlatform` as
 an argument; `ice-engine::host_platform()` is the compile-time mapping.
-`src-tauri` depends on `ice-engine` for config generation. `AppPaths` /
+`src-tauri` depends on `ice-engine` for config generation **and**
+subscription types (no direct `ice-subscription` dependency). `AppPaths` /
 `AppSettings` and pid/logging stay in `ice-config` so `ice-core` can use
 them without depending on `ice-engine` (which would pull in
 `ice-subscription`).
@@ -928,6 +957,10 @@ Add `export const browserApi = {…} satisfies typeof import("./tauri")` so a
 missing method fails type-checking. Also move the port/listen helpers out of
 `lib/generationGuard.ts` (lines 21-55) into `lib/listenValidation.ts`.
 
+**Done (unreleased)** Live Demo keeps a hand-maintained `browser-api.ts`
+stand-in (Vite aliases `api/tauri` to it). A `satisfies typeof import("./tauri")`
+check is still optional follow-up.
+
 ### 4.10 Build, CI and release
 
 #### CI-1 (High) Integration tests never run
@@ -1089,3 +1122,9 @@ Phase 4 — structure and hygiene — **done (unreleased)**
 - `docs/architecture.md` and `docs/tun.md` no longer contradict the code on
   the points in §4.11.
 - This file's summary table reflects the current status of each ID.
+
+Optional leftovers (not merge-blocking): ARCH-4 file splits for
+`ice-config` / `ice-subscription` / `ice-tun-sys/windows.rs`; FE-7
+`satisfies typeof import("./tauri")` on the website stand-in; ARCH-1
+`AppPaths` / settings / pid / logging remaining in `ice-config` so
+`ice-core` does not depend on `ice-engine`.

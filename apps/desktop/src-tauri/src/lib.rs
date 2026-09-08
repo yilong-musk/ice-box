@@ -30,6 +30,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
+/// Shared poisoned-mutex error for command, capture, and shutdown paths.
+pub(crate) fn lock_poisoned(context: &str) -> ice_config::AppError {
+    ice_config::AppError::new(
+        ice_config::ErrorCode::LockPoisoned,
+        format!("internal lock poisoned: {context}"),
+    )
+}
+
 /// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
 /// written here so a crash on Windows (where the release binary has no console and
 /// stderr is discarded) still leaves a trace in `ice-box.log`.
@@ -96,6 +104,12 @@ pub struct AppState {
     /// each time. Invalidated implicitly: the key changes when the active
     /// subscription, its profile, or `auto_default_rules` changes on disk.
     pub profile_cache: Mutex<Option<commands::ProfileCacheEntry>>,
+    /// ice-subscription parse cache (SUB-6). Shared by the UI read path;
+    /// owned here instead of a process-global static.
+    pub profile_parse_cache: ice_engine::ProfileCache,
+    /// Subscription auto-update watchdog liveness (SUB-4). False while the
+    /// outer loop is restarting after a panic.
+    pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
     pub log_view_cache: Mutex<Option<commands::LogViewCache>>,
@@ -185,6 +199,10 @@ pub fn run() {
                 traffic: TrafficMonitor::new(),
                 capture,
                 profile_cache: Mutex::new(None),
+                profile_parse_cache: ice_engine::ProfileCache::new(),
+                subscription_watchdog_alive: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(true),
+                ),
                 log_view_cache: Mutex::new(None),
                 helper_probe_cache: Mutex::new(None),
                 tun_task_cache: Mutex::new(None),

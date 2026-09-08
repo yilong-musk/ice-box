@@ -3,11 +3,11 @@
 use super::*;
 use crate::capture::CaptureController;
 use ice_config::{AppPaths, NormalizedOutbound};
-use ice_proxy_sys::is_proxy_applied_on_disk;
-use ice_subscription::{
+use ice_engine::{
     load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
     SubscriptionPaths,
 };
+use ice_proxy_sys::is_proxy_applied_on_disk;
 use std::fs;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,6 +73,8 @@ fn temp_state_with_node(label: &str) -> AppState {
         traffic: ice_core::TrafficMonitor::new(),
         capture: CaptureController::new(paths.clone(), None),
         profile_cache: Mutex::new(None),
+        profile_parse_cache: ice_engine::ProfileCache::new(),
+        subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         log_view_cache: Mutex::new(None),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
@@ -138,6 +140,8 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         traffic: ice_core::TrafficMonitor::new(),
         capture: CaptureController::new(paths.clone(), None),
         profile_cache: Mutex::new(None),
+        profile_parse_cache: ice_engine::ProfileCache::new(),
+        subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         log_view_cache: Mutex::new(None),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
@@ -369,9 +373,7 @@ fn profile_cache_serves_unchanged_and_invalidates_on_update() {
     // rewritten atomically, which must invalidate the cached entry.
     let sub = SubscriptionPaths::from_app(&state.paths);
     let index = load_index(&sub).unwrap();
-    let meta = ice_subscription::active_subscription(&index)
-        .unwrap()
-        .clone();
+    let meta = ice_engine::active_subscription(&index).unwrap().clone();
     let nodes = vec![NormalizedOutbound {
         tag: "n2".into(),
         outbound: serde_json::json!({"type":"socks","tag":"n2","server":"2.2.2.2","server_port":1}),

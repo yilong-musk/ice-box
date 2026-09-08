@@ -655,7 +655,7 @@ mod tests_g5 {
         assert_eq!(sel.as_deref(), Some("one"));
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: sel,
             geoip_rule_set_dir: None,
             group_selections: Default::default(),
@@ -1194,6 +1194,10 @@ mod tests_g5 {
             "one job must surface the injected panic"
         );
         assert!(
+            mgr.fetch_workers_alive(),
+            "a per-job panic must not mark the worker pool dead"
+        );
+        assert!(
             results.iter().any(|(_, r)| r.is_ok()),
             "the next job must still run after a panic"
         );
@@ -1213,7 +1217,7 @@ pub use fetch::{
 };
 pub use merge::{
     active_subscription, list_profile_outbounds, load_active_profile,
-    load_active_profile_with_default_rules, resolve_selected_tag, short_id,
+    load_active_profile_with_default_rules, resolve_selected_tag, short_id, ProfileCache,
 };
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
@@ -1234,6 +1238,7 @@ use ice_config::{
     HostPlatform, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -1643,6 +1648,9 @@ pub struct SubscriptionManager<F: HttpFetcher = DirectFetcher> {
     paths: SubscriptionPaths,
     fetcher: F,
     platform: HostPlatform,
+    /// False when a fetch worker exited because the result channel closed
+    /// (SUB-4). The desktop watchdog inspects this and respawns.
+    worker_alive: Arc<AtomicBool>,
 }
 
 /// Result of the network phase of an update; the disk phase consumes it via
@@ -1671,6 +1679,7 @@ impl SubscriptionManager<DirectFetcher> {
             paths,
             fetcher: DirectFetcher,
             platform,
+            worker_alive: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -1685,7 +1694,14 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             paths,
             fetcher,
             platform,
+            worker_alive: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// Whether the last [`Self::fetch_ids`] worker pool is still considered live
+    /// (SUB-4). A closed result channel flips this to false.
+    pub fn fetch_workers_alive(&self) -> bool {
+        self.worker_alive.load(Ordering::SeqCst)
     }
 
     pub fn paths(&self) -> &SubscriptionPaths {
@@ -1880,6 +1896,8 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             return Vec::new();
         }
 
+        self.worker_alive.store(true, Ordering::SeqCst);
+        let worker_alive = Arc::clone(&self.worker_alive);
         let worker_count = ids.len().min(MAX_FETCH_CONCURRENCY);
         let queue = std::sync::Arc::new(std::sync::Mutex::new(
             ids.into_iter()
@@ -1892,6 +1910,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             for _ in 0..worker_count {
                 let queue = std::sync::Arc::clone(&queue);
                 let sender = sender.clone();
+                let worker_alive = Arc::clone(&worker_alive);
                 scope.spawn(move || loop {
                     let job = queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
                     let Some((index, id)) = job else {
@@ -1906,6 +1925,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                         ))
                     });
                     if sender.send((index, id, result)).is_err() {
+                        worker_alive.store(false, Ordering::SeqCst);
                         tracing::error!("subscription fetch receiver dropped; worker exiting");
                         break;
                     }
@@ -2031,13 +2051,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         set_auto_update(&self.paths, id, auto_update, auto_update_interval)
     }
 
-    pub fn active_profile(&self) -> Result<NormalizedProfile, SubscriptionError> {
+    pub fn active_profile(&self) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
         let index = load_index(&self.paths)?;
-        Ok(Arc::unwrap_or_clone(load_active_profile(
-            &self.paths,
-            &index,
-            self.platform,
-        )?))
+        load_active_profile(&self.paths, &index, self.platform)
     }
 }
 

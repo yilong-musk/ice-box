@@ -20,10 +20,14 @@ pub use ice_config::{
     RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
-    apply_builtin_default_rules, detect_format, load_active_profile_with_default_rules, load_index,
-    maybe_decode_base64, normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox,
-    parse_singbox_profile, parse_subscription, resolve_selected_tag, DirectFetcher, FetchResponse,
-    HttpFetcher, MemorySubscriptionManager, SubscriptionError, SubscriptionFormat,
+    active_subscription, apply_builtin_default_rules, detect_format, list_profile_outbounds,
+    load_active_profile, load_active_profile_with_default_rules, load_index, maybe_decode_base64,
+    normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox, parse_singbox_profile,
+    parse_subscription, read_profile, recover_subscription_dirs, redact_subscription_url_for_log,
+    redact_subscription_url_for_ui, remove_subscription, resolve_selected_tag, set_active,
+    set_auto_update, set_enabled, write_subscription_error, write_subscription_success,
+    AutoUpdateInterval, DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager,
+    MockFetchMode, MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat,
     SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
 pub use ice_types::{AppError, ENGINE_COMPAT_CORE_VERSION};
@@ -108,7 +112,7 @@ pub fn subscription_to_config(
     apply_builtin_default_rules(&mut profile, platform);
     let input = BuildInput {
         template,
-        profile,
+        profile: std::sync::Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir,
         group_selections: GroupSelections::new(),
@@ -319,15 +323,17 @@ proxies:
                 proxy_mode: ProxyMode::Global,
                 ..LocalTemplate::default()
             },
-            profile: NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
-                tag: "n1".into(),
-                outbound: serde_json::json!({
-                    "type": "socks",
-                    "tag": "n1",
-                    "server": "127.0.0.1",
-                    "server_port": 1080
-                }),
-            }]),
+            profile: std::sync::Arc::new(NormalizedProfile::from_nodes_only(vec![
+                NormalizedOutbound {
+                    tag: "n1".into(),
+                    outbound: serde_json::json!({
+                        "type": "socks",
+                        "tag": "n1",
+                        "server": "127.0.0.1",
+                        "server_port": 1080
+                    }),
+                },
+            ])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -361,7 +367,7 @@ proxies:
     fn config_errors_are_surfaced_as_engine_errors() {
         let err = build_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile: NormalizedProfile::from_nodes_only(vec![]),
+            profile: std::sync::Arc::new(NormalizedProfile::from_nodes_only(vec![])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),

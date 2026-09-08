@@ -38,17 +38,11 @@ use ice_tun_sys::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::lock_poisoned;
 use crate::orchestrate::{
     build_core_paths, generate_config, orchestrate_disable_system_proxy,
     orchestrate_enable_system_proxy,
 };
-
-fn lock_poisoned(context: &str) -> AppError {
-    AppError::new(
-        ErrorCode::LockPoisoned,
-        format!("internal lock poisoned: {context}"),
-    )
-}
 
 fn map_tun(err: TunError) -> AppError {
     AppError::new(tun_code(err.code), err.message)

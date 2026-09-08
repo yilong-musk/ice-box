@@ -1327,6 +1327,41 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn adopt_external_accepts_live_process_named_sing_box() {
+        let dir = temp_root("adopt-live");
+        let bin = dir.join("sing-box");
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .expect("sleep binary");
+        if std::os::unix::fs::symlink(sleep, &bin).is_err() {
+            fs::copy(sleep, &bin).expect("copy sleep as sing-box");
+        }
+        let mut child = std::process::Command::new(&bin)
+            .arg("8")
+            .spawn()
+            .expect("spawn sing-box stub");
+        let pid = child.id();
+        let paths = paths_in(&dir, bin.clone());
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        let adopted = core.adopt_external(pid, &paths);
+        if adopted.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        adopted.expect("adopt live process whose image is named sing-box");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = core.stop(&paths.pid_file);
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     // --- G2.1 ---
 
     #[test]

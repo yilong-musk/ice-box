@@ -23,15 +23,14 @@ pub(crate) use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
     HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
 };
-pub(crate) use ice_engine::host_platform;
+pub(crate) use ice_engine::{
+    active_subscription, host_platform, list_profile_outbounds, load_index,
+    redact_subscription_url_for_log, redact_subscription_url_for_ui, write_subscription_error,
+    SubscriptionError, SubscriptionManager, SubscriptionPaths,
+};
 pub(crate) use ice_proxy_sys::{
     disk_proxy_state, is_proxy_live_applied, proxy_backup_indicates_ownership,
     recover_if_applied_hinted, DiskProxyState, ProxyEndpoints, RecoverOutcome,
-};
-pub(crate) use ice_subscription::{
-    active_subscription, list_profile_outbounds, load_active_profile_with_default_rules,
-    load_index, redact_subscription_url_for_log, redact_subscription_url_for_ui,
-    write_subscription_error, SubscriptionError, SubscriptionManager, SubscriptionPaths,
 };
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::path::Path;
@@ -44,12 +43,7 @@ pub(crate) use std::time::{Instant, SystemTime};
 pub(crate) use tauri::{AppHandle, Manager, State};
 pub(crate) use uuid::Uuid;
 
-pub(crate) fn lock_poisoned(context: &str) -> AppError {
-    AppError::new(
-        ErrorCode::LockPoisoned,
-        format!("internal lock poisoned: {context}"),
-    )
-}
+pub(crate) use crate::lock_poisoned;
 
 pub(crate) fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, AppError> {
     state
@@ -328,7 +322,7 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     let auto_default_rules = current_settings(&state.paths)
         .map(|s| s.auto_default_rules)
         .unwrap_or(true);
-    let profile = match load_active_profile_with_default_rules(
+    let profile = match state.profile_parse_cache.load_active_with_default_rules(
         &sub_paths,
         &index,
         auto_default_rules,
@@ -448,7 +442,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
     let core_state = state.core_snapshot.load().state.clone();
     let running = core_state.status == CoreStatus::Running;
     let paths = SubscriptionPaths::from_app(&state.paths);
-    let count = ice_subscription::load_index(&paths)
+    let count = ice_engine::load_index(&paths)
         .map(|i| i.items.len())
         .unwrap_or(0);
     let proxy_recovery_warning = state

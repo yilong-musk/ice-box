@@ -10,7 +10,7 @@ pub struct AddSubscriptionRequest {
     #[serde(default)]
     pub auto_update: bool,
     #[serde(default)]
-    pub auto_update_interval: Option<ice_subscription::AutoUpdateInterval>,
+    pub auto_update_interval: Option<ice_engine::AutoUpdateInterval>,
 }
 
 #[tauri::command]
@@ -18,7 +18,7 @@ pub async fn list_subscriptions(app: AppHandle) -> Result<serde_json::Value, App
     run_blocking("list_subscriptions", move || {
         let state = app.state::<AppState>();
         let paths = SubscriptionPaths::from_app(&state.paths);
-        let index = ice_subscription::load_index(&paths).map_err(AppError::from)?;
+        let index = ice_engine::load_index(&paths).map_err(AppError::from)?;
         let public: Vec<serde_json::Value> = index
             .items
             .iter()
@@ -107,7 +107,7 @@ pub async fn remove_subscription(
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let paths = SubscriptionPaths::from_app(&state.paths);
-        ice_subscription::remove_subscription(&paths, req.id).map_err(AppError::from)?;
+        ice_engine::remove_subscription(&paths, req.id).map_err(AppError::from)?;
 
         let settings = current_settings(&state.paths)?;
         let apply_warning = apply_after_subscription_change(&app, &state, &settings);
@@ -202,8 +202,7 @@ pub async fn set_active_subscription(
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let paths = SubscriptionPaths::from_app(&state.paths);
-        let meta =
-            ice_subscription::set_active(&paths, req.id, req.active).map_err(AppError::from)?;
+        let meta = ice_engine::set_active(&paths, req.id, req.active).map_err(AppError::from)?;
 
         let settings = current_settings(&state.paths)?;
         let apply_warning = apply_after_subscription_change(&app, &state, &settings);
@@ -220,7 +219,7 @@ pub struct SetAutoUpdateRequest {
     pub id: Uuid,
     pub auto_update: bool,
     #[serde(default)]
-    pub auto_update_interval: Option<ice_subscription::AutoUpdateInterval>,
+    pub auto_update_interval: Option<ice_engine::AutoUpdateInterval>,
 }
 
 #[tauri::command]
@@ -232,13 +231,9 @@ pub async fn set_auto_update_subscription(
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let paths = SubscriptionPaths::from_app(&state.paths);
-        let meta = ice_subscription::set_auto_update(
-            &paths,
-            req.id,
-            req.auto_update,
-            req.auto_update_interval,
-        )
-        .map_err(AppError::from)?;
+        let meta =
+            ice_engine::set_auto_update(&paths, req.id, req.auto_update, req.auto_update_interval)
+                .map_err(AppError::from)?;
         tracing::info!(
             id = %req.id,
             auto_update = req.auto_update,

@@ -23,7 +23,6 @@ ice-core = { workspace = true }
 ice-proxy-sys = { workspace = true }
 ice-engine = { workspace = true }
 ice-config = { workspace = true }
-ice-subscription = { workspace = true }
 ice-tun-sys = { workspace = true }
 ice-elevate = { workspace = true }
 sha2 = "0.10"

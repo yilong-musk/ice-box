@@ -623,15 +623,30 @@ impl MacosTunBackend {
     /// must not treat unknown as consistent, and must not treat unknown as
     /// "not owned".
     fn dns_matches_after(&self, after: &DnsSnapshot) -> Option<bool> {
+        self.dns_matches_after_retries(after, DNS_PROBE_TRIES, DNS_PROBE_DELAY_MS)
+    }
+
+    /// Apply-path wait: keep probing until the adapter-appear deadline, then
+    /// fail closed (`tun.healthcheck_failed`) if DNS is still unknown (TUN-1).
+    fn dns_matches_after_until_deadline(&self, after: &DnsSnapshot) -> Option<bool> {
+        self.dns_matches_after_retries(after, INTERFACE_APPEAR_TRIES, INTERFACE_APPEAR_DELAY_MS)
+    }
+
+    fn dns_matches_after_retries(
+        &self,
+        after: &DnsSnapshot,
+        tries: u32,
+        delay_ms: u64,
+    ) -> Option<bool> {
         let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
         let mut last_err = None;
-        for attempt in 0..DNS_PROBE_TRIES {
+        for attempt in 0..tries {
             match self.host.dns_servers(&service) {
                 Ok(current) => return Some(current == expected),
                 Err(err) => {
                     last_err = Some(err);
-                    if attempt + 1 < DNS_PROBE_TRIES {
-                        std::thread::sleep(Duration::from_millis(DNS_PROBE_DELAY_MS));
+                    if attempt + 1 < tries {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
                     }
                 }
             }
@@ -640,7 +655,7 @@ impl MacosTunBackend {
             tracing::error!(
                 error = %err,
                 service = %service,
-                tries = DNS_PROBE_TRIES,
+                tries,
                 "macos tun dns probe failed"
             );
         }
@@ -833,6 +848,23 @@ impl TunBackend for MacosTunBackend {
                 journal.dns_after = dns_after.clone();
             }) {
                 return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+            }
+            // TUN-1: unknown DNS after hijack is not "consistent". Keep
+            // probing up to the adapter-appear deadline, then fail closed.
+            if let Some(after) = &dns_after {
+                if self.dns_matches_after_until_deadline(after) != Some(true) {
+                    return Err(self.rollback_dns_after_apply_failure(
+                        &service,
+                        &before,
+                        TunError::new(
+                            TunErrorCode::HealthcheckFailed,
+                            format!(
+                                "DNS on {service} did not match the applied snapshot after {} ms",
+                                INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
+                            ),
+                        ),
+                    ));
+                }
             }
         }
 

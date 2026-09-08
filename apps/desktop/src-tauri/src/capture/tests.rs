@@ -241,7 +241,7 @@ fn seed_applied_proxy(paths: &AppPaths) {
 }
 
 fn seed_subscription(paths: &AppPaths) {
-    use ice_subscription::{
+    use ice_engine::{
         write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
     };
     let sub = SubscriptionPaths::from_app(paths);

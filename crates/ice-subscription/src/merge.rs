@@ -30,83 +30,113 @@ struct ProfileLoadCache {
     profile: Arc<NormalizedProfile>,
 }
 
-/// Process-wide parse cache for the active profile. `generate_config` and the
-/// UI read path otherwise deserialize the same multi-MB `profile.json` on
-/// every cold start.
-static PROFILE_LOAD_CACHE: Mutex<Option<ProfileLoadCache>> = Mutex::new(None);
+/// Parsed-active-profile cache owned by the host (`AppState`), not a process
+/// static, so tests and multiple app instances do not share state (SUB-6).
+#[derive(Default)]
+pub struct ProfileCache {
+    inner: Mutex<Option<ProfileLoadCache>>,
+}
+
+impl ProfileCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load profile for the active subscription, attaching the built-in
+    /// split-routing defaults (they are not baked into the cached profile).
+    pub fn load_active(
+        &self,
+        paths: &SubscriptionPaths,
+        index: &SubscriptionIndex,
+        platform: HostPlatform,
+    ) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
+        self.load_active_with_default_rules(paths, index, true, platform)
+    }
+
+    /// Like [`Self::load_active`], honoring the app's `auto_default_rules`
+    /// setting: when enabled, rule-less profiles get the built-in defaults at
+    /// load time so both the Rules page and the generated config stay consistent.
+    ///
+    /// The cached `profile.json` may predate the Windows DNS emission (parsed by
+    /// an older binary), so the platform DNS shape is re-applied at load time:
+    /// [`normalize_dns_on`] drops fakeip / `local` / UDP upstreams and pins the
+    /// anchor (no-op off-Windows).
+    ///
+    /// Cache hits return a cloned `Arc` (SUB-6); the profile body is not copied.
+    pub fn load_active_with_default_rules(
+        &self,
+        paths: &SubscriptionPaths,
+        index: &SubscriptionIndex,
+        auto_default_rules: bool,
+        platform: HostPlatform,
+    ) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
+        let meta = active_subscription(index).ok_or(SubscriptionError::NoActiveSubscription)?;
+        if !paths.sub_dir(meta.id).exists() {
+            return Err(SubscriptionError::ParseFailed(format!(
+                "active subscription {} ({}) is missing on disk",
+                meta.name, meta.id
+            )));
+        }
+        let profile_path = paths.profile(meta.id);
+        let nodes_path = paths.nodes(meta.id);
+        let profile_sig = file_sig(&profile_path);
+        let nodes_sig = file_sig(&nodes_path);
+
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.as_ref() {
+            if entry.profile_path == profile_path
+                && entry.profile_sig == profile_sig
+                && entry.nodes_sig == nodes_sig
+                && entry.auto_default_rules == auto_default_rules
+                && entry.platform == platform
+            {
+                return Ok(Arc::clone(&entry.profile));
+            }
+        }
+
+        let mut profile = read_profile(paths, meta.id)?;
+        normalize_dns_on(&mut profile, platform.is_windows());
+        if auto_default_rules {
+            apply_builtin_default_rules(&mut profile, platform);
+        }
+        let profile = Arc::new(profile);
+        *cache = Some(ProfileLoadCache {
+            profile_path,
+            profile_sig,
+            nodes_sig,
+            auto_default_rules,
+            platform,
+            profile: profile.clone(),
+        });
+        Ok(profile)
+    }
+}
 
 /// Returns the active subscription meta, if any.
 pub fn active_subscription(index: &SubscriptionIndex) -> Option<&SubscriptionMeta> {
     index.items.iter().find(|m| m.active)
 }
 
-/// Load profile for the active subscription, attaching the built-in
-/// split-routing defaults (they are not baked into the cached profile).
+/// Uncached load (each call parses). Prefer [`ProfileCache`] in long-lived hosts.
 pub fn load_active_profile(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
     platform: HostPlatform,
 ) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
-    load_active_profile_with_default_rules(paths, index, true, platform)
+    ProfileCache::new().load_active(paths, index, platform)
 }
 
-/// Like [`load_active_profile`], honoring the app's `auto_default_rules`
-/// setting: when enabled, rule-less profiles get the built-in defaults at
-/// load time so both the Rules page and the generated config stay consistent.
-///
-/// The cached `profile.json` may predate the Windows DNS emission (parsed by
-/// an older binary), so the platform DNS shape is re-applied at load time:
-/// [`normalize_dns_on`] drops fakeip / `local` / UDP upstreams and pins the
-/// anchor (no-op off-Windows).
-///
-/// Cache hits return a cloned `Arc` (SUB-6); the profile body is not copied.
+/// Uncached load (each call parses). Prefer [`ProfileCache`] in long-lived hosts.
 pub fn load_active_profile_with_default_rules(
     paths: &SubscriptionPaths,
     index: &SubscriptionIndex,
     auto_default_rules: bool,
     platform: HostPlatform,
 ) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
-    let meta = active_subscription(index).ok_or(SubscriptionError::NoActiveSubscription)?;
-    if !paths.sub_dir(meta.id).exists() {
-        return Err(SubscriptionError::ParseFailed(format!(
-            "active subscription {} ({}) is missing on disk",
-            meta.name, meta.id
-        )));
-    }
-    let profile_path = paths.profile(meta.id);
-    let nodes_path = paths.nodes(meta.id);
-    let profile_sig = file_sig(&profile_path);
-    let nodes_sig = file_sig(&nodes_path);
-
-    let mut cache = PROFILE_LOAD_CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(entry) = cache.as_ref() {
-        if entry.profile_path == profile_path
-            && entry.profile_sig == profile_sig
-            && entry.nodes_sig == nodes_sig
-            && entry.auto_default_rules == auto_default_rules
-            && entry.platform == platform
-        {
-            return Ok(Arc::clone(&entry.profile));
-        }
-    }
-
-    let mut profile = read_profile(paths, meta.id)?;
-    normalize_dns_on(&mut profile, platform.is_windows());
-    if auto_default_rules {
-        apply_builtin_default_rules(&mut profile, platform);
-    }
-    let profile = Arc::new(profile);
-    *cache = Some(ProfileLoadCache {
-        profile_path,
-        profile_sig,
-        nodes_sig,
-        auto_default_rules,
-        platform,
-        profile: profile.clone(),
-    });
-    Ok(profile)
+    ProfileCache::new().load_active_with_default_rules(paths, index, auto_default_rules, platform)
 }
 
 /// Resolve `selected_tag`: keep if present in outbounds/groups, else default_outbound or first tag.
@@ -214,13 +244,14 @@ mod tests {
         )
         .expect("seed");
         let index = load_index(&paths).expect("index");
-        let first =
-            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
-                .expect("first");
+        let cache = ProfileCache::new();
+        let first = cache
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("first");
         assert_eq!(first.nodes[0].tag, "n1");
-        let again =
-            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
-                .expect("cache");
+        let again = cache
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("cache");
         assert_eq!(again.nodes[0].tag, "n1");
         assert!(
             std::sync::Arc::ptr_eq(&first, &again),
@@ -235,9 +266,9 @@ mod tests {
         )
         .expect("rewrite");
         let index = load_index(&paths).expect("index");
-        let updated =
-            load_active_profile_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
-                .expect("invalidated");
+        let updated = cache
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("invalidated");
         assert_eq!(updated.nodes[0].tag, "n2-longer-tag");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -8,11 +8,11 @@ mod tests {
     use crate::test_settings;
     use ice_config::{write_json_atomic, AppPaths, AppSettings, CaptureIntent};
     use ice_core::{CoreController, CoreStatus, ImmediateHealthProbe, MockReloader, MockSpawner};
-    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
-    use ice_subscription::{
+    use ice_engine::{
         FetchResponse, MockFetchMode, MockFetcher, SubscriptionFormat, SubscriptionManager,
         SubscriptionPaths,
     };
+    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
     use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
@@ -226,6 +226,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: ice_engine::ProfileCache::new(),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
@@ -265,10 +269,10 @@ mod live {
     };
     use ice_config::{AppPaths, AppSettings, CaptureIntent};
     use ice_core::{resolve_singbox_binary, CoreController, CoreStatus};
-    use ice_proxy_sys::{create_system_proxy, ProxyBackupFile, SystemProxy};
-    use ice_subscription::{
+    use ice_engine::{
         FetchResponse, MockFetchMode, MockFetcher, SubscriptionManager, SubscriptionPaths,
     };
+    use ice_proxy_sys::{create_system_proxy, ProxyBackupFile, SystemProxy};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -674,7 +678,7 @@ mod live {
     fn g9_10_live_group_exits_listable_and_switchable() {
         use ice_config::HostPlatform;
         use ice_core::{proxy_groups, select_group, GroupState, HealthEndpoints};
-        use ice_subscription::{list_profile_outbounds, load_active_profile, load_index};
+        use ice_engine::{list_profile_outbounds, load_active_profile, load_index};
 
         let paths = temp_app("group-exits");
         let body = repo_fixture("subscription-clash-profile-full.yaml");

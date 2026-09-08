@@ -48,7 +48,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 /// The runtime capture intent for a generated config (plan §4.1).
@@ -164,7 +164,13 @@ pub struct NormalizedOutbound {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildInput {
     pub template: LocalTemplate,
-    pub profile: NormalizedProfile,
+    /// Shared with the desktop profile cache so Apply does not clone a
+    /// multi-MB `NormalizedProfile` (SUB-6).
+    #[serde(
+        serialize_with = "crate::serialize_arc_profile",
+        deserialize_with = "crate::deserialize_arc_profile"
+    )]
+    pub profile: Arc<NormalizedProfile>,
     /// Optional selected outbound / selector tag.
     pub selected_tag: Option<String>,
     /// Directory containing bundled `geoip-{code}.srs` rule-set files (app resources).
@@ -187,6 +193,19 @@ pub struct BuildInput {
     pub platform: HostPlatform,
 }
 
+fn serialize_arc_profile<S: serde::Serializer>(
+    profile: &Arc<NormalizedProfile>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    profile.as_ref().serialize(serializer)
+}
+
+fn deserialize_arc_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Arc<NormalizedProfile>, D::Error> {
+    NormalizedProfile::deserialize(deserializer).map(Arc::new)
+}
+
 /// Legacy helper: build from flat node list (tests / fallback).
 pub fn build_input_from_nodes(
     template: LocalTemplate,
@@ -195,7 +214,7 @@ pub fn build_input_from_nodes(
 ) -> BuildInput {
     BuildInput {
         template,
-        profile: NormalizedProfile::from_nodes_only(outbounds),
+        profile: Arc::new(NormalizedProfile::from_nodes_only(outbounds)),
         selected_tag,
         geoip_rule_set_dir: None,
         group_selections: GroupSelections::new(),
@@ -1482,7 +1501,7 @@ mod build_tests {
         selections.insert("Proxies".into(), "b".into());
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: Some("Proxies".into()),
             geoip_rule_set_dir: None,
             group_selections: selections,
@@ -1559,7 +1578,7 @@ mod build_tests {
     fn g5_10_empty_outbounds() {
         let err = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile: NormalizedProfile::from_nodes_only(vec![]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1603,7 +1622,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1651,7 +1670,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile: profile_with_geoip(&["cn"]),
+            profile: Arc::new(profile_with_geoip(&["cn"])),
             selected_tag: None,
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
@@ -1695,7 +1714,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile: profile_with_geoip(&["kz"]),
+            profile: Arc::new(profile_with_geoip(&["kz"])),
             selected_tag: None,
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
@@ -1751,7 +1770,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: Some(dir.clone()),
             group_selections: GroupSelections::new(),
@@ -1824,7 +1843,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1874,7 +1893,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1913,7 +1932,7 @@ mod build_tests {
 
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1950,7 +1969,7 @@ mod build_tests {
         })];
         let err = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -1972,7 +1991,7 @@ mod build_tests {
         ];
         let cfg = build_runtime_config(&BuildInput {
             template: LocalTemplate::default(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2020,7 +2039,7 @@ mod build_tests {
                 proxy_mode: ProxyMode::Global,
                 ..LocalTemplate::default()
             },
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2055,7 +2074,7 @@ mod build_tests {
                 proxy_mode: ProxyMode::Global,
                 ..LocalTemplate::default()
             },
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2090,7 +2109,7 @@ mod build_tests {
                 proxy_mode: ProxyMode::Direct,
                 ..LocalTemplate::default()
             },
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2220,7 +2239,7 @@ mod build_tests {
         // non-green platforms, but Diagnostic must build identically everywhere.
         let cfg = build_runtime_config(&BuildInput {
             template: template.clone(),
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2247,7 +2266,7 @@ mod build_tests {
     fn tun_config_has_both_inbounds_and_locked_shape() {
         let cfg = build_runtime_config(&BuildInput {
             template: tun_template(),
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2308,7 +2327,7 @@ mod build_tests {
         ];
         let cfg = build_runtime_config(&BuildInput {
             template: tun_template(),
-            profile,
+            profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2351,7 +2370,7 @@ mod build_tests {
             };
             let cfg = build_runtime_config(&BuildInput {
                 template: template.clone(),
-                profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+                profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
                 group_selections: GroupSelections::new(),
@@ -2393,7 +2412,7 @@ mod build_tests {
         };
         let err = build_runtime_config(&BuildInput {
             template: template.clone(),
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2420,7 +2439,7 @@ mod build_tests {
         };
         let err = build_runtime_config(&BuildInput {
             template: bad_mtu,
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2458,7 +2477,7 @@ mod build_tests {
         };
         let err = build_runtime_config(&BuildInput {
             template: template.clone(),
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),
@@ -2594,7 +2613,7 @@ mod build_tests {
     fn build_input_serde_preserves_capture_intent_and_defaults_to_diagnostic() {
         let value = serde_json::to_value(BuildInput {
             template: LocalTemplate::default(),
-            profile: NormalizedProfile::from_nodes_only(vec![socks("a")]),
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
             group_selections: GroupSelections::new(),

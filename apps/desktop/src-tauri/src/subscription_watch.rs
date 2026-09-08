@@ -5,10 +5,10 @@
 use crate::commands;
 use crate::orchestrate::current_settings;
 use crate::AppState;
-use ice_engine::host_platform;
-use ice_subscription::{
-    AutoUpdateInterval, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
+use ice_engine::{
+    host_platform, AutoUpdateInterval, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -82,6 +82,9 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
         return true;
     }
     let fetched = mgr.fetch_ids(due);
+    if !mgr.fetch_workers_alive() {
+        tracing::error!("subscription fetch workers died; a later tick starts a fresh pool");
+    }
     let Ok(_orch) = state.orchestrate.try_lock() else {
         tracing::debug!("auto-update: orchestrate busy, deferring apply");
         return false;
@@ -107,13 +110,28 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
 /// closed refresh promptly instead of waiting for the first hourly tick.
 pub fn spawn_subscription_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
+        if let Some(state) = app.try_state::<AppState>() {
+            state
+                .subscription_watchdog_alive
+                .store(true, Ordering::SeqCst);
+        }
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_subscription_watchdog_loop(&app);
         }));
         if panicked.is_err() {
+            if let Some(state) = app.try_state::<AppState>() {
+                state
+                    .subscription_watchdog_alive
+                    .store(false, Ordering::SeqCst);
+            }
             tracing::error!("subscription watchdog panicked; restarting after a delay");
             std::thread::sleep(STARTUP_RETRY_DELAY);
             continue;
+        }
+        if let Some(state) = app.try_state::<AppState>() {
+            state
+                .subscription_watchdog_alive
+                .store(false, Ordering::SeqCst);
         }
         break;
     });
@@ -167,7 +185,7 @@ mod tests {
             name: "t".into(),
             url: "https://example.com/s".into(),
             active: false,
-            format: ice_subscription::SubscriptionFormat::SingBox,
+            format: ice_engine::SubscriptionFormat::SingBox,
             node_count: 1,
             group_count: 0,
             rule_count: 0,

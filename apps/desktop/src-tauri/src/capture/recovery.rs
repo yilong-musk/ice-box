@@ -438,7 +438,7 @@ impl CaptureController {
     /// Reconcile a transition candidate's selected tag against the active
     /// profile, without writing disk (plan §4.3 commit-after-health).
     pub(crate) fn reconciled_candidate(&self, settings: &AppSettings) -> AppSettings {
-        use ice_subscription::{load_active_profile, load_index, SubscriptionPaths};
+        use ice_engine::{load_active_profile, load_index, SubscriptionPaths};
         let sub_paths = SubscriptionPaths::from_app(&self.paths);
         match load_index(&sub_paths)
             .ok()

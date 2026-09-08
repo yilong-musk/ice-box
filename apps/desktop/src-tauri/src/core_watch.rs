@@ -266,6 +266,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: ice_engine::ProfileCache::new(),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),

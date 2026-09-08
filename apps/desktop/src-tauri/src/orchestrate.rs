@@ -13,15 +13,13 @@ use ice_core::{
 };
 use ice_engine::{
     build_config, build_direct_only_config, host_platform, load_active_profile_with_default_rules,
-    load_index, resolve_selected_tag,
+    load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
 };
 use ice_proxy_sys::{
     apply_and_record, disk_proxy_state, is_proxy_live_applied, restore_and_clear_flag,
     DiskProxyState, ProxyEndpoints, SystemProxy,
 };
-use ice_subscription::{SubscriptionError, SubscriptionPaths};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 pub fn repo_third_party_singbox() -> PathBuf {
     // apps/desktop/src-tauri → repo root
@@ -289,7 +287,7 @@ pub fn generate_config(
     let rule_overrides = load_rule_overrides(&app_paths.rule_overrides());
     let config = build_config(&BuildInput {
         template: settings.to_local_template(),
-        profile: Arc::unwrap_or_clone(profile),
+        profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
         group_selections,
@@ -727,12 +725,12 @@ mod tests {
         CoreController, ImmediateHealthProbe, MockClashApi, MockReloadMode, MockReloader,
         MockSpawner, SequenceHealthProbe,
     };
+    use ice_engine::{
+        write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
+    };
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     use ice_proxy_sys::create_system_proxy;
     use ice_proxy_sys::{NoopSystemProxy, ProxyBackup, ProxyBackupFile, ProxySysError};
-    use ice_subscription::{
-        write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
-    };
     use std::cell::Cell;
     use std::fs;
     use std::sync::Arc;
@@ -1413,7 +1411,7 @@ mod tests {
                 .collect()
         }
 
-        ice_subscription::set_enabled(&sub, id, false).unwrap();
+        ice_engine::set_enabled(&sub, id, false).unwrap();
         generate_config(
             &paths,
             &AppSettings::default(),
@@ -1427,7 +1425,7 @@ mod tests {
             "no active subscription falls back to direct-only config"
         );
 
-        ice_subscription::set_enabled(&sub, id, true).unwrap();
+        ice_engine::set_enabled(&sub, id, true).unwrap();
         generate_config(
             &paths,
             &AppSettings::default(),
@@ -1437,7 +1435,7 @@ mod tests {
         .unwrap();
         assert_ne!(direct_only_tags(&paths), ["direct", "block"]);
 
-        ice_subscription::remove_subscription(&sub, id).unwrap();
+        ice_engine::remove_subscription(&sub, id).unwrap();
         generate_config(
             &paths,
             &AppSettings::default(),
