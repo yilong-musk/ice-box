@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::coordinator::CoreCoordinator;
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::helper_protocol::{
     decode_response, encode_request, validate_config_path, HelperCommand, HelperRequest,
     HelperResponse, DEFAULT_SOCKET_PATH,
@@ -72,7 +72,7 @@ pub fn helper_token(data_dir: &Path) -> Result<String, TunError> {
     let token_file = data_dir.join(HELPER_TOKEN_FILE);
     let raw = std::fs::read_to_string(&token_file).map_err(|e| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "privileged helper not installed or not authorized (no {}): {e}",
                 token_file.display()
@@ -82,7 +82,7 @@ pub fn helper_token(data_dir: &Path) -> Result<String, TunError> {
     let token = raw.trim();
     if token.is_empty() {
         return Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!("helper token file is empty: {}", token_file.display()),
         ));
     }
@@ -104,7 +104,7 @@ pub fn roundtrip_with_timeout(
 ) -> Result<HelperResponse, TunError> {
     let stream = UnixStream::connect(socket).map_err(|e| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "privileged helper unreachable at {}: {e} (install and authorize the helper, or use the dev sudo path)",
                 socket.display()
@@ -116,7 +116,7 @@ pub fn roundtrip_with_timeout(
 
     let mut writer = stream.try_clone().map_err(|e| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("clone helper socket: {e}"),
         )
     })?;
@@ -124,7 +124,7 @@ pub fn roundtrip_with_timeout(
     line.push(b'\n');
     writer.write_all(&line).map_err(|e| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("write helper request: {e}"),
         )
     })?;
@@ -134,7 +134,7 @@ pub fn roundtrip_with_timeout(
     let mut response = String::new();
     reader.read_line(&mut response).map_err(|e| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("read helper response: {e}"),
         )
     })?;
@@ -210,11 +210,11 @@ impl CoreCoordinator for HelperCoreCoordinator {
                 pid: None,
                 ..
             } => Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "helper started the core but returned no pid",
             )),
             HelperResponse { ok: false, .. } => Err(response.into_error().unwrap_or_else(|| {
-                TunError::new(TunErrorCode::ApplyFailed, "helper rejected the start")
+                TunError::new(ErrorCode::TunApplyFailed, "helper rejected the start")
             })),
         }
     }
@@ -318,7 +318,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let err = helper_token(&dir).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -330,7 +330,7 @@ mod tests {
             command: HelperCommand::Status,
         };
         let err = roundtrip(Path::new("/nonexistent/ice-box-helper.sock"), &request).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
         assert!(!helper_reachable(
             Path::new("/nonexistent/ice-box-helper.sock"),
             "t"

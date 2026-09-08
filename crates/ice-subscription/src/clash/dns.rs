@@ -11,12 +11,12 @@
 //! drops the fakeip server and the `local` server, and rewires every
 //! `local` reference to the DNS `final` tag.
 
-use ice_config::NormalizedProfile;
+use ice_config::{NormalizedProfile, UiMessage};
 use serde_json::{json, Value};
 
 /// Platform-selectable DNS builder so the Windows shape is testable on any
 /// host.
-pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<String>) {
+pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<UiMessage>) {
     let mut warnings = Vec::new();
     let Some(dns) = doc.get("dns") else {
         return (None, warnings);
@@ -36,7 +36,8 @@ pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<String>) 
                 if let Some(server) = map_dns_server(s, &mut tag_idx) {
                     servers.push(server);
                 } else {
-                    warnings.push(format!("dns: unsupported nameserver {s}"));
+                    warnings
+                        .push(UiMessage::new("parse.dnsUnsupportedNameserver").with("server", s));
                 }
             }
         }
@@ -53,7 +54,7 @@ pub fn parse_dns_on(doc: &Value, windows: bool) -> (Option<Value>, Vec<String>) 
     }
 
     if servers.is_empty() {
-        warnings.push("dns: no usable nameserver entries".into());
+        warnings.push(UiMessage::new("parse.dnsNoUsableNameserver"));
         return (None, warnings);
     }
 

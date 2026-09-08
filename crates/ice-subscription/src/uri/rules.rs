@@ -366,13 +366,15 @@ mod tests {
             nodes: (0..nodes)
                 .map(|i| NormalizedOutbound {
                     tag: format!("n{i}"),
-                    outbound: json!({"type": "socks", "tag": format!("n{i}")}),
+                    outbound: std::sync::Arc::new(json!({"type": "socks", "tag": format!("n{i}")})),
                 })
                 .collect(),
             groups: (0..groups)
                 .map(|i| NormalizedOutbound {
                     tag: format!("g{i}"),
-                    outbound: json!({"type": "selector", "tag": format!("g{i}")}),
+                    outbound: std::sync::Arc::new(
+                        json!({"type": "selector", "tag": format!("g{i}")}),
+                    ),
                 })
                 .collect(),
             route: Default::default(),

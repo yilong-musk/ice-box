@@ -64,7 +64,7 @@ export function isGroupType(outboundType: string): boolean {
 }
 
 export function formatDelay(v: DelayCell): string {
-  if (v === null) return "—";
+  if (v === null) return t("common.dash");
   if (v === "testing") return "…";
   if (v === "error") return t("delay.failed");
   return `${v} ms`;

@@ -799,7 +799,7 @@ v1 minimal UI set:
 
 ## 16. Logging and observability
 
-- App: `tracing` → `ice-box.log` (`ice_config::init_logging`; append-only without rotation in v1, rotation can come later)
+- App: `tracing` → `ice-box.log` (`ice_box_lib::runtime::init_logging`; size-rotated, keep 2 generations). Pid-file and size rotation helpers live in `ice-core`.
 - Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path), where the elevated core's output goes to the helper's fixed root-owned `/var/log/ice-box-core.log`; the log view merges that file in as an extra core source (best-effort, latched on the first helper-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner)
 - UI `get_log_view`: merges the log files and **sorts by time** (same-timestamp lines keep file read order; display lines use a compact timestamp and omit source tags)
 - Display filter (UI only, never touches the log files): keep WARN/ERROR/FATAL; keep all app INFO (deliberate key events by developers); core INFO only keeps lifecycle keywords (started / stopped / ready / reload / restart), per-connection traffic noise is dropped; DEBUG/TRACE never shown
@@ -857,7 +857,7 @@ TUN capture codes (TUN slice, §24):
 | `tun.helper_stale` / `tun.helper_install_failed` / `tun.helper_install_cancelled` / `tun.helper_not_ready` | macOS helper install / version drift |
 | `tun.elevation_cancelled` | Windows one-time UAC cancelled |
 
-The Rust enum `ice_config::ErrorCode` is the single IPC source of truth (including `tun.*` / `update.*`). `TunErrorCode` in `ice-tun-sys` maps onto those variants at the shell boundary. The desktop UI types `apps/desktop/src/api/errorCodes.ts` against the same strings.
+The Rust enum `ice_types::ErrorCode` (re-exported as `ice_config::ErrorCode`) is the single IPC source of truth (including `tun.*` / `update.*`). `TunError` in `ice-types` uses those `tun.*` variants. The desktop UI types `apps/desktop/src/api/errorCodes.ts` against the same strings.
 
 UI shows a localized summary for known codes (`error.*` keys) plus the
 stable `code`; unknown codes still render as `code: message`. Developers

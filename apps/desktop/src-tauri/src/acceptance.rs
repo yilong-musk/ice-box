@@ -218,7 +218,7 @@ mod tests {
             core_snapshot,
             proxy: Mutex::new(Box::new(TrackProxy::default())),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -226,7 +226,7 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
-            profile_parse_cache: ice_engine::ProfileCache::new(),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
             subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 true,
             )),
@@ -629,7 +629,9 @@ mod live {
         assert_eq!(meta.group_count, 21);
         assert!(meta.rule_count > 3000);
         assert!(
-            meta.parse_warnings.iter().all(|w| !w.contains("GEOIP")),
+            meta.parse_warnings
+                .iter()
+                .all(|w| !w.to_string().contains("GEOIP")),
             "GEOIP must parse to bundled rule-sets, no warning expected"
         );
 
@@ -1167,7 +1169,7 @@ mod live {
             .expect("session B: reclaim orphaned elevated core");
         let warning = capture_b.recover(&mut core_b).expect("session B: recover");
         restore_settings().expect("restore original settings");
-        assert!(warning.is_none(), "recovery warning: {warning:?}");
+        assert!(warning.is_empty(), "recovery warning: {warning:?}");
         let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone());
         core_b.start(&core_paths).expect("session B: auto-start");
         assert_eq!(core_b.state().status, CoreStatus::Running);

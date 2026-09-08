@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RuleRow } from "../api/tauri";
+import { t } from "./i18n";
 import {
   MATCH_KEY_ORDER,
   RULE_TYPE_LABELS,
@@ -56,8 +57,8 @@ function row(rule: Record<string, unknown>): RuleRow {
 
 describe("rule helpers", () => {
   it("labels known and unknown rule types", () => {
-    expect(ruleTypeLabel("domain_suffix")).toBe("域名后缀");
-    expect(ruleTypeLabel("geoip")).toBe("GEOIP");
+    expect(ruleTypeLabel("domain_suffix")).toBe(t("ruleType.domainSuffix"));
+    expect(ruleTypeLabel("geoip")).toBe(t("ruleType.geoip"));
     expect(ruleTypeLabel("unknown_thing")).toBe("unknown_thing");
   });
 

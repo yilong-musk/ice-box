@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Application data directory layout (architecture §6).
+//!
+//! Path joins only, plus `ensure_dirs` (`std::fs::create_dir_all`). Settings
+//! load/save stays in `ice-config`.
 
 use std::fs;
 use std::io;

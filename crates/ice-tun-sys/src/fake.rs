@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 pub use crate::routes::{AUTO_ROUTE_RANGES, AUTO_ROUTE_RANGES_V6};
@@ -149,7 +149,7 @@ impl FakeTunBackend {
         mutate(&mut self.state);
         let failure = if fail_journal_write == Some(mutations) {
             Some(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("injected journal write failure after {mutations} mutations"),
             ))
         } else {
@@ -167,7 +167,7 @@ impl FakeTunBackend {
         &self,
         done: Option<usize>,
         mutations: usize,
-        code: TunErrorCode,
+        code: ErrorCode,
     ) -> Result<(), TunError> {
         if done == Some(mutations) {
             return Err(TunError::new(
@@ -182,7 +182,7 @@ impl FakeTunBackend {
     fn fail_before(&self, done: Option<usize>) -> Result<(), TunError> {
         if done == Some(0) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "injected failure before any mutation",
             ));
         }
@@ -241,13 +241,13 @@ impl TunBackend for FakeTunBackend {
         self.push(TraceEvent::Prepare);
         if self.faults.fail_prepare {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "injected prepare failure",
             ));
         }
         if config.addresses.is_empty() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config requires at least one address",
             ));
         }
@@ -257,7 +257,7 @@ impl TunBackend for FakeTunBackend {
         for cidr in &config.addresses {
             if cidr.contains(':') && routes::ipv6_groups(cidr).is_none() {
                 return Err(TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("invalid IPv6 address in tun config: {cidr}"),
                 ));
             }
@@ -301,7 +301,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -329,7 +329,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -351,7 +351,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -400,7 +400,7 @@ impl TunBackend for FakeTunBackend {
                 self.fail_after(
                     self.faults.fail_apply_after_mutations,
                     mutations,
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                 )?;
             }
         }
@@ -435,7 +435,7 @@ impl TunBackend for FakeTunBackend {
         self.push(TraceEvent::Verify);
         if self.faults.fail_verify_applied {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 "injected verify failure",
             ));
         }
@@ -517,7 +517,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_restore_after_mutations,
                 mutations,
-                TunErrorCode::RestoreFailed,
+                ErrorCode::TunRestoreFailed,
             )?;
         }
 
@@ -561,7 +561,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_restore_after_mutations,
                 mutations,
-                TunErrorCode::RestoreFailed,
+                ErrorCode::TunRestoreFailed,
             )?;
         }
 
@@ -581,7 +581,7 @@ impl TunBackend for FakeTunBackend {
                     self.fail_after(
                         self.faults.fail_restore_after_mutations,
                         mutations,
-                        TunErrorCode::RestoreFailed,
+                        ErrorCode::TunRestoreFailed,
                     )?;
                 }
                 _ => {
@@ -590,7 +590,7 @@ impl TunBackend for FakeTunBackend {
                     // a *defined* fail-closed state (recovery_required),
                     // not an unexpected failure.
                     return Err(TunError::new(
-                        TunErrorCode::RecoveryRequired,
+                        ErrorCode::TunRecoveryRequired,
                         "platform DNS no longer matches the journal's dns_after snapshot; external change preserved",
                     ));
                 }
@@ -607,7 +607,7 @@ impl TunBackend for FakeTunBackend {
         let applied = AppliedTun::from_journal(journal);
         match self.restore(&applied) {
             Ok(()) => {}
-            Err(err) if err.code == TunErrorCode::RecoveryRequired => {
+            Err(err) if err.code == ErrorCode::TunRecoveryRequired => {
                 // Defined fail-closed state (e.g. external DNS change):
                 // report it as the outcome; the driver persists the journal.
                 return Ok(RecoveryOutcome::RecoveryRequired);

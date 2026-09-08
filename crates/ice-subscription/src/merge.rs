@@ -185,7 +185,9 @@ mod tests {
             nodes: vec![],
             groups: vec![NormalizedOutbound {
                 tag: "Proxies".into(),
-                outbound: serde_json::json!({"type":"selector","tag":"Proxies"}),
+                outbound: std::sync::Arc::new(
+                    serde_json::json!({"type":"selector","tag":"Proxies"}),
+                ),
             }],
             route: Default::default(),
             dns: None,
@@ -234,7 +236,9 @@ mod tests {
         };
         let node = |tag: &str| NormalizedOutbound {
             tag: tag.into(),
-            outbound: serde_json::json!({"type":"socks","tag":tag,"server":"1.1.1.1","server_port":1}),
+            outbound: std::sync::Arc::new(
+                serde_json::json!({"type":"socks","tag":tag,"server":"1.1.1.1","server_port":1}),
+            ),
         };
         write_subscription_success(
             &paths,

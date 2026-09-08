@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::capture::CaptureController;
-use ice_config::{AppPaths, NormalizedOutbound};
+use crate::orchestrate::generate_config;
+use ice_config::{set_proxy_service_enabled, AppPaths, NormalizedOutbound};
 use ice_engine::{
     load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
     SubscriptionPaths,
@@ -45,7 +46,9 @@ fn temp_state_with_node(label: &str) -> AppState {
     };
     let nodes = vec![NormalizedOutbound {
         tag: "n1".into(),
-        outbound: serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
     }];
     write_subscription_success(
         &sub,
@@ -65,7 +68,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         core_snapshot,
         proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
         orchestrate: Mutex::new(()),
-        proxy_recovery_warning: Mutex::new(None),
+        proxy_recovery_warning: Mutex::new(Vec::new()),
         proxy_applied_cache: Mutex::new(None),
         system_proxy_available: false,
         shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -73,7 +76,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         traffic: ice_core::TrafficMonitor::new(),
         capture: CaptureController::new(paths.clone(), None),
         profile_cache: Mutex::new(None),
-        profile_parse_cache: ice_engine::ProfileCache::new(),
+        profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         log_view_cache: Mutex::new(None),
         helper_probe_cache: Mutex::new(None),
@@ -117,7 +120,9 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
     };
     let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
         tag: "n1".into(),
-        outbound: serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
     }]);
     profile.route.rules = rules;
     write_subscription_success(&sub, &meta, "{}", &profile).unwrap();
@@ -132,7 +137,7 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         core_snapshot,
         proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
         orchestrate: Mutex::new(()),
-        proxy_recovery_warning: Mutex::new(None),
+        proxy_recovery_warning: Mutex::new(Vec::new()),
         proxy_applied_cache: Mutex::new(None),
         system_proxy_available: false,
         shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -140,7 +145,7 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         traffic: ice_core::TrafficMonitor::new(),
         capture: CaptureController::new(paths.clone(), None),
         profile_cache: Mutex::new(None),
-        profile_parse_cache: ice_engine::ProfileCache::new(),
+        profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         log_view_cache: Mutex::new(None),
         helper_probe_cache: Mutex::new(None),
@@ -230,7 +235,7 @@ fn launch_proxy_restore_skips_when_shutting_down_or_already_capturing() {
 fn recover_launch_leftovers_is_a_noop_on_a_fresh_data_dir() {
     let state = temp_state_with_node("launch-recover-fresh");
     recover_launch_leftovers(&state);
-    assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+    assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
     assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
     let _ = fs::remove_dir_all(state.paths.root());
 }
@@ -252,7 +257,7 @@ fn recover_launch_leftovers_clears_applied_proxy_backup_without_enabling_capture
     recover_launch_leftovers(&state);
     assert!(!is_proxy_applied_on_disk(&state.paths.proxy_backup()));
     assert_eq!(state.capture.active_backend(), TrafficCapture::Inactive);
-    assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+    assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
     let _ = fs::remove_dir_all(state.paths.root());
 }
 
@@ -376,7 +381,9 @@ fn profile_cache_serves_unchanged_and_invalidates_on_update() {
     let meta = ice_engine::active_subscription(&index).unwrap().clone();
     let nodes = vec![NormalizedOutbound {
         tag: "n2".into(),
-        outbound: serde_json::json!({"type":"socks","tag":"n2","server":"2.2.2.2","server_port":1}),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n2","server":"2.2.2.2","server_port":1}),
+        ),
     }];
     write_subscription_success(
         &sub,
@@ -394,11 +401,11 @@ fn profile_cache_serves_unchanged_and_invalidates_on_update() {
 fn validate_static_group_member_accepts_member() {
     let outbounds = vec![NormalizedOutbound {
         tag: "Proxies".into(),
-        outbound: serde_json::json!({
+        outbound: std::sync::Arc::new(serde_json::json!({
             "type": "selector",
             "tag": "Proxies",
             "outbounds": ["n1", "n2"],
-        }),
+        })),
     }];
     validate_static_group_member(&outbounds, "Proxies", "n2").expect("member");
 }
@@ -407,7 +414,7 @@ fn validate_static_group_member_accepts_member() {
 fn validate_static_group_member_rejects_unknown_group() {
     let outbounds = vec![NormalizedOutbound {
         tag: "Proxies".into(),
-        outbound: serde_json::json!({"type": "selector", "outbounds": ["n1"]}),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "selector", "outbounds": ["n1"]})),
     }];
     let err = validate_static_group_member(&outbounds, "missing", "n1").expect_err("unknown");
     assert_eq!(err.code, "config.invalid");
@@ -418,7 +425,7 @@ fn validate_static_group_member_rejects_unknown_group() {
 fn validate_static_group_member_rejects_non_member() {
     let outbounds = vec![NormalizedOutbound {
         tag: "Proxies".into(),
-        outbound: serde_json::json!({"type": "selector", "outbounds": ["n1"]}),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "selector", "outbounds": ["n1"]})),
     }];
     let err = validate_static_group_member(&outbounds, "Proxies", "nope").expect_err("non member");
     assert_eq!(err.code, "config.invalid");
@@ -429,7 +436,7 @@ fn validate_static_group_member_rejects_non_member() {
 fn validate_static_group_member_rejects_non_selector() {
     let outbounds = vec![NormalizedOutbound {
         tag: "auto".into(),
-        outbound: serde_json::json!({"type": "urltest", "outbounds": ["n1"]}),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "urltest", "outbounds": ["n1"]})),
     }];
     let err = validate_static_group_member(&outbounds, "auto", "n1").expect_err("not selector");
     assert_eq!(err.code, "config.invalid");
@@ -440,7 +447,7 @@ fn validate_static_group_member_rejects_non_selector() {
 fn selection_group_for_flat_profile_is_none() {
     let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
         tag: "n1".into(),
-        outbound: serde_json::json!({"type": "socks", "tag": "n1"}),
+        outbound: std::sync::Arc::new(serde_json::json!({"type": "socks", "tag": "n1"})),
     }]);
     assert_eq!(selection_group_for(&profile, "n1"), None);
 }
@@ -450,24 +457,24 @@ fn selection_group_for_prefers_top_level_group() {
     let profile = NormalizedProfile {
         nodes: vec![NormalizedOutbound {
             tag: "HK".into(),
-            outbound: serde_json::json!({"type": "socks", "tag": "HK"}),
+            outbound: std::sync::Arc::new(serde_json::json!({"type": "socks", "tag": "HK"})),
         }],
         groups: vec![
             NormalizedOutbound {
                 tag: "Proxies".into(),
-                outbound: serde_json::json!({
+                outbound: std::sync::Arc::new(serde_json::json!({
                     "type": "selector",
                     "tag": "Proxies",
                     "outbounds": ["auto", "HK", "direct"],
-                }),
+                })),
             },
             NormalizedOutbound {
                 tag: "auto".into(),
-                outbound: serde_json::json!({
+                outbound: std::sync::Arc::new(serde_json::json!({
                     "type": "urltest",
                     "tag": "auto",
                     "outbounds": ["HK", "JP"],
-                }),
+                })),
             },
         ],
         route: Default::default(),

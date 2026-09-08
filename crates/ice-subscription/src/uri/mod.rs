@@ -18,7 +18,9 @@ mod v2ray;
 
 use std::collections::HashMap;
 
-use ice_config::{NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats};
+use ice_config::{
+    NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats, UiMessage,
+};
 use percent_encoding::percent_decode_str;
 
 use crate::error::SubscriptionError;
@@ -78,7 +80,7 @@ fn is_info_line(line: &str) -> bool {
 /// Parse a proxy URI list into a normalized profile (no groups, direct route).
 pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionError> {
     let mut nodes: Vec<NormalizedOutbound> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<UiMessage> = Vec::new();
     let mut skipped = 0usize;
     let mut truncated = 0usize;
     let mut line_count = 0usize;
@@ -97,11 +99,19 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
             Ok(node) => nodes.push(node),
             Err(SkipReason::Unsupported(reason)) => {
                 skipped += 1;
-                warnings.push(format!("line {}: {reason}", idx + 1));
+                warnings.push(
+                    UiMessage::new("parse.uriLine")
+                        .with("line", (idx + 1).to_string())
+                        .with("reason", reason),
+                );
             }
             Err(SkipReason::Incomplete(reason)) => {
                 skipped += 1;
-                warnings.push(format!("line {}: {reason}", idx + 1));
+                warnings.push(
+                    UiMessage::new("parse.uriLine")
+                        .with("line", (idx + 1).to_string())
+                        .with("reason", reason),
+                );
             }
         }
     }
@@ -198,10 +208,7 @@ fn parse_uri_line(line: &str, idx: usize) -> Result<NormalizedOutbound, SkipReas
         .as_object_mut()
         .unwrap()
         .insert("tag".into(), serde_json::json!(name));
-    Ok(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Ok(NormalizedOutbound::new(name, outbound))
 }
 
 /// Split `uri#fragment`; returns the fragment (still percent-encoded).
@@ -234,10 +241,11 @@ pub(crate) fn dedupe_tags(nodes: &mut [NormalizedOutbound]) {
         *count += 1;
         if *count > 1 {
             node.tag = format!("{}-{}", node.tag, *count);
-            node.outbound
+            let tag = node.tag.clone();
+            node.outbound_mut()
                 .as_object_mut()
                 .unwrap()
-                .insert("tag".into(), serde_json::json!(node.tag));
+                .insert("tag".into(), serde_json::json!(tag));
         }
     }
 }
@@ -402,15 +410,15 @@ mod tests {
         let mut nodes = vec![
             NormalizedOutbound {
                 tag: "a".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"a"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"a"})),
             },
             NormalizedOutbound {
                 tag: "a".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"a"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"a"})),
             },
             NormalizedOutbound {
                 tag: "b".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"b"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"b"})),
             },
         ];
         dedupe_tags(&mut nodes);

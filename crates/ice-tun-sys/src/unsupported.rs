@@ -11,7 +11,7 @@ use crate::backend::{
     unsupported_capability, AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability,
     TunConfig, TunHealth,
 };
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::TunJournal;
 
 /// Backend that refuses every TUN operation with a stable reason.
@@ -35,28 +35,28 @@ impl TunBackend for UnsupportedTunBackend {
 
     fn prepare(&self, _config: &TunConfig) -> Result<PreparedTun, TunError> {
         Err(TunError::new(
-            TunErrorCode::NotSupported,
+            ErrorCode::TunNotSupported,
             "TUN is not available on this platform",
         ))
     }
 
     fn apply(&mut self, _prepared: &PreparedTun) -> Result<AppliedTun, TunError> {
         Err(TunError::new(
-            TunErrorCode::NotSupported,
+            ErrorCode::TunNotSupported,
             "TUN is not available on this platform",
         ))
     }
 
     fn verify(&self, _applied: &AppliedTun) -> Result<TunHealth, TunError> {
         Err(TunError::new(
-            TunErrorCode::NotSupported,
+            ErrorCode::TunNotSupported,
             "TUN is not available on this platform",
         ))
     }
 
     fn restore(&mut self, _applied: &AppliedTun) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::NotSupported,
+            ErrorCode::TunNotSupported,
             "TUN is not available on this platform",
         ))
     }
@@ -66,7 +66,7 @@ impl TunBackend for UnsupportedTunBackend {
         // than guess. The startup driver surfaces the error and stays
         // fail-closed.
         Err(TunError::new(
-            TunErrorCode::NotSupported,
+            ErrorCode::TunNotSupported,
             "TUN is not available on this platform",
         ))
     }

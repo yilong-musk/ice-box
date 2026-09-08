@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 
 /// Coordinates the elevated sing-box process for the native path. The
 /// coordinator is the *only* thing that can start / stop the core; the
@@ -49,7 +49,7 @@ pub struct DeferredCoreCoordinator;
 impl CoreCoordinator for DeferredCoreCoordinator {
     fn start_with_config(&mut self, _config_path: &Path) -> Result<u32, TunError> {
         Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             "privileged sing-box runner is not wired yet (slice T3): install and authorize the helper, or use the dev sudo path",
         ))
     }
@@ -60,7 +60,7 @@ impl CoreCoordinator for DeferredCoreCoordinator {
 
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             "privileged DNS mutation is not wired yet (no elevated runner): install and authorize the helper, or use the dev sudo path",
         ))
     }
@@ -120,7 +120,7 @@ fn wait_for_child_liveness(child: &mut Child, log_path: &Path) -> Result<(), Tun
         match child.try_wait() {
             Ok(Some(code)) => {
                 return Err(TunError::new(
-                    TunErrorCode::HealthcheckFailed,
+                    ErrorCode::TunHealthcheckFailed,
                     format!(
                         "elevated sing-box exited during startup (code {code}); check {}",
                         log_path.display()
@@ -130,7 +130,7 @@ fn wait_for_child_liveness(child: &mut Child, log_path: &Path) -> Result<(), Tun
             Ok(None) => {}
             Err(err) => {
                 return Err(TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("poll elevated core: {err}"),
                 ));
             }
@@ -155,7 +155,7 @@ fn wait_for_pid_liveness(
     while Instant::now() < deadline {
         if !is_alive(pid) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "elevated sing-box exited during startup (pid {pid}); check {}",
                     log_hint.display()
@@ -191,11 +191,11 @@ impl SudoCoreCoordinator {
         match status {
             Ok(status) if status.success() => Ok(()),
             Ok(_) => Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 "dev sudo runner needs a cached root credential (`sudo -v`) or a NOPASSWD rule; use scripts/run-acceptance-macos-tun.sh, or authorize the helper",
             )),
             Err(err) => Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 format!("sudo unavailable: {err}"),
             )),
         }
@@ -204,7 +204,7 @@ impl SudoCoreCoordinator {
     fn spawn_elevated(&self, config_path: &Path) -> Result<Child, TunError> {
         if !self.binary.is_file() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "sing-box binary not found at {} (dev sudo runner)",
                     self.binary.display()
@@ -213,14 +213,14 @@ impl SudoCoreCoordinator {
         }
         if !config_path.is_file() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("config not found at {}", config_path.display()),
             ));
         }
         if let Some(parent) = self.log_path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("create log dir {}: {err}", parent.display()),
                 )
             })?;
@@ -231,13 +231,13 @@ impl SudoCoreCoordinator {
             .open(&self.log_path)
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("open core log {}: {err}", self.log_path.display()),
                 )
             })?;
         let log_err = log.try_clone().map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("clone core log handle: {err}"),
             )
         })?;
@@ -253,7 +253,7 @@ impl SudoCoreCoordinator {
             .spawn()
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!(
                         "spawn sudo -n {} run -c {}: {err}",
                         self.binary.display(),
@@ -310,13 +310,13 @@ impl CoreCoordinator for SudoCoreCoordinator {
             Ok(status) if status.success() || !pid_is_alive(pid) => {}
             Ok(_) => {
                 return Err(TunError::new(
-                    TunErrorCode::RestoreFailed,
+                    ErrorCode::TunRestoreFailed,
                     format!("sudo kill -TERM {pid} failed"),
                 ));
             }
             Err(err) => {
                 return Err(TunError::new(
-                    TunErrorCode::RestoreFailed,
+                    ErrorCode::TunRestoreFailed,
                     format!("sudo kill -TERM {pid}: {err}"),
                 ));
             }
@@ -364,7 +364,7 @@ impl CoreCoordinator for SudoCoreCoordinator {
             return Ok(());
         }
         Err(TunError::new(
-            TunErrorCode::RecoveryRequired,
+            ErrorCode::TunRecoveryRequired,
             format!("elevated sing-box (pid {pid}) survived TERM and KILL"),
         ))
     }
@@ -389,11 +389,11 @@ impl CoreCoordinator for SudoCoreCoordinator {
         match status {
             Ok(status) if status.success() => Ok(()),
             Ok(_) => Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("sudo networksetup -setdnsservers {service} failed (exit {status:?})"),
             )),
             Err(err) => Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("run sudo networksetup -setdnsservers {service}: {err}"),
             )),
         }
@@ -522,7 +522,7 @@ impl WindowsElevatedCoreCoordinator {
             Ok(())
         } else {
             Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 "TUN transitions need an elevated context (the core runs elevated to create the wintun adapter); run the acceptance suite from an Administrator shell",
             ))
         }
@@ -531,7 +531,7 @@ impl WindowsElevatedCoreCoordinator {
     fn spawn_elevated(&self, config_path: &Path) -> Result<Child, TunError> {
         if !self.binary.is_file() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "sing-box binary not found at {} (dev elevated runner)",
                     self.binary.display()
@@ -540,14 +540,14 @@ impl WindowsElevatedCoreCoordinator {
         }
         if !config_path.is_file() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("config not found at {}", config_path.display()),
             ));
         }
         if let Some(parent) = self.log_path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("create log dir {}: {err}", parent.display()),
                 )
             })?;
@@ -558,13 +558,13 @@ impl WindowsElevatedCoreCoordinator {
             .open(&self.log_path)
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("open core log {}: {err}", self.log_path.display()),
                 )
             })?;
         let log_err = log.try_clone().map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("clone core log handle: {err}"),
             )
         })?;
@@ -578,7 +578,7 @@ impl WindowsElevatedCoreCoordinator {
             .spawn()
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!(
                         "spawn {} run -c {}: {err}",
                         self.binary.display(),
@@ -674,14 +674,14 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
                     .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
                 if still_alive {
                     return Err(TunError::new(
-                        TunErrorCode::RestoreFailed,
+                        ErrorCode::TunRestoreFailed,
                         format!("taskkill /PID {pid} /T /F failed"),
                     ));
                 }
             }
             Err(err) => {
                 return Err(TunError::new(
-                    TunErrorCode::RestoreFailed,
+                    ErrorCode::TunRestoreFailed,
                     format!("taskkill /PID {pid}: {err}"),
                 ));
             }
@@ -706,14 +706,14 @@ impl CoreCoordinator for WindowsElevatedCoreCoordinator {
             std::thread::sleep(LIVENESS_POLL);
         }
         Err(TunError::new(
-            TunErrorCode::RecoveryRequired,
+            ErrorCode::TunRecoveryRequired,
             format!("elevated sing-box (pid {pid}) survived taskkill /T /F"),
         ))
     }
 
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             "system DNS mutation is not supported on the Windows dev runner",
         ))
     }
@@ -941,13 +941,13 @@ pub fn tun_task_pin_matches(launcher: &Path) -> bool {
 fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
     let xml = query_tun_task_xml().ok_or_else(|| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
         )
     })?;
     let pin = ice_tun_pin::extract_tun_task_pin_from_xml(&xml).ok_or_else(|| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "the TUN scheduled task {TUN_TASK_NAME} is missing the binary pin; run the one-time elevation setup (ensure_tun_elevation) before enabling capture"
             ),
@@ -956,10 +956,10 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
     let program_data = ice_tun_pin::program_data_dir();
     let protected = ice_tun_pin::protected_launcher_path(&program_data);
     ice_tun_pin::verify_task_command(&xml, &protected)
-        .map_err(|msg| TunError::new(TunErrorCode::PermissionRequired, msg))?;
+        .map_err(|msg| TunError::new(ErrorCode::TunPermissionRequired, msg))?;
     let protected_core = ice_tun_pin::core_beside_launcher(&protected).ok_or_else(|| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!(
                 "TUN protected launcher path {} has no parent",
                 protected.display()
@@ -970,21 +970,21 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
         Ok(true) => {}
         Ok(false) => {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "protected TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
                     protected_core.display()
                 ),
             ))
         }
-        Err(err) => return Err(TunError::new(TunErrorCode::ApplyFailed, err)),
+        Err(err) => return Err(TunError::new(ErrorCode::TunApplyFailed, err)),
     }
     // User-install drift: a replaced per-user copy must trigger re-elevation
     // so the protected copies are refreshed.
     if !ice_tun_pin::path_is_protected_launcher(launcher, &program_data) {
         let core = ice_tun_pin::core_beside_launcher(launcher).ok_or_else(|| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "TUN task launcher path {} has no parent",
                     launcher.display()
@@ -995,14 +995,14 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             Ok(true) => {}
             Ok(false) => {
                 return Err(TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!(
                         "TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
                         core.display()
                     ),
                 ))
             }
-            Err(err) => return Err(TunError::new(TunErrorCode::ApplyFailed, err)),
+            Err(err) => return Err(TunError::new(ErrorCode::TunApplyFailed, err)),
         }
     }
     Ok(())
@@ -1050,13 +1050,13 @@ impl TaskCoreCoordinator {
 
     fn run_task(&self) -> Result<(), TunError> {
         let status = run_schtasks(&["/Run", "/TN", TUN_TASK_NAME]).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("schtasks /Run: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("schtasks /Run: {err}"))
         })?;
         if status.success() {
             Ok(())
         } else {
             Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "schtasks /Run failed (exit {}): the TUN task may be missing or disabled",
                     status.code().unwrap_or(-1)
@@ -1098,7 +1098,7 @@ impl TaskCoreCoordinator {
             }
             if Instant::now() >= deadline {
                 return Err(TunError::new(
-                    TunErrorCode::HealthcheckFailed,
+                    ErrorCode::TunHealthcheckFailed,
                     format!(
                         "TUN task started but no live core pid appeared in {}",
                         self.pidfile.display()
@@ -1143,7 +1143,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
         if !tun_task_exists() {
             return Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 format!(
                     "the TUN scheduled task {TUN_TASK_NAME} is missing; run the one-time elevation setup (ensure_tun_elevation) before enabling capture"
                 ),
@@ -1151,19 +1151,19 @@ impl CoreCoordinator for TaskCoreCoordinator {
         }
         if !self.launcher.is_file() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("TUN task launcher not found at {}", self.launcher.display()),
             ));
         }
         verify_task_binaries(&self.launcher)?;
         let xml = query_tun_task_xml().ok_or_else(|| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
             )
         })?;
         ice_tun_pin::task_config_path_matches(&xml, config_path)
-            .map_err(|msg| TunError::new(TunErrorCode::ApplyFailed, msg))?;
+            .map_err(|msg| TunError::new(ErrorCode::TunApplyFailed, msg))?;
         self.end_task();
         self.reset_handshake()?;
         self.run_task()?;
@@ -1193,7 +1193,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
         // graceful-then-forced sequence the dev runner uses.
         if let Err(err) = std::fs::write(&self.stopfile, "stop") {
             return Err(TunError::new(
-                TunErrorCode::RestoreFailed,
+                ErrorCode::TunRestoreFailed,
                 format!("request TUN core stop: {err}"),
             ));
         }
@@ -1215,7 +1215,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
         }
         if pid_is_alive_windows(pid) {
             return Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!("elevated sing-box (pid {pid}) survived the scheduled-task end"),
             ));
         }
@@ -1225,7 +1225,7 @@ impl CoreCoordinator for TaskCoreCoordinator {
 
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             "system DNS mutation is not supported on the Windows TUN task runner",
         ))
     }
@@ -1241,7 +1241,7 @@ mod tests {
         let err = coordinator
             .start_with_config(Path::new("/nonexistent/config.json"))
             .expect_err("deferred runner must fail");
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
         assert!(coordinator.stop().is_ok(), "stop is idempotent");
     }
 
@@ -1265,14 +1265,14 @@ mod tests {
         };
         let err = wait_for_child_liveness(&mut child, Path::new("sing-box.log"))
             .expect_err("exited child must fail liveness");
-        assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+        assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     }
 
     #[test]
     fn wait_for_pid_liveness_reports_dead_pid() {
         let err = wait_for_pid_liveness(1, Path::new("pidfile"), |_| false)
             .expect_err("dead pid must fail liveness");
-        assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+        assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::CoreError;
-use ice_config::is_loopback_host;
+use ice_types::is_loopback_host;
 
 /// Default healthcheck timeout (architecture: 3–5s). Locked for v1: **5000 ms**.
 pub const HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(5000);

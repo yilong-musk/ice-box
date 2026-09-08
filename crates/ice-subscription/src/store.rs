@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 use ice_config::{
     write_bytes_atomic, write_json_atomic, AppPaths, ConfigError, NormalizedOutbound,
-    NormalizedProfile,
+    NormalizedProfile, UiMessage,
 };
 use uuid::Uuid;
 
@@ -274,7 +274,7 @@ pub fn apply_error_to_index(
     paths: &SubscriptionPaths,
     index: &mut SubscriptionIndex,
     id: Uuid,
-    last_error: String,
+    last_error: UiMessage,
 ) -> bool {
     let Some(meta) = index.items.iter_mut().find(|m| m.id == id) else {
         return false;
@@ -315,7 +315,7 @@ pub fn clear_error_in_index(
 pub fn write_subscription_error(
     paths: &SubscriptionPaths,
     id: Uuid,
-    last_error: String,
+    last_error: UiMessage,
 ) -> Result<(), SubscriptionError> {
     let mut index = load_index(paths)?;
     if !apply_error_to_index(paths, &mut index, id, last_error) {
@@ -537,7 +537,7 @@ mod tests {
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),
-            outbound: serde_json::json!({"type":"direct","tag":"n1"}),
+            outbound: std::sync::Arc::new(serde_json::json!({"type":"direct","tag":"n1"})),
         }]);
         write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
         assert!(paths.raw(id).is_file());
@@ -584,7 +584,7 @@ mod tests {
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
-            outbound: serde_json::json!({"type":"direct","tag":"kept"}),
+            outbound: std::sync::Arc::new(serde_json::json!({"type":"direct","tag":"kept"})),
         }]);
         write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
 
@@ -632,7 +632,7 @@ mod tests {
         };
         let kept = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
-            outbound: serde_json::json!({"type":"direct","tag":"kept"}),
+            outbound: std::sync::Arc::new(serde_json::json!({"type":"direct","tag":"kept"})),
         }]);
         write_subscription_success(&paths, &meta, "{}", &kept).unwrap();
 
@@ -646,7 +646,9 @@ mod tests {
         std::fs::create_dir_all(&staging).unwrap();
         let staging_profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "from-staging".into(),
-            outbound: serde_json::json!({"type":"direct","tag":"from-staging"}),
+            outbound: std::sync::Arc::new(
+                serde_json::json!({"type":"direct","tag":"from-staging"}),
+            ),
         }]);
         std::fs::write(
             staging.join("profile.json"),

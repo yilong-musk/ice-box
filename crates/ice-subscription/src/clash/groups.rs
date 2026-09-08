@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use ice_config::NormalizedOutbound;
+use ice_config::{NormalizedOutbound, UiMessage};
 use serde_json::{json, Value};
 
 use super::names::resolve_member;
@@ -14,7 +14,7 @@ use crate::limits::Limits;
 pub struct GroupParseResult {
     pub groups: Vec<NormalizedOutbound>,
     pub skipped: usize,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<UiMessage>,
 }
 
 pub fn parse_groups(doc: &Value, known: &HashSet<String>) -> GroupParseResult {
@@ -53,7 +53,7 @@ fn map_group(
     group: &Value,
     idx: usize,
     known: &HashSet<String>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<UiMessage>,
 ) -> Option<NormalizedOutbound> {
     let obj = group.as_object()?;
     let name = obj
@@ -76,7 +76,11 @@ fn map_group(
                 .filter_map(|m| match resolve_member(m, known) {
                     Some(tag) => Some(tag),
                     None => {
-                        warnings.push(format!("group {name}: unknown member {m}"));
+                        warnings.push(
+                            UiMessage::new("parse.groupUnknownMember")
+                                .with("name", name.clone())
+                                .with("member", m),
+                        );
                         None
                     }
                 })
@@ -85,7 +89,7 @@ fn map_group(
         .unwrap_or_default();
 
     if members.is_empty() {
-        warnings.push(format!("group {name}: no resolvable members"));
+        warnings.push(UiMessage::new("parse.groupNoMembers").with("name", name.clone()));
         return None;
     }
 
@@ -142,13 +146,14 @@ fn map_group(
             })
         }
         other => {
-            warnings.push(format!("group {name}: unsupported type {other}"));
+            warnings.push(
+                UiMessage::new("parse.groupUnsupportedType")
+                    .with("name", name)
+                    .with("type", other),
+            );
             return None;
         }
     };
 
-    Some(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Some(NormalizedOutbound::new(name, outbound))
 }

@@ -18,7 +18,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ice_tun_sys::backend::RecoveryOutcome;
 use ice_tun_sys::coordinator::CoreCoordinator;
-use ice_tun_sys::error::{TunError, TunErrorCode};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::routes;
 use ice_tun_sys::windows::{
@@ -28,6 +27,7 @@ use ice_tun_sys::windows::{
 #[cfg(target_os = "windows")]
 use ice_tun_sys::WindowsHost;
 use ice_tun_sys::{create_backend, AppliedTun, TunBackend, TunConfig, TunStack};
+use ice_types::{ErrorCode, TunError};
 
 const OWNER: &str = "ice-box:test-install-1";
 /// Fake adapter interface index (the Windows identity token).
@@ -288,8 +288,8 @@ impl ice_tun_sys::WindowsHost for FakeHost {
 /// false (a core that refuses to die / a stuck helper).
 struct FakeCoreCoordinator {
     host: FakeHost,
-    start_failure: Option<TunErrorCode>,
-    stop_failure: Option<TunErrorCode>,
+    start_failure: Option<ErrorCode>,
+    stop_failure: Option<ErrorCode>,
     remove_on_stop: bool,
     /// When false, the adapter is created without its routes (a core that
     /// never converged): apply must fail closed.
@@ -311,10 +311,10 @@ impl FakeCoreCoordinator {
 
     fn tun_addresses(config_path: &Path) -> Result<Vec<String>, TunError> {
         let raw = fs::read_to_string(config_path).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("read config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("read config: {err}"))
         })?;
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("parse config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("parse config: {err}"))
         })?;
         value
             .get("inbounds")
@@ -333,7 +333,7 @@ impl FakeCoreCoordinator {
             })
             .ok_or_else(|| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     "config has no tun inbound with addresses",
                 )
             })
@@ -380,7 +380,7 @@ impl CoreCoordinator for FakeCoreCoordinator {
 
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             "dns not supported by the windows fake coordinator",
         ))
     }
@@ -484,7 +484,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..win_config()
     };
     let err = bk.prepare(&ipv4_only).expect_err("ipv4-only leaks IPv6");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv6"));
 
     let ipv6_only = TunConfig {
@@ -492,7 +492,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..win_config()
     };
     let err = bk.prepare(&ipv6_only).expect_err("ipv4 is mandatory");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv4"));
     let _ = fs::remove_dir_all(&dir);
 }
@@ -509,7 +509,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad).expect_err("bad cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
     for cidr in ["fdfe:dcba:9876::1", "fdfe:dcba:9876::1/129", "10.0.0.1/24"] {
         let bad = TunConfig {
@@ -517,7 +517,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad).expect_err("bad v6 cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
 
     let low_mtu = TunConfig {
@@ -526,7 +526,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
     };
     assert_eq!(
         bk.prepare(&low_mtu).expect_err("low mtu").code,
-        TunErrorCode::ApplyFailed
+        ErrorCode::TunApplyFailed
     );
 
     for name in ["bad/name", "bad:name", "bad*name", "bad\nname"] {
@@ -535,7 +535,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad_name).expect_err("bad adapter name");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {name}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {name}");
     }
     let _ = fs::remove_dir_all(&dir);
 }
@@ -679,11 +679,11 @@ fn apply_propagates_permission_required_without_records() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
 
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.start_failure = Some(TunErrorCode::PermissionRequired);
+    coordinator.start_failure = Some(ErrorCode::TunPermissionRequired);
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("permission required");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     let journal = TunJournal::load(&journal_path(&dir))
         .unwrap()
@@ -717,7 +717,7 @@ fn apply_journal_write_failure_stops_core_and_rolls_back() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("journal write failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
     assert!(
         !host.has_wintun("Wintun"),
@@ -735,7 +735,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
 
     let host = FakeHost::default();
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.stop_failure = Some(TunErrorCode::RestoreFailed);
+    coordinator.stop_failure = Some(ErrorCode::TunRestoreFailed);
     let mut bk = WindowsTunBackend::new(
         OWNER,
         Box::new(host.clone()),
@@ -746,7 +746,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("uncertain cleanup");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(
         host.has_wintun("Wintun"),
         "stuck core leaves ownership uncertain"
@@ -808,7 +808,7 @@ fn apply_fails_closed_when_routes_do_not_converge() {
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("routes never converge");
-    assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     assert!(
         !host.has_wintun("Wintun"),
         "the core must be stopped when the capture does not converge"
@@ -898,7 +898,7 @@ fn restore_fails_closed_when_interface_survives_stop() {
     let err = bk.restore(&applied).expect_err("interface survives stop");
     assert_eq!(
         err.code,
-        TunErrorCode::RecoveryRequired,
+        ErrorCode::TunRecoveryRequired,
         "uncertain cleanup must fail closed, not claim success"
     );
     assert!(

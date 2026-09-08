@@ -4,7 +4,7 @@
 //!
 //! The macOS production path runs the core elevated inside a small
 //! launchd helper daemon (T0 lock §24.5.2). This module is the *shared*
-//! contract between the app-side client ([`crate::helper::HelperCoreCoordinator`])
+//! contract between the app-side client ([`ice_tun_sys::helper::HelperCoreCoordinator`])
 //! and the daemon (`crates/ice-helper`). It is deliberately host-free: pure
 //! types, framing, and path validation with no OS calls, so it tests on all
 //! CI platforms.
@@ -27,7 +27,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{TunError, TunErrorCode};
+use ice_types::{ErrorCode, TunError};
 
 /// Protocol version; the daemon rejects mismatched `v` values. Bumped when
 /// a command is added so an older installed daemon fails with a clear
@@ -76,7 +76,7 @@ pub fn validate_dns_service(service: &str) -> Result<(), TunError> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-' | '/'))
     {
         return Err(TunError::new(
-            TunErrorCode::InvalidArgument,
+            ErrorCode::TunInvalidArgument,
             format!("invalid dns service name: {service:?}"),
         ));
     }
@@ -87,7 +87,7 @@ pub fn validate_dns_service(service: &str) -> Result<(), TunError> {
 pub fn validate_dns_server(server: &str) -> Result<(), TunError> {
     if server.parse::<std::net::IpAddr>().is_err() {
         return Err(TunError::new(
-            TunErrorCode::InvalidArgument,
+            ErrorCode::TunInvalidArgument,
             format!("invalid dns server: {server:?}"),
         ));
     }
@@ -100,7 +100,7 @@ pub fn validate_set_dns(service: &str, servers: &[String]) -> Result<(), TunErro
     validate_dns_service(service)?;
     if servers.len() > MAX_DNS_SERVERS {
         return Err(TunError::new(
-            TunErrorCode::InvalidArgument,
+            ErrorCode::TunInvalidArgument,
             format!(
                 "at most {MAX_DNS_SERVERS} dns servers allowed, got {}",
                 servers.len()
@@ -160,17 +160,7 @@ impl HelperResponse {
         if self.ok {
             return None;
         }
-        let code = match self.code.as_deref() {
-            Some("tun.not_supported") => TunErrorCode::NotSupported,
-            Some("tun.permission_required") => TunErrorCode::PermissionRequired,
-            Some("tun.apply_failed") => TunErrorCode::ApplyFailed,
-            Some("tun.restore_failed") => TunErrorCode::RestoreFailed,
-            Some("tun.healthcheck_failed") => TunErrorCode::HealthcheckFailed,
-            Some("tun.recovery_required") => TunErrorCode::RecoveryRequired,
-            Some("tun.invalid_argument") => TunErrorCode::InvalidArgument,
-            Some("tun.config_rejected") => TunErrorCode::ConfigRejected,
-            _ => TunErrorCode::ApplyFailed,
-        };
+        let code = ErrorCode::from_tun_wire(self.code.as_deref());
         Some(TunError::new(
             code,
             self.message.unwrap_or_else(|| code.as_str().to_string()),
@@ -181,10 +171,10 @@ impl HelperResponse {
 /// Serialize a request frame (single line, no trailing newline).
 pub fn encode_request(req: &HelperRequest) -> Result<Vec<u8>, TunError> {
     let line = serde_json::to_string(req)
-        .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("encode request: {e}")))?;
+        .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("encode request: {e}")))?;
     if line.len() > MAX_FRAME_BYTES {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("request frame exceeds {MAX_FRAME_BYTES} bytes"),
         ));
     }
@@ -195,15 +185,15 @@ pub fn encode_request(req: &HelperRequest) -> Result<Vec<u8>, TunError> {
 pub fn decode_response(line: &[u8]) -> Result<HelperResponse, TunError> {
     if line.len() > MAX_FRAME_BYTES {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("response frame exceeds {MAX_FRAME_BYTES} bytes"),
         ));
     }
     let trimmed = std::str::from_utf8(line)
-        .map_err(|_| TunError::new(TunErrorCode::ApplyFailed, "response is not UTF-8"))?
+        .map_err(|_| TunError::new(ErrorCode::TunApplyFailed, "response is not UTF-8"))?
         .trim_end_matches(['\n', '\r']);
     serde_json::from_str(trimmed)
-        .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("decode response: {e}")))
+        .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("decode response: {e}")))
 }
 
 /// Validate the `config` path a client wants the helper to start:
@@ -219,25 +209,25 @@ pub fn validate_config_path(data_dir: &Path, config: &str) -> Result<std::path::
     let config_path = std::path::Path::new(config);
     if !config_path.is_absolute() {
         return Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!("config path must be absolute, got {config}"),
         ));
     }
     let canonical = config_path.canonicalize().map_err(|e| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("config path not resolvable: {config}: {e}"),
         )
     })?;
     if !canonical.is_file() {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("config path is not a regular file: {}", canonical.display()),
         ));
     }
     let data_canonical = data_dir.canonicalize().map_err(|e| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!("data dir not resolvable: {}: {e}", data_dir.display()),
         )
     })?;
@@ -247,7 +237,7 @@ pub fn validate_config_path(data_dir: &Path, config: &str) -> Result<std::path::
             .is_ok_and(|rest| !rest.as_os_str().is_empty() && !rest.starts_with(".."));
     if !within {
         return Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "config path must be inside the app data dir: {}",
                 canonical.display()
@@ -293,14 +283,14 @@ mod tests {
 
     #[test]
     fn response_frame_with_trailing_newline_parses() {
-        let resp = HelperResponse::err(&TunError::new(TunErrorCode::PermissionRequired, "denied"));
+        let resp = HelperResponse::err(&TunError::new(ErrorCode::TunPermissionRequired, "denied"));
         let mut line = serde_json::to_string(&resp).unwrap();
         line.push('\n');
         let parsed = decode_response(line.as_bytes()).unwrap();
         assert!(!parsed.ok);
         assert_eq!(parsed.code.as_deref(), Some("tun.permission_required"));
         let err = parsed.into_error().unwrap();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
     }
 
     #[test]
@@ -315,7 +305,7 @@ mod tests {
     fn unknown_error_code_maps_to_apply_failed() {
         let parsed =
             decode_response(br#"{"ok":false,"code":"something.else","message":"x"}"#).unwrap();
-        assert_eq!(parsed.into_error().unwrap().code, TunErrorCode::ApplyFailed);
+        assert_eq!(parsed.into_error().unwrap().code, ErrorCode::TunApplyFailed);
     }
 
     #[test]
@@ -325,7 +315,7 @@ mod tests {
         )
         .unwrap();
         let err = parsed.into_error().unwrap();
-        assert_eq!(err.code, TunErrorCode::ConfigRejected);
+        assert_eq!(err.code, ErrorCode::TunConfigRejected);
         assert!(err.message.contains("/outbounds/0/type"));
     }
 
@@ -391,13 +381,13 @@ mod tests {
             "9.9.9.9".into(),
         ];
         let err = validate_set_dns("Wi-Fi", &five).expect_err("five servers rejected");
-        assert_eq!(err.code, TunErrorCode::InvalidArgument);
+        assert_eq!(err.code, ErrorCode::TunInvalidArgument);
         let err = validate_set_dns("Wi-Fi; rm -rf /", &["1.1.1.1".into()])
             .expect_err("metacharacter service rejected");
-        assert_eq!(err.code, TunErrorCode::InvalidArgument);
+        assert_eq!(err.code, ErrorCode::TunInvalidArgument);
         let err = validate_set_dns("Wi-Fi", &["8.8.8.8 evil".into()])
             .expect_err("non-literal server rejected");
-        assert_eq!(err.code, TunErrorCode::InvalidArgument);
+        assert_eq!(err.code, ErrorCode::TunInvalidArgument);
     }
 
     #[test]
@@ -412,17 +402,17 @@ mod tests {
 
         // Relative path: rejected.
         let err = validate_config_path(&dir, "config.json").unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
         // Missing file: rejected.
         let err = validate_config_path(&dir, &dir.join("nope.json").to_string_lossy()).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::ApplyFailed);
+        assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
         // Outside the data dir: rejected.
         let outside = std::env::temp_dir().join("ice-helper-outside.json");
         fs::write(&outside, b"{}").unwrap();
         let err = validate_config_path(&dir, &outside.to_string_lossy()).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
         // Sibling-prefix dir must not pass (DATA_DIR-other).
         let sibling = std::env::temp_dir().join(format!(
@@ -433,7 +423,7 @@ mod tests {
         let in_sibling = sibling.join("config.json");
         fs::write(&in_sibling, b"{}").unwrap();
         let err = validate_config_path(&dir, &in_sibling.to_string_lossy()).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_file(&outside);
@@ -450,7 +440,7 @@ mod tests {
             let link = dir.join("escaped.json");
             std::os::unix::fs::symlink(&outside, &link).unwrap();
             let err = validate_config_path(&dir, &link.to_string_lossy()).unwrap_err();
-            assert_eq!(err.code, TunErrorCode::PermissionRequired);
+            assert_eq!(err.code, ErrorCode::TunPermissionRequired);
             let _ = fs::remove_dir_all(&dir);
             let _ = fs::remove_file(&outside);
         }

@@ -469,7 +469,7 @@ export function Settings({
         scrollHideDelay={600}
         className="min-h-0 flex-1 overflow-hidden"
       >
-        <div className="flex w-full flex-col gap-3">
+        <div className="flex w-full flex-col gap-3" data-testid="settings-stack">
           <AppearanceCard
             themePreference={themePreference}
             setThemePreference={setThemePreference}

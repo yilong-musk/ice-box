@@ -4,9 +4,9 @@ pub(crate) use crate::capture::{
     only_tun_enabled_changed, tun_topology_changed, TrafficCapture, TunStatus,
 };
 pub(crate) use crate::orchestrate::{
-    current_settings, endpoints_from_settings, generate_config, orchestrate_apply,
-    orchestrate_set_proxy_mode_with_apply, orchestrate_start, patch_selected_tag_default,
-    resolve_binary,
+    current_settings, endpoints_from_settings, generate_config_with_cache,
+    orchestrate_apply_with_cache, orchestrate_set_proxy_mode_with_apply,
+    orchestrate_start_with_cache, patch_selected_tag_default, resolve_binary,
 };
 pub(crate) use crate::shutdown::graceful_stop;
 pub(crate) use crate::tray::{self, TrayLanguage};
@@ -15,9 +15,9 @@ pub(crate) use ice_config::NormalizedOutbound;
 pub(crate) use ice_config::{
     load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint,
     rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
-    save_settings_for as persist_settings, set_proxy_service_enabled,
-    set_proxy_service_enabled_for, AppError, AppSettings, CaptureIntent, ErrorCode,
-    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
+    save_settings_for as persist_settings, set_proxy_service_enabled_for, AppError, AppSettings,
+    CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
+    UiMessage,
 };
 pub(crate) use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
@@ -52,35 +52,26 @@ pub(crate) fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, A
         .map_err(|_| lock_poisoned("orchestrate"))
 }
 
+fn is_sticky_recovery(msg: &UiMessage) -> bool {
+    msg.key == ErrorCode::SettingsReset.message_key()
+        || msg.key == ErrorCode::LogsOversized.message_key()
+}
+
 pub(crate) fn clear_transient_recovery_warnings(state: &AppState) {
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = slot.take().and_then(|s| {
-            let kept: Vec<&str> = s
-                .split('；')
-                .map(str::trim)
-                .filter(|part| {
-                    !part.is_empty()
-                        && (part.contains(ErrorCode::SettingsReset.as_str())
-                            || part.contains(ErrorCode::LogsOversized.as_str()))
-                })
-                .collect();
-            if kept.is_empty() {
-                None
-            } else {
-                Some(kept.join("；"))
-            }
-        });
+        slot.retain(is_sticky_recovery);
     }
 }
 
-pub(crate) fn append_recovery_warning(state: &AppState, warning: String) {
+pub(crate) fn append_recovery_warning(state: &AppState, warning: UiMessage) {
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        let existing = slot.take().unwrap_or_default();
-        *slot = Some(if existing.is_empty() {
-            warning
-        } else {
-            format!("{existing}；{warning}")
-        });
+        slot.push(warning);
+    }
+}
+
+pub(crate) fn replace_recovery_warnings(state: &AppState, warnings: Vec<UiMessage>) {
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        *slot = warnings;
     }
 }
 
@@ -140,7 +131,7 @@ pub(crate) async fn run_blocking<T: Send + 'static>(
 pub struct StatusResponse {
     pub core: CoreState,
     pub subscription_count: usize,
-    pub proxy_recovery_warning: Option<String>,
+    pub proxy_recovery_warning: Vec<UiMessage>,
     /// Live OS match when the platform backend is available and core is running.
     pub system_proxy_applied: Option<bool>,
     /// On-disk `applied` flag (enables「停止代理服务」even when the OS was changed externally).
@@ -157,7 +148,7 @@ pub struct StatusResponse {
     pub tun_error: Option<AppError>,
     pub capture_transition_id: Option<String>,
     pub tun_available: bool,
-    pub tun_unavailable_reason: Option<String>,
+    pub tun_unavailable_reason: Option<ice_config::UiMessage>,
     /// True when the platform must not surface TUN controls at all; the
     /// frontend hides the TUN card and switches when set.
     pub tun_ui_hidden: bool,
@@ -448,8 +439,8 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
     let proxy_recovery_warning = state
         .proxy_recovery_warning
         .lock()
-        .ok()
-        .and_then(|g| g.clone());
+        .map(|g| g.clone())
+        .unwrap_or_default();
     let proxy_available = state.system_proxy_available;
     let settings = current_settings(&state.paths).ok();
     let system_proxy_recorded = if running {

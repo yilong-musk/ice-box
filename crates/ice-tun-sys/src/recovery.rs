@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use crate::backend::{RecoveryOutcome, TunBackend};
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, JournalState, TunJournal};
 
 /// Drives one recovery attempt for the active installation.
@@ -112,7 +112,7 @@ impl<'a> RecoveryDriver<'a> {
                             "tun recovery failed and journal could not be re-read"
                         );
                         return Err(TunError::new(
-                            TunErrorCode::RecoveryRequired,
+                            ErrorCode::TunRecoveryRequired,
                             format!(
                                 "recovery failed ({err}) and journal reload failed ({load_err})"
                             ),
@@ -132,7 +132,7 @@ impl<'a> RecoveryDriver<'a> {
                         "tun recovery failed and journal could not be persisted"
                     );
                     return Err(TunError::new(
-                        TunErrorCode::RecoveryRequired,
+                        ErrorCode::TunRecoveryRequired,
                         format!("recovery failed ({err}) and journal write failed ({record_err})"),
                     ));
                 }

@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{TunError, TunErrorCode};
+use ice_types::{ErrorCode, TunError};
 
 /// Capture lifecycle states (plan §4.3). `clean` means verified: no owned
 /// resource remains. `recovery_required` is fail-closed: ownership or
@@ -160,13 +160,13 @@ impl TunJournal {
         }
         let raw = fs::read_to_string(path).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("read tun journal {}: {err}", path.display()),
             )
         })?;
         let journal: Self = serde_json::from_str(&raw).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("parse tun journal {}: {err}", path.display()),
             )
         })?;
@@ -359,7 +359,7 @@ mod tests {
         let path = temp_journal_path("corrupt");
         fs::write(&path, b"{not json").unwrap();
         let err = TunJournal::load(&path).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::ApplyFailed);
+        assert_eq!(err.code, ErrorCode::TunApplyFailed);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

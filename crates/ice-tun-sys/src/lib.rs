@@ -28,9 +28,9 @@ pub mod error;
 pub mod fake;
 #[cfg(unix)]
 pub mod helper;
-pub mod helper_protocol;
-pub mod install_paths;
-pub mod journal;
+pub use ice_tun_helper_proto as helper_protocol;
+pub use ice_tun_helper_proto::install_paths;
+pub use ice_tun_journal as journal;
 pub mod macos;
 pub mod recovery;
 pub mod routes;
@@ -48,7 +48,7 @@ pub use coordinator::{
     tun_task_pin_matches, tun_task_xml_create_args, write_tun_task_xml, CoreCoordinator,
     DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
 };
-pub use error::{TunError, TunErrorCode};
+pub use error::{ErrorCode, TunError};
 pub use ice_tun_pin::{format_tun_task_pin, program_data_dir, protected_bin_dir, sha256_of_file};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
@@ -159,7 +159,7 @@ pub fn create_backend(
         // The parameters feed only the platform backends; drop them here so
         // the platform gate branch stays warn-free on every other host.
         let _ = (owner_token, config_path, binary, log_path);
-        let reason = "TUN is supported on macOS and Windows only in the first release";
+        let reason = "tun.unsupportedPlatform";
         Box::new(UnsupportedTunBackend::new(reason))
     }
 }

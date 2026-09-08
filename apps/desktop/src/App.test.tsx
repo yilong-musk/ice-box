@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
-import { LANGUAGE_STORAGE_KEY, t } from "./lib/i18n";
+import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
 const getStatus = vi.fn();
@@ -60,6 +60,20 @@ const tunStatus = {
 
 vi.mock("./api/tauri", () => ({
   formatDiagnostic: (warning: string) => warning,
+  formatUiMessage: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    const params = m.params ?? {};
+    const label = isMessageKey(m.key) ? t(m.key, params) : m.key;
+    const detail = params.detail;
+    if (detail && !label.includes(detail)) {
+      return `${label}: ${detail}`;
+    }
+    return label;
+  },
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
@@ -140,12 +154,14 @@ describe("App", () => {
     getStatus.mockResolvedValue({
       core: {
         status: "error",
-        message: "sing-box exited unexpectedly (code 1)",
+        message: { key: "core.exitedUnexpectedly", params: { code: "1" } },
         inbound_host: null,
         inbound_port: null,
       },
       subscription_count: 1,
-      proxy_recovery_warning: "system proxy recovery failed after sing-box exited unexpectedly: mock",
+      proxy_recovery_warning: [
+        { key: "recover.proxyAfterExit", params: { detail: "mock" } },
+      ],
       system_proxy_applied: null,
       system_proxy_recorded: null,
       system_proxy_available: true,
@@ -157,7 +173,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(view.getByRole("alert")).toHaveTextContent(
-        "system proxy recovery failed after sing-box exited unexpectedly",
+        t("recover.proxyAfterExit", { detail: "mock" }),
       );
     });
   });
@@ -227,7 +243,9 @@ describe("App", () => {
     );
     expect(nav).not.toBeNull();
     expect(brand).toHaveTextContent("ice-box");
-    expect(brand!.parentElement?.className.split(/\s+/)).toContain("justify-center");
+    expect(container.querySelector('[data-testid="app-brand-row"]')?.contains(brand)).toBe(
+      true,
+    );
     expect(version).toHaveTextContent(APP_VERSION);
     expect(brand!.compareDocumentPosition(version!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,

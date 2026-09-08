@@ -268,12 +268,7 @@ impl CaptureController {
                 // released, bring it back on the Diagnostic config (best
                 // effort) so the previous service state is restored.
                 if core.state().status == CoreStatus::Stopped {
-                    let _ = generate_config(
-                        &self.paths,
-                        settings,
-                        self.resource_dir.as_deref(),
-                        CaptureIntent::Diagnostic,
-                    );
+                    let _ = self.rewrite_config(settings, CaptureIntent::Diagnostic);
                     let core_paths = build_core_paths(&self.paths, settings, binary);
                     let _ = core.start(&core_paths);
                 }
@@ -342,12 +337,7 @@ impl CaptureController {
         if let Some(name) = &resolved_name {
             tun_settings.tun.interface_name = Some(name.clone());
         }
-        if let Err(err) = generate_config(
-            &self.paths,
-            &tun_settings,
-            self.resource_dir.as_deref(),
-            CaptureIntent::Tun,
-        ) {
+        if let Err(err) = self.rewrite_config(&tun_settings, CaptureIntent::Tun) {
             self.journal_clean("tun config generation failed; nothing was mutated")?;
             return Err(err);
         }
@@ -373,7 +363,7 @@ impl CaptureController {
         let applied = match backend.apply(&prepared) {
             Ok(applied) => applied,
             Err(err) => {
-                if err.code == TunErrorCode::PermissionRequired {
+                if err.code == ErrorCode::TunPermissionRequired {
                     // Refused before any OS mutation (helper not authorized):
                     // nothing was owned, the journal can be closed clean.
                     self.journal_clean("permission required before any mutation")?;
@@ -470,12 +460,7 @@ impl CaptureController {
         match backend.restore(applied) {
             Ok(()) => {
                 let _ = self.journal_clean("adopt failed; elevated core released and verified");
-                let _ = generate_config(
-                    &self.paths,
-                    settings,
-                    self.resource_dir.as_deref(),
-                    CaptureIntent::Diagnostic,
-                );
+                let _ = self.rewrite_config(settings, CaptureIntent::Diagnostic);
                 let core_paths = build_core_paths(&self.paths, settings, binary);
                 let _ = core.start(&core_paths);
                 Err(err.clone())
@@ -642,12 +627,7 @@ impl CaptureController {
 
         if restart_diagnostic {
             tracing::info!("disable_tun: regenerating diagnostic config and restarting core");
-            generate_config(
-                &self.paths,
-                settings,
-                self.resource_dir.as_deref(),
-                CaptureIntent::Diagnostic,
-            )?;
+            self.rewrite_config(settings, CaptureIntent::Diagnostic)?;
             let core_paths = build_core_paths(&self.paths, settings, binary);
             // The app's own clash API `/traffic` stream can still hold the
             // clash port in CLOSE_WAIT right after the elevated core's

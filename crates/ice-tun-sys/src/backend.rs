@@ -13,7 +13,7 @@
 //! coordinates the core; on a helper path the helper performs the explicit
 //! OS mutations. The two are never mixed for the same resource.
 
-use crate::error::{TunError, TunErrorCode};
+use crate::error::TunError;
 use crate::journal::{CidrRecord, DnsSnapshot, RouteRecord, TunJournal};
 
 /// Validated TUN capture parameters (locked by the feasibility spike).
@@ -220,11 +220,5 @@ pub fn unsupported_capability(reason: impl Into<String>) -> TunCapability {
         ipv4: false,
         ipv6: false,
         dns_hijack: false,
-    }
-}
-
-impl From<TunErrorCode> for TunError {
-    fn from(code: TunErrorCode) -> Self {
-        Self::new(code, code.as_str())
     }
 }

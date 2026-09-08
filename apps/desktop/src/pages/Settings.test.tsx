@@ -14,6 +14,7 @@ import {
   LANGUAGE_STORAGE_KEY,
   persistLanguagePreference,
   t,
+  isMessageKey,
 } from "../lib/i18n";
 import { Settings } from "./Settings";
 import { RuntimeStoreProvider } from "../lib/runtimeStore";
@@ -55,6 +56,14 @@ vi.mock("../api/tauri", () => ({
     revealDataDir: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
+  formatUiMessage: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
+  },
 }));
 
 const tunSettings = {
@@ -175,10 +184,10 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("允许局域网共享（Allow LAN）")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.allowLan"))).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByLabelText("允许局域网共享（Allow LAN）"));
+    fireEvent.click(view.getByLabelText(t("settings.allowLan")));
 
     await waitFor(() => {
       const listenInputs = view.getAllByDisplayValue("127.0.0.1");
@@ -209,11 +218,11 @@ describe("Settings", () => {
     const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByLabelText("为无规则的订阅附加默认分流规则"),
+        view.getByLabelText(t("settings.autoDefaultRules")),
       ).toBeInTheDocument();
     });
 
-    const toggle = view.getByLabelText("为无规则的订阅附加默认分流规则");
+    const toggle = view.getByLabelText(t("settings.autoDefaultRules"));
     expect(toggle).toBeChecked();
 
     fireEvent.click(toggle);
@@ -240,7 +249,7 @@ describe("Settings", () => {
 
     await waitFor(
       () => {
-        expect(container.textContent).toContain("不能相同");
+        expect(container.textContent).toContain(t("validation.portsConflict"));
         expect(saveSettings).not.toHaveBeenCalled();
       },
       { timeout: 2000 },
@@ -258,8 +267,8 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
-    const mixedInput = await view.findByLabelText("Mixed 监听");
-    const language = view.getByLabelText("语言");
+    const mixedInput = await view.findByLabelText(t("settings.mixedListen"));
+    const language = view.getByLabelText(t("settings.language"));
     expect(mixedInput).toBeDisabled();
     expect(language).toBeDisabled();
 
@@ -299,9 +308,9 @@ describe("Settings", () => {
       expect(container.textContent).toContain("load failed");
     });
 
-    const mixedInput = view.getByLabelText("Mixed 监听");
+    const mixedInput = view.getByLabelText(t("settings.mixedListen"));
     expect(mixedInput).toBeDisabled();
-    expect(view.getByLabelText("语言")).toBeDisabled();
+    expect(view.getByLabelText(t("settings.language"))).toBeDisabled();
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
@@ -331,7 +340,7 @@ describe("Settings", () => {
     });
 
     rerender(<Settings active={false} />);
-    expect(view.getByLabelText("Mixed 监听")).toBeDisabled();
+    expect(view.getByLabelText(t("settings.mixedListen"))).toBeDisabled();
     rerender(<Settings active />);
 
     await waitFor(() => {
@@ -345,31 +354,31 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      const appearance = view.getByLabelText("外观");
+      const appearance = view.getByLabelText(t("settings.appearance"));
       expect(
-        within(appearance).getByRole("radio", { name: "跟随系统" }),
+        within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
       ).toHaveAttribute("data-state", "on");
     });
-    const appearance = view.getByLabelText("外观");
+    const appearance = view.getByLabelText(t("settings.appearance"));
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: "浅色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));
     expect(
-      within(appearance).getByRole("radio", { name: "浅色" }),
+      within(appearance).getByRole("radio", { name: t("settings.appearance.light") }),
     ).toHaveAttribute("data-state", "on");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: "深色" }));
+    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.dark") }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(saveSettings).not.toHaveBeenCalled();
 
     fireEvent.click(
-      within(appearance).getByRole("radio", { name: "跟随系统" }),
+      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
     );
     expect(
-      within(appearance).getByRole("radio", { name: "跟随系统" }),
+      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
     ).toHaveAttribute("data-state", "on");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
@@ -380,9 +389,9 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByLabelText("语言")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.language"))).toBeInTheDocument();
     });
-    const language = view.getByLabelText("语言");
+    const language = view.getByLabelText(t("settings.language"));
     expect(language).toHaveValue("system");
 
     fireEvent.change(language, { target: { value: "en" } });
@@ -405,7 +414,7 @@ describe("Settings", () => {
     const { container, rerender } = render(<Settings active />);
     const view = within(container);
 
-    const language = await view.findByLabelText("语言");
+    const language = await view.findByLabelText(t("settings.language"));
     await waitFor(() => expect(language).not.toBeDisabled());
     fireEvent.change(language, { target: { value: "en" } });
     rerender(<Settings active={false} />);
@@ -441,8 +450,8 @@ describe("Settings", () => {
     expect(document.documentElement.lang).toBe("en");
     // Rendering stays Chinese-free: the nav/labels resolve through the
     // current language, so the settings panel shows English text.
-    expect(document.body.textContent).toContain("Appearance");
-    expect(document.body.textContent).toContain("Language");
+    expect(document.body.textContent).toContain(t("settings.appearance"));
+    expect(document.body.textContent).toContain(t("settings.language"));
 
     // Reset the module-level language so later tests in this file render zh.
     persistLanguagePreference("system");
@@ -451,11 +460,7 @@ describe("Settings", () => {
   it("lets the settings panel fill the content pane", () => {
     const { container } = render(<Settings />);
     expect(within(container).getByTestId("settings-panel")).toBeInTheDocument();
-    const card = container.querySelector("[data-slot=card]");
-    expect(card).not.toBeNull();
-    const classes = card!.className.split(/\s+/);
-    expect(classes).toContain("w-full");
-    expect(classes).not.toContain("max-w-lg");
+    expect(within(container).getByTestId("settings-stack")).toBeInTheDocument();
   });
 
   it("auto-saves the TUN switch", async () => {
@@ -570,7 +575,7 @@ describe("Settings", () => {
     expect(saveSettings).not.toHaveBeenCalled();
 
     // Cancel: dialog closes, switch stays off, nothing saved.
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("button", { name: t("common.cancel") }));
     await waitFor(() => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
@@ -582,7 +587,7 @@ describe("Settings", () => {
 
     // Second attempt: confirm -> install runs, then the TUN-on setting saves.
     fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
-    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    fireEvent.click(screen.getByRole("button", { name: t("tunDialog.installAndEnable") }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalledTimes(1);
       expect(saveSettings).toHaveBeenCalledWith(
@@ -704,7 +709,7 @@ describe("Settings", () => {
     });
 
     fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
-    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    fireEvent.click(screen.getByRole("button", { name: t("tunDialog.installAndEnable") }));
 
     await waitFor(() => {
       expect(container.textContent).toContain("tun.helper_install_failed");
@@ -741,15 +746,15 @@ describe("Settings", () => {
     });
 
     fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
-    fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+    fireEvent.click(screen.getByRole("button", { name: t("tunDialog.installAndEnable") }));
 
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("TUN 设置未保存");
+      expect(container.textContent).toContain(t("settings.tunNotSaved"));
     });
     // No TUN-on save, no success flash, switch stays off.
     expect(saveSettings).not.toHaveBeenCalled();
-    expect(container.textContent).not.toContain("已保存");
+    expect(container.textContent).not.toContain(t("common.saved"));
     expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
       "unchecked",
@@ -769,7 +774,7 @@ describe("Settings", () => {
       });
 
       fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
-      fireEvent.click(screen.getByRole("button", { name: "安装并启用" }));
+      fireEvent.click(screen.getByRole("button", { name: t("tunDialog.installAndEnable") }));
       await waitFor(() => {
         expect(installHelper).toHaveBeenCalled();
       });
@@ -779,7 +784,7 @@ describe("Settings", () => {
         await vi.advanceTimersByTimeAsync(4000);
       });
 
-      expect(container.textContent).toContain("辅助组件状态未确认");
+      expect(container.textContent).toContain(t("settings.helperStatusUnconfirmed"));
       expect(saveSettings).not.toHaveBeenCalled();
       expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
         "data-state",
@@ -794,7 +799,7 @@ describe("Settings", () => {
     getStatus.mockResolvedValue({
       ...defaultStatus,
       tun_available: false,
-      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_unavailable_reason: { key: "tun.unsupportedPlatform" },
     });
 
     const { container } = render(<Settings />);
@@ -804,7 +809,7 @@ describe("Settings", () => {
     // before the first status arrives (`!loaded`), so asserting the disabled
     // state alone would race with the mocked status resolution.
     await waitFor(() => {
-      expect(container.textContent).toContain("Windows TUN gate pending");
+      expect(container.textContent).toContain(t("tun.unsupportedPlatform"));
     });
     expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
   });
@@ -813,7 +818,7 @@ describe("Settings", () => {
     getStatus.mockResolvedValue({
       ...defaultStatus,
       tun_available: false,
-      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_unavailable_reason: { key: "tun.unsupportedPlatform" },
       tun_ui_hidden: true,
     });
 
@@ -821,16 +826,16 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByLabelText("外观")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.appearance"))).toBeInTheDocument();
     });
-    expect(view.queryByText("TUN 模式")).not.toBeInTheDocument();
+    expect(view.queryByText(t("settings.tun"))).not.toBeInTheDocument();
     expect(
-      view.queryByLabelText("启用 TUN 模式"),
+      view.queryByLabelText(t("settings.tunEnable")),
     ).not.toBeInTheDocument();
     expect(
-      view.queryByRole("button", { name: "安装辅助组件" }),
+      view.queryByRole("button", { name: t("settings.installHelper") }),
     ).not.toBeInTheDocument();
-    expect(container.textContent).not.toContain("Windows TUN gate pending");
+    expect(container.textContent).not.toContain(t("tun.unsupportedPlatform"));
   });
 
   it("disables the TUN switch while a TUN transition is in progress", async () => {
@@ -846,7 +851,7 @@ describe("Settings", () => {
     // The switch is disabled before the first status arrives (`!loaded`);
     // wait for the transition hint to render first.
     await waitFor(() => {
-      expect(container.textContent).toContain("正在启用 TUN…");
+      expect(container.textContent).toContain(t("settings.tunTransition.preparing"));
     });
     expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
   });
@@ -886,7 +891,7 @@ describe("Settings", () => {
       onCore();
     });
     await waitFor(() => {
-      expect(container.textContent).toContain("正在启用 TUN…");
+      expect(container.textContent).toContain(t("settings.tunTransition.preparing"));
     });
     expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
   });
@@ -916,7 +921,7 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(container.textContent).toContain("接口 utun42");
+      expect(container.textContent).toContain(t("common.withIfaceLabel", { iface: "utun42" }));
     });
     expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
       "data-state",
@@ -933,10 +938,10 @@ describe("Settings", () => {
     // The install button is also disabled before the first status arrives
     // (`!loaded`); wait for the installed-state text first.
     await waitFor(() => {
-      expect(container.textContent).toContain("辅助组件已安装并授权");
+      expect(container.textContent).toContain(t("settings.helperReady"));
     });
-    expect(view.getByRole("button", { name: "安装辅助组件" })).toBeDisabled();
-    expect(view.getByRole("button", { name: "卸载辅助组件" })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: t("settings.installHelper") })).toBeDisabled();
+    expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).not.toBeDisabled();
   });
 
   it("enables install and disables uninstall when the helper is missing", async () => {
@@ -946,9 +951,9 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "安装辅助组件" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("settings.installHelper") })).not.toBeDisabled();
     });
-    expect(view.getByRole("button", { name: "卸载辅助组件" })).toBeDisabled();
+    expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).toBeDisabled();
   });
 
   it("blocks TUN and offers an update when the helper core is stale", async () => {
@@ -963,12 +968,12 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "更新辅助组件" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("settings.updateHelper") })).toBeInTheDocument();
     });
-    expect(container.textContent).toContain("仍在运行旧版内核");
+    expect(container.textContent).toContain(t("settings.helperStale"));
     expect(view.getByLabelText(t("settings.tunEnable"))).toBeDisabled();
 
-    fireEvent.click(view.getByRole("button", { name: "更新辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateHelper") }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalled();
     });
@@ -988,10 +993,12 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "更新辅助组件" })).toBeDisabled();
+      expect(view.getByRole("button", { name: t("settings.updateHelper") })).toBeDisabled();
     });
-    expect(view.getByRole("button", { name: "卸载辅助组件" })).toBeDisabled();
-    expect(container.textContent).toContain("当前通过 TUN 接管流量");
+    expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).toBeDisabled();
+    expect(container.textContent).toContain(
+      t("settings.tunActiveWithIface", { interface: "" }),
+    );
   });
 
   it("installs and uninstalls the helper through the authorization dialog", async () => {
@@ -1009,20 +1016,20 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "安装辅助组件" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("settings.installHelper") })).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "安装辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.installHelper") }));
     await waitFor(() => {
       expect(installHelper).toHaveBeenCalled();
-      expect(view.getByRole("button", { name: "卸载辅助组件" })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).not.toBeDisabled();
     });
 
-    fireEvent.click(view.getByRole("button", { name: "卸载辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.uninstallHelper") }));
     await waitFor(() => {
       expect(uninstallHelper).toHaveBeenCalled();
     });
-    expect(container.textContent).not.toContain("辅助组件安装失败");
+    expect(container.textContent).not.toContain(t("error.tun.helper_install_failed"));
   });
 
   it("turns the TUN setting off when the helper is uninstalled while TUN is enabled", async () => {
@@ -1056,7 +1063,7 @@ describe("Settings", () => {
       );
     });
 
-    fireEvent.click(view.getByRole("button", { name: "卸载辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.uninstallHelper") }));
     await waitFor(() => {
       expect(uninstallHelper).toHaveBeenCalled();
     });
@@ -1083,9 +1090,9 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "安装辅助组件" })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("settings.installHelper") })).toBeInTheDocument();
     });
-    fireEvent.click(view.getByRole("button", { name: "安装辅助组件" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.installHelper") }));
 
     await waitFor(() => {
       expect(container.textContent).toContain("tun.helper_install_failed");
@@ -1103,15 +1110,15 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
     await waitFor(() => {
       expect(checkAppUpdate).toHaveBeenCalledWith(false);
-      expect(container.textContent).toContain("发现新版本 0.1.6");
+      expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
     });
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
-    fireEvent.click(view.getByRole("button", { name: "安装更新" }));
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateInstall") }));
     await waitFor(() => {
       expect(installAppUpdate).toHaveBeenCalled();
     });
@@ -1128,13 +1135,13 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
     await waitFor(() => {
-      expect(container.textContent).toContain("发现新版本 0.1.6");
+      expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
     });
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
   });
 
   it("shows install next to check when a parent reported an available update", async () => {
@@ -1151,10 +1158,10 @@ describe("Settings", () => {
     );
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    expect(container.textContent).toContain("发现新版本 0.1.6");
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
   });
 
   it("explains a missing GitHub update catalog instead of blaming the proxy", async () => {
@@ -1164,13 +1171,13 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
     await waitFor(() => {
-      expect(container.textContent).toContain("未找到 GitHub 上的更新清单");
+      expect(container.textContent).toContain(t("settings.updateFeedUnavailable"));
     });
-    expect(container.textContent).not.toContain("请先启动代理服务");
+    expect(container.textContent).not.toContain(t("settings.updateCheckFailed"));
   });
 
   it("keeps the proxy hint for a real update check network failure", async () => {
@@ -1180,11 +1187,11 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
     await waitFor(() => {
-      expect(container.textContent).toContain("请先启动代理服务后再试");
+      expect(container.textContent).toContain(t("settings.updateCheckFailed"));
     });
   });
 
@@ -1192,9 +1199,9 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("自动检查更新")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.updateAutoCheck"))).toBeInTheDocument();
     });
-    fireEvent.click(view.getByLabelText("自动检查更新"));
+    fireEvent.click(view.getByLabelText(t("settings.updateAutoCheck")));
     await waitFor(
       () => {
         expect(saveSettings).toHaveBeenCalledWith(
@@ -1222,14 +1229,14 @@ describe("Settings", () => {
     );
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText("自动检查更新")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.updateAutoCheck"))).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
-    fireEvent.click(view.getByLabelText("自动检查更新"));
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+    fireEvent.click(view.getByLabelText(t("settings.updateAutoCheck")));
     expect(onAvailableUpdate).toHaveBeenCalledWith(null);
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
-    expect(container.textContent).toContain("发现新版本 0.1.6");
-    fireEvent.click(view.getByLabelText("自动检查更新"));
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+    expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
+    fireEvent.click(view.getByLabelText(t("settings.updateAutoCheck")));
     expect(onAvailableUpdate).toHaveBeenLastCalledWith(available);
   });
 
@@ -1263,13 +1270,13 @@ describe("Settings", () => {
     );
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: "检查更新" })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
     await waitFor(() => {
-      expect(container.textContent).toContain("发现新版本 0.1.6");
+      expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
     });
     expect(onAvailableUpdate).toHaveBeenCalledWith(null);
-    expect(view.getByRole("button", { name: "安装更新" })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
   });
 });

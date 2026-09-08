@@ -5,15 +5,16 @@
 use ice_config::{
     clash_mode_name, config_to_pretty_json, load_group_selections, load_rule_overrides,
     load_settings, restore_runtime_config_from_bak, save_settings_for, write_runtime_config_bytes,
-    AppError, AppPaths, AppSettings, BuildInput, CaptureIntent, ErrorCode, NormalizedProfile,
+    AppError, AppPaths, AppSettings, BuildInput, CaptureIntent, ErrorCode, LocalTemplate,
+    NormalizedProfile, UiMessage,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
     ReloadOutcome,
 };
 use ice_engine::{
-    build_config, build_direct_only_config, host_platform, load_active_profile_with_default_rules,
-    load_index, resolve_selected_tag, SubscriptionError, SubscriptionPaths,
+    build_config, build_direct_only_config, host_platform, load_index, resolve_selected_tag,
+    ProfileCache, SubscriptionError, SubscriptionPaths,
 };
 use ice_proxy_sys::{
     apply_and_record, disk_proxy_state, is_proxy_live_applied, restore_and_clear_flag,
@@ -111,20 +112,20 @@ pub fn build_core_paths(
 
 /// Protected sing-box copies started by the macOS helper / Windows launcher.
 fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
-    let mut extra = Vec::new();
     #[cfg(target_os = "macos")]
     {
-        extra.push(std::path::PathBuf::from(
+        return vec![std::path::PathBuf::from(
             ice_tun_sys::install_paths::CORE_BIN_DEST,
-        ));
+        )];
     }
     #[cfg(windows)]
     {
-        extra.push(
+        return vec![
             ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_data_dir()).join("sing-box.exe"),
-        );
+        ];
     }
-    extra
+    #[cfg(not(any(target_os = "macos", windows)))]
+    Vec::new()
 }
 
 pub fn endpoints_from_settings(settings: &AppSettings) -> ProxyEndpoints {
@@ -178,10 +179,10 @@ pub fn reconcile_selected_tag(settings: &AppSettings, profile: &NormalizedProfil
 /// no-op applies skip the full copy + fsync churn. Returns whether the file
 /// was rewritten. The .bak only advances on real changes, which is exactly
 /// when the reload-failure rollback path can need it.
-fn write_config_if_changed(
+fn write_config_if_changed<C: serde::Serialize>(
     config_path: &Path,
     bak_path: &Path,
-    config: &serde_json::Value,
+    config: &C,
 ) -> Result<bool, AppError> {
     let rendered = config_to_pretty_json(config)?;
     let unchanged = std::fs::read_to_string(config_path)
@@ -246,16 +247,39 @@ pub fn patch_selected_tag_default(
 /// `capture_intent` is supplied explicitly by the caller (plan §4.1): automatic core start
 /// and every pre-T3 path pass [`CaptureIntent::Diagnostic`]; the TUN controller (slice T3)
 /// passes `Tun` only during a TUN capture transition.
+///
+/// Host production paths use [`generate_config_with_cache`]. This wrapper is
+/// for tests and acceptance that do not share a `ProfileCache`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn generate_config(
     app_paths: &AppPaths,
     settings: &AppSettings,
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
 ) -> Result<bool, AppError> {
+    generate_config_with_cache(app_paths, settings, resource_dir, capture_intent, None)
+}
+
+/// Like [`generate_config`], using the host-owned [`ProfileCache`] (SUB-6).
+pub fn generate_config_with_cache(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
+    cache: Option<&ProfileCache>,
+) -> Result<bool, AppError> {
+    let scratch;
+    let cache = match cache {
+        Some(cache) => cache,
+        None => {
+            scratch = ProfileCache::new();
+            &scratch
+        }
+    };
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
     let platform = host_platform();
-    let profile = match load_active_profile_with_default_rules(
+    let profile = match cache.load_active_with_default_rules(
         &sub_paths,
         &index,
         settings.auto_default_rules,
@@ -267,7 +291,7 @@ pub fn generate_config(
             // config so Start keeps working (system proxy + inbound, all traffic
             // direct) until a subscription is imported.
             let config =
-                build_direct_only_config(&settings.to_local_template(), capture_intent, platform)?;
+                build_direct_only_config(&LocalTemplate::from(settings), capture_intent, platform)?;
             return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
         }
         Err(err) => return Err(AppError::from(err)),
@@ -277,7 +301,7 @@ pub fn generate_config(
         // hand-edited profile): nothing usable to route through — direct-only fallback so
         // Start/Apply keep working (build_runtime_config errors on empty nodes).
         let config =
-            build_direct_only_config(&settings.to_local_template(), capture_intent, platform)?;
+            build_direct_only_config(&LocalTemplate::from(settings), capture_intent, platform)?;
         return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
     }
     let settings = reconcile_selected_tag_in_settings(app_paths, settings, &profile)?;
@@ -286,7 +310,7 @@ pub fn generate_config(
     let group_selections = load_group_selections(&app_paths.group_selections());
     let rule_overrides = load_rule_overrides(&app_paths.rule_overrides());
     let config = build_config(&BuildInput {
-        template: settings.to_local_template(),
+        template: LocalTemplate::from(&settings),
         profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
@@ -311,6 +335,7 @@ pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> 
 /// Automatic core start always uses [`CaptureIntent::Diagnostic`]: the TUN
 /// inbound exists in `config.json` only while a TUN capture transition is in
 /// flight or active (architecture §24.1).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn orchestrate_start(
     app_paths: &AppPaths,
     settings: &AppSettings,
@@ -319,7 +344,28 @@ pub fn orchestrate_start(
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
 ) -> Result<Option<String>, AppError> {
-    generate_config(app_paths, settings, resource_dir, capture_intent)?;
+    orchestrate_start_with_cache(
+        app_paths,
+        settings,
+        core,
+        binary,
+        resource_dir,
+        capture_intent,
+        None,
+    )
+}
+
+/// Like [`orchestrate_start`], sharing the host [`ProfileCache`] (SUB-6).
+pub fn orchestrate_start_with_cache(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    core: &mut dyn CoreHandle,
+    binary: PathBuf,
+    resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
+    cache: Option<&ProfileCache>,
+) -> Result<Option<String>, AppError> {
+    generate_config_with_cache(app_paths, settings, resource_dir, capture_intent, cache)?;
 
     let core_paths = build_core_paths(app_paths, settings, binary);
     core.start(&core_paths).map_err(AppError::from)?;
@@ -402,7 +448,7 @@ pub fn orchestrate_stop(
 pub fn restore_proxy_after_unexpected_core_exit(
     app_paths: &AppPaths,
     proxy: &dyn SystemProxy,
-) -> Option<String> {
+) -> Option<UiMessage> {
     match restore_and_clear_flag(&app_paths.proxy_backup(), proxy) {
         Ok(true) => {
             tracing::info!("restored system proxy after unexpected sing-box exit");
@@ -411,9 +457,7 @@ pub fn restore_proxy_after_unexpected_core_exit(
         Ok(false) => None,
         Err(err) => {
             tracing::error!(error = %err, "proxy restore after unexpected core exit");
-            Some(format!(
-                "system proxy recovery failed after sing-box exited unexpectedly: {err}"
-            ))
+            Some(UiMessage::new("recover.proxyAfterExit").with("detail", err.to_string()))
         }
     }
 }
@@ -431,9 +475,36 @@ pub fn orchestrate_apply(
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
 ) -> Result<(), AppError> {
+    orchestrate_apply_with_cache(
+        app_paths,
+        settings,
+        previous_settings,
+        core,
+        proxy,
+        binary,
+        resource_dir,
+        capture_intent,
+        None,
+    )
+}
+
+/// Like [`orchestrate_apply`], sharing the host [`ProfileCache`] (SUB-6).
+#[allow(clippy::too_many_arguments)]
+pub fn orchestrate_apply_with_cache(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    previous_settings: &AppSettings,
+    core: &mut dyn CoreHandle,
+    proxy: &dyn SystemProxy,
+    binary: PathBuf,
+    resource_dir: Option<&Path>,
+    capture_intent: CaptureIntent,
+    cache: Option<&ProfileCache>,
+) -> Result<(), AppError> {
     // generate_config falls back to a direct-only config when no subscription /
     // no usable nodes exist, so Apply always writes a valid config.json.
-    let config_changed = generate_config(app_paths, settings, resource_dir, capture_intent)?;
+    let config_changed =
+        generate_config_with_cache(app_paths, settings, resource_dir, capture_intent, cache)?;
 
     let status = core.state().status;
     if status != CoreStatus::Running {
@@ -477,6 +548,7 @@ pub fn orchestrate_apply(
                 previous_settings,
                 resource_dir,
                 capture_intent,
+                cache,
             );
             Err(AppError::from(err))
         }
@@ -683,15 +755,20 @@ fn rollback_runtime_config_after_reload_failure(
     previous_settings: &AppSettings,
     resource_dir: Option<&Path>,
     capture_intent: CaptureIntent,
+    cache: Option<&ProfileCache>,
 ) {
     match restore_runtime_config_from_bak(&app_paths.config(), &app_paths.config_bak()) {
         Ok(true) => {
             tracing::info!("restored config.json from config.json.bak after reload failure");
         }
         Ok(false) => {
-            if let Err(rollback) =
-                generate_config(app_paths, previous_settings, resource_dir, capture_intent)
-            {
+            if let Err(rollback) = generate_config_with_cache(
+                app_paths,
+                previous_settings,
+                resource_dir,
+                capture_intent,
+                cache,
+            ) {
                 tracing::error!(
                     error = %rollback,
                     "failed to regenerate config after reload failure (no .bak present)"
@@ -703,9 +780,13 @@ fn rollback_runtime_config_after_reload_failure(
                 error = %restore_err,
                 "failed to restore config.json.bak after reload failure"
             );
-            if let Err(rollback) =
-                generate_config(app_paths, previous_settings, resource_dir, capture_intent)
-            {
+            if let Err(rollback) = generate_config_with_cache(
+                app_paths,
+                previous_settings,
+                resource_dir,
+                capture_intent,
+                cache,
+            ) {
                 tracing::error!(
                     error = %rollback,
                     "failed to regenerate config after .bak restore error"
@@ -819,12 +900,12 @@ mod tests {
         };
         let nodes = vec![NO {
             tag: "n1".into(),
-            outbound: serde_json::json!({
+            outbound: std::sync::Arc::new(serde_json::json!({
                 "type": "socks",
                 "tag": "n1",
                 "server": "127.0.0.1",
                 "server_port": 1080
-            }),
+            })),
         }];
         write_subscription_success(
             &sub,
@@ -1383,7 +1464,9 @@ mod tests {
         };
         let nodes = vec![NO {
             tag: "n1".into(),
-            outbound: serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+            outbound: std::sync::Arc::new(
+                serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+            ),
         }];
         write_subscription_success(
             &sub,
@@ -1682,20 +1765,20 @@ mod tests {
             nodes: vec![
                 NO {
                     tag: "n1".into(),
-                    outbound: serde_json::json!({"type":"socks","tag":"n1"}),
+                    outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"n1"})),
                 },
                 NO {
                     tag: "n2".into(),
-                    outbound: serde_json::json!({"type":"socks","tag":"n2"}),
+                    outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"n2"})),
                 },
             ],
             groups: vec![NO {
                 tag: "Proxies".into(),
-                outbound: serde_json::json!({
+                outbound: std::sync::Arc::new(serde_json::json!({
                     "type": "selector",
                     "tag": "Proxies",
                     "outbounds": ["n1", "n2"],
-                }),
+                })),
             }],
             route: Default::default(),
             dns: None,
@@ -1754,11 +1837,11 @@ mod tests {
             nodes: vec![],
             groups: vec![NO {
                 tag: "Proxies".into(),
-                outbound: serde_json::json!({
+                outbound: std::sync::Arc::new(serde_json::json!({
                     "type": "selector",
                     "tag": "Proxies",
                     "outbounds": ["direct"],
-                }),
+                })),
             }],
             route: Default::default(),
             dns: None,

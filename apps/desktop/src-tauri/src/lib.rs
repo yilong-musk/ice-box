@@ -11,6 +11,7 @@ mod instance;
 mod log_tail;
 mod log_view;
 mod orchestrate;
+mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
@@ -19,9 +20,10 @@ mod windows_elevation;
 use crate::capture::CaptureController;
 use crate::core_snapshot::{wrap_core, CoreSnapshotHub};
 use crate::orchestrate::current_settings;
+use crate::runtime::init_logging;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
-use ice_config::{init_logging, load_settings_detailed, purge_invalid_pid_file, AppPaths};
-use ice_core::{CoreController, CoreHandle, TrafficMonitor};
+use ice_config::{load_settings_detailed, AppPaths, ErrorCode};
+use ice_core::{purge_invalid_pid_file, CoreController, CoreHandle, TrafficMonitor};
 use ice_proxy_sys::{create_system_proxy, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
@@ -83,7 +85,7 @@ pub struct AppState {
     /// Serializes config mutations (subscriptions, settings, start/stop, node select).
     pub orchestrate: Mutex<()>,
     /// Shown in UI when startup proxy crash recovery failed.
-    pub proxy_recovery_warning: Mutex<Option<String>>,
+    pub proxy_recovery_warning: Mutex<Vec<ice_config::UiMessage>>,
     /// Memoized `is_proxy_live_applied` result (endpoints, checked-at, value); avoids a
     /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
     /// `start` command and on endpoints change (cache key).
@@ -104,9 +106,8 @@ pub struct AppState {
     /// each time. Invalidated implicitly: the key changes when the active
     /// subscription, its profile, or `auto_default_rules` changes on disk.
     pub profile_cache: Mutex<Option<commands::ProfileCacheEntry>>,
-    /// ice-subscription parse cache (SUB-6). Shared by the UI read path;
-    /// owned here instead of a process-global static.
-    pub profile_parse_cache: ice_engine::ProfileCache,
+    /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
+    pub profile_parse_cache: Arc<ice_engine::ProfileCache>,
     /// Subscription auto-update watchdog liveness (SUB-4). False while the
     /// outer loop is restarting after a panic.
     pub subscription_watchdog_alive: Arc<AtomicBool>,
@@ -178,13 +179,21 @@ pub fn run() {
             let shutdown_requested = Arc::new(AtomicBool::new(false));
             let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
             let (core, core_snapshot) = wrap_core(core);
-            let settings_reset_warning = load_settings_detailed(&paths.settings())
-                .reset_reason
-                .map(|reason| format!("{}: {reason}", ice_config::ErrorCode::SettingsReset));
+            let settings_reset_warning: Vec<ice_config::UiMessage> =
+                load_settings_detailed(&paths.settings())
+                    .reset_reason
+                    .map(|reason| ErrorCode::SettingsReset.ui_message_detail(reason))
+                    .into_iter()
+                    .collect();
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
             let resource_dir = app.path().resource_dir().ok();
-            let capture = CaptureController::new(paths.clone(), resource_dir.clone());
+            let profile_parse_cache = Arc::new(ice_engine::ProfileCache::new());
+            let capture = CaptureController::with_profile_cache(
+                paths.clone(),
+                resource_dir.clone(),
+                Arc::clone(&profile_parse_cache),
+            );
             app.manage(AppState {
                 paths,
                 core,
@@ -199,7 +208,7 @@ pub fn run() {
                 traffic: TrafficMonitor::new(),
                 capture,
                 profile_cache: Mutex::new(None),
-                profile_parse_cache: ice_engine::ProfileCache::new(),
+                profile_parse_cache,
                 subscription_watchdog_alive: std::sync::Arc::new(
                     std::sync::atomic::AtomicBool::new(true),
                 ),
@@ -254,9 +263,11 @@ pub fn run() {
                         return;
                     }
                     tracing::error!(error = %err, "auto-start failed");
-                    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                        *slot = Some(format!("auto-start failed ({err})"));
-                    }
+                    crate::commands::append_recovery_warning(
+                        &state,
+                        ice_config::UiMessage::new("recover.autoStartFailed")
+                            .with("detail", err.to_string()),
+                    );
                 }
             });
             if orch_rx.recv().is_err() {

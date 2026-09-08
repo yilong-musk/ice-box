@@ -20,8 +20,9 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         let previous = current_settings(&state.paths)?;
-        // Home start/stop own `proxy_service_enabled`; the patch type has no
-        // such field, so a Settings/Home save cannot clobber on/off.
+        // Home start/stop own `proxy_service_enabled`; Settings omits it so a
+        // form save cannot clobber on/off. An explicit patch field exists for
+        // dedicated callers.
         let settings = previous.apply_patch(&patch);
         settings.validate_for(host_platform())?;
         let active = state.capture.active_backend();
@@ -142,7 +143,7 @@ pub(crate) fn set_proxy_mode_inner(
                     .capture
                     .apply_while_tun_active(settings, previous, core, proxy, binary)
             } else {
-                orchestrate_apply(
+                orchestrate_apply_with_cache(
                     paths,
                     settings,
                     previous,
@@ -151,6 +152,7 @@ pub(crate) fn set_proxy_mode_inner(
                     binary,
                     resource_dir,
                     intent,
+                    Some(state.profile_parse_cache.as_ref()),
                 )
             }
         },
@@ -205,7 +207,7 @@ pub(crate) fn apply_after_change(
             binary,
         )?;
     } else {
-        orchestrate_apply(
+        orchestrate_apply_with_cache(
             &state.paths,
             settings,
             previous_settings,
@@ -214,6 +216,7 @@ pub(crate) fn apply_after_change(
             binary,
             resource_dir(app).as_deref(),
             state.capture.apply_intent(),
+            Some(state.profile_parse_cache.as_ref()),
         )?;
     }
     let running = core.state().status == CoreStatus::Running;

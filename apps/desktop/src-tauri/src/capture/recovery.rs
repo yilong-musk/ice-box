@@ -11,13 +11,13 @@ impl CaptureController {
         &self,
         core: &mut dyn CoreHandle,
         settings: &AppSettings,
-    ) -> Option<String> {
+    ) -> Option<UiMessage> {
         if self.active_backend() != TrafficCapture::Tun {
             return None;
         }
         let mut backend = match self.backend.lock() {
             Ok(backend) => backend,
-            Err(_) => return Some("capture controller unavailable; TUN state not restored".into()),
+            Err(_) => return Some(UiMessage::new("recover.controllerUnavailable")),
         };
         let _ = self.begin_transition(TunStatus::Stopping, Uuid::new_v4().to_string());
         let mut journal = match TunJournal::load(&self.paths.tun_state()) {
@@ -34,9 +34,7 @@ impl CaptureController {
                         "journal missing while TUN capture was active",
                     ),
                 );
-                return Some(
-                    "TUN journal missing after sing-box exited unexpectedly; fail-closed".into(),
-                );
+                return Some(UiMessage::new("recover.tunJournalMissing"));
             }
         };
         let applied = AppliedTun::from_journal(&journal);
@@ -72,12 +70,7 @@ impl CaptureController {
                     )
                     .ok();
                 // The Diagnostic config prevents auto-start from recreating TUN.
-                let _ = generate_config(
-                    &self.paths,
-                    settings,
-                    self.resource_dir.as_deref(),
-                    CaptureIntent::Diagnostic,
-                );
+                let _ = self.rewrite_config(settings, CaptureIntent::Diagnostic);
                 let _ = self.finish_transition(TrafficCapture::Inactive, TunStatus::Disabled, None);
                 tracing::info!("tun capture released after unexpected sing-box exit");
                 None
@@ -104,9 +97,9 @@ impl CaptureController {
                         format!("TUN cleanup unconfirmed ({err})"),
                     ),
                 );
-                Some(format!(
-                    "TUN cleanup unconfirmed after sing-box exited unexpectedly: {err}"
-                ))
+                Some(
+                    UiMessage::new("recover.tunCleanupUnconfirmed").with("detail", err.to_string()),
+                )
             }
         }
     }
@@ -139,7 +132,7 @@ impl CaptureController {
     /// the journaled snapshot (the classic "TUN is on but nothing resolves"
     /// after sleep), re-apply the DNS snapshot through the elevated
     /// coordinator. Returns a UI warning when a repair fails.
-    pub fn heal_tun_dns(&self) -> Option<String> {
+    pub fn heal_tun_dns(&self) -> Option<UiMessage> {
         if self.active_backend() != TrafficCapture::Tun {
             return None;
         }
@@ -150,7 +143,7 @@ impl CaptureController {
         let applied = AppliedTun::from_journal(&journal);
         let mut backend = match self.backend.lock() {
             Ok(backend) => backend,
-            Err(_) => return Some("capture controller unavailable; TUN DNS not re-applied".into()),
+            Err(_) => return Some(UiMessage::new("recover.controllerUnavailable")),
         };
         let health = match backend.verify(&applied) {
             Ok(health) => health,
@@ -170,7 +163,7 @@ impl CaptureController {
             Ok(false) => None,
             Err(err) => {
                 tracing::error!(error = %err, "TUN DNS re-apply failed");
-                Some(format!("TUN DNS recovery failed: {}", err.message))
+                Some(UiMessage::new("recover.tunDnsFailed").with("detail", err.message.clone()))
             }
         }
     }
@@ -180,17 +173,15 @@ impl CaptureController {
     /// driver. Never enables capture. Returns a UI warning when anything
     /// needs attention. Used by startup (after orphan-core reclamation)
     /// and by the on-demand「重试恢复」action from the UI.
-    pub fn recover(&self, core: &mut dyn CoreHandle) -> Result<Option<String>, AppError> {
-        let mut warnings: Vec<String> = Vec::new();
+    pub fn recover(&self, core: &mut dyn CoreHandle) -> Result<Vec<UiMessage>, AppError> {
+        let mut warnings: Vec<UiMessage> = Vec::new();
 
         if self.paths.pending_settings().is_file() {
             tracing::warn!(
                 "interrupted settings transaction; committed settings are the old state"
             );
             let _ = fs::remove_file(self.paths.pending_settings());
-            warnings.push(
-                "an incomplete backend switch was detected; restored the previous settings".into(),
-            );
+            warnings.push(UiMessage::new("recover.pendingSettings"));
         }
 
         let mut backend = self
@@ -225,12 +216,7 @@ impl CaptureController {
                 if outcome == RecoveryOutcome::Cleaned {
                     let settings =
                         crate::orchestrate::current_settings(&self.paths).unwrap_or_default();
-                    let _ = generate_config(
-                        &self.paths,
-                        &settings,
-                        self.resource_dir.as_deref(),
-                        CaptureIntent::Diagnostic,
-                    );
+                    let _ = self.rewrite_config(&settings, CaptureIntent::Diagnostic);
                 }
                 // The OS system proxy may still be applied (startup recovery
                 // runs after the proxy backup was restored into the live OS,
@@ -257,11 +243,11 @@ impl CaptureController {
                         "TUN cleanup unconfirmed; new TUN activation is blocked",
                     ),
                 );
-                warnings.push("TUN cleanup unconfirmed; fail-closed. Retry recovery".into());
+                warnings.push(UiMessage::new("recover.tunCleanupRetry"));
             }
         }
         let _ = core;
-        Ok((!warnings.is_empty()).then(|| warnings.join("；")))
+        Ok(warnings)
     }
 
     /// Serialized live-TUN reconfigure when TUN topology changed while TUN

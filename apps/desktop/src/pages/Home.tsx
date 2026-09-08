@@ -5,6 +5,7 @@ import { Power } from "lucide-react";
 import {
   api,
   formatInvokeError,
+  formatUiMessage,
   type AppSettings,
   type CoreStatus,
   type CoreState,
@@ -437,7 +438,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     },
   ];
   if (core?.message) {
-    infoRows.push({ label: t("home.info.message"), value: core.message });
+    infoRows.push({
+      label: t("home.info.message"),
+      value: formatUiMessage(core.message),
+    });
   }
 
   const powerTitle = proxyOn ? t("home.power.stop") : t("home.power.start");
@@ -561,7 +565,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 </Button>
                 {configuredTun && !tunActive && !tunAvailable && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {status?.tun_unavailable_reason ??
+                    {formatUiMessage(status?.tun_unavailable_reason) ||
                       t("home.tunUnavailable")}
                   </p>
                 )}

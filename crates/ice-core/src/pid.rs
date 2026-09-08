@@ -2,11 +2,34 @@
 
 //! `sing-box.pid` read / write helpers.
 
-use std::fs;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::atomic::write_bytes_atomic;
-use crate::ConfigError;
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+    let tmp_name = format!(".{file_name}.{nanos}.tmp");
+    let tmp = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(tmp_name),
+        _ => PathBuf::from(tmp_name),
+    };
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let mut f = File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
+}
 
 /// Parse pid file contents. Invalid / empty / zero → `None` (never panics).
 pub fn parse_pid_contents(raw: &str) -> Option<u32> {
@@ -23,7 +46,7 @@ pub fn parse_pid_contents(raw: &str) -> Option<u32> {
 }
 
 /// Read pid file. Missing or invalid contents → `Ok(None)`.
-pub fn read_pid(path: &Path) -> Result<Option<u32>, ConfigError> {
+pub fn read_pid(path: &Path) -> io::Result<Option<u32>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -32,24 +55,27 @@ pub fn read_pid(path: &Path) -> Result<Option<u32>, ConfigError> {
 }
 
 /// Atomically write a pid file.
-pub fn write_pid(path: &Path, pid: u32) -> Result<(), ConfigError> {
+pub fn write_pid(path: &Path, pid: u32) -> io::Result<()> {
     if pid == 0 {
-        return Err(ConfigError::invalid("pid must be non-zero"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid must be non-zero",
+        ));
     }
     write_bytes_atomic(path, format!("{pid}\n").as_bytes())
 }
 
 /// Remove pid file if present. Missing file is Ok.
-pub fn clear_pid(path: &Path) -> Result<(), ConfigError> {
+pub fn clear_pid(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(ConfigError::from(err)),
+        Err(err) => Err(err),
     }
 }
 
 /// If the file exists but contents are not a usable pid, delete it (no panic).
-pub fn purge_invalid_pid_file(path: &Path) -> Result<(), ConfigError> {
+pub fn purge_invalid_pid_file(path: &Path) -> io::Result<()> {
     if !path.exists() {
         return Ok(());
     }

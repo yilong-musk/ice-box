@@ -2,7 +2,7 @@
 
 //! Core errors mapped to architecture §17 codes.
 
-use ice_config::{AppError, ErrorCode};
+use ice_types::{AppError, ErrorCode, UiMessage};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -39,6 +39,11 @@ impl CoreError {
 
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self::InvalidState(message.into())
+    }
+
+    /// Structured UI copy for `CoreState.message` (FE-5).
+    pub fn ui_message(&self) -> UiMessage {
+        self.code().ui_message_detail(self.to_string())
     }
 }
 

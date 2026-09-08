@@ -209,7 +209,7 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
             .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
-        if overrides.is_rule_disabled(rule) {
+        if overrides.is_disabled(fp.as_ref()) {
             disabled += 1;
         }
         *counts.entry(rule_type_of(rule)).or_default() += 1;
@@ -317,7 +317,7 @@ pub(crate) fn query_rules(
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
             .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
-        let disabled = overrides.is_rule_disabled(rule);
+        let disabled = overrides.is_disabled(fp.as_ref());
         if keyword_matches(&keyword, &keyword_texts, idx, rule)
             && matches_filter(
                 rule_type_of(rule),
@@ -663,20 +663,22 @@ pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), Ap
         let persist_result = match &selector_tag {
             Some(sel) => match patch_selected_tag_default(&state.paths, sel, &req.tag) {
                 Ok(true) => Ok(()),
-                Ok(false) => generate_config(
+                Ok(false) => generate_config_with_cache(
                     &state.paths,
                     &settings,
                     resource_dir(&app).as_deref(),
                     state.capture.apply_intent(),
+                    Some(state.profile_parse_cache.as_ref()),
                 )
                 .map(|_| ()),
                 Err(err) => Err(err),
             },
-            None => generate_config(
+            None => generate_config_with_cache(
                 &state.paths,
                 &settings,
                 resource_dir(&app).as_deref(),
                 state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
             )
             .map(|_| ()),
         };
@@ -699,11 +701,12 @@ pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), Ap
             if let Err(err) = result {
                 let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
                 rollback_group_selection(&state, &previous_selection);
-                let _ = generate_config(
+                let _ = generate_config_with_cache(
                     &state.paths,
                     &previous,
                     resource_dir(&app).as_deref(),
                     state.capture.apply_intent(),
+                    Some(state.profile_parse_cache.as_ref()),
                 );
                 return Err(AppError::from(err));
             }
@@ -798,11 +801,12 @@ pub async fn set_group_selection(
             let endpoints = clash_endpoints(&settings);
             select_group(&endpoints, &req.group, &req.member).map_err(AppError::from)?;
         } else if !patch_selected_tag_default(&state.paths, &req.group, &req.member)? {
-            generate_config(
+            generate_config_with_cache(
                 &state.paths,
                 &settings,
                 resource_dir(&app).as_deref(),
                 state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
             )?;
         }
         Ok(())

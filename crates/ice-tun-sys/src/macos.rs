@@ -32,7 +32,7 @@ use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
 use crate::coordinator::CoreCoordinator;
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 use crate::routes::netmask_to_prefix;
@@ -113,7 +113,7 @@ pub struct ProcessMacOsHost;
 fn run_command(program: &str, args: &[&str]) -> Result<CommandOutput, TunError> {
     let output = Command::new(program).args(args).output().map_err(|err| {
         TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!("run {program}: {err}"),
         )
     })?;
@@ -135,7 +135,7 @@ impl MacOsHost for ProcessMacOsHost {
         let out = run_command("ifconfig", &["-l"])?;
         if out.status != Some(0) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!("ifconfig -l failed: {}", out.stderr.trim()),
             ));
         }
@@ -190,7 +190,7 @@ impl MacOsHost for ProcessMacOsHost {
         let out = run_command("networksetup", &["-getdnsservers", service])?;
         if out.status != Some(0) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "networksetup -getdnsservers {service} failed: {}",
                     out.stderr.trim()
@@ -331,13 +331,13 @@ fn dns_snapshot_parts(snapshot: &str) -> (String, Vec<String>) {
 fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     let (addr, prefix) = cidr.split_once('/').ok_or_else(|| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address must be a CIDR, got {cidr}"),
         )
     })?;
     let prefix: u32 = prefix.parse().map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address has a non-numeric prefix: {cidr}"),
         )
     })?;
@@ -348,14 +348,14 @@ fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     };
     parsed.map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("invalid tun address: {cidr}"),
         )
     })?;
     let max = if ipv6 { 128 } else { 32 };
     if prefix == 0 || prefix > max {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address prefix must be in 1..={max}, got {prefix}"),
         ));
     }
@@ -424,7 +424,7 @@ impl MacosTunBackend {
         match self.coordinator.stop() {
             Ok(()) => apply_err,
             Err(stop_err) => TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "apply failed ({}) and elevated core cleanup was not verified ({})",
                     apply_err.message, stop_err.message
@@ -456,7 +456,7 @@ impl MacosTunBackend {
                     .map(|err| err.message)
                     .unwrap_or_else(|| "unknown core cleanup failure".into());
                 TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     format!(
                         "apply failed ({}); DNS cleanup: {}; elevated core cleanup: {}",
                         apply_err.message, dns_error, core_error
@@ -478,7 +478,7 @@ impl MacosTunBackend {
             .map(|index| format!("utun{index}"))
             .ok_or_else(|| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("no free utun index in {from}..1000"),
                 )
             })
@@ -492,7 +492,7 @@ impl MacosTunBackend {
             Some(name) => {
                 let Some(index) = utun_index(name) else {
                     return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("macOS requires a utun<N> interface name, got {name}"),
                     ));
                 };
@@ -582,7 +582,7 @@ impl MacosTunBackend {
             std::thread::sleep(Duration::from_millis(APPLY_CONVERGE_DELAY_MS));
         }
         Err(TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!(
                 "interface {name} did not converge to the required addresses and routes within {} ms; last observation: {last_diagnostic}",
                 APPLY_CONVERGE_TRIES * APPLY_CONVERGE_DELAY_MS as u32
@@ -694,7 +694,7 @@ impl TunBackend for MacosTunBackend {
     fn prepare(&self, config: &TunConfig) -> Result<PreparedTun, TunError> {
         if config.addresses.is_empty() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config requires at least one address",
             ));
         }
@@ -702,13 +702,13 @@ impl TunBackend for MacosTunBackend {
         // routes and silently leaks IPv6; IPv4 itself is mandatory.
         if !routes::has_v4(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv4 address (IPv4 is mandatory)",
             ));
         }
         if !routes::has_v6(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv6 address (dual-stack lock: an IPv4-only tun silently leaks IPv6)",
             ));
         }
@@ -717,7 +717,7 @@ impl TunBackend for MacosTunBackend {
         }
         if !(1280..=9000).contains(&config.mtu) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("tun mtu must be in 1280..=9000, got {}", config.mtu),
             ));
         }
@@ -734,7 +734,7 @@ impl TunBackend for MacosTunBackend {
         let config = &prepared.config;
         let Some(name) = config.interface_name.as_deref() else {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "prepare must resolve the interface name before apply",
             ));
         };
@@ -768,7 +768,7 @@ impl TunBackend for MacosTunBackend {
             // The core claims success but the adapter never appeared: stop
             // it (fail closed) so nothing half-owned survives.
             return Err(self.rollback_after_apply_failure(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "core started but interface {name} is not present after {} ms",
                     INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
@@ -820,7 +820,7 @@ impl TunBackend for MacosTunBackend {
                 Ok(Some(service)) => service,
                 Ok(None) => {
                     return Err(self.rollback_after_apply_failure(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         "no network service found to point DNS at public resolvers",
                     )))
                 }
@@ -857,7 +857,7 @@ impl TunBackend for MacosTunBackend {
                         &service,
                         &before,
                         TunError::new(
-                            TunErrorCode::HealthcheckFailed,
+                            ErrorCode::TunHealthcheckFailed,
                             format!(
                                 "DNS on {service} did not match the applied snapshot after {} ms",
                                 INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
@@ -998,7 +998,7 @@ impl TunBackend for MacosTunBackend {
             // privileged helper. Fail closed — the driver persists
             // recovery_required and no new capture starts.
             return Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "interface {} still present after core stop; removal needs the privileged helper",
                     name.unwrap_or("<unknown>")
@@ -1009,7 +1009,7 @@ impl TunBackend for MacosTunBackend {
         if let Some(name) = name {
             if self.owned_routes_remain(applied, name)? {
                 return Err(TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     format!("owned routes still resolve to {name} after core stop"),
                 ));
             }
@@ -1064,7 +1064,7 @@ impl TunBackend for MacosTunBackend {
                 }
             } else {
                 let err = TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
                 );
                 if restore_error.is_none() {
@@ -1074,7 +1074,7 @@ impl TunBackend for MacosTunBackend {
         }
         match restore_error {
             Some(err) => Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "restore cleanup completed with unrecoverable state: {}",
                     err.message
@@ -1099,7 +1099,7 @@ impl TunBackend for MacosTunBackend {
         // re-verify. Never enables capture.
         match self.restore(&applied) {
             Ok(()) => {}
-            Err(err) if err.code == TunErrorCode::RecoveryRequired => {
+            Err(err) if err.code == ErrorCode::TunRecoveryRequired => {
                 return Ok(RecoveryOutcome::RecoveryRequired);
             }
             Err(err) => return Err(err),

@@ -2,6 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "@/lib/i18n";
 import { WindowControls } from "./WindowControls";
 import type { WindowChrome } from "@/lib/windowChrome";
 
@@ -33,9 +34,9 @@ describe("WindowControls", () => {
     chrome = "windows-custom";
     render(<WindowControls />);
 
-    fireEvent.click(screen.getByRole("button", { name: "最小化" }));
-    fireEvent.click(screen.getByRole("button", { name: "最大化" }));
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: t("window.minimize") }));
+    fireEvent.click(screen.getByRole("button", { name: t("window.maximize") }));
+    fireEvent.click(screen.getByRole("button", { name: t("window.close") }));
 
     expect(runWindowCommand).toHaveBeenCalledWith("minimize");
     expect(runWindowCommand).toHaveBeenCalledWith("toggleMaximize");

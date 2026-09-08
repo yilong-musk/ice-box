@@ -30,6 +30,7 @@ cargo test -p ice-tun-sys --tests
 
 echo "== tsc --noEmit =="
 (cd apps/desktop && npx tsc --noEmit)
+(cd apps/website && npx tsc --noEmit)
 
 echo "== vitest =="
 (cd apps/desktop && npm test)

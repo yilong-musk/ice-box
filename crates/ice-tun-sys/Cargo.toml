@@ -12,7 +12,10 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
+ice-types = { workspace = true }
 ice-tun-pin = { workspace = true }
+ice-tun-helper-proto = { workspace = true }
+ice-tun-journal = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

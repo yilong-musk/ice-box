@@ -10,7 +10,7 @@ Companion: `scripts/gate.sh` (CI), `scripts/gate-local.sh` (pre-commit),
 
 | Command | Scope |
 |---|---|
-| `scripts/gate-local.sh` | `cargo fmt --check`, clippy (excluding `ice-box`), `cargo test --workspace --lib --exclude ice-box`, `cargo test -p ice-tun-sys --tests`, frontend `tsc` + vitest, updater-fixture script, Live Demo screenshot |
+| `scripts/gate-local.sh` | `cargo fmt --check`, clippy (excluding `ice-box`), `cargo test --workspace --lib --exclude ice-box`, `cargo test -p ice-tun-sys --tests`, desktop + website `tsc`, vitest, updater-fixture script, Live Demo screenshot |
 | `scripts/gate.sh` (CI) | The above plus clippy/`cargo test --workspace` for **all** crates (including `ice-box`), Vite production build |
 | CI macOS / Windows extra steps | `cargo test -p ice-box --lib 'g9_'` (headless acceptance), `cargo test -p ice-proxy-sys` |
 

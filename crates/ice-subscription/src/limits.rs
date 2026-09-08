@@ -3,6 +3,8 @@
 //! Shared subscription size caps (architecture §11.4). Over-limit input is
 //! truncated with a warning; parsers never hard-fail on size.
 
+use ice_config::UiMessage;
+
 /// Caps applied by Clash YAML, sing-box JSON, and URI-list parsers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -22,7 +24,9 @@ impl Default for Limits {
 }
 
 impl Limits {
-    pub fn warning(kind: &str, dropped: usize) -> String {
-        format!("truncated {kind}: dropped {dropped}")
+    pub fn warning(kind: &str, dropped: usize) -> UiMessage {
+        UiMessage::new("parse.truncated")
+            .with("kind", kind)
+            .with("dropped", dropped.to_string())
     }
 }

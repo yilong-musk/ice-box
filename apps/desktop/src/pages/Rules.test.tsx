@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../lib/i18n";
+import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
 import { Rules } from "./Rules";
 
@@ -22,7 +22,18 @@ vi.mock("../api/tauri", () => ({
     removeCustomRule: (...args: unknown[]) => removeCustomRule(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
   },
-  formatInvokeError: (err: unknown) => String(err),
+  formatInvokeError: (err: unknown) => {
+    if (err && typeof err === "object") {
+      const o = err as { code?: string; message?: string };
+      if (typeof o.code === "string") {
+        const key = `error.${o.code}`;
+        if (isMessageKey(key)) return `${t(key)} (${o.code})`;
+        if (typeof o.message === "string") return `${o.code}: ${o.message}`;
+      }
+      if (typeof o.message === "string") return o.message;
+    }
+    return String(err);
+  },
 }));
 
 function sampleOverview(overrides: Partial<Record<string, unknown>> = {}) {
@@ -224,8 +235,7 @@ describe("Rules", () => {
     within(row).getByRole("button", { name: t("common.disable") }).click();
 
     await waitFor(() => {
-      expect(screen.getByText(/已保存，但应用失败/)).toBeInTheDocument();
-      expect(screen.getByText(/config.invalid: bad outbound/)).toBeInTheDocument();
+      expect(screen.getByText(t("rules.savedButApplyFailed", { detail: `${t("error.config.invalid")} (config.invalid)` }))).toBeInTheDocument();
     });
   });
 
@@ -240,20 +250,20 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
-    expect(screen.getByLabelText("匹配值")).toBeInTheDocument();
-    expect(screen.getByLabelText("出口")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "添加" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("匹配值"), {
+    expect(screen.getByLabelText(t("ruleForm.matchValue"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("ruleForm.add") })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
       target: { value: "x.io, y.io" },
     });
-    const outbound = screen.getByLabelText("出口") as HTMLSelectElement;
+    const outbound = screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement;
     await waitFor(() => {
       expect(
         within(outbound).getByRole("option", { name: "n1" }),
       ).toBeInTheDocument();
     });
     fireEvent.change(outbound, { target: { value: "n1" } });
-    screen.getByRole("button", { name: "添加" }).click();
+    screen.getByRole("button", { name: t("ruleForm.add") }).click();
 
     await waitFor(() => {
       expect(addCustomRule).toHaveBeenCalledWith({
@@ -262,7 +272,7 @@ describe("Rules", () => {
       });
     });
     await waitFor(() => {
-      expect(screen.queryByLabelText("匹配值")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(t("ruleForm.matchValue"))).not.toBeInTheDocument();
     });
   });
 
@@ -274,14 +284,16 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
-    const outbound = screen.getByLabelText("出口") as HTMLSelectElement;
+    const outbound = screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement;
     await waitFor(() => {
       expect(
-        within(outbound).getByRole("option", { name: "Proxies（策略组）" }),
+        within(outbound).getByRole("option", {
+          name: `Proxies${t("ruleForm.strategyGroupSuffix")}`,
+        }),
       ).toBeInTheDocument();
     });
     expect(
-      within(outbound).getByRole("option", { name: "direct（直连）" }),
+      within(outbound).getByRole("option", { name: t("ruleForm.directOption") }),
     ).toBeInTheDocument();
   });
 
@@ -293,13 +305,15 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
-    fireEvent.change(screen.getByLabelText("匹配类型"), {
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matcherType")), {
       target: { value: "ip_is_private" },
     });
-    const checkbox = screen.getByRole("checkbox", { name: "私网 IP" });
+    const checkbox = screen.getByRole("checkbox", {
+      name: t("ruleType.ipIsPrivate"),
+    });
     expect(checkbox).toBeInTheDocument();
 
-    screen.getByRole("button", { name: "添加" }).click();
+    screen.getByRole("button", { name: t("ruleForm.add") }).click();
     await waitFor(() => {
       expect(addCustomRule).toHaveBeenCalledWith({
         ip_is_private: true,
@@ -317,15 +331,15 @@ describe("Rules", () => {
 
     fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
     const addButton = screen.getByRole("button", {
-      name: "添加",
+      name: t("ruleForm.add"),
     }) as HTMLButtonElement;
     expect(addButton.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText("匹配值"), {
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
       target: { value: "x.io" },
     });
     await waitFor(() => {
       expect(
-        (screen.getByRole("button", { name: "添加" }) as HTMLButtonElement)
+        (screen.getByRole("button", { name: t("ruleForm.add") }) as HTMLButtonElement)
           .disabled,
       ).toBe(false);
     });
@@ -340,10 +354,10 @@ describe("Rules", () => {
     });
 
     fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
-    fireEvent.change(screen.getByLabelText("匹配值"), {
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
       target: { value: "x.io" },
     });
-    screen.getByRole("button", { name: "添加" }).click();
+    screen.getByRole("button", { name: t("ruleForm.add") }).click();
     await waitFor(() => {
       expect(addCustomRule).toHaveBeenCalledWith({
         domain_suffix: ["x.io"],
@@ -358,11 +372,11 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
-    expect((screen.getByLabelText("匹配值") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement).value).toBe(
       "",
     );
     expect(
-      (screen.getByRole("button", { name: "添加" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: t("ruleForm.add") }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -382,7 +396,7 @@ describe("Rules", () => {
     });
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", {
-        name: "删除",
+        name: t("common.delete"),
       }),
     );
 

@@ -5,7 +5,7 @@
 use crate::capture::TrafficCapture;
 use crate::orchestrate::{current_settings, orchestrate_stop};
 use crate::{lock_poisoned, AppState};
-use ice_config::{AppError, ErrorCode};
+use ice_config::{AppError, ErrorCode, UiMessage};
 use ice_core::CoreStatus;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
@@ -35,7 +35,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
         .lock()
         .map_err(|_| lock_poisoned("orchestrate"))?;
 
-    let mut tun_warning: Option<String> = None;
+    let mut tun_warning: Option<UiMessage> = None;
     if state.capture.active_backend() == TrafficCapture::Tun {
         let settings = current_settings(&state.paths).unwrap_or_default();
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -51,7 +51,10 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             Err(err) => {
                 // Fail closed: keep stopping the core; the journal stays for
                 // startup recovery, and the warning is surfaced.
-                tun_warning = Some(format!("TUN capture shutdown unconfirmed ({err})"));
+                tun_warning = Some(
+                    UiMessage::new("recover.tunShutdownUnconfirmed")
+                        .with("detail", err.to_string()),
+                );
             }
         }
     }
@@ -64,7 +67,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             drop(core);
             state.traffic.set_endpoints(None);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = tun_warning;
+                *slot = tun_warning.into_iter().collect();
             }
             Ok(())
         }
@@ -77,7 +80,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
                 .shutdown_requested
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = Some(err.message.clone());
+                *slot = vec![err.ui_message()];
             }
             Err(err)
         }
@@ -230,7 +233,7 @@ mod tests {
             core_snapshot,
             proxy: Mutex::new(proxy),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -238,7 +241,7 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
-            profile_parse_cache: ice_engine::ProfileCache::new(),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
             subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 true,
             )),
@@ -349,8 +352,8 @@ mod tests {
         assert_eq!(err.code, "proxy.restore_failed");
 
         let warning = state.proxy_recovery_warning.lock().unwrap().clone();
-        assert!(warning.is_some());
-        assert!(warning.unwrap().contains("system proxy recovery failed"));
+        assert_eq!(warning.len(), 1);
+        assert_eq!(warning[0].key, ErrorCode::ProxyRestoreFailed.message_key());
 
         let _ = std::fs::remove_dir_all(state.paths.root());
     }

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use ice_helper::{FixedPeerAuth, PeerAuth, ProcessCoreRunner, ServerConfig};
 use ice_tun_sys::coordinator::CoreCoordinator;
-use ice_tun_sys::error::TunErrorCode;
+use ice_tun_sys::error::ErrorCode;
 use ice_tun_sys::helper::HelperCoreCoordinator;
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -143,7 +143,7 @@ fn helper_coordinator_end_to_end_start_stop() {
     let err = coordinator
         .start_with_config(&config_path)
         .expect_err("second start must be rejected");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
     // Stop: idempotent, removes the core.
     coordinator.stop().expect("stop via helper");
@@ -229,7 +229,7 @@ fn helper_rejects_unauthorized_token() {
     let err = coordinator
         .start_with_config(&config_path)
         .expect_err("wrong token must fail");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     stop_server(server);
     let _ = std::fs::remove_dir_all(&dir);
@@ -253,7 +253,7 @@ fn helper_rejects_config_outside_data_dir_before_ipc() {
     let err = coordinator
         .start_with_config(std::path::Path::new("/etc/hosts"))
         .expect_err("outside path must fail");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     stop_server(server);
     let _ = std::fs::remove_dir_all(&dir);
@@ -283,7 +283,7 @@ fn helper_rejects_tor_outbound_config() {
     let err = coordinator
         .start_with_config(&config_path)
         .expect_err("tor outbound must be rejected");
-    assert_eq!(err.code, TunErrorCode::ConfigRejected);
+    assert_eq!(err.code, ErrorCode::TunConfigRejected);
     assert!(
         err.message.contains("/outbounds/0/type"),
         "pointer in message: {}",

@@ -5,7 +5,7 @@ use ice_core::{CoreError, CorePaths, CoreState, ReloadOutcome};
 use ice_proxy_sys::{ProxyBackup, ProxyEndpoints, ProxySysError};
 use ice_tun_sys::fake::{FakeOsState, FakeTunBackend};
 use ice_tun_sys::{
-    AppliedTun, PreparedTun, RecoveryOutcome, TunCapability, TunConfig, TunError, TunErrorCode,
+    AppliedTun, ErrorCode, PreparedTun, RecoveryOutcome, TunCapability, TunConfig, TunError,
     TunHealth, TunJournal,
 };
 use std::cell::Cell;
@@ -159,7 +159,7 @@ impl TunBackend for ScriptedBackend {
     fn apply(&mut self, prepared: &PreparedTun) -> Result<AppliedTun, TunError> {
         if self.fail_next_apply.replace(false) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "injected one-shot apply failure",
             ));
         }
@@ -265,12 +265,12 @@ fn seed_subscription(paths: &AppPaths) {
     };
     let nodes = vec![ice_config::NormalizedOutbound {
         tag: "n1".into(),
-        outbound: serde_json::json!({
+        outbound: std::sync::Arc::new(serde_json::json!({
             "type": "socks",
             "tag": "n1",
             "server": "127.0.0.1",
             "server_port": 1080
-        }),
+        })),
     }];
     write_subscription_success(
         &sub,
@@ -816,7 +816,7 @@ fn startup_recovery_discards_pending_and_converges_journal() {
     .unwrap();
 
     let warning = c.recover(&mut core).expect("recover");
-    assert!(warning.is_some(), "pending transaction surfaced");
+    assert!(!warning.is_empty(), "pending transaction surfaced");
     assert!(!paths.pending_settings().exists());
     let journal = TunJournal::load(&paths.tun_state()).unwrap().unwrap();
     assert_eq!(journal.state, JournalState::Clean);
@@ -843,7 +843,7 @@ fn startup_recovery_fail_closed_when_cleanup_uncertain() {
     }
 
     let warning = c.recover(&mut core).expect("recover runs");
-    assert!(warning.is_some());
+    assert!(!warning.is_empty());
     assert_eq!(c.tun_status(), TunStatus::RecoveryRequired);
     let journal = TunJournal::load(&paths.tun_state()).unwrap().unwrap();
     assert_eq!(journal.state, JournalState::RecoveryRequired);

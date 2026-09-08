@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 use crate::health::HealthEndpoints;
-use ice_config::is_loopback_host;
+use ice_types::is_loopback_host;
 
 /// Selector outbound tag in generated config (`ice-config` template).
 pub const SELECTOR_TAG: &str = "proxy";
@@ -183,7 +183,7 @@ pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
 /// `default_mode` prepended onto an empty list). A `PATCH` targeting a different mode is
 /// therefore silently ignored — `GET /configs` keeps returning the old mode — so callers
 /// must verify with [`get_mode`] and fall back to a rebuild + reload. Pass a mode string
-/// from `ice_config::clash_mode_name` so the reported mode stays capitalized.
+/// from `ice_types::clash_mode_name` so the reported mode stays capitalized.
 pub fn set_mode(endpoints: &HealthEndpoints, mode: &str) -> Result<(), CoreError> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     clash_patch_json(endpoints, "/configs", &body)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { SubscriptionMeta } from "../api/tauri";
+import { formatInvokeError, type SubscriptionMeta } from "../api/tauri";
 import { t } from "./i18n";
 
 export type ApplyWarning = {
@@ -23,7 +23,7 @@ export type RemoveSubscriptionResult = {
 };
 
 export function formatApplyWarning(w: ApplyWarning): string {
-  return `${w.code}: ${w.message}`;
+  return formatInvokeError(w);
 }
 
 export function extractApplyWarning(payload: unknown): ApplyWarning | null {

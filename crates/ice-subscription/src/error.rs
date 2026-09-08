@@ -2,7 +2,7 @@
 
 //! Subscription errors mapped to architecture §17.
 
-use ice_config::{AppError, ErrorCode};
+use ice_config::{AppError, ErrorCode, UiMessage};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SubscriptionError {
@@ -44,6 +44,23 @@ impl SubscriptionError {
     /// Display text with any embedded subscription URLs redacted, safe for logs.
     pub fn redacted_display(&self) -> String {
         crate::url::redact_urls_in_text(&self.to_string())
+    }
+
+    /// Structured UI copy for `last_error` (FE-5). Detail stays in `params`.
+    pub fn ui_message(&self) -> UiMessage {
+        let key = match self {
+            Self::UnknownFormat => "error.sub.unknown_format",
+            Self::EmptyNodes => "error.sub.empty",
+            Self::FetchFailed(_) => "error.sub.fetch_failed",
+            Self::InvalidSingBox(_) | Self::ParseFailed(_) | Self::Json(_) => {
+                "error.sub.parse_failed"
+            }
+            Self::Io(_) => "error.sub.io",
+            Self::NoActiveSubscription => "error.sub.not_found",
+            Self::ProfileParseFailed(_) => "error.sub.parse_failed",
+        };
+        let detail = self.redacted_display();
+        UiMessage::new(key).with("detail", detail)
     }
 }
 

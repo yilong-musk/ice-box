@@ -11,7 +11,7 @@ use crate::error::CoreError;
 /// Source of truth lives in `ice-types` and is re-exported by `ice-engine`
 /// (`ENGINE_COMPAT_CORE_VERSION`); the desktop process layer only mirrors it
 /// for packaging checks.
-pub const BUNDLED_SINGBOX_VERSION: &str = ice_config::ENGINE_COMPAT_CORE_VERSION;
+pub const BUNDLED_SINGBOX_VERSION: &str = ice_types::ENGINE_COMPAT_CORE_VERSION;
 
 /// Current packaging target directory name under `third_party/sing-box/`.
 pub fn current_target_dir() -> &'static str {

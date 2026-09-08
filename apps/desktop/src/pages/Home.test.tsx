@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../lib/i18n";
+import { t, isMessageKey } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
@@ -38,6 +38,14 @@ vi.mock("../api/tauri", () => ({
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
+  formatUiMessage: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
+  },
 }));
 
 const tunStatus = {
@@ -602,7 +610,7 @@ describe("Home", () => {
       ...tunStatus,
       configured_tun: true,
       tun_available: false,
-      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_unavailable_reason: { key: "tun.unsupportedPlatform" },
     });
 
     const { container } = render(<Home />);
@@ -612,7 +620,7 @@ describe("Home", () => {
     // status-dependent reason text so the disabled assertion below cannot
     // race the mocked status resolution.
     await waitFor(() => {
-      expect(view.getByText("Windows TUN gate pending")).toBeInTheDocument();
+      expect(view.getByText(t("tun.unsupportedPlatform"))).toBeInTheDocument();
     });
     const power = view.getByRole("button", { name: t("home.power.start") });
     expect(power).toBeDisabled();
@@ -634,7 +642,7 @@ describe("Home", () => {
       ...tunStatus,
       configured_tun: true,
       tun_available: false,
-      tun_unavailable_reason: "Windows TUN gate pending",
+      tun_unavailable_reason: { key: "tun.unsupportedPlatform" },
       tun_ui_hidden: true,
     });
 
@@ -646,7 +654,7 @@ describe("Home", () => {
     });
     // No TUN switch on the home page, no TUN reason text anywhere.
     expect(view.queryByRole("button", { name: t("home.tunMode") })).not.toBeInTheDocument();
-    expect(container.textContent).not.toContain("Windows TUN gate pending");
+    expect(container.textContent).not.toContain(t("tun.unsupportedPlatform"));
     // The power control ignores the hidden TUN desire: system proxy stays usable.
     expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
     expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(

@@ -186,7 +186,7 @@ mod fixture_tests {
                 .parse_stats
                 .warnings
                 .iter()
-                .all(|w| !w.contains("GEOIP")),
+                .all(|w| !w.to_string().contains("GEOIP")),
             "GEOIP is supported via bundled rule-sets, no warning expected"
         );
         assert!(

@@ -56,15 +56,15 @@ pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<Str
 pub async fn clear_logs(app: AppHandle) -> Result<(), AppError> {
     run_blocking("clear_logs", move || {
         let state = app.state::<AppState>();
-        ice_config::truncate_log_file(&state.paths.app_log(), ice_config::APP_LOG_KEEP).map_err(
+        ice_core::truncate_log_file(&state.paths.app_log(), ice_core::APP_LOG_KEEP).map_err(
             |e| AppError::new(ErrorCode::ConfigInvalid, format!("truncate app log: {e}")),
         )?;
-        ice_config::truncate_log_file(&state.paths.core_log(), ice_config::CORE_LOG_KEEP).map_err(
+        ice_core::truncate_log_file(&state.paths.core_log(), ice_core::CORE_LOG_KEEP).map_err(
             |e| AppError::new(ErrorCode::ConfigInvalid, format!("truncate core log: {e}")),
         )?;
         if state.capture.helper_core_used() && !ice_tun_sys::dev_sudo_runner_enabled() {
             let helper_log = std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST);
-            if let Err(err) = ice_config::truncate_log_file(helper_log, ice_config::CORE_LOG_KEEP) {
+            if let Err(err) = ice_core::truncate_log_file(helper_log, ice_core::CORE_LOG_KEEP) {
                 tracing::warn!(error = %err, "could not truncate helper core log");
             }
         }
@@ -72,23 +72,7 @@ pub async fn clear_logs(app: AppHandle) -> Result<(), AppError> {
             *cache = None;
         }
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            if slot
-                .as_ref()
-                .is_some_and(|s| s.contains(ErrorCode::LogsOversized.as_str()))
-            {
-                *slot = slot.take().and_then(|s| {
-                    let next = s
-                        .split('；')
-                        .filter(|part| !part.contains(ErrorCode::LogsOversized.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("；");
-                    if next.is_empty() {
-                        None
-                    } else {
-                        Some(next)
-                    }
-                });
-            }
+            slot.retain(|m| m.key != ErrorCode::LogsOversized.message_key());
         }
         Ok(())
     })

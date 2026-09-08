@@ -76,6 +76,26 @@ pub(crate) fn tls_get_pinned(
     conditional: &[(&str, &str)],
     log_url: &str,
 ) -> Result<RawHttpResponse, SubscriptionError> {
+    tls_get_pinned_with_config(
+        host,
+        port,
+        ip,
+        path_query,
+        conditional,
+        log_url,
+        tls_client_config()?,
+    )
+}
+
+fn tls_get_pinned_with_config(
+    host: &str,
+    port: u16,
+    ip: IpAddr,
+    path_query: &str,
+    conditional: &[(&str, &str)],
+    log_url: &str,
+    config: Arc<ClientConfig>,
+) -> Result<RawHttpResponse, SubscriptionError> {
     let addr = SocketAddr::new(ip, port);
     let mut stream = TcpStream::connect_timeout(&addr, FETCH_TIMEOUT).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: connect: {e}"))
@@ -83,7 +103,6 @@ pub(crate) fn tls_get_pinned(
     let _ = stream.set_read_timeout(Some(FETCH_TIMEOUT));
     let _ = stream.set_write_timeout(Some(FETCH_TIMEOUT));
 
-    let config = tls_client_config()?;
     let server_name = ServerName::try_from(host.to_string()).map_err(|_| {
         SubscriptionError::FetchFailed(format!("GET {log_url}: invalid TLS server name"))
     })?;
@@ -324,6 +343,76 @@ mod tests {
         let a = tls_client_config().expect("platform verifier");
         let b = tls_client_config().expect("platform verifier");
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn fetch_gzip_body_from_private_ca_tls_server() {
+        ensure_crypto_provider();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_der = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+        );
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], key_der)
+            .expect("server cert");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(false).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let mut body = Vec::new();
+        {
+            let mut encoder = GzEncoder::new(&mut body, Compression::default());
+            encoder.write_all(br#"{"outbounds":[]}"#).unwrap();
+            encoder.finish().unwrap();
+        }
+        let response = {
+            let mut raw = format!(
+                "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            raw.extend_from_slice(&body);
+            raw
+        };
+
+        let server = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("accept");
+            let mut conn =
+                rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
+            {
+                let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+                let mut req = [0u8; 1024];
+                let _ = tls.read(&mut req);
+                tls.write_all(&response).expect("write");
+                tls.flush().expect("flush");
+            }
+            // rustls clients treat TCP EOF without close_notify as an error.
+            conn.send_close_notify();
+            while conn.wants_write() {
+                conn.write_tls(&mut tcp).expect("close_notify");
+            }
+        });
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert_der).expect("trust test CA");
+        let client = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let resp = tls_get_pinned_with_config(
+            "localhost",
+            addr.port(),
+            addr.ip(),
+            "/",
+            &[],
+            "https://localhost/",
+            Arc::new(client),
+        )
+        .expect("pinned GET");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, br#"{"outbounds":[]}"#);
+        server.join().expect("server");
     }
 
     #[test]

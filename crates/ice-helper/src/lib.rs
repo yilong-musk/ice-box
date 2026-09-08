@@ -39,11 +39,11 @@ mod imp {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use ice_tun_sys::error::{TunError, TunErrorCode};
-    use ice_tun_sys::helper_protocol::{
+    use ice_tun_helper_proto::{
         validate_config_path, validate_set_dns, HelperCommand, HelperRequest, HelperResponse,
         MAX_FRAME_BYTES, PROTOCOL_VERSION,
     };
+    use ice_types::{ErrorCode, TunError};
 
     /// How long to wait for the elevated core to stay alive during startup
     /// (config/bind errors surface as an early exit) before accepting it.
@@ -127,7 +127,7 @@ mod imp {
             let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
             if rc != 0 {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("getpeereid: {}", std::io::Error::last_os_error()),
                 ));
             }
@@ -152,7 +152,7 @@ mod imp {
             };
             if rc != 0 {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("SO_PEERCRED: {}", std::io::Error::last_os_error()),
                 ));
             }
@@ -194,14 +194,14 @@ mod imp {
         if let Some(allowed) = config.allowed_uid {
             if peer_uid != allowed {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("peer uid {peer_uid} is not the authorized user {allowed}"),
                 ));
             }
         }
         if request.v != PROTOCOL_VERSION {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "protocol version mismatch: client {}, daemon {PROTOCOL_VERSION}",
                     request.v
@@ -210,7 +210,7 @@ mod imp {
         }
         if !constant_time_eq(&config.token, &request.token) {
             return Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 "invalid helper token",
             ));
         }
@@ -231,11 +231,11 @@ mod imp {
         // Bounded read: a peer that connects but never finishes its frame
         // must not hold a daemon thread for long.
         stream.set_read_timeout(Some(READ_TIMEOUT)).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("set read timeout: {e}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("set read timeout: {e}"))
         })?;
         let mut reader =
             BufReader::new(stream.try_clone().map_err(|e| {
-                TunError::new(TunErrorCode::ApplyFailed, format!("clone stream: {e}"))
+                TunError::new(ErrorCode::TunApplyFailed, format!("clone stream: {e}"))
             })?);
         // Cap the request at MAX_FRAME_BYTES + 1 bytes: an oversized or
         // unterminated frame is rejected without buffering unbounded input
@@ -245,18 +245,18 @@ mod imp {
             .by_ref()
             .take((MAX_FRAME_BYTES + 1) as u64)
             .read_line(&mut line)
-            .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("read request: {e}")))?;
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("read request: {e}")))?;
         if read == 0 {
-            return Err(TunError::new(TunErrorCode::ApplyFailed, "empty request"));
+            return Err(TunError::new(ErrorCode::TunApplyFailed, "empty request"));
         }
         if line.len() > MAX_FRAME_BYTES {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("request frame exceeds {MAX_FRAME_BYTES} bytes"),
             ));
         }
         let request: HelperRequest = serde_json::from_str(line.trim_end()).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("decode request: {e}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("decode request: {e}"))
         })?;
         let response = if let Err(err) = authenticate(config, peer_uid, &request) {
             HelperResponse::err(&err)
@@ -267,20 +267,20 @@ mod imp {
             }
         };
         let mut frame = serde_json::to_vec(&response).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("encode response: {e}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("encode response: {e}"))
         })?;
-        if frame.len() > ice_tun_sys::helper_protocol::MAX_FRAME_BYTES {
+        if frame.len() > ice_tun_helper_proto::MAX_FRAME_BYTES {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "response frame exceeds limit",
             ));
         }
         frame.push(b'\n');
         let mut writer = stream
             .try_clone()
-            .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("clone stream: {e}")))?;
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("clone stream: {e}")))?;
         writer.write_all(&frame).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("write response: {e}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("write response: {e}"))
         })?;
         writer.flush().ok();
         Ok(())
@@ -321,13 +321,13 @@ mod imp {
     ) -> Result<PathBuf, TunError> {
         let raw = std::fs::read(user_path).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("read config {}: {err}", user_path.display()),
             )
         })?;
         if raw.len() > ice_config_guard::MAX_CONFIG_BYTES {
             return Err(TunError::new(
-                TunErrorCode::ConfigRejected,
+                ErrorCode::TunConfigRejected,
                 format!(
                     "config exceeds {} bytes",
                     ice_config_guard::MAX_CONFIG_BYTES
@@ -336,7 +336,7 @@ mod imp {
         }
         let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
             TunError::new(
-                TunErrorCode::ConfigRejected,
+                ErrorCode::TunConfigRejected,
                 format!("config is not JSON: {err}"),
             )
         })?;
@@ -347,10 +347,10 @@ mod imp {
             cache_file_path: Some(config.protected_run_dir.join("cache.db")),
         };
         ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
-            .map_err(|err| TunError::new(TunErrorCode::ConfigRejected, err.to_string()))?;
+            .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
         std::fs::create_dir_all(&config.protected_run_dir).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "create protected run dir {}: {err}",
                     config.protected_run_dir.display()
@@ -360,13 +360,13 @@ mod imp {
         let dest = config.protected_run_dir.join("config.json");
         let bytes = serde_json::to_vec(&cfg).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("encode sanitised config: {err}"),
             )
         })?;
         std::fs::write(&dest, bytes).map_err(|err| {
             TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("write sanitised config {}: {err}", dest.display()),
             )
         })?;
@@ -393,7 +393,7 @@ mod imp {
             .status()
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("run networksetup {args:?}: {err}"),
                 )
             })?;
@@ -401,7 +401,7 @@ mod imp {
             Ok(())
         } else {
             Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("networksetup -setdnsservers {service} failed (exit {status:?})"),
             ))
         }
@@ -481,7 +481,7 @@ mod imp {
                     self.child = None;
                 } else {
                     return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         "core already running; stop it first",
                     ));
                 }
@@ -489,7 +489,7 @@ mod imp {
             if let Some(parent) = log.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("create log dir {}: {e}", parent.display()),
                     )
                 })?;
@@ -502,12 +502,12 @@ mod imp {
                 .open(log)
                 .map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("open core log {}: {e}", log.display()),
                     )
                 })?;
             let log_err = log_file.try_clone().map_err(|e| {
-                TunError::new(TunErrorCode::ApplyFailed, format!("clone log handle: {e}"))
+                TunError::new(ErrorCode::TunApplyFailed, format!("clone log handle: {e}"))
             })?;
             let mut child = Command::new(bin)
                 .arg("run")
@@ -519,7 +519,7 @@ mod imp {
                 .spawn()
                 .map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("spawn {} run -c {}: {e}", bin.display(), config.display()),
                     )
                 })?;
@@ -531,7 +531,7 @@ mod imp {
                 match child.try_wait() {
                     Ok(Some(code)) => {
                         return Err(TunError::new(
-                            TunErrorCode::HealthcheckFailed,
+                            ErrorCode::TunHealthcheckFailed,
                             format!(
                                 "core exited during startup (code {code}); check {}",
                                 log.display()
@@ -541,7 +541,7 @@ mod imp {
                     Ok(None) => {}
                     Err(e) => {
                         return Err(TunError::new(
-                            TunErrorCode::ApplyFailed,
+                            ErrorCode::TunApplyFailed,
                             format!("poll core: {e}"),
                         ));
                     }
@@ -576,7 +576,7 @@ mod imp {
                         Ok(())
                     } else {
                         Err(TunError::new(
-                            TunErrorCode::RestoreFailed,
+                            ErrorCode::TunRestoreFailed,
                             format!("kill TERM {pid}: {err}"),
                         ))
                     }
@@ -592,7 +592,7 @@ mod imp {
                             Ok(None) => {}
                             Err(e) => {
                                 return Err(TunError::new(
-                                    TunErrorCode::RestoreFailed,
+                                    ErrorCode::TunRestoreFailed,
                                     format!("wait core {pid}: {e}"),
                                 ));
                             }
@@ -616,7 +616,7 @@ mod imp {
                                 Ok(None) => {}
                                 Err(e) => {
                                     return Err(TunError::new(
-                                        TunErrorCode::RestoreFailed,
+                                        ErrorCode::TunRestoreFailed,
                                         format!("wait core {pid}: {e}"),
                                     ));
                                 }
@@ -633,7 +633,7 @@ mod imp {
                             // Status/Stop request can still observe and retry
                             // cleanup of the live process.
                             Err(TunError::new(
-                                TunErrorCode::RecoveryRequired,
+                                ErrorCode::TunRecoveryRequired,
                                 format!("core (pid {pid}) survived TERM and KILL"),
                             ))
                         }
@@ -767,7 +767,7 @@ mod imp {
         }
         if pid_running(pid) {
             Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!("orphan core (pid {pid}, {desc}) survived TERM and KILL"),
             ))
         } else {
@@ -844,15 +844,15 @@ mod imp {
             config: &ServerConfig,
             auth: &'static dyn PeerAuth,
             runner: Arc<std::sync::Mutex<R>>,
-            request: &ice_tun_sys::helper_protocol::HelperRequest,
-        ) -> Result<ice_tun_sys::helper_protocol::HelperResponse, TunError> {
+            request: &ice_tun_helper_proto::HelperRequest,
+        ) -> Result<ice_tun_helper_proto::HelperResponse, TunError> {
             let (client, server) = UnixStream::pair().expect("socketpair");
             let config = config.clone();
             std::thread::spawn(move || {
                 let mut runner = runner.lock().expect("runner lock");
                 let _ = serve_connection(server, &config, auth, &mut *runner);
             });
-            let mut line = ice_tun_sys::helper_protocol::encode_request(request)?;
+            let mut line = ice_tun_helper_proto::encode_request(request)?;
             line.push(b'\n');
             let mut writer = client.try_clone()?;
             writer.write_all(&line)?;
@@ -860,11 +860,11 @@ mod imp {
             let mut reader = BufReader::new(client);
             let mut response = String::new();
             reader.read_line(&mut response)?;
-            ice_tun_sys::helper_protocol::decode_response(response.as_bytes())
+            ice_tun_helper_proto::decode_response(response.as_bytes())
         }
 
-        fn status_request(token: &str) -> ice_tun_sys::helper_protocol::HelperRequest {
-            ice_tun_sys::helper_protocol::HelperRequest {
+        fn status_request(token: &str) -> ice_tun_helper_proto::HelperRequest {
+            ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: token.to_string(),
                 command: HelperCommand::Status,
@@ -948,7 +948,7 @@ mod imp {
                 _log: &std::path::Path,
             ) -> Result<u32, TunError> {
                 Err(TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     "RecordingDnsRunner does not start a core",
                 ))
             }
@@ -967,11 +967,8 @@ mod imp {
             }
         }
 
-        fn set_dns_request(
-            service: &str,
-            servers: &[&str],
-        ) -> ice_tun_sys::helper_protocol::HelperRequest {
-            ice_tun_sys::helper_protocol::HelperRequest {
+        fn set_dns_request(service: &str, servers: &[&str]) -> ice_tun_helper_proto::HelperRequest {
+            ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::SetDns {
@@ -1067,7 +1064,7 @@ mod imp {
             assert!(response.ok, "start failed: {:?}", response.message);
             let pid = response.pid.expect("pid");
 
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,
@@ -1211,7 +1208,7 @@ mod imp {
             assert!(!second.ok, "second start must be rejected");
 
             // Cleanup: TERM the running sleep.
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,
@@ -1267,7 +1264,7 @@ mod imp {
             let pid2 = resp.pid.expect("pid2");
             assert_ne!(pid2, pid, "a fresh process must be spawned");
 
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,

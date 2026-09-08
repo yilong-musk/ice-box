@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared DTOs with no I/O and no `cfg(target_os)` (architecture review ARCH-1).
+//! Shared DTOs with no `cfg(target_os)` (architecture review ARCH-1).
 //!
-//! `AppPaths` / `AppSettings` stay in `ice-config` because they own disk
-//! layout and load/save. Pid-file and tracing helpers stay there too so
-//! `ice-core` can use them without depending on the desktop shell or
-//! `ice-engine` (which would pull in `ice-subscription`).
+//! `AppPaths` is path layout only (`ensure_dirs` is std `create_dir_all`).
+//! Listen/SSRF helpers and `AppSettings` (no I/O) are pure. Load/save of
+//! `settings.json` stays in `ice-config`. Pid-file and log rotation live in
+//! `ice-core`; tracing init lives in the desktop shell.
 
 mod error;
+mod listen;
+mod paths;
 mod platform;
+mod settings;
+mod ui;
 
-pub use error::{AppError, ErrorCode};
+pub use error::{AppError, ErrorCode, TunError};
+pub use listen::{is_fake_ip, is_loopback_host, is_restricted_fetch_host, is_restricted_ip};
+pub use paths::AppPaths;
 pub use platform::HostPlatform;
+pub use settings::{
+    clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppSettings,
+    CoreLogLevel, LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
+    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+};
+pub use ui::{UiMessage, UI_RAW_KEY};
 
 /// sing-box core version the config generator targets (architecture §12 / §22).
 ///

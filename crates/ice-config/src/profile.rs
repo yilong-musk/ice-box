@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::NormalizedOutbound;
+use ice_types::UiMessage;
 
 /// Parse-time statistics and non-fatal warnings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,7 +20,7 @@ pub struct ProfileParseStats {
     #[serde(default)]
     pub geoip_codes: Vec<String>,
     #[serde(default)]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<UiMessage>,
 }
 
 /// sing-box route block derived from Clash rules or sing-box route.

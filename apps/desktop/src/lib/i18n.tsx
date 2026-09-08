@@ -397,9 +397,44 @@ const zh = {
 
   // --- delay ---
   "delay.failed": "失败",
+
+  "ui.raw": "{text}",
+  "tun.unsupportedPlatform": "当前版本仅在 macOS 和 Windows 上支持 TUN",
+  "parse.truncated": "已截断 {kind}：丢弃 {dropped} 项",
+  "parse.groupUnknownMember": "策略组 {name}：未知成员 {member}",
+  "parse.groupNoMembers": "策略组 {name}：没有可解析的成员",
+  "parse.groupUnsupportedType": "策略组 {name}：不支持的类型 {type}",
+  "parse.dnsUnsupportedNameserver": "DNS：不支持的 nameserver {server}",
+  "parse.dnsNoUsableNameserver": "DNS：没有可用的 nameserver",
+  "parse.ruleUnknownTarget": "规则目标 {target} 无法解析为出站，已跳过",
+  "parse.uriLine": "第 {line} 行：{reason}",
+  "parse.droppedDetour": "已丢弃出站 {tag}：detour {detour} 不存在",
+  "parse.trimmedGroup": "已修剪策略组 {tag}：丢弃 {dropped} 个缺失成员",
+  "parse.droppedEmptyGroup": "已丢弃空策略组 {tag}",
+  "parse.routeOutboundMissing": "路由规则出站 {outbound} 缺失，回退到 {fallback}",
+  "parse.routeFinalMissing": "路由 final {outbound} 缺失，回退到 {fallback}",
+  "core.writePid": "写入 PID 失败：{error}",
+  "core.stopFailed": "停止失败：{error}",
+  "core.exitedUnexpectedly": "内核意外退出（代码 {code}）",
+  "parse.skippedOutbound": "已跳过出站 {tag}：{detail}",
+  "recover.pendingSettings": "检测到未完成的后端切换，已恢复为上一份设置",
+  "recover.controllerUnavailable": "捕获控制器不可用，未能恢复 TUN 状态",
+  "recover.tunJournalMissing": "内核意外退出后找不到 TUN 日志，已进入故障关闭",
+  "recover.tunCleanupUnconfirmed": "内核意外退出后未能确认 TUN 清理：{detail}",
+  "recover.tunCleanupRetry": "未能确认 TUN 清理，已故障关闭。请重试恢复",
+  "recover.tunDnsFailed": "TUN DNS 恢复失败：{detail}",
+  "recover.orphanCoreUnconfirmed": "残留内核清理未确认：{detail}",
+  "recover.tunStateUnconfirmed": "TUN 状态恢复未确认：{detail}",
+  "recover.proxyAfterExit": "内核意外退出后系统代理恢复失败：{detail}",
+  "recover.tunShutdownUnconfirmed": "未能确认 TUN 捕获关闭：{detail}",
+  "recover.autoStartFailed": "自动启动失败：{detail}",
 } as const;
 
 export type MessageKey = keyof typeof zh;
+
+export function isMessageKey(key: string): key is MessageKey {
+  return Object.prototype.hasOwnProperty.call(zh, key);
+}
 
 const en: Record<MessageKey, string> = {
   // --- common ---
@@ -750,6 +785,42 @@ const en: Record<MessageKey, string> = {
 
   // --- delay ---
   "delay.failed": "Failed",
+
+  "ui.raw": "{text}",
+  "tun.unsupportedPlatform": "TUN is supported on macOS and Windows only in this release",
+  "parse.truncated": "Truncated {kind}: dropped {dropped}",
+  "parse.groupUnknownMember": "Group {name}: unknown member {member}",
+  "parse.groupNoMembers": "Group {name}: no resolvable members",
+  "parse.groupUnsupportedType": "Group {name}: unsupported type {type}",
+  "parse.dnsUnsupportedNameserver": "DNS: unsupported nameserver {server}",
+  "parse.dnsNoUsableNameserver": "DNS: no usable nameserver entries",
+  "parse.ruleUnknownTarget": "Rule target {target} does not resolve to an outbound; skipped",
+  "parse.uriLine": "Line {line}: {reason}",
+  "parse.droppedDetour": "Dropped outbound {tag}: detour {detour} is missing",
+  "parse.trimmedGroup": "Trimmed group {tag}: dropped {dropped} missing members",
+  "parse.droppedEmptyGroup": "Dropped empty group {tag}",
+  "parse.routeOutboundMissing": "Route rule outbound {outbound} is missing; falling back to {fallback}",
+  "parse.routeFinalMissing": "Route final {outbound} is missing; falling back to {fallback}",
+  "core.writePid": "Failed to write pid: {error}",
+  "core.stopFailed": "Stop failed: {error}",
+  "core.exitedUnexpectedly": "sing-box exited unexpectedly (code {code})",
+  "parse.skippedOutbound": "Skipped outbound {tag}: {detail}",
+  "recover.pendingSettings":
+    "An incomplete backend switch was detected; previous settings were restored",
+  "recover.controllerUnavailable":
+    "Capture controller is unavailable; TUN state was not restored",
+  "recover.tunJournalMissing":
+    "TUN journal missing after sing-box exited unexpectedly; fail-closed",
+  "recover.tunCleanupUnconfirmed":
+    "TUN cleanup unconfirmed after sing-box exited unexpectedly: {detail}",
+  "recover.tunCleanupRetry": "TUN cleanup unconfirmed; fail-closed. Retry recovery",
+  "recover.tunDnsFailed": "TUN DNS recovery failed: {detail}",
+  "recover.orphanCoreUnconfirmed": "Leftover core cleanup unconfirmed: {detail}",
+  "recover.tunStateUnconfirmed": "TUN state recovery unconfirmed: {detail}",
+  "recover.proxyAfterExit":
+    "System proxy recovery failed after sing-box exited unexpectedly: {detail}",
+  "recover.tunShutdownUnconfirmed": "TUN capture shutdown unconfirmed: {detail}",
+  "recover.autoStartFailed": "Auto-start failed: {detail}",
 };
 
 const dictionaries: Record<ResolvedLanguage, Record<MessageKey, string>> = {

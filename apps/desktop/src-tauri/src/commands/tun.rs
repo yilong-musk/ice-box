@@ -7,16 +7,14 @@ use super::*;
 /// the journal recovery driver under the orchestration lock; never enables
 /// capture. Returns a warning message when cleanup is still uncertain.
 #[tauri::command]
-pub async fn recover_tun(app: AppHandle) -> Result<Option<String>, AppError> {
+pub async fn recover_tun(app: AppHandle) -> Result<Vec<ice_config::UiMessage>, AppError> {
     run_blocking("recover_tun", move || {
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
         state.capture.refresh_backend()?;
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         let warning = state.capture.recover(&mut **core)?;
-        if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = warning.clone();
-        }
+        replace_recovery_warnings(&state, warning.clone());
         Ok(warning)
     })
     .await

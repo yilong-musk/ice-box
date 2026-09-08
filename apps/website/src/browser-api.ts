@@ -15,7 +15,9 @@ import type {
   TrafficDelta,
   TrafficSnapshot,
   SettingsPatch,
+  UiMessage,
 } from "../../../apps/desktop/src/api/tauri";
+import { isMessageKey, t } from "../../../apps/desktop/src/lib/i18n";
 
 export type {
   AppErrorPayload,
@@ -36,6 +38,7 @@ export type {
   TrafficSample,
   TrafficSnapshot,
   SettingsPatch,
+  UiMessage,
 } from "../../../apps/desktop/src/api/tauri";
 
 /** README / CI screenshot mode (`demo.html?capture=1`) freezes traffic and skips mock latency. */
@@ -135,7 +138,23 @@ export function formatDiagnostic(warning: string): string {
   return warning;
 }
 
-type DesktopApi = typeof import("../../../apps/desktop/src/api/tauri").api;
+export function formatUiMessage(
+  msg: UiMessage | string | null | undefined,
+): string {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  const params = msg.params ?? {};
+  if (msg.key === "ui.raw") return params.text ?? "";
+  const label = isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
+  const detail = params.detail;
+  if (detail && !label.includes(detail)) {
+    return `${label}: ${detail}`;
+  }
+  return label;
+}
+
+type DesktopTauriModule = typeof import("../../../apps/desktop/src/api/tauri");
+type DesktopApi = DesktopTauriModule["api"];
 
 export const api = {
   async getStatus(): Promise<StatusResponse> {
@@ -143,7 +162,7 @@ export const api = {
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
       subscription_count: subscriptions.length,
-      proxy_recovery_warning: null,
+      proxy_recovery_warning: [],
       system_proxy_applied: running,
       system_proxy_recorded: running,
       system_proxy_available: true,
@@ -215,7 +234,7 @@ export const api = {
     const points = cursor == null ? snap.points : snap.points.filter((p) => p.t > cursor);
     return {
       generation: 1,
-      cursor: snap.points.at(-1)?.t ?? null,
+      cursor: snap.points[snap.points.length - 1]?.t ?? null,
       points,
       latest: snap.latest,
       peak: snap.peak,
@@ -235,7 +254,7 @@ export const api = {
   },
   async stop(): Promise<void> { await delay(180); running = false; },
   async stopSystemProxy(): Promise<void> { await delay(180); running = false; },
-  async recoverTun(): Promise<null> { await delay(); return null; },
+  async recoverTun(): Promise<UiMessage[]> { await delay(); return []; },
   async installHelper(): Promise<void> { await delay(); },
   async uninstallHelper(): Promise<void> { await delay(); },
   async ensureTunElevation(): Promise<void> { await delay(); },
@@ -258,3 +277,11 @@ export const api = {
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
 } satisfies DesktopApi;
+
+/** Compile-time check that the Live Demo stand-in covers desktop API values (FE-7). */
+export const browserApi = {
+  api,
+  formatInvokeError,
+  formatDiagnostic,
+  formatUiMessage,
+} satisfies typeof import("../../../apps/desktop/src/api/tauri");

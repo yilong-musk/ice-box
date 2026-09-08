@@ -175,6 +175,19 @@ impl ErrorCode {
             Self::UpdateDisabled => "update.disabled",
         }
     }
+
+    /// Frontend `t()` key (`error.{as_str}`), matching `apps/desktop` catalogues.
+    pub fn message_key(self) -> String {
+        format!("error.{}", self.as_str())
+    }
+
+    pub fn ui_message(self) -> crate::UiMessage {
+        crate::UiMessage::new(self.message_key())
+    }
+
+    pub fn ui_message_detail(self, detail: impl Into<String>) -> crate::UiMessage {
+        self.ui_message().with("detail", detail)
+    }
 }
 
 impl fmt::Display for ErrorCode {
@@ -207,6 +220,11 @@ impl AppError {
     pub fn is_code(&self, code: ErrorCode) -> bool {
         self.code == code.as_str()
     }
+
+    /// Structured UI copy: `error.{code}` plus the technical `message` as `detail`.
+    pub fn ui_message(&self) -> crate::UiMessage {
+        crate::UiMessage::new(format!("error.{}", self.code)).with("detail", self.message.clone())
+    }
 }
 
 impl fmt::Display for AppError {
@@ -216,6 +234,71 @@ impl fmt::Display for AppError {
 }
 
 impl std::error::Error for AppError {}
+
+/// TUN subsystem error. `code` is always a `tun.*` [`ErrorCode`] (ARCH-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+impl TunError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for TunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for TunError {}
+
+impl From<ErrorCode> for TunError {
+    fn from(code: ErrorCode) -> Self {
+        Self::new(code, code.as_str())
+    }
+}
+
+impl From<TunError> for AppError {
+    fn from(err: TunError) -> Self {
+        AppError::new(err.code, err.message)
+    }
+}
+
+impl From<std::io::Error> for TunError {
+    fn from(err: std::io::Error) -> Self {
+        Self::new(ErrorCode::TunApplyFailed, format!("io: {err}"))
+    }
+}
+
+impl From<serde_json::Error> for TunError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::new(ErrorCode::TunApplyFailed, format!("json: {err}"))
+    }
+}
+
+impl ErrorCode {
+    /// Parse a `tun.*` wire code; unknown values map to apply-failed.
+    pub fn from_tun_wire(code: Option<&str>) -> Self {
+        match code {
+            Some("tun.not_supported") => Self::TunNotSupported,
+            Some("tun.permission_required") => Self::TunPermissionRequired,
+            Some("tun.apply_failed") => Self::TunApplyFailed,
+            Some("tun.restore_failed") => Self::TunRestoreFailed,
+            Some("tun.healthcheck_failed") => Self::TunHealthcheckFailed,
+            Some("tun.recovery_required") => Self::TunRecoveryRequired,
+            Some("tun.invalid_argument") => Self::TunInvalidArgument,
+            Some("tun.config_rejected") => Self::TunConfigRejected,
+            _ => Self::TunApplyFailed,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

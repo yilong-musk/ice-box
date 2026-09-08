@@ -16,8 +16,9 @@ echo "== cargo test (workspace: lib + integration + doc) =="
 cargo test --workspace
 
 echo "== tsc --noEmit =="
+(cd apps/desktop && npx tsc --noEmit)
+(cd apps/website && npx tsc --noEmit)
 cd apps/desktop
-npx tsc --noEmit
 
 echo "== vitest =="
 npm test

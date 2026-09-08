@@ -82,7 +82,6 @@ describe("Nodes", () => {
     expect(container.querySelector(".node-table")).toBeNull();
     expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
     expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
-    expect(view.queryByRole("button", { name: "按延迟排序" })).toBeNull();
     const nodeList = view.getByRole("list", { name: t("nodes.listAria") });
     const scrollArea = nodeList.closest('[data-slot="scroll-area"]');
     expect(

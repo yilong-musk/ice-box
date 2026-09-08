@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use ice_config::NormalizedProfile;
+use ice_config::{NormalizedProfile, UiMessage};
 use serde_json::json;
 
 const BUILTIN_TAGS: &[&str] = &["direct", "block", "dns", "proxy"];
@@ -21,8 +21,11 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
         profile.nodes.retain(
             |n| match n.outbound.get("detour").and_then(|v| v.as_str()) {
                 Some(d) if !known.contains(d) => {
-                    dropped_detour
-                        .push(format!("dropped outbound {}: detour {d} is missing", n.tag));
+                    dropped_detour.push(
+                        UiMessage::new("parse.droppedDetour")
+                            .with("tag", n.tag.clone())
+                            .with("detour", d),
+                    );
                     false
                 }
                 _ => true,
@@ -33,19 +36,20 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
         let mut empty_groups = Vec::new();
         let mut trimmed_groups = Vec::new();
         for g in &mut profile.groups {
+            let tag = g.tag.clone();
             if let Some(arr) = g
-                .outbound
+                .outbound_mut()
                 .get_mut("outbounds")
                 .and_then(|v| v.as_array_mut())
             {
                 let before = arr.len();
                 arr.retain(|m| m.as_str().is_some_and(|t| known.contains(t)));
                 if arr.len() != before {
-                    trimmed_groups.push(format!(
-                        "trimmed group {}: dropped {} missing members",
-                        g.tag,
-                        before - arr.len()
-                    ));
+                    trimmed_groups.push(
+                        UiMessage::new("parse.trimmedGroup")
+                            .with("tag", tag.clone())
+                            .with("dropped", (before - arr.len()).to_string()),
+                    );
                 }
             }
         }
@@ -57,7 +61,8 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
                 .and_then(|v| v.as_array())
                 .is_none_or(|a| a.is_empty());
             if empty {
-                empty_groups.push(format!("dropped empty group {}", g.tag));
+                empty_groups
+                    .push(UiMessage::new("parse.droppedEmptyGroup").with("tag", g.tag.clone()));
                 false
             } else {
                 true
@@ -74,18 +79,21 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
     for rule in &mut profile.route.rules {
         if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
             if !known.contains(out) {
-                profile.parse_stats.warnings.push(format!(
-                    "route rule outbound {out} is missing; falling back to direct"
-                ));
+                profile.parse_stats.warnings.push(
+                    UiMessage::new("parse.routeOutboundMissing")
+                        .with("outbound", out)
+                        .with("fallback", "direct"),
+                );
                 rule["outbound"] = json!("direct");
             }
         }
     }
     if !known.contains(&profile.route.final_outbound) {
-        profile.parse_stats.warnings.push(format!(
-            "route final {} is missing; falling back to direct",
-            profile.route.final_outbound
-        ));
+        profile.parse_stats.warnings.push(
+            UiMessage::new("parse.routeFinalMissing")
+                .with("outbound", profile.route.final_outbound.clone())
+                .with("fallback", "direct"),
+        );
         profile.route.final_outbound = "direct".into();
     }
     if let Some(tag) = &profile.default_outbound {
@@ -138,15 +146,17 @@ mod tests {
     fn prunes_members_rules_final_and_detour() {
         let leaf = NormalizedOutbound {
             tag: "ss".into(),
-            outbound: json!({"type":"shadowsocks","tag":"ss","detour":"st"}),
+            outbound: std::sync::Arc::new(json!({"type":"shadowsocks","tag":"ss","detour":"st"})),
         };
         let keep = NormalizedOutbound {
             tag: "ok".into(),
-            outbound: json!({"type":"shadowsocks","tag":"ok"}),
+            outbound: std::sync::Arc::new(json!({"type":"shadowsocks","tag":"ok"})),
         };
         let group = NormalizedOutbound {
             tag: "proxy".into(),
-            outbound: json!({"type":"selector","tag":"proxy","outbounds":["ss","ok","gone"]}),
+            outbound: std::sync::Arc::new(
+                json!({"type":"selector","tag":"proxy","outbounds":["ss","ok","gone"]}),
+            ),
         };
         let mut p = profile(vec![leaf, keep], vec![group]);
         prune_dangling_refs(&mut p);
@@ -158,6 +168,10 @@ mod tests {
         assert_eq!(p.groups[0].outbound["outbounds"], json!(["ok"]));
         assert_eq!(p.route.rules[0]["outbound"], "direct");
         assert_eq!(p.route.final_outbound, "direct");
-        assert!(p.parse_stats.warnings.iter().any(|w| w.contains("detour")));
+        assert!(p
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.key == "parse.droppedDetour"));
     }
 }

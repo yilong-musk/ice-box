@@ -521,8 +521,8 @@ persist.
 
 **Done (unreleased)** `save_settings` takes `SettingsPatch`; omitted fields
 keep the on-disk value. Home and Settings send partial patches so they cannot
-clobber each other. `proxy_service_enabled` is still not patchable from the
-settings page.
+clobber each other. `proxy_service_enabled` is optional on the patch type for
+Home start/stop; the Settings form still omits it.
 
 ### 4.4 TUN / capture
 
@@ -652,8 +652,8 @@ succeeds; a gzip-forcing server returns readable JSON.
 
 **Done (unreleased)** `tls_fetch.rs` caches `Arc<ClientConfig>` from
 `rustls-platform-verifier` (OS trust store) and decodes `Content-Encoding:
-gzip`. Gzip decode is covered by a unit test; a private-CA live fetch is
-not run in CI.
+gzip`. A unit test stands up a local rustls server with a private CA plus a
+gzip body and fetches it through a client that trusts only that CA.
 
 #### SUB-4 (Medium) Fetch worker panics on a poisoned queue
 
@@ -693,8 +693,9 @@ again every 2 s.
 share state.
 
 **Done (unreleased)** `ProfileCache` is owned by `AppState` (no process
-static). Loads return `Arc<NormalizedProfile>`; `BuildInput.profile` is
-that `Arc`, so Apply no longer `unwrap_or_clone`s the body.
+static) and shared with `CaptureController`. `generate_config_with_cache`
+and the start/apply wrappers take that cache. Loads return
+`Arc<NormalizedProfile>`; `BuildInput.profile` is that `Arc`.
 
 ### 4.6 System proxy (`ice-proxy-sys`)
 
@@ -763,14 +764,15 @@ point and `ENGINE_COMPAT_CORE_VERSION` lives in `ice-config`.
 `rg "cfg\(target_os" crates/ice-config crates/ice-subscription` is empty.
 
 **Done (unreleased)** `crates/ice-types` holds `ErrorCode`, `AppError`,
-`HostPlatform`, and `ENGINE_COMPAT_CORE_VERSION` (no I/O, no
-`cfg(target_os)`). `ice-config` / `ice-subscription` take `HostPlatform` as
-an argument; `ice-engine::host_platform()` is the compile-time mapping.
-`src-tauri` depends on `ice-engine` for config generation **and**
-subscription types (no direct `ice-subscription` dependency). `AppPaths` /
-`AppSettings` and pid/logging stay in `ice-config` so `ice-core` can use
-them without depending on `ice-engine` (which would pull in
-`ice-subscription`).
+`AppSettings`, `AppPaths`, `HostPlatform`, listen/SSRF helpers, `UiMessage`,
+and `ENGINE_COMPAT_CORE_VERSION` (no `cfg(target_os)`, no I/O). `ice-config`
+is a builder: platform choices arrive as `HostPlatform`; load/save of
+`settings.json` stays here. Pid-file and size-based log rotation live in
+`ice-core` (the process manager needs them and must not depend on
+`ice-engine`). Tracing init lives in `apps/desktop/src-tauri/src/runtime.rs`.
+`src-tauri` depends on `ice-engine` for config generation and subscription
+types (no direct `ice-subscription` dependency).
+`ice-engine::host_platform()` is the compile-time mapping.
 
 #### ARCH-2 (Low) Library depends on a binary crate
 
@@ -804,8 +806,8 @@ returns no error-code literals.
 **Done (unreleased)** `ErrorCode` includes `tun.*` / `update.*` / helper
 codes; `AppError::with_code` takes `ErrorCode`. Frontend
 `apps/desktop/src/api/errorCodes.ts` is checked against `ErrorCode::ALL`.
-`TunErrorCode` still exists in `ice-tun-sys` (orphan-rule `From` cannot live
-in the shell); capture maps at the boundary.
+`TunError` in `ice-types` carries `ErrorCode` (`tun.*` variants);
+`ice-tun-sys` re-exports that type. There is no second `TunErrorCode` enum.
 
 #### ARCH-4 (Low) File sizes and inlined tests
 
@@ -824,8 +826,13 @@ modules into sibling `*_tests.rs` files or `tests/`. Consider splitting
 **Done (unreleased)** Desktop IPC is `commands/{common,status,core,tun,logs,
 settings,subscription,nodes}.rs` plus sibling `tests.rs`. Capture is
 `capture/{mod,journal,transition,recovery}.rs` plus sibling `tests.rs`.
-`ice-config/lib.rs`, `ice-subscription/lib.rs`, and `ice-tun-sys/windows.rs`
-were left unsplit (optional in the original note).
+Config generation lives in `ice-config/src/build.rs` with
+`build_tests.rs`; subscription manager + G5 tests are
+`ice-subscription/src/{manager,tests_g5}.rs`; Windows TUN parsing tests are
+`ice-tun-sys/src/windows_tests.rs`. TUN crates are split:
+`ice-tun-journal` (journal I/O), `ice-tun-helper-proto` (IPC protocol +
+install paths), `ice-tun-sys` (platform backends + coordinator).
+`ice-helper` depends on the proto crate, not `ice-tun-sys`.
 
 #### ARCH-5 (Low) Four `start_with_config` implementations
 
@@ -854,9 +861,11 @@ hasher (or fingerprint the profile revision); pass outbounds as `Arc<Value>`.
 
 **Done (unreleased)** GeoIP codes are cached by directory mtime;
 `rule_fingerprint` streams canonical JSON into SHA-256 (`sha256:…`) and
-still matches legacy canonical-JSON entries in `rules.json`. Outbound
-`Value`s are still cloned when tags are applied (the generated config owns
-a distinct object per outbound).
+still matches legacy canonical-JSON entries in `rules.json`.
+`NormalizedOutbound.outbound` is `Arc<Value>` so profile clones are cheap.
+`RuntimeConfig` keeps outbounds as `Vec<Arc<Value>>` and serializes each
+`Arc` by reference, so writing `config.json` does not deep-copy outbound
+trees (tag already set → cheap `Arc` clone; otherwise clone-on-write).
 
 #### PERF-2 (Medium) Uncoordinated frontend polling
 
@@ -935,9 +944,11 @@ user-visible strings through `t()`; backend returns `code` + structured
 params, frontend formats.
 
 **Done (unreleased)** Outbound labels, DNS badge, and core status go
-through `t()`. Known IPC codes use `error.*` keys (`formatInvokeError`
-shows the localized summary plus the stable code). Backend `message`
-strings stay English for logs / unknown codes.
+through `t()`. Backend user-visible copy is `UiMessage { key, params }`:
+parse warnings, `last_error`, `CoreState.message`, TUN unavailability, and
+recovery banners. The frontend runs `t(key, params)` (`formatUiMessage`).
+IPC errors still use `{ code, message }` with `formatInvokeError`.
+Technical `detail` (OS / sing-box excerpts) stays in params.
 
 #### FE-6 (Low) Tests assert on copy and classNames
 
@@ -947,9 +958,12 @@ break ~2400 lines of page tests.
 **Done (unreleased)** Page roots expose `data-testid` (`home-panel`,
 `settings-panel`, …, `log-view`, `app-main`). Delay tones and the rules
 pager use test ids / `data-visible` instead of Tailwind classes. Page
-tests look up copy through `t(key)` rather than zh literals. Settings
-form tests still mix some remaining zh labels with `t()`; converting
-every leftover string is follow-up, not a gate.
+and helper tests look up copy through `t(key)` rather than zh literals,
+including Settings form labels, helper/update copy, Rules form labels,
+subscription auto-update switches, window caption buttons, delay/rule
+type labels, and update progress. Layout checks use test ids
+(`settings-stack`, `app-brand-row`) instead of classNames. Node tags
+such as `选择组` / `自动组` remain fixture data, not UI copy.
 
 #### FE-7 (Low) `browser-api.ts` mirrors `api/tauri.ts` by hand
 
@@ -958,8 +972,12 @@ missing method fails type-checking. Also move the port/listen helpers out of
 `lib/generationGuard.ts` (lines 21-55) into `lib/listenValidation.ts`.
 
 **Done (unreleased)** Live Demo keeps a hand-maintained `browser-api.ts`
-stand-in (Vite aliases `api/tauri` to it). A `satisfies typeof import("./tauri")`
-check is still optional follow-up.
+stand-in (Vite aliases `api/tauri` to it). `export const browserApi`
+`satisfies typeof import("…/api/tauri")` so a missing value export fails
+type-checking. Website `tsc` pins `react` / `react-dom` to this package's
+`@types/*` and includes `vite/client` so compiling desktop UI sources does
+not hit a second React identity or missing `*.png` modules. Port/listen
+helpers live in `lib/listenValidation.ts`.
 
 ### 4.10 Build, CI and release
 
@@ -1068,8 +1086,8 @@ know desktop-crate tests only run in CI. `acceptance.rs` is fully
 | DOC-9 | `CHANGELOG.md`: `libcronet.dll` ships on Windows | Not in `bundle.resources` | Done (unreleased): bundled + CHANGELOG correction |
 
 Also: §22 (`ice-engine`) is used by the desktop shell (ARCH-1); `ice-types`
-holds `ErrorCode` / `HostPlatform` / the engine pin. `AppPaths` / `AppSettings`
-remain in `ice-config`.
+holds `ErrorCode` / `AppSettings` / `AppPaths` / `HostPlatform` / the engine
+pin. `settings.json` load/save stays in `ice-config`.
 
 ---
 
@@ -1109,10 +1127,11 @@ Phase 4 — structure and hygiene — **done (unreleased)**
 
 - ARCH-2 `ice-tun-pin`; ARCH-5 shared start liveness; SUB-3 TLS + DOC-4;
   SUB-6 Arc cache; PROXY-2 primary-service live probe; CORE-6 Windows orphan
-  reclaim; PERF-1 GeoIP cache / SHA-256 fingerprints; FE-2/3/4/5/6/7;
-  CI-2/3/4/6/7/8; DOC-5/8.
-- ARCH-1 `ice-types` / `HostPlatform` / `ice-engine` in the shell; ARCH-4
-  `commands/` + `capture/` splits.
+  reclaim; PERF-1 GeoIP cache / SHA-256 fingerprints / `RuntimeConfig`
+  outbound `Arc` serialize-by-ref; FE-2/3/4/5/6/7; CI-2/3/4/6/7/8; DOC-5/8.
+- ARCH-1 `ice-types` (`AppSettings`) / `HostPlatform` / `ice-engine` in the
+  shell; pid/logging out of `ice-config`; ARCH-4 `commands/` + `capture/`
+  splits plus `ice-tun-journal` / `ice-tun-helper-proto`.
 
 ## 6. Definition of done for this review
 
@@ -1122,9 +1141,3 @@ Phase 4 — structure and hygiene — **done (unreleased)**
 - `docs/architecture.md` and `docs/tun.md` no longer contradict the code on
   the points in §4.11.
 - This file's summary table reflects the current status of each ID.
-
-Optional leftovers (not merge-blocking): ARCH-4 file splits for
-`ice-config` / `ice-subscription` / `ice-tun-sys/windows.rs`; FE-7
-`satisfies typeof import("./tauri")` on the website stand-in; ARCH-1
-`AppPaths` / settings / pid / logging remaining in `ice-config` so
-`ice-core` does not depend on `ice-engine`.

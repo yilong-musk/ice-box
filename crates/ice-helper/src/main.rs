@@ -35,7 +35,7 @@ mod unix_main {
     use std::sync::{Arc, Mutex};
 
     use ice_helper::{ProcessCoreRunner, ServerConfig, SocketPeerAuth};
-    use ice_tun_sys::error::{TunError, TunErrorCode};
+    use ice_types::{ErrorCode, TunError};
 
     use crate::install::{
         ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR,
@@ -88,7 +88,9 @@ mod unix_main {
                 PathBuf::from(&core_bin)
                     .parent()
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(ice_tun_sys::install_paths::CORE_BIN_DEST_DIR))
+                    .unwrap_or_else(|| {
+                        PathBuf::from(ice_tun_helper_proto::install_paths::CORE_BIN_DEST_DIR)
+                    })
             });
         Ok(ServerConfig {
             token,
@@ -96,7 +98,7 @@ mod unix_main {
             core_bin: PathBuf::from(core_bin),
             core_log: PathBuf::from(core_log),
             allowed_uid,
-            protected_run_dir: PathBuf::from(ice_tun_sys::install_paths::CORE_RUN_DIR),
+            protected_run_dir: PathBuf::from(ice_tun_helper_proto::install_paths::CORE_RUN_DIR),
             resources_dir,
         })
     }
@@ -123,7 +125,7 @@ mod unix_main {
 
         let socket_path = std::env::var(ENV_SOCKET)
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(ice_tun_sys::helper_protocol::DEFAULT_SOCKET_PATH));
+            .unwrap_or_else(|_| PathBuf::from(ice_tun_helper_proto::DEFAULT_SOCKET_PATH));
         if socket_path.exists() {
             // Stale socket from a previous run (daemon crashed without cleanup).
             let _ = std::fs::remove_file(&socket_path);
@@ -179,7 +181,7 @@ mod unix_main {
                                 serve_connection(stream, &config, &auth, &mut runner)
                             }
                             Err(_) => Err(TunError::new(
-                                TunErrorCode::ApplyFailed,
+                                ErrorCode::TunApplyFailed,
                                 "runner lock poisoned",
                             )),
                         };

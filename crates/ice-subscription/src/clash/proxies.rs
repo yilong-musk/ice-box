@@ -77,10 +77,7 @@ pub fn map_proxy(proxy: &Value, idx: usize) -> Result<NormalizedOutbound, SkipRe
         _ => return Err(SkipReason::Unsupported),
     };
 
-    Ok(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Ok(NormalizedOutbound::new(name, outbound))
 }
 
 fn require_server_port(obj: &serde_json::Map<String, Value>) -> Result<(String, u16), SkipReason> {

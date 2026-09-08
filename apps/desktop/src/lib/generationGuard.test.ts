@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
+import { t } from "./i18n";
 import {
   formatListenValidationError,
   formatPortValidationError,
@@ -49,7 +50,7 @@ describe("listenValidation", () => {
   it("portsConflict matches backend port equality rule", () => {
     expect(portsConflict(17890, 17890)).toBe(true);
     expect(portsConflict(17890, 19090)).toBe(false);
-    expect(formatPortsConflictError()).toContain("不能相同");
+    expect(formatPortsConflictError()).toBe(t("validation.portsConflict"));
   });
 });
 

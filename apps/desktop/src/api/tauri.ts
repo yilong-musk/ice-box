@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { t, type MessageKey } from "../lib/i18n";
+import { isMessageKey, t, type MessageKey } from "../lib/i18n";
 import { isErrorCode, type ErrorCode } from "./errorCodes";
 
 export type CoreStatus =
@@ -14,9 +14,15 @@ export type CoreStatus =
   | "stopping"
   | "error";
 
+/** Backend i18n payload: frontend runs `t(key, params)` (FE-5). */
+export type UiMessage = {
+  key: string;
+  params?: Record<string, string>;
+};
+
 export type CoreState = {
   status: CoreStatus;
-  message: string | null;
+  message: UiMessage | null;
   inbound_host: string | null;
   inbound_port: number | null;
 };
@@ -37,7 +43,7 @@ export type TunStatus =
 export type StatusResponse = {
   core: CoreState;
   subscription_count: number;
-  proxy_recovery_warning: string | null;
+  proxy_recovery_warning: UiMessage[] | null;
   system_proxy_applied: boolean | null;
   /** On-disk applied flag; drives「停止代理服务」when OS proxy was changed externally. */
   system_proxy_recorded: boolean | null;
@@ -54,7 +60,7 @@ export type StatusResponse = {
   capture_transition_id: string | null;
   /** False when the platform gate is pending/failed; the switch stays disabled. */
   tun_available: boolean;
-  tun_unavailable_reason: string | null;
+  tun_unavailable_reason: UiMessage | null;
   /** True when the platform must not surface TUN controls at all (Windows:
    * TUN gate blocked upstream); the frontend hides the TUN card/switches. */
   tun_ui_hidden: boolean;
@@ -129,9 +135,9 @@ export type SubscriptionMeta = {
   group_count: number;
   rule_count: number;
   has_dns: boolean;
-  parse_warnings: string[];
+  parse_warnings: UiMessage[];
   last_updated: string | null;
-  last_error: string | null;
+  last_error: UiMessage | null;
   etag: string | null;
   last_modified: string | null;
   auto_update: boolean;
@@ -181,6 +187,8 @@ export type SettingsPatch = {
   clash_api_port?: number;
   selected_tag?: string | null;
   auto_set_system_proxy?: boolean;
+  /** Home start/stop owns this; Settings omits it. */
+  proxy_service_enabled?: boolean;
   allow_lan?: boolean;
   proxy_mode?: ProxyMode;
   tun?: Partial<TunSettings> & { interface_name?: string | null };
@@ -293,6 +301,21 @@ const ERROR_MESSAGE_KEYS = {
   "update.disabled": "error.update.disabled",
 } as const satisfies Record<ErrorCode, MessageKey>;
 
+export function formatUiMessage(
+  msg: UiMessage | string | null | undefined,
+): string {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  const params = msg.params ?? {};
+  if (msg.key === "ui.raw") return params.text ?? "";
+  const label = isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
+  const detail = params.detail;
+  if (detail && !label.includes(detail)) {
+    return `${label}: ${detail}`;
+  }
+  return label;
+}
+
 /**
  * Known IPC codes are translated via `t()`. Unknown payloads keep
  * `code: message` so a new backend code still surfaces.
@@ -359,7 +382,7 @@ export const api = {
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),
   /** On-demand TUN recovery retry (plan §4.3); never enables capture. */
-  recoverTun: () => invoke<string | null>("recover_tun"),
+  recoverTun: () => invoke<UiMessage[]>("recover_tun"),
   /** Install + authorize the privileged helper via the system authorization
    * dialog (unsigned elevation path). macOS only; cancel modifies nothing. */
   installHelper: () => invoke<void>("install_helper"),

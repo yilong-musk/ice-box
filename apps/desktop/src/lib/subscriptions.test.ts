@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
+import { t } from "./i18n";
 import {
   extractApplyWarning,
   formatApplyWarning,
@@ -24,7 +25,9 @@ describe("apply warning helpers", () => {
       apply_warning: { code: "core.invalid_state", message: "reload failed" },
     });
     expect(w).toEqual({ code: "core.invalid_state", message: "reload failed" });
-    expect(formatApplyWarning(w!)).toBe("core.invalid_state: reload failed");
+    expect(formatApplyWarning(w!)).toBe(
+      `${t("error.core.invalid_state")} (core.invalid_state)`,
+    );
   });
 
   it("returns null when no warning", () => {

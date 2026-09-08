@@ -6,6 +6,8 @@ mod binary;
 mod clash_api;
 mod error;
 mod health;
+mod log_rotate;
+mod pid;
 mod process;
 mod reload;
 mod traffic;
@@ -25,6 +27,11 @@ pub use health::{
     FailingHealthProbe, HealthCancel, HealthEndpoints, HealthProbe, ImmediateHealthProbe,
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
+pub use log_rotate::{
+    log_file_oversized, rotate_log_now, rotate_sized_log, truncate_log_file, APP_LOG_KEEP,
+    CORE_LOG_KEEP, CORE_LOG_MAX_BYTES, SIZED_LOG_MAX_BYTES,
+};
+pub use pid::{clear_pid, parse_pid_contents, purge_invalid_pid_file, read_pid, write_pid};
 pub use process::{
     pid_is_alive, stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner,
     PidProcess, ProcessSpawner, STOP_GRACE_TIMEOUT,
@@ -39,7 +46,7 @@ pub use traffic::{
 
 // CoreHandle is defined below with CoreController.
 
-use ice_config::{clear_pid, write_pid};
+use ice_types::UiMessage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -64,7 +71,7 @@ pub enum CoreStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CoreState {
     pub status: CoreStatus,
-    pub message: Option<String>,
+    pub message: Option<UiMessage>,
     pub inbound_host: Option<String>,
     pub inbound_port: Option<u16>,
 }
@@ -259,7 +266,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         let child: Box<dyn ManagedProcess> = Box::new(PidProcess::new(pid));
         if let Err(err) = write_pid(&paths.pid_file, pid) {
-            self.fail(format!("write pid: {err}"));
+            self.fail(UiMessage::new("core.writePid").with("error", err.to_string()));
             return Err(CoreError::SpawnFailed(format!("write pid: {err}")));
         }
         self.child = Some(child);
@@ -270,7 +277,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             // kept when the kill fails so the failure stays visible.
             let _ = self.kill_child_and_clear_pid(&paths.pid_file);
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
                 other => other,
@@ -312,7 +319,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         if let Err(err) = self.spawn_and_probe(paths) {
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
                 CoreError::NotFound(_) => err,
@@ -353,7 +360,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                         Ok(())
                     }
                     Err(err) => {
-                        self.fail(format!("stop failed: {err}"));
+                        self.fail(UiMessage::new("core.stopFailed").with("error", err.to_string()));
                         Err(err)
                     }
                 };
@@ -379,7 +386,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 // The process could not be terminated (e.g. an adopted
                 // root-owned pid that only the privileged coordinator may
                 // signal). Never report Stopped while it may still run.
-                self.fail(format!("stop failed: {err}"));
+                self.fail(UiMessage::new("core.stopFailed").with("error", err.to_string()));
                 Err(err)
             }
         }
@@ -437,7 +444,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         // the original still owns the TUN adapter must never happen.
         if let Err(err) = self.kill_child_and_clear_pid(&paths.pid_file) {
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             self.needs_proxy_restore = true;
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
@@ -462,7 +469,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
             Err(err) => {
                 let msg = err.to_string();
-                self.fail(msg.clone());
+                self.fail(err.ui_message());
                 self.needs_proxy_restore = true;
                 Err(match err {
                     CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
@@ -633,8 +640,8 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     /// recovery path (or a later privileged stop) converges it instead of
     /// silently clearing the record of the still-running process.
     pub fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
-        let Some(pid) = ice_config::read_pid(pid_file)
-            .map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
+        let Some(pid) =
+            read_pid(pid_file).map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
         else {
             return Ok(());
         };
@@ -677,9 +684,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         Ok(())
     }
 
-    fn fail(&mut self, message: String) {
+    fn fail(&mut self, message: impl Into<UiMessage>) {
         self.state.status = CoreStatus::Error;
-        self.state.message = Some(message);
+        self.state.message = Some(message.into());
         self.clear_inbound();
     }
 
@@ -700,8 +707,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 let _ = clear_pid(pid_file);
                 if self.state.status == CoreStatus::Running {
                     self.state.status = CoreStatus::Error;
-                    self.state.message =
-                        Some(format!("sing-box exited unexpectedly (code {code})"));
+                    self.state.message = Some(
+                        UiMessage::new("core.exitedUnexpectedly").with("code", code.to_string()),
+                    );
                     self.clear_inbound();
                 }
                 true
@@ -1025,7 +1033,7 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
 }
 
 fn try_tcp_connect_once(endpoints: &HealthEndpoints) -> Result<(), String> {
-    if !ice_config::is_loopback_host(&endpoints.host) {
+    if !ice_types::is_loopback_host(&endpoints.host) {
         return Err(format!(
             "healthcheck host must be loopback, got {}",
             endpoints.host
@@ -1226,7 +1234,7 @@ fn force_kill_pid(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ice_config::read_pid;
+    use crate::read_pid;
     use std::fs;
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1323,7 +1331,7 @@ mod tests {
             .adopt_external(std::process::id(), &paths)
             .expect_err("test process is not sing-box");
         assert!(matches!(err, CoreError::AdoptRejected(_)));
-        assert_eq!(err.code(), ice_config::ErrorCode::CoreAdoptRejected);
+        assert_eq!(err.code(), ice_types::ErrorCode::CoreAdoptRejected);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1483,12 +1491,10 @@ mod tests {
         core.inject_exited_child_for_test();
         assert!(core.reap_exited_child(&pid_file));
         assert_eq!(core.state().status, CoreStatus::Error);
-        assert!(core
-            .state()
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("exited unexpectedly"));
+        assert_eq!(
+            core.state().message.as_ref().map(|m| m.key.as_str()),
+            Some("core.exitedUnexpectedly")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1564,12 +1570,22 @@ mod tests {
         );
         assert_ne!(core.state().status, CoreStatus::Stopped);
         assert_eq!(
-            core.state().message.as_deref(),
-            Some("stop failed: request_terminate: pid 1 is owned by another user; terminate it via the privileged coordinator"),
+            core.state().message.as_ref().map(|m| m.key.as_str()),
+            Some("core.stopFailed"),
             "the controller must not claim the foreign process was stopped"
         );
+        assert!(
+            core.state()
+                .message
+                .as_ref()
+                .unwrap()
+                .params
+                .get("error")
+                .is_some_and(|e| e.contains("request_terminate")),
+            "stop failure detail must be retained"
+        );
         assert_eq!(
-            ice_config::read_pid(&paths.pid_file).unwrap(),
+            read_pid(&paths.pid_file).unwrap(),
             Some(1),
             "the pid file must be kept while the foreign process may still run"
         );
@@ -1607,7 +1623,7 @@ mod tests {
             "the restart must fail on the un-killable foreign pid: {err}"
         );
         assert_eq!(
-            ice_config::read_pid(&paths.pid_file).unwrap(),
+            read_pid(&paths.pid_file).unwrap(),
             Some(1),
             "no second core may be spawned (a new pid would replace this file) while the original still runs"
         );

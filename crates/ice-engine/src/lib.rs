@@ -16,8 +16,8 @@ pub use ice_config::{
     minimal_dns_block, redact_config_str, rule_type_of, tun_gate_for, tun_reserved_rules,
     validate_config_for_intent, validate_template, AppSettings, BuildInput, CaptureIntent,
     ConfigError, GroupSelections, HostPlatform, LocalTemplate, NormalizedOutbound,
-    NormalizedProfile, NormalizedRoute, ProxyMode, RuleOverrides, TunGate, TunSettings,
-    RULE_TYPE_KEYS,
+    NormalizedProfile, NormalizedRoute, ProxyMode, RuleOverrides, RuntimeConfig, TunGate,
+    TunSettings, RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
     active_subscription, apply_builtin_default_rules, detect_format, list_profile_outbounds,
@@ -30,7 +30,7 @@ pub use ice_subscription::{
     MockFetchMode, MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat,
     SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
-pub use ice_types::{AppError, ENGINE_COMPAT_CORE_VERSION};
+pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 
 use std::path::PathBuf;
 
@@ -89,7 +89,7 @@ pub fn import_subscription_for(
 }
 
 /// Build the final sing-box JSON config from a validated input.
-pub fn build_config(input: &BuildInput) -> Result<serde_json::Value, EngineError> {
+pub fn build_config(input: &BuildInput) -> Result<RuntimeConfig, EngineError> {
     Ok(build_runtime_config(input)?)
 }
 
@@ -326,12 +326,12 @@ proxies:
             profile: std::sync::Arc::new(NormalizedProfile::from_nodes_only(vec![
                 NormalizedOutbound {
                     tag: "n1".into(),
-                    outbound: serde_json::json!({
+                    outbound: std::sync::Arc::new(serde_json::json!({
                         "type": "socks",
                         "tag": "n1",
                         "server": "127.0.0.1",
                         "server_port": 1080
-                    }),
+                    })),
                 },
             ])),
             selected_tag: None,
@@ -341,7 +341,9 @@ proxies:
             capture_intent: CaptureIntent::Diagnostic,
             platform: HostPlatform::MacOs,
         })
-        .expect("build");
+        .expect("build")
+        .to_json_value()
+        .expect("json");
         let first = &value["route"]["rules"][0];
         assert_eq!(first["clash_mode"], "global");
         assert_eq!(first["outbound"], "proxy");

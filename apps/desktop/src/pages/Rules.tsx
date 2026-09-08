@@ -178,7 +178,7 @@ export function Rules({ onNavigate, active = true }: Props) {
       const r = await api.setRuleDisabled(row.fingerprint, !row.disabled);
       if (mountedRef.current && r.apply_warning) {
         setApplyWarning(
-          `${r.apply_warning.code}: ${r.apply_warning.message}`,
+          `${formatInvokeError(r.apply_warning)}`,
         );
       }
       await reloadAfterMutation();
@@ -197,7 +197,7 @@ export function Rules({ onNavigate, active = true }: Props) {
       const r = await api.removeCustomRule(row.fingerprint);
       if (mountedRef.current && r.apply_warning) {
         setApplyWarning(
-          `${r.apply_warning.code}: ${r.apply_warning.message}`,
+          `${formatInvokeError(r.apply_warning)}`,
         );
       }
       await reloadAfterMutation();
@@ -216,7 +216,7 @@ export function Rules({ onNavigate, active = true }: Props) {
       const r = await api.addCustomRule(rule);
       if (mountedRef.current && r.apply_warning) {
         setApplyWarning(
-          `${r.apply_warning.code}: ${r.apply_warning.message}`,
+          `${formatInvokeError(r.apply_warning)}`,
         );
       }
       await reloadAfterMutation();

@@ -12,13 +12,14 @@ pub(crate) fn start_core_inner(app: &AppHandle, state: &AppState) -> Result<(), 
         if core.state().status != CoreStatus::Running {
             // Do not hold `proxy` across spawn + healthcheck; start never applies OS proxy.
             let binary = binary_for(app)?;
-            let _ = orchestrate_start(
+            let _ = orchestrate_start_with_cache(
                 &state.paths,
                 &settings,
                 &mut **core,
                 binary,
                 resource_dir(app).as_deref(),
                 CaptureIntent::Diagnostic,
+                Some(state.profile_parse_cache.as_ref()),
             )?;
             clear_transient_recovery_warnings(state);
         }
@@ -36,13 +37,14 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         if core.state().status != CoreStatus::Running {
             let binary = binary_for(app)?;
-            let _ = orchestrate_start(
+            let _ = orchestrate_start_with_cache(
                 &state.paths,
                 &settings,
                 &mut **core,
                 binary,
                 resource_dir(app).as_deref(),
                 CaptureIntent::Diagnostic,
+                Some(state.profile_parse_cache.as_ref()),
             )?;
             clear_transient_recovery_warnings(state);
         }
@@ -94,7 +96,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
             }
         }
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = None;
+            slot.clear();
         }
     } else {
         // System-proxy branch: exclusivity is enforced by the capture
@@ -108,7 +110,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
                 .enable_system_proxy(&settings, &**core, proxy.as_ref())?;
         }
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = None;
+            slot.clear();
         }
         if let Ok(mut cache) = state.proxy_applied_cache.lock() {
             *cache = None;
@@ -198,13 +200,7 @@ pub(crate) fn recover_launch_leftovers(state: &AppState) {
             Ok(outcome) if outcome.restored() => {
                 tracing::info!("restored system proxy from previous session");
                 if outcome == RecoverOutcome::RestoredFromCorrupt {
-                    append_recovery_warning(
-                        state,
-                        format!(
-                            "{}: proxy-backup.json was corrupt; system proxy was reset to defaults",
-                            ErrorCode::ProxyBackupCorrupt
-                        ),
-                    );
+                    append_recovery_warning(state, ErrorCode::ProxyBackupCorrupt.ui_message());
                 }
             }
             Ok(_) => {
@@ -214,10 +210,7 @@ pub(crate) fn recover_launch_leftovers(state: &AppState) {
                 tracing::error!(error = %err, "system proxy crash recovery failed");
                 append_recovery_warning(
                     state,
-                    format!(
-                        "{}: system proxy recovery failed: {err}",
-                        ErrorCode::ProxyBackupCorrupt
-                    ),
+                    ErrorCode::ProxyBackupCorrupt.ui_message_detail(err.to_string()),
                 );
             }
         }
@@ -243,14 +236,25 @@ pub(crate) fn recover_launch_leftovers(state: &AppState) {
     // re-enable never hits `bind: address already in use`.
     if let Err(err) = state.capture.reclaim_orphan_elevated_core(&mut **core) {
         tracing::warn!(error = %err, "failed to reclaim orphaned elevated core");
-        append_recovery_warning(state, format!("残留内核清理未确认 ({err})"));
+        append_recovery_warning(
+            state,
+            ice_config::UiMessage::new("recover.orphanCoreUnconfirmed")
+                .with("detail", err.to_string()),
+        );
     }
     match state.capture.recover(&mut **core) {
-        Ok(Some(warning)) => append_recovery_warning(state, warning),
-        Ok(None) => {}
+        Ok(warnings) => {
+            for warning in warnings {
+                append_recovery_warning(state, warning);
+            }
+        }
         Err(err) => {
             tracing::error!(error = %err, "startup tun recovery failed");
-            append_recovery_warning(state, format!("TUN state recovery unconfirmed ({err})"));
+            append_recovery_warning(
+                state,
+                ice_config::UiMessage::new("recover.tunStateUnconfirmed")
+                    .with("detail", err.to_string()),
+            );
         }
     }
 }
@@ -269,9 +273,11 @@ pub fn restore_proxy_service_on_launch(app: &AppHandle, state: &AppState) -> Res
             if state.shutdown_requested.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = Some(format!("proxy service auto-start failed ({err})"));
-            }
+            append_recovery_warning(
+                state,
+                ice_config::UiMessage::new("recover.autoStartFailed")
+                    .with("detail", err.to_string()),
+            );
             Err(err)
         }
     }
@@ -332,7 +338,7 @@ pub(crate) fn disable_active_backend_inner(
         .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, true)?;
     set_proxy_service_enabled_for(&state.paths.settings(), false, host_platform())?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = None;
+        slot.clear();
     }
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;

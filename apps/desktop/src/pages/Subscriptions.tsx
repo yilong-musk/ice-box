@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api,
   formatInvokeError,
+  formatUiMessage,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/tauri";
@@ -328,12 +329,12 @@ export function Subscriptions() {
                           </ItemDescription>
                           {s.last_error ? (
                             <ItemDescription className="text-destructive">
-                              {s.last_error}
+                              {formatUiMessage(s.last_error)}
                             </ItemDescription>
                           ) : null}
                           {warnings.length > 0 ? (
                             <ItemDescription className="text-warn">
-                              {warnings.join("；")}
+                              {warnings.map(formatUiMessage).join("；")}
                             </ItemDescription>
                           ) : null}
                         </ItemContent>

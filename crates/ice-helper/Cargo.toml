@@ -11,7 +11,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10"
 subtle = "2.6"
-ice-tun-sys = { workspace = true }
+ice-types = { workspace = true }
+ice-tun-helper-proto = { workspace = true }
 ice-config-guard = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

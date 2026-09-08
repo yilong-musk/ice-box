@@ -2,7 +2,7 @@
 
 //! Clash `rules` → sing-box `route.rules`.
 
-use ice_config::{NormalizedRoute, ProfileParseStats};
+use ice_config::{NormalizedRoute, ProfileParseStats, UiMessage};
 use serde_json::{json, Value};
 
 use super::names::normalize_clash_target;
@@ -60,9 +60,9 @@ pub fn parse_rules(doc: &Value, known_targets: &[String]) -> RuleParseResult {
             }
             Err(RuleSkip::UnknownTarget(target)) => {
                 stats.skipped_rules += 1;
-                stats.warnings.push(format!(
-                    "rule target {target} does not resolve to any outbound; rule dropped"
-                ));
+                stats
+                    .warnings
+                    .push(UiMessage::new("parse.ruleUnknownTarget").with("target", target));
             }
             Err(RuleSkip::Invalid) => stats.skipped_rules += 1,
         }

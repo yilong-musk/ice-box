@@ -59,7 +59,7 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
                 .handle_unexpected_core_exit(&mut **core, &settings)
         };
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = warning;
+            *slot = warning.into_iter().collect();
         }
         return;
     }
@@ -69,7 +69,7 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
     };
     let warning = restore_proxy_after_unexpected_core_exit(&state.paths, proxy.as_ref());
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = warning;
+        *slot = warning.into_iter().collect();
     }
 }
 
@@ -86,22 +86,19 @@ fn heal_tun_dns(state: &AppState) {
     };
     let warning = state.capture.heal_tun_dns();
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = warning;
+        *slot = warning.into_iter().collect();
     }
 }
 
 fn check_oversized_logs(state: &AppState) {
     let mut oversized =
-        ice_config::log_file_oversized(&state.paths.core_log(), ice_config::CORE_LOG_MAX_BYTES)
-            || ice_config::log_file_oversized(
-                &state.paths.app_log(),
-                ice_config::SIZED_LOG_MAX_BYTES,
-            );
+        ice_core::log_file_oversized(&state.paths.core_log(), ice_core::CORE_LOG_MAX_BYTES)
+            || ice_core::log_file_oversized(&state.paths.app_log(), ice_core::SIZED_LOG_MAX_BYTES);
     if state.capture.helper_core_used() && !ice_tun_sys::dev_sudo_runner_enabled() {
         oversized = oversized
-            || ice_config::log_file_oversized(
+            || ice_core::log_file_oversized(
                 std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST),
-                ice_config::CORE_LOG_MAX_BYTES,
+                ice_core::CORE_LOG_MAX_BYTES,
             );
     }
     if !oversized {
@@ -111,19 +108,12 @@ fn check_oversized_logs(state: &AppState) {
         return;
     };
     if slot
-        .as_ref()
-        .is_some_and(|s| s.contains(ice_config::ErrorCode::LogsOversized.as_str()))
+        .iter()
+        .any(|m| m.key == ice_config::ErrorCode::LogsOversized.message_key())
     {
         return;
     }
-    let warning = format!(
-        "{}: log files exceeded 20 MiB; clear logs on the Logs page",
-        ice_config::ErrorCode::LogsOversized
-    );
-    *slot = Some(match slot.take() {
-        Some(existing) if !existing.is_empty() => format!("{existing}；{warning}"),
-        _ => warning,
-    });
+    slot.push(ice_config::ErrorCode::LogsOversized.ui_message());
 }
 
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
@@ -258,7 +248,7 @@ mod tests {
                 restore_calls: restore_calls.clone(),
             })),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -266,7 +256,7 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
-            profile_parse_cache: ice_engine::ProfileCache::new(),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
             subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 true,
             )),
@@ -308,7 +298,7 @@ mod tests {
         assert_eq!(restore_calls.load(Ordering::SeqCst), 1);
         let backup = ProxyBackupFile::load(&state.paths.proxy_backup()).unwrap();
         assert!(!backup.applied);
-        assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
 
         let _ = fs::remove_dir_all(state.paths.root());
     }

@@ -30,7 +30,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub use ice_tun_sys::install_paths::{
+pub use ice_tun_helper_proto::install_paths::{
     CORE_BIN_DEST, CORE_BIN_DEST_DIR, CORE_LOG_DEST, CORE_RUN_DIR, ENV_ALLOWED_UID, ENV_CORE_BIN,
     ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_RESOURCES_DIR, ENV_SOCKET, ENV_TOKEN,
     HELPER_BIN_DEST, HELPER_LOG_DEST, LAUNCHD_LABEL, PLIST_DEST, SOCKET_PATH, TOKEN_FILE_NAME,

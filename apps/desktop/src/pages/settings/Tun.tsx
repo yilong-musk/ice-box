@@ -13,7 +13,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { formatInvokeError, api, type AppSettings, type StatusResponse } from "../../api/tauri";
+import { formatInvokeError, formatUiMessage, api, type AppSettings, type StatusResponse } from "../../api/tauri";
 import { t, type MessageKey } from "../../lib/i18n";
 import { HelperActions } from "./Helper";
 
@@ -117,7 +117,8 @@ export function TunCard({
             </FieldDescription>
           ) : status?.tun_available === false ? (
             <FieldDescription>
-              {status?.tun_unavailable_reason ?? t("settings.tunNotSupported")}
+              {formatUiMessage(status?.tun_unavailable_reason) ||
+                t("settings.tunNotSupported")}
             </FieldDescription>
           ) : status?.traffic_capture === "tun" ? (
             <FieldDescription>

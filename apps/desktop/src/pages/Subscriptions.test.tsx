@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../lib/i18n";
+import { t, isMessageKey } from "../lib/i18n";
 import { api } from "../api/tauri";
 import { Subscriptions } from "./Subscriptions";
 
@@ -21,7 +21,26 @@ vi.mock("../api/tauri", () => ({
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
   },
-  formatInvokeError: (err: unknown) => String(err),
+  formatInvokeError: (err: unknown) => {
+    if (err && typeof err === "object") {
+      const o = err as { code?: string; message?: string };
+      if (typeof o.code === "string") {
+        const key = `error.${o.code}`;
+        if (isMessageKey(key)) return `${t(key)} (${o.code})`;
+        if (typeof o.message === "string") return `${o.code}: ${o.message}`;
+      }
+      if (typeof o.message === "string") return o.message;
+    }
+    return String(err);
+  },
+  formatUiMessage: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
+  },
 }));
 
 function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
@@ -137,7 +156,7 @@ describe("Subscriptions", () => {
       ok: true,
       apply_warning: {
         code: "proxy.restore_failed",
-        message: "内核已重载，但系统代理未能恢复",
+        message: "core reloaded but system proxy was not restored",
       },
     });
 
@@ -154,13 +173,13 @@ describe("Subscriptions", () => {
     });
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", {
-        name: "删除",
+      name: t("common.delete"),
       }),
     );
 
     await waitFor(() => {
       expect(removeSubscription).toHaveBeenCalled();
-      expect(view.getByText(/系统代理未能恢复/)).toBeInTheDocument();
+      expect(view.getByText(t("error.proxy.restore_failed"), { exact: false })).toBeInTheDocument();
     });
   });
 
@@ -171,7 +190,9 @@ describe("Subscriptions", () => {
         group_count: 21,
         rule_count: 4270,
         has_dns: true,
-        parse_warnings: ["GEOIP 规则已跳过", "未知组引用 x"],
+        parse_warnings: [
+          { key: "parse.groupUnknownMember", params: { name: "x", member: "y" } },
+        ],
       }),
     ]);
 
@@ -180,10 +201,14 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("flower")).toBeInTheDocument();
     });
-    expect(view.getByText(/21 策略组/)).toBeInTheDocument();
-    expect(view.getByText(/4270 规则/)).toBeInTheDocument();
-    expect(view.getByText(/· DNS/)).toBeInTheDocument();
-    expect(view.getByText(/GEOIP 规则已跳过/)).toBeInTheDocument();
+    expect(view.getByText(t("subs.summaryGroups", { n: 21 }), { exact: false })).toBeInTheDocument();
+    expect(view.getByText(t("subs.summaryRules", { n: 4270 }), { exact: false })).toBeInTheDocument();
+    expect(view.getByText(t("subs.hasDns"), { exact: false })).toBeInTheDocument();
+    expect(
+      view.getByText(t("parse.groupUnknownMember", { name: "x", member: "y" }), {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
   });
 
   it("renders legacy payloads without new fields (stale backend)", async () => {
@@ -207,7 +232,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("legacy")).toBeInTheDocument();
     });
-    expect(view.getByText(/5 节点/)).toBeInTheDocument();
+    expect(view.getByText(t("subs.summaryNodes", { n: 5 }), { exact: false })).toBeInTheDocument();
   });
 
   it("imports with auto-update when the import switch is on", async () => {
@@ -266,7 +291,7 @@ describe("Subscriptions", () => {
     });
     const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
     const switches = within(rowB).getAllByRole("switch", {
-      name: "自动更新",
+      name: t("subs.autoUpdate"),
     });
     expect(switches).toHaveLength(1);
     expect(switches[0]).not.toBeChecked();

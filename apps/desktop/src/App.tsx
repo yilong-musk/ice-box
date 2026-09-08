@@ -17,7 +17,7 @@ import {
   Settings as SettingsIcon,
   Waypoints,
 } from "lucide-react";
-import { api, formatDiagnostic, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
+import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
 import { Subscriptions } from "./pages/Subscriptions";
@@ -254,6 +254,7 @@ function AppShell() {
                 <div
                   className="flex w-full items-center justify-center gap-2.5"
                   data-tauri-drag-region
+                  data-testid="app-brand-row"
                 >
                   <img
                     src={logo}
@@ -294,13 +295,13 @@ function AppShell() {
           </Sidebar>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {status?.proxy_recovery_warning && (
+            {status?.proxy_recovery_warning?.length ? (
               <div className="px-4 pt-3">
                 <ErrorAlert>
-                  {formatDiagnostic(status.proxy_recovery_warning)}
+                  {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
                 </ErrorAlert>
               </div>
-            )}
+            ) : null}
 
             <main
               className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4"

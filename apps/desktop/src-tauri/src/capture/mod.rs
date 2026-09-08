@@ -22,44 +22,30 @@
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use ice_config::{
     save_settings_for, write_json_atomic, AppError, AppPaths, AppSettings, CaptureIntent,
-    ErrorCode, TunSettings,
+    ErrorCode, TunSettings, UiMessage,
 };
 use ice_core::{CoreHandle, CoreStatus};
-use ice_engine::host_platform;
+use ice_engine::{host_platform, ProfileCache};
 use ice_proxy_sys::{proxy_backup_indicates_ownership, SystemProxy};
 use ice_tun_sys::{
     create_backend, steps, AppliedTun, JournalState, RecoveryDriver, RecoveryOutcome, TunBackend,
-    TunCapability, TunConfig, TunError, TunErrorCode, TunJournal, TunStack,
+    TunCapability, TunConfig, TunError, TunJournal, TunStack,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::lock_poisoned;
 use crate::orchestrate::{
-    build_core_paths, generate_config, orchestrate_disable_system_proxy,
+    build_core_paths, generate_config_with_cache, orchestrate_disable_system_proxy,
     orchestrate_enable_system_proxy,
 };
 
 fn map_tun(err: TunError) -> AppError {
-    AppError::new(tun_code(err.code), err.message)
-}
-
-fn tun_code(code: ice_tun_sys::TunErrorCode) -> ErrorCode {
-    use ice_tun_sys::TunErrorCode;
-    match code {
-        TunErrorCode::NotSupported => ErrorCode::TunNotSupported,
-        TunErrorCode::PermissionRequired => ErrorCode::TunPermissionRequired,
-        TunErrorCode::ApplyFailed => ErrorCode::TunApplyFailed,
-        TunErrorCode::RestoreFailed => ErrorCode::TunRestoreFailed,
-        TunErrorCode::HealthcheckFailed => ErrorCode::TunHealthcheckFailed,
-        TunErrorCode::RecoveryRequired => ErrorCode::TunRecoveryRequired,
-        TunErrorCode::InvalidArgument => ErrorCode::TunInvalidArgument,
-        TunErrorCode::ConfigRejected => ErrorCode::TunConfigRejected,
-    }
+    err.into()
 }
 
 /// Bounded wait for the app's own Clash API connections to release the core
@@ -139,7 +125,7 @@ pub struct CaptureStatus {
     pub tun_error: Option<AppError>,
     pub capture_transition_id: Option<String>,
     pub tun_available: bool,
-    pub tun_unavailable_reason: Option<String>,
+    pub tun_unavailable_reason: Option<UiMessage>,
     /// True when the platform must not surface TUN controls at all.
     /// Currently only Windows: the backend reports `supported=false` when
     /// no bundled sing-box binary is present (deferred coordinator), so the
@@ -181,6 +167,9 @@ pub struct CaptureController {
     /// held for the whole enable/disable convergence window).
     capability: Mutex<TunCapability>,
     inner: Mutex<CaptureInner>,
+    /// Shared with `AppState.profile_parse_cache` so TUN transitions reuse
+    /// the parsed profile (SUB-6).
+    profile_cache: Arc<ProfileCache>,
 }
 
 /// File name of the per-installation owner token inside the app data dir.
@@ -276,6 +265,14 @@ pub fn only_tun_enabled_changed(previous: &AppSettings, next: &AppSettings) -> b
 
 impl CaptureController {
     pub fn new(paths: AppPaths, resource_dir: Option<PathBuf>) -> Self {
+        Self::with_profile_cache(paths, resource_dir, Arc::new(ProfileCache::new()))
+    }
+
+    pub fn with_profile_cache(
+        paths: AppPaths,
+        resource_dir: Option<PathBuf>,
+        profile_cache: Arc<ProfileCache>,
+    ) -> Self {
         let owner = tun_owner_token(&paths);
         // Resolve the bundled binary at construction so the dev `sudo`
         // runner (`ICE_BOX_TUN_DEV_SUDO`) can spawn the elevated core; the
@@ -299,7 +296,22 @@ impl CaptureController {
                 tun_error: None,
                 helper_core_used: false,
             }),
+            profile_cache,
         }
+    }
+
+    pub(crate) fn rewrite_config(
+        &self,
+        settings: &AppSettings,
+        intent: CaptureIntent,
+    ) -> Result<bool, AppError> {
+        generate_config_with_cache(
+            &self.paths,
+            settings,
+            self.resource_dir.as_deref(),
+            intent,
+            Some(self.profile_cache.as_ref()),
+        )
     }
 
     #[cfg(test)]
@@ -329,6 +341,7 @@ impl CaptureController {
                 tun_error: None,
                 helper_core_used: false,
             }),
+            profile_cache: Arc::new(ProfileCache::new()),
         }
     }
 
@@ -450,7 +463,13 @@ impl CaptureController {
             tun_error,
             capture_transition_id: transition_id,
             tun_available: capability.supported,
-            tun_unavailable_reason: capability.reason,
+            tun_unavailable_reason: capability.reason.map(|r| {
+                if r.contains('.') && !r.contains(' ') {
+                    UiMessage::new(r)
+                } else {
+                    UiMessage::raw(r)
+                }
+            }),
             // Windows hides TUN controls while the backend is unsupported
             // (e.g. no bundled binary → deferred coordinator →
             // tun.permission_required). Deriving from the backend capability

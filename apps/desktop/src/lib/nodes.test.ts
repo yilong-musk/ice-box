@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
+import { t } from "./i18n";
 import {
   clearNodesSnapshot,
   delayTestTagsForGroup,
@@ -16,9 +17,9 @@ import {
 
 describe("formatDelay", () => {
   it("renders known states", () => {
-    expect(formatDelay(null)).toBe("—");
+    expect(formatDelay(null)).toBe(t("common.dash"));
     expect(formatDelay("testing")).toBe("…");
-    expect(formatDelay("error")).toBe("失败");
+    expect(formatDelay("error")).toBe(t("delay.failed"));
     expect(formatDelay(42)).toBe("42 ms");
   });
 });

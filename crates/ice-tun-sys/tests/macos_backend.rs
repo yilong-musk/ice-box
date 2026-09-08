@@ -17,7 +17,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ice_tun_sys::backend::{AppliedTun, RecoveryOutcome};
 use ice_tun_sys::coordinator::CoreCoordinator;
-use ice_tun_sys::error::{TunError, TunErrorCode};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::macos::{MacInterfaceState, MacOsHost};
 use ice_tun_sys::routes;
@@ -27,6 +26,7 @@ use ice_tun_sys::{
     create_backend, DnsSnapshot, MacosTunBackend, PreparedTun, TunBackend, TunConfig, TunStack,
     UnsupportedTunBackend,
 };
+use ice_types::{ErrorCode, TunError};
 
 const OWNER: &str = "ice-box:test-install-1";
 
@@ -236,7 +236,7 @@ impl MacOsHost for FakeHost {
         let state = self.state.lock().unwrap();
         if let Some(message) = &state.dns_probe_error {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 message.clone(),
             ));
         }
@@ -250,9 +250,9 @@ impl MacOsHost for FakeHost {
 /// (a core that refuses to die / a stuck helper).
 struct FakeCoreCoordinator {
     host: FakeHost,
-    start_failure: Option<TunErrorCode>,
-    stop_failure: Option<TunErrorCode>,
-    dns_failure: Option<TunErrorCode>,
+    start_failure: Option<ErrorCode>,
+    stop_failure: Option<ErrorCode>,
+    dns_failure: Option<ErrorCode>,
     remove_on_stop: bool,
     /// When false, the adapter is created without its routes (a core that
     /// never converged): apply must fail closed.
@@ -275,10 +275,10 @@ impl FakeCoreCoordinator {
 
     fn tun_addresses(config_path: &Path) -> Result<Vec<String>, TunError> {
         let raw = fs::read_to_string(config_path).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("read config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("read config: {err}"))
         })?;
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("parse config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("parse config: {err}"))
         })?;
         value
             .get("inbounds")
@@ -297,7 +297,7 @@ impl FakeCoreCoordinator {
             })
             .ok_or_else(|| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     "config has no tun inbound with addresses",
                 )
             })
@@ -448,7 +448,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..mac_config()
     };
     let err = bk.prepare(&ipv4_only).expect_err("ipv4-only leaks IPv6");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv6"));
 
     let ipv6_only = TunConfig {
@@ -456,7 +456,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..mac_config()
     };
     let err = bk.prepare(&ipv6_only).expect_err("ipv4 is mandatory");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv4"));
     let _ = fs::remove_dir_all(&dir);
 }
@@ -473,7 +473,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..mac_config()
         };
         let err = bk.prepare(&bad).expect_err("bad cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
     for cidr in ["fdfe:dcba:9876::1", "fdfe:dcba:9876::1/129", "10.0.0.1/24"] {
         let bad = TunConfig {
@@ -481,7 +481,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..mac_config()
         };
         let err = bk.prepare(&bad).expect_err("bad v6 cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
 
     let low_mtu = TunConfig {
@@ -490,7 +490,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
     };
     assert_eq!(
         bk.prepare(&low_mtu).expect_err("low mtu").code,
-        TunErrorCode::ApplyFailed
+        ErrorCode::TunApplyFailed
     );
 
     for name in ["tun0", "utun", "utunx", "utun-1"] {
@@ -499,7 +499,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..mac_config()
         };
         let err = bk.prepare(&bad_name).expect_err("bad utun name");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {name}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {name}");
     }
     let _ = fs::remove_dir_all(&dir);
 }
@@ -634,7 +634,7 @@ fn dns_restore_preserves_external_change_as_recovery_required() {
     // overwrite it (compare-before-restore), and surfaces recovery_required.
     host.set_dns("Wi-Fi", vec!["8.8.8.8".into()]);
     let err = bk.restore(&applied).expect_err("external change preserved");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert_eq!(host.dns("Wi-Fi"), vec!["8.8.8.8".to_string()]);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -681,14 +681,14 @@ fn dns_apply_failure_rolls_back_the_core() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
 
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.dns_failure = Some(TunErrorCode::PermissionRequired);
+    coordinator.dns_failure = Some(ErrorCode::TunPermissionRequired);
     let mut bk = backend(&dir, host.clone(), coordinator);
     let mut config = mac_config();
     config.dns_hijack = true;
     let prepared = bk.prepare(&config).expect("prepare");
     let err = bk.apply(&prepared).expect_err("DNS failure");
 
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(!host.has_utun("utun420"), "DNS failure must stop the core");
     assert_eq!(host.dns("Wi-Fi"), vec!["192.168.5.1".to_string()]);
     let _ = fs::remove_dir_all(&dir);
@@ -769,7 +769,7 @@ fn restore_restores_dns_when_journal_writes_fail() {
     fs::remove_file(&journal).unwrap();
     fs::create_dir(&journal).unwrap();
     let err = bk.restore(&applied).expect_err("journal writes fail");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(!host.has_utun("utun420"));
     assert_eq!(host.dns("Wi-Fi"), vec!["192.168.5.1".to_string()]);
     let _ = fs::remove_dir_all(&dir);
@@ -783,11 +783,11 @@ fn apply_propagates_permission_required_without_records() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
 
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.start_failure = Some(TunErrorCode::PermissionRequired);
+    coordinator.start_failure = Some(ErrorCode::TunPermissionRequired);
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&mac_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("permission required");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     let journal = TunJournal::load(&journal_path(&dir))
         .unwrap()
@@ -821,7 +821,7 @@ fn apply_journal_write_failure_stops_core_and_rolls_back() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&mac_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("journal write failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
     assert!(
         !host.has_utun("utun420"),
@@ -839,7 +839,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
 
     let host = FakeHost::default();
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.stop_failure = Some(TunErrorCode::RestoreFailed);
+    coordinator.stop_failure = Some(ErrorCode::TunRestoreFailed);
     let mut bk = MacosTunBackend::new(
         OWNER,
         Box::new(host.clone()),
@@ -850,7 +850,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&mac_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("uncertain cleanup");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(
         host.has_utun("utun420"),
         "stuck core leaves ownership uncertain"
@@ -891,7 +891,7 @@ fn apply_fails_closed_when_routes_do_not_converge() {
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&mac_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("routes never converge");
-    assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     assert!(
         !host.has_utun("utun420"),
         "the core must be stopped when the capture does not converge"
@@ -979,7 +979,7 @@ fn restore_fails_closed_when_interface_survives_stop() {
     let err = bk.restore(&applied).expect_err("interface survives stop");
     assert_eq!(
         err.code,
-        TunErrorCode::RecoveryRequired,
+        ErrorCode::TunRecoveryRequired,
         "uncertain cleanup must fail closed, not claim success"
     );
     assert!(
@@ -1012,7 +1012,7 @@ fn restore_stops_core_even_when_journal_writes_fail() {
     .with_journal(broken_journal);
 
     let err = bk.restore(&applied).expect_err("journal write fails");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(
         !host.has_utun("utun420"),
         "the core must be stopped even when the journal cannot be written"
@@ -1130,13 +1130,13 @@ fn unsupported_backend_refuses_every_operation_with_stable_code() {
     assert!(!capability.ipv4 && !capability.ipv6 && !capability.dns_hijack);
 
     let err = backend.prepare(&mac_config()).expect_err("prepare");
-    assert_eq!(err.code, TunErrorCode::NotSupported);
+    assert_eq!(err.code, ErrorCode::TunNotSupported);
     let err = backend
         .apply(&PreparedTun {
             config: mac_config(),
         })
         .expect_err("apply");
-    assert_eq!(err.code, TunErrorCode::NotSupported);
+    assert_eq!(err.code, ErrorCode::TunNotSupported);
     let err = backend
         .verify(&AppliedTun {
             interface_name: None,
@@ -1150,7 +1150,7 @@ fn unsupported_backend_refuses_every_operation_with_stable_code() {
             core_pid: None,
         })
         .expect_err("verify");
-    assert_eq!(err.code, TunErrorCode::NotSupported);
+    assert_eq!(err.code, ErrorCode::TunNotSupported);
     let err = backend
         .restore(&AppliedTun {
             interface_name: None,
@@ -1164,7 +1164,7 @@ fn unsupported_backend_refuses_every_operation_with_stable_code() {
             core_pid: None,
         })
         .expect_err("restore");
-    assert_eq!(err.code, TunErrorCode::NotSupported);
+    assert_eq!(err.code, ErrorCode::TunNotSupported);
 }
 
 #[test]

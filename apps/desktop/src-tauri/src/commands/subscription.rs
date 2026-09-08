@@ -134,7 +134,7 @@ pub async fn update_subscription(
             Err(err) => {
                 // Keep the pre-split behavior: record `last_error` on a failed fetch.
                 let _orch = lock_orchestrate(&state)?;
-                write_subscription_error(mgr.paths(), req.id, err.to_string())
+                write_subscription_error(mgr.paths(), req.id, err.ui_message())
                     .map_err(AppError::from)?;
                 return Err(AppError::from(err));
             }
