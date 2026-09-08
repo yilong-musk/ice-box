@@ -186,7 +186,7 @@ mod tests {
             "wrapped file must stay at or under the cap"
         );
         assert!(
-            body.iter().any(|&b| b == b'a'),
+            body.contains(&b'a'),
             "newest part of the first chunk is kept"
         );
         assert!(!dir.join("ice-box.log.1").exists());
