@@ -20,7 +20,7 @@ pub use paths::AppPaths;
 pub use platform::HostPlatform;
 pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppSettings,
-    CoreLogLevel, LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
+    LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
     TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 pub use ui::{UiMessage, UI_RAW_KEY};

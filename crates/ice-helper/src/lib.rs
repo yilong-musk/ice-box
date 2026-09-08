@@ -4,10 +4,10 @@
 //!
 //! The daemon runs as root under launchd. It owns a narrow privileged
 //! surface: start the bundled sing-box with an allowlisted config path,
-//! stop it (TERM→KILL with bounded grace), and apply validated `SetDns`
-//! updates via `networksetup`. sing-box owns the adapter / routes; the
-//! helper never accepts a binary path, interface name, or shell string
-//! from the client.
+//! stop it (TERM→KILL with bounded grace), apply validated `SetDns`
+//! updates via `networksetup`, and truncate the fixed core log in place.
+//! sing-box owns the adapter / routes; the helper never accepts a binary
+//! path, interface name, or shell string from the client.
 //!
 //! Security model:
 //!
@@ -23,6 +23,9 @@
 //!   sing-box is started from that copy, never from the user-writable file.
 //! - The core binary path is fixed at install; the client never supplies it.
 //! - `SetDns` is validated (`validate_set_dns`) before `networksetup` runs.
+//! - `TruncateCoreLog` empties the daemon's own core log path (never a
+//!   client-supplied path) so the app can shrink a running elevated
+//!   core's output.
 //!
 //! The server logic is host-free (inject the peer uid and a fake core
 //! binary), so the same code tests on Linux and macOS CI. On non-unix
@@ -31,8 +34,10 @@
 
 #[cfg(unix)]
 mod imp {
+    use std::ffi::CString;
     use std::fs::OpenOptions;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
@@ -58,33 +63,126 @@ mod imp {
     /// concurrent-connection cap).
     const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-    /// Rotate `sing-box.log` to `.1..3` when it exceeds 20 MiB (CORE-7).
-    fn rotate_core_log(path: &std::path::Path) {
-        const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    /// Cap the core log at 20 MiB by dropping the oldest 5 MiB (CORE-7).
+    fn rotated_log_path(path: &std::path::Path, n: u32) -> std::path::PathBuf {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{n}"));
+        match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+            _ => std::path::PathBuf::from(name),
+        }
+    }
+
+    fn cap_core_log(path: &std::path::Path) {
+        cap_core_log_at(path, 20 * 1024 * 1024, 3);
+    }
+
+    fn cap_core_log_at(path: &std::path::Path, max_bytes: u64, keep: u32) {
+        let oversized = std::fs::metadata(path)
+            .map(|m| m.len() > max_bytes)
+            .unwrap_or(false);
+        if oversized {
+            let _ = retain_log_tail(path, max_bytes);
+        }
+        for i in 1..=keep {
+            let _ = std::fs::remove_file(rotated_log_path(path, i));
+        }
+    }
+
+    /// Keep in sync with `ice_core::trim_log_file`.
+    fn retain_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        let len = file.metadata()?.len();
+        let start = if len <= 1 {
+            0
+        } else {
+            let drop = (max_bytes / 4).max(1);
+            let over = len.saturating_sub(max_bytes);
+            drop.max(over).min(len - 1)
+        };
+        let kept = if start == 0 || len <= 1 {
+            file.seek(SeekFrom::Start(0))?;
+            let mut all = Vec::new();
+            file.read_to_end(&mut all)?;
+            all
+        } else {
+            let at_line_start = {
+                file.seek(SeekFrom::Start(start - 1))?;
+                let mut prev = [0u8; 1];
+                file.read_exact(&mut prev)?;
+                prev[0] == b'\n'
+            };
+            file.seek(SeekFrom::Start(start))?;
+            let mut tail = Vec::new();
+            file.read_to_end(&mut tail)?;
+            if !at_line_start {
+                if let Some(i) = tail.iter().position(|&b| b == b'\n') {
+                    if i + 1 < tail.len() {
+                        tail.drain(..=i);
+                    }
+                }
+            }
+            tail
+        };
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&kept)?;
+        file.flush()?;
+        Ok(())
+    }
+
+    /// Empty the core log in place so a running sing-box keeps writing to the
+    /// same inode, and drop rotated siblings. The path is the daemon's own
+    /// `core_log` (never client-supplied).
+    fn truncate_core_log_file(path: &std::path::Path) -> Result<(), TunError> {
         const KEEP: u32 = 3;
-        let Ok(meta) = std::fs::metadata(path) else {
-            return;
-        };
-        if meta.len() <= MAX_BYTES {
-            return;
-        }
-        let rotated = |n: u32| {
-            let mut name = path.file_name().unwrap_or_default().to_os_string();
-            name.push(format!(".{n}"));
-            match path.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
-                _ => std::path::PathBuf::from(name),
-            }
-        };
-        let _ = std::fs::remove_file(rotated(KEEP));
-        for i in (1..KEEP).rev() {
-            let from = rotated(i);
-            if from.exists() {
-                let _ = std::fs::rename(&from, rotated(i + 1));
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        format!("create log dir {}: {e}", parent.display()),
+                    )
+                })?;
             }
         }
-        if path.exists() {
-            let _ = std::fs::rename(path, rotated(1));
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|e| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("truncate core log {}: {e}", path.display()),
+                )
+            })?;
+        for i in 1..=KEEP {
+            let _ = std::fs::remove_file(rotated_log_path(path, i));
+        }
+        Ok(())
+    }
+
+    /// Give the authorized user ownership of the core log so the unelevated
+    /// app can truncate it in place (the directory stays root-owned, so the
+    /// user cannot replace the path with a symlink).
+    fn chown_core_log_to_allowed_uid(path: &std::path::Path, uid: u32) {
+        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+            return;
+        };
+        let rc = unsafe { libc::chown(c_path.as_ptr(), uid, 0) };
+        if rc != 0 {
+            tracing::warn!(
+                path = %path.display(),
+                uid,
+                error = %std::io::Error::last_os_error(),
+                "chown core log to allowed uid failed"
+            );
         }
     }
 
@@ -302,11 +400,21 @@ mod imp {
                 let canonical = validate_config_path(&config.data_dir, path)?;
                 let protected = sanitize_user_config(config, &canonical)?;
                 let pid = runner.start(&config.core_bin, &protected, &config.core_log)?;
+                if let Some(uid) = config.allowed_uid {
+                    chown_core_log_to_allowed_uid(&config.core_log, uid);
+                }
                 Ok(Some(pid))
             }
             HelperCommand::SetDns { service, servers } => {
                 validate_set_dns(service, servers)?;
                 runner.set_dns(service, servers)?;
+                Ok(None)
+            }
+            HelperCommand::TruncateCoreLog => {
+                truncate_core_log_file(&config.core_log)?;
+                if let Some(uid) = config.allowed_uid {
+                    chown_core_log_to_allowed_uid(&config.core_log, uid);
+                }
                 Ok(None)
             }
         }
@@ -494,7 +602,7 @@ mod imp {
                     )
                 })?;
             }
-            rotate_core_log(log);
+            cap_core_log(log);
             let log_file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -912,6 +1020,52 @@ mod imp {
             let response = roundtrip(&config, &PEER42, runner, &status_request("tok")).unwrap();
             assert!(response.ok);
             assert_eq!(response.pid, None);
+        }
+
+        #[test]
+        fn truncate_core_log_empties_current_and_drops_rotations() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-truncate-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut config = fixture_config("tok", &dir);
+            config.core_log = dir.join("core.log");
+            std::fs::write(&config.core_log, vec![b'x'; 64]).unwrap();
+            std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+            let mut req = status_request("tok");
+            req.command = HelperCommand::TruncateCoreLog;
+            let response = roundtrip(&config, &PEER42, runner, &req).unwrap();
+            assert!(response.ok, "{response:?}");
+            assert_eq!(std::fs::read(&config.core_log).unwrap(), b"");
+            assert!(!dir.join("core.log.1").exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn cap_core_log_drops_oldest_quarter_and_siblings() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-cap-log-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("core.log");
+            std::fs::write(&path, vec![b'x'; 64]).unwrap();
+            std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+            cap_core_log_at(&path, 32, 3);
+            assert_eq!(std::fs::read(&path).unwrap(), vec![b'x'; 32]);
+            assert!(!dir.join("core.log.1").exists());
+            std::fs::write(&path, vec![b'y'; 8]).unwrap();
+            cap_core_log_at(&path, 32, 3);
+            assert_eq!(std::fs::read(&path).unwrap()[0], b'y');
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         #[test]

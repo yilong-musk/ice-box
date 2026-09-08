@@ -13,7 +13,7 @@
 //! line capped at [`MAX_FRAME_BYTES`]. The daemon rejects anything else
 //! without reading unbounded input.
 //!
-//! Security model (plan §7): the helper accepts exactly four commands and
+//! Security model (plan §7): the helper accepts a fixed command set and
 //! never accepts a binary path, route target, interface name, or arbitrary
 //! shell input from the client. The `config` path must canonicalize into the
 //! app data directory the daemon was installed with; the `SetDns` service
@@ -61,6 +61,11 @@ pub enum HelperCommand {
         service: String,
         servers: Vec<String>,
     },
+    /// Truncate the helper's fixed core log in place (same inode) and drop
+    /// rotated siblings. The path is the daemon's installed `CORE_LOG_DEST`,
+    /// never a client-supplied path, so a same-user client cannot aim the
+    /// write at an arbitrary file.
+    TruncateCoreLog,
 }
 
 /// Validate the service name the `SetDns` command may target. The daemon
@@ -331,6 +336,21 @@ mod tests {
             },
         };
         assert!(encode_request(&req).is_err());
+    }
+
+    #[test]
+    fn truncate_core_log_command_roundtrips() {
+        let req = HelperRequest {
+            v: PROTOCOL_VERSION,
+            token: "secret".into(),
+            command: HelperCommand::TruncateCoreLog,
+        };
+        let bytes = encode_request(&req).unwrap();
+        let parsed: HelperRequest =
+            serde_json::from_str(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(parsed, req);
+        let text = String::from_utf8(encode_request(&req).unwrap()).unwrap();
+        assert!(text.contains("truncate_core_log"));
     }
 
     #[test]

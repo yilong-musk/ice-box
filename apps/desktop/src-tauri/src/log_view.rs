@@ -3,13 +3,13 @@
 //! Merged user-facing log view.
 //!
 //! Display-only concern: merges the app log (ice-box.log, `tracing` format) and the
-//! core log (sing-box.log, sing-box format) into one time-ordered view, and keeps only
-//! lines with user value (WARN/ERROR/FATAL plus key lifecycle INFO and per-connection
-//! outbound routing INFO). Core `hijack-dns` unpack failures are hidden (they are
-//! session noise, not capture failure). Connection lines render as
-//! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — full recording
-//! (info/debug/trace) is untouched for troubleshooting; the filter applies only at
-//! read/display time (architecture §16).
+//! core log (sing-box.log, sing-box format) into one time-ordered view. The default
+//! view keeps lines with user value (WARN/ERROR/FATAL, app INFO, core lifecycle
+//! INFO, and per-connection outbound routing). Debug mode skips that filter and
+//! shows every parsed line. Core `hijack-dns` unpack failures stay hidden in the
+//! default view (session noise, not capture failure). Connection lines render as
+//! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — the filter
+//! applies only at read/display time (architecture §16).
 
 use std::path::Path;
 
@@ -141,7 +141,8 @@ fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
     Some((dt, level))
 }
 
-/// Keep only lines with user value; DEBUG/TRACE and core connection noise are hidden.
+/// Default (non-debug) view: WARN/ERROR/FATAL, app INFO, core lifecycle and
+/// per-connection routing. DEBUG/TRACE and other core INFO stay hidden.
 /// `text` is the original file line (used for INFO keyword matching).
 fn display_worthy(source: Source, level: Level, text: &str) -> bool {
     if source == Source::Core && core_dns_unpack_noise(text) {
@@ -166,6 +167,7 @@ fn collect(
     source: Source,
     path: &Path,
     next_order: &mut usize,
+    debug: bool,
 ) -> Result<(), AppError> {
     for raw in read_log_tail_deep(path, SCAN_PER_SOURCE)? {
         let order = *next_order;
@@ -175,7 +177,7 @@ fn collect(
             Source::Core => parse_core_line(&raw),
         };
         let Some((ts, level)) = parsed else { continue };
-        if display_worthy(source, level, &raw) {
+        if debug || display_worthy(source, level, &raw) {
             out.push(LogLine {
                 ts,
                 source,
@@ -323,13 +325,14 @@ fn format_display_line(
     format!("{lvl} {time} {msg}")
 }
 
-/// Read the merged, filtered log view: app + core tails, sorted by time, capped at `n`.
+/// Read the merged log view: app + core tails, sorted by time, capped at `n`.
 ///
-/// `helper_core_log` is the privileged helper's core log destination
-/// (`/var/log/ice-box-core.log`): while TUN capture runs through the helper,
-/// the elevated core's output lands there instead of the app-data core log, so
-/// it is merged in as an extra core source. Best-effort — a missing or
-/// unreadable helper log is ignored, never a view error.
+/// `debug` skips the user-facing filter and keeps every parsed line (still
+/// compact-formatted). `helper_core_log` is the privileged helper's core log
+/// destination (`/var/log/ice-box-core.log`): while TUN capture runs through
+/// the helper, the elevated core's output lands there instead of the app-data
+/// core log, so it is merged in as an extra core source. Best-effort — a
+/// missing or unreadable helper log is ignored, never a view error.
 ///
 /// Lines with identical timestamps keep file read order (app, then core, then
 /// the helper core log). Display lines use a compact timestamp and omit source
@@ -339,16 +342,17 @@ pub fn read_log_view(
     core_log: &Path,
     helper_core_log: Option<&Path>,
     n: usize,
+    debug: bool,
 ) -> Result<Vec<String>, AppError> {
     let n = n.min(VIEW_MAX);
     let mut lines: Vec<LogLine> = Vec::new();
     let mut next_order = 0usize;
-    collect(&mut lines, Source::App, app_log, &mut next_order)?;
-    collect(&mut lines, Source::Core, core_log, &mut next_order)?;
+    collect(&mut lines, Source::App, app_log, &mut next_order, debug)?;
+    collect(&mut lines, Source::Core, core_log, &mut next_order, debug)?;
     if let Some(helper_log) = helper_core_log {
         // Missing / unreadable helper log: read_tail yields an empty tail for
         // missing paths, and collect errors are dropped — never a view error.
-        let _ = collect(&mut lines, Source::Core, helper_log, &mut next_order);
+        let _ = collect(&mut lines, Source::Core, helper_log, &mut next_order, debug);
     }
     lines.sort_by_key(|a| (a.ts, a.source, a.order));
     // Keep the newest lines after merging both sources. Truncating the ascending
@@ -560,7 +564,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, None, 500).unwrap();
+        let view = read_log_view(&app, &core, None, 500, false).unwrap();
         assert_eq!(
             view.len(),
             5,
@@ -604,6 +608,59 @@ mod tests {
     }
 
     #[test]
+    fn debug_view_keeps_core_chatter_and_trace() {
+        let dir = temp_dir("debug");
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("ice-box.log");
+        let core = dir.join("sing-box.log");
+        fs::write(
+            &app,
+            concat!(
+                "2026-08-23T13:47:02.000000Z  INFO ice_core: sing-box ready on 127.0.0.1:17890\n",
+                "2026-08-23T13:47:04.000000Z DEBUG ice_core: probe loop tick\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &core,
+            concat!(
+                "+0000 2026-08-23 13:47:05 INFO [TCP] dial example.com:443\n",
+                "+0000 2026-08-23 13:47:06 INFO [1 0ms] outbound/direct: outbound connection to example.com:443\n",
+                "+0000 2026-08-23 13:47:07 ERROR router: process DNS packet: unpack request: bad question name: dns: bad rdata\n",
+            ),
+        )
+        .unwrap();
+
+        let filtered = read_log_view(&app, &core, None, 500, false).unwrap();
+        assert_eq!(
+            filtered,
+            vec![
+                "INFO 08-23 13:47:02 ice_core: sing-box ready on 127.0.0.1:17890",
+                "INFO 08-23 13:47:06 example.com:443 → direct",
+            ]
+        );
+
+        let debug = read_log_view(&app, &core, None, 500, true).unwrap();
+        assert!(
+            debug.iter().any(|l| l.contains("probe loop tick")),
+            "debug keeps TRACE/DEBUG: {debug:?}"
+        );
+        assert!(
+            debug.iter().any(|l| l.contains("[TCP] dial")),
+            "debug keeps other core INFO: {debug:?}"
+        );
+        assert!(
+            debug.iter().any(|l| l.contains("unpack request")),
+            "debug keeps DNS unpack noise: {debug:?}"
+        );
+        assert!(
+            debug.iter().any(|l| l.contains("example.com:443 → direct")),
+            "debug still compact-formats connections: {debug:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn caps_view_at_n() {
         let dir = temp_dir("cap");
         fs::create_dir_all(&dir).unwrap();
@@ -619,7 +676,7 @@ mod tests {
         fs::write(&app, app_text).unwrap();
         fs::write(&core, "").unwrap();
 
-        let view = read_log_view(&app, &core, None, 3).unwrap();
+        let view = read_log_view(&app, &core, None, 3, false).unwrap();
         assert_eq!(
             view,
             vec![
@@ -647,7 +704,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, None, 1).unwrap();
+        let view = read_log_view(&app, &core, None, 1, false).unwrap();
         assert_eq!(
             view,
             vec!["INFO 08-23 13:47:06 second.example:443 → direct"]
@@ -658,7 +715,14 @@ mod tests {
     #[test]
     fn missing_files_yield_empty_view() {
         let dir = temp_dir("missing");
-        let view = read_log_view(&dir.join("nope.log"), &dir.join("nope2.log"), None, 500).unwrap();
+        let view = read_log_view(
+            &dir.join("nope.log"),
+            &dir.join("nope2.log"),
+            None,
+            500,
+            false,
+        )
+        .unwrap();
         assert!(view.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -682,7 +746,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, Some(&helper), 500).unwrap();
+        let view = read_log_view(&app, &core, Some(&helper), 500, false).unwrap();
         assert_eq!(
             view,
             vec![
@@ -692,7 +756,7 @@ mod tests {
         );
 
         // Missing / unreadable helper log must not break the view.
-        let view = read_log_view(&app, &core, Some(&dir.join("missing.log")), 500).unwrap();
+        let view = read_log_view(&app, &core, Some(&dir.join("missing.log")), 500, false).unwrap();
         assert_eq!(view.len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -716,7 +780,7 @@ mod tests {
         )
         .unwrap();
 
-        let view = read_log_view(&app, &core, Some(&helper), 500).unwrap();
+        let view = read_log_view(&app, &core, Some(&helper), 500, false).unwrap();
         assert_eq!(
             view,
             vec![

@@ -88,16 +88,19 @@ Production runs the bundled core as root via a small launchd daemon
 DNS; `ice-tun-sys` journals and verifies. No network-extension package.
 
 The helper starts and stops the bundled core with an allowlisted
-config path, and applies validated DNS changes (`SetDns`) so TUN DNS
-hijack can run elevated. IPC is one JSON object per line, 16 KiB cap,
-protocol version **2**, one request/response per connection
-(`crates/ice-tun-sys/src/helper_protocol.rs`):
+config path, applies validated DNS changes (`SetDns`) so TUN DNS
+hijack can run elevated, and truncates its fixed core log in place
+(`TruncateCoreLog`) so the app can shrink a root-owned
+`/var/log/ice-box-core.log` without a permission error. IPC is one JSON
+object per line, 16 KiB cap, protocol version **2**, one request/response
+per connection (`crates/ice-tun-sys/src/helper_protocol.rs`):
 
 ```json
 {"v": 2, "token": "...", "cmd": "status"}
 {"v": 2, "token": "...", "cmd": "start", "config": "/abs/path/config.json"}
 {"v": 2, "token": "...", "cmd": "stop"}
 {"v": 2, "token": "...", "cmd": "set_dns", "service": "Wi-Fi", "servers": ["1.1.1.1"]}
+{"v": 2, "token": "...", "cmd": "truncate_core_log"}
 ```
 
 Auth: peer uid (`getpeereid`) is the **primary** control; the per-installation

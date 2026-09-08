@@ -6,12 +6,10 @@ import { t } from "../lib/i18n";
 import { Logs } from "./Logs";
 
 const getLogView = vi.fn();
-const clearLogs = vi.fn();
 
 vi.mock("../api/tauri", () => ({
   api: {
     getLogView: (...args: unknown[]) => getLogView(...args),
-    clearLogs: (...args: unknown[]) => clearLogs(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -27,7 +25,6 @@ describe("Logs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLogView.mockImplementation(async () => [...baseTail]);
-    clearLogs.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -47,6 +44,7 @@ describe("Logs", () => {
     expect(view.queryByRole("combobox")).toBeNull();
     expect(view.queryByRole("button", { name: t("common.refresh") })).toBeNull();
     expect(view.queryByText(t("app.nav.logs"))).toBeNull();
+    expect(view.queryByLabelText(t("settings.logDebug"))).toBeNull();
     expect(container.querySelector("[data-slot='card']")).toBeNull();
     const logView = view.getByTestId("log-view");
     expect(logView.parentElement).toBe(view.getByTestId("logs-panel"));
@@ -168,20 +166,5 @@ describe("Logs", () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     expect(scrollTop).toBe(500);
-  });
-
-  it("clears logs through the Clear action", async () => {
-    const { container } = render(<Logs />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByText(/sing-box ready/)).toBeInTheDocument();
-    });
-    const button = view.getByRole("button", { name: /清空日志|Clear logs/ });
-    await act(async () => {
-      button.click();
-    });
-    await waitFor(() => {
-      expect(clearLogs).toHaveBeenCalled();
-    });
   });
 });

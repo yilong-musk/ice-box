@@ -55,26 +55,6 @@ pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
     }
 }
 
-/// sing-box `log.level` baked into generated config (CORE-7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum CoreLogLevel {
-    /// Production default: per-connection chatter stays off.
-    #[default]
-    Warn,
-    /// Verbose core logs for debug sessions.
-    Info,
-}
-
-impl CoreLogLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Warn => "warn",
-            Self::Info => "info",
-        }
-    }
-}
-
 /// Legacy default for `auto_set_system_proxy` in `settings.json`.
 ///
 /// Product: the core follows the app; system proxy is toggled from the home page.
@@ -336,9 +316,10 @@ pub struct AppSettings {
     /// for existing `settings.json` files; the Settings page can turn it off.
     #[serde(default = "default_check_app_updates")]
     pub check_app_updates: bool,
-    /// Core `log.level` (`warn` default; `info` for debug sessions).
+    /// Logs page shows every parsed line when true. Display-only; default
+    /// off (connections and important events). Missing field → false.
     #[serde(default)]
-    pub core_log_level: CoreLogLevel,
+    pub log_debug: bool,
 }
 
 fn default_auto_default_rules() -> bool {
@@ -365,7 +346,7 @@ impl Default for AppSettings {
             auto_default_rules: true,
             language: LanguagePreference::System,
             check_app_updates: true,
-            core_log_level: CoreLogLevel::Warn,
+            log_debug: false,
         }
     }
 }
@@ -462,8 +443,8 @@ impl AppSettings {
         if let Some(v) = patch.check_app_updates {
             next.check_app_updates = v;
         }
-        if let Some(v) = patch.core_log_level {
-            next.core_log_level = v;
+        if let Some(v) = patch.log_debug {
+            next.log_debug = v;
         }
         next
     }
@@ -506,7 +487,7 @@ pub struct SettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_app_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub core_log_level: Option<CoreLogLevel>,
+    pub log_debug: Option<bool>,
 }
 
 /// Nested TUN patch; omitted fields keep the current `TunSettings`.

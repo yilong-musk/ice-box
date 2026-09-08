@@ -3,15 +3,15 @@
 //! Desktop-shell process runtime helpers (architecture review ARCH-1).
 //!
 //! Tracing initialization lives here so `ice-config` stays a pure config
-//! builder. Size-based rotation itself lives in `ice-core` (the process
-//! layer also rotates the core log on spawn).
+//! builder. Size-cap helpers live in `ice-core` (the process layer also
+//! caps the core log on spawn).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use ice_core::{rotate_log_now, rotate_sized_log, APP_LOG_KEEP, SIZED_LOG_MAX_BYTES};
+use ice_core::{cap_log_file, trim_log_file, APP_LOG_KEEP, SIZED_LOG_MAX_BYTES};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
@@ -22,8 +22,9 @@ static FILE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 /// Initialize global tracing.
 ///
 /// - Always logs to stderr.
-/// - When `log_file` is set, also writes to that path with size-based rotation
-///   (keep [`APP_LOG_KEEP`]).
+/// - When `log_file` is set, also writes to that path and drops the oldest
+///   quarter in place at [`SIZED_LOG_MAX_BYTES`] (5 MiB at 20 MiB; same inode;
+///   leftover `path.N` siblings from the old rename-rotation scheme are deleted).
 /// - Filter defaults to `info`; override with `RUST_LOG`.
 ///
 /// Safe to call once at process start. Subsequent calls return an error from
@@ -41,10 +42,10 @@ pub fn init_logging(log_file: Option<&Path>) -> Result<(), String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create log dir {}: {e}", parent.display()))?;
         }
-        let _ = rotate_sized_log(path, SIZED_LOG_MAX_BYTES, APP_LOG_KEEP);
-        let rotating = SizeRotatingWriter::open(path, SIZED_LOG_MAX_BYTES, APP_LOG_KEEP)
+        let _ = cap_log_file(path, SIZED_LOG_MAX_BYTES, APP_LOG_KEEP);
+        let capped = SizeCappedWriter::open(path, SIZED_LOG_MAX_BYTES, APP_LOG_KEEP)
             .map_err(|e| format!("open log file {}: {e}", path.display()))?;
-        let (non_blocking, guard) = tracing_appender::non_blocking(rotating);
+        let (non_blocking, guard) = tracing_appender::non_blocking(capped);
         let _ = FILE_GUARD.set(guard);
 
         let file_layer = fmt::layer()
@@ -71,7 +72,7 @@ pub fn init_logging(log_file: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
-struct SizeRotatingWriter {
+struct SizeCappedWriter {
     path: PathBuf,
     max_bytes: u64,
     keep: u32,
@@ -79,7 +80,7 @@ struct SizeRotatingWriter {
     len: u64,
 }
 
-impl SizeRotatingWriter {
+impl SizeCappedWriter {
     fn open(path: &Path, max_bytes: u64, keep: u32) -> io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -92,19 +93,18 @@ impl SizeRotatingWriter {
         })
     }
 
-    fn rotate(&mut self) -> io::Result<()> {
+    fn wrap(&mut self) -> io::Result<()> {
         if let Some(mut file) = self.file.take() {
             file.flush()?;
             drop(file);
         }
-        rotate_log_now(&self.path, self.keep)?;
+        self.len = trim_log_file(&self.path, self.max_bytes, self.keep)?;
         self.file = Some(
             OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.path)?,
         );
-        self.len = 0;
         Ok(())
     }
 
@@ -115,10 +115,10 @@ impl SizeRotatingWriter {
     }
 }
 
-impl Write for SizeRotatingWriter {
+impl Write for SizeCappedWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.len > 0 && self.len.saturating_add(buf.len() as u64) > self.max_bytes {
-            self.rotate()?;
+            self.wrap()?;
         }
         let n = self.file_mut()?.write(buf)?;
         self.len = self.len.saturating_add(n as u64);
@@ -164,6 +164,32 @@ mod tests {
 
         let contents = fs::read_to_string(&path).expect("read");
         assert!(contents.contains("probe"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn size_capped_writer_drops_oldest_quarter_without_siblings() {
+        let dir = temp_dir("cap");
+        let path = dir.join("ice-box.log");
+        fs::write(dir.join("ice-box.log.1"), b"old").expect("rot");
+
+        let mut writer = SizeCappedWriter::open(&path, 32, APP_LOG_KEEP).expect("open");
+        writer.write_all(&[b'a'; 20]).expect("first");
+        writer.write_all(&[b'b'; 20]).expect("wrap");
+        writer.flush().expect("flush");
+        drop(writer);
+
+        let body = fs::read(&path).expect("read");
+        assert_eq!(&body[body.len().saturating_sub(20)..], &[b'b'; 20]);
+        assert!(
+            body.len() <= 32,
+            "wrapped file must stay at or under the cap"
+        );
+        assert!(
+            body.iter().any(|&b| b == b'a'),
+            "newest part of the first chunk is kept"
+        );
+        assert!(!dir.join("ice-box.log.1").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

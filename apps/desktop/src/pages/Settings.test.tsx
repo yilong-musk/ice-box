@@ -118,7 +118,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
-      core_log_level: "warn",
+      log_debug: false,
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -237,6 +237,47 @@ describe("Settings", () => {
     expect(toggle).not.toBeChecked();
   });
 
+  it("persists turning on debug logs", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
+    });
+    const inboundCard = view
+      .getByText(t("settings.inbound"))
+      .closest('[data-slot="card"]');
+    expect(inboundCard).toBeTruthy();
+    expect(
+      within(inboundCard as HTMLElement).queryByLabelText(
+        t("settings.logDebug"),
+      ),
+    ).toBeNull();
+    expect(
+      within(inboundCard as HTMLElement).queryByText(t("settings.openDataDir")),
+    ).toBeNull();
+    const dataCard = view
+      .getByText(t("settings.data"))
+      .closest('[data-slot="card"]');
+    expect(dataCard).toBeTruthy();
+    expect(
+      within(dataCard as HTMLElement).getByText(t("settings.openDataDir")),
+    ).toBeInTheDocument();
+    const toggle = within(dataCard as HTMLElement).getByLabelText(
+      t("settings.logDebug"),
+    );
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(
+      () => {
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ log_debug: true }),
+        );
+      },
+      { timeout: 2000 },
+    );
+    expect(toggle).toBeChecked();
+  });
+
   it("blocks save when mixed and clash api ports conflict", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
@@ -285,7 +326,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
-      core_log_level: "warn",
+      log_debug: false,
       tun: tunSettings,
     });
 
@@ -327,7 +368,7 @@ describe("Settings", () => {
       proxy_mode: "rule" as const,
       language: "system" as const,
       check_app_updates: true,
-      core_log_level: "warn",
+      log_debug: false,
       tun: tunSettings,
     };
     const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
@@ -440,7 +481,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "en",
       check_app_updates: true,
-      core_log_level: "warn",
+      log_debug: false,
       tun: tunSettings,
     });
     render(<Settings />);
@@ -520,7 +561,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: true,
-      core_log_level: "warn",
+      log_debug: false,
       tun: { ...tunSettings, enabled: true },
     });
 
@@ -1254,7 +1295,7 @@ describe("Settings", () => {
       auto_default_rules: true,
       language: "system",
       check_app_updates: false,
-      core_log_level: "warn",
+      log_debug: false,
       tun: tunSettings,
     });
     checkAppUpdate.mockResolvedValue({

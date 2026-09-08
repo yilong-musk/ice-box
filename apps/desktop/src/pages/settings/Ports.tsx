@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { type Dispatch, type SetStateAction } from "react";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -22,7 +21,7 @@ import {
   formatPortValidationError,
 } from "../../lib/listenValidation";
 import { t } from "../../lib/i18n";
-import { formatInvokeError, api, type AppSettings } from "../../api/tauri";
+import type { AppSettings } from "../../api/tauri";
 
 export function PortsCard({
   form,
@@ -32,7 +31,6 @@ export function PortsCard({
   loaded,
   clearFieldError,
   setFieldErrors,
-  setError,
 }: {
   form: AppSettings;
   setForm: (next: AppSettings) => void;
@@ -41,7 +39,6 @@ export function PortsCard({
   loaded: boolean;
   clearFieldError: (key: string) => void;
   setFieldErrors: Dispatch<SetStateAction<Record<string, string>>>;
-  setError: (error: string | null) => void;
 }) {
   return (
     <Card size="sm" className="w-full">
@@ -203,40 +200,6 @@ export function PortsCard({
               {t("settings.autoDefaultRulesDesc")}
             </FieldDescription>
           ) : null}
-          <Field orientation="horizontal" className="w-auto gap-2">
-            <Switch
-              id="settings-core-log-level"
-              size="sm"
-              checked={form.core_log_level === "info"}
-              disabled={busy || !loaded}
-              aria-label={t("settings.coreLogLevel")}
-              onCheckedChange={(checked) => {
-                setForm({
-                  ...form,
-                  core_log_level: checked === true ? "info" : "warn",
-                });
-              }}
-            />
-            <FieldLabel htmlFor="settings-core-log-level">
-              {t("settings.coreLogLevel")}
-            </FieldLabel>
-          </Field>
-          <FieldDescription>{t("settings.coreLogLevelDesc")}</FieldDescription>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || !loaded}
-              onClick={() =>
-                void api
-                  .revealDataDir()
-                  .catch((err) => setError(formatInvokeError(err)))
-              }
-            >
-              {t("settings.openDataDir")}
-            </Button>
-          </div>
         </div>
       </CardContent>
     </Card>

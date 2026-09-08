@@ -90,32 +90,6 @@ fn heal_tun_dns(state: &AppState) {
     }
 }
 
-fn check_oversized_logs(state: &AppState) {
-    let mut oversized =
-        ice_core::log_file_oversized(&state.paths.core_log(), ice_core::CORE_LOG_MAX_BYTES)
-            || ice_core::log_file_oversized(&state.paths.app_log(), ice_core::SIZED_LOG_MAX_BYTES);
-    if state.capture.helper_core_used() && !ice_tun_sys::dev_sudo_runner_enabled() {
-        oversized = oversized
-            || ice_core::log_file_oversized(
-                std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST),
-                ice_core::CORE_LOG_MAX_BYTES,
-            );
-    }
-    if !oversized {
-        return;
-    }
-    let Ok(mut slot) = state.proxy_recovery_warning.lock() else {
-        return;
-    };
-    if slot
-        .iter()
-        .any(|m| m.key == ice_config::ErrorCode::LogsOversized.message_key())
-    {
-        return;
-    }
-    slot.push(ice_config::ErrorCode::LogsOversized.ui_message());
-}
-
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
 pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
@@ -125,7 +99,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
         };
         reconcile_unexpected_core_exit(state.inner());
         heal_tun_dns(state.inner());
-        check_oversized_logs(state.inner());
+        crate::commands::cap_oversized_logs(state.inner());
     });
 }
 
@@ -333,6 +307,24 @@ mod tests {
         reconcile_unexpected_core_exit(state.as_ref());
         assert_eq!(state.core.lock().unwrap().state().status, CoreStatus::Error);
         assert_eq!(restore_calls.load(Ordering::SeqCst), 1);
+
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn cap_oversized_logs_drops_legacy_core_siblings_without_banner() {
+        let restore_calls = Arc::new(AtomicUsize::new(0));
+        let state = temp_state("cap-logs", restore_calls);
+        let core = state.paths.core_log();
+        fs::create_dir_all(core.parent().expect("parent")).unwrap();
+        fs::write(&core, b"keep").unwrap();
+        fs::write(core.with_file_name("sing-box.log.1"), b"old").unwrap();
+
+        crate::commands::cap_oversized_logs(state.as_ref());
+
+        assert_eq!(fs::read(&core).unwrap(), b"keep");
+        assert!(!core.with_file_name("sing-box.log.1").exists());
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
 
         let _ = fs::remove_dir_all(state.paths.root());
     }

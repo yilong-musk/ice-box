@@ -41,8 +41,8 @@ pub use selections::{
 pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, load_settings, load_settings_detailed,
     save_settings, save_settings_for, set_proxy_service_enabled, set_proxy_service_enabled_for,
-    tun_interface_name_valid, AppSettings, CoreLogLevel, LanguagePreference, LoadSettingsOutcome,
-    ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS,
+    tun_interface_name_valid, AppSettings, LanguagePreference, LoadSettingsOutcome, ProxyMode,
+    SettingsPatch, TunSettings, TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS,
     TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 
@@ -133,9 +133,6 @@ pub struct LocalTemplate {
     /// alone.
     #[serde(default)]
     pub tun: TunSettings,
-    /// sing-box `log.level` (`warn` by default).
-    #[serde(default)]
-    pub log_level: CoreLogLevel,
 }
 
 impl Default for LocalTemplate {
@@ -148,7 +145,6 @@ impl Default for LocalTemplate {
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
-            log_level: CoreLogLevel::Warn,
         }
     }
 }
@@ -163,7 +159,6 @@ impl From<&AppSettings> for LocalTemplate {
             allow_lan: settings.allow_lan,
             proxy_mode: settings.proxy_mode,
             tun: settings.tun.clone(),
-            log_level: settings.core_log_level,
         }
     }
 }

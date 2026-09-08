@@ -283,6 +283,7 @@ pub struct LogViewCache {
     /// missing/unreadable source or when the helper log is not in play.
     pub(crate) sigs: Vec<Option<(SystemTime, u64)>>,
     pub(crate) n: usize,
+    pub(crate) debug: bool,
     pub(crate) lines: Vec<String>,
 }
 

@@ -114,8 +114,8 @@ export type AppSettings = {
   language: "system" | "zh" | "en";
   /** Background update checks and the auto prompt. Defaults to on. */
   check_app_updates: boolean;
-  /** sing-box `log.level`: `warn` (default) or `info` for debug sessions. */
-  core_log_level: "warn" | "info";
+  /** Logs page shows every parsed line. Default is connections and important events. */
+  log_debug: boolean;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -195,7 +195,7 @@ export type SettingsPatch = {
   auto_default_rules?: boolean;
   language?: "system" | "zh" | "en";
   check_app_updates?: boolean;
-  core_log_level?: "warn" | "info";
+  log_debug?: boolean;
 };
 
 export type AppErrorPayload = {
@@ -396,7 +396,6 @@ export const api = {
   removeTunElevation: () => invoke<void>("remove_tun_elevation"),
   getLogView: (n: number) =>
     invoke<string[]>("get_log_view", { req: { n } }),
-  clearLogs: () => invoke<void>("clear_logs"),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
   getSettings: () => invoke<AppSettings>("get_settings"),

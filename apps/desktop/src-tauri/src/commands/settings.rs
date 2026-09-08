@@ -36,6 +36,10 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
             persist_settings(&state.paths.settings(), &settings, host_platform())?;
             return Ok(());
         }
+        if only_log_debug_changed(&previous, &settings) {
+            persist_settings(&state.paths.settings(), &settings, host_platform())?;
+            return Ok(());
+        }
         // Live TUN topology reconfigure (addresses / MTU / stack / …) while
         // TUN capture stays the active backend. Enabled flips never belong
         // here — they were handled above.
@@ -88,6 +92,15 @@ pub fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), A
 pub struct SetProxyModeRequest {
     /// `"rule"` | `"global"` | `"direct"`.
     pub mode: String,
+}
+
+/// Persist-only: log debug is a display filter, not a runtime-config knob.
+fn only_log_debug_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.log_debug = false;
+    right.log_debug = false;
+    left == right && previous.log_debug != next.log_debug
 }
 
 pub(crate) fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {

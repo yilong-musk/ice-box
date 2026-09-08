@@ -40,7 +40,7 @@ const defaultSettings = {
   },
   language: "system",
   check_app_updates: true,
-  core_log_level: "warn",
+  log_debug: false,
 } as const;
 
 const tunStatus = {

@@ -28,8 +28,8 @@ pub use health::{
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
 pub use log_rotate::{
-    log_file_oversized, rotate_log_now, rotate_sized_log, truncate_log_file, APP_LOG_KEEP,
-    CORE_LOG_KEEP, CORE_LOG_MAX_BYTES, SIZED_LOG_MAX_BYTES,
+    cap_log_file, log_file_oversized, trim_log_file, truncate_log_file, APP_LOG_KEEP,
+    CORE_LOG_KEEP, CORE_LOG_MAX_BYTES, SIZED_LOG_MAX_BYTES, SIZED_LOG_TRIM_BYTES,
 };
 pub use pid::{clear_pid, parse_pid_contents, purge_invalid_pid_file, read_pid, write_pid};
 pub use process::{

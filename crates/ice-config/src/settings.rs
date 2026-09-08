@@ -11,7 +11,7 @@ use crate::HostPlatform;
 
 pub use ice_types::{
     clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppSettings,
-    CoreLogLevel, LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
+    LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
     TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 
@@ -222,6 +222,23 @@ mod tests {
         fs::write(&path, json).expect("write");
         let s = load_settings(&path).expect("legacy json without proxy_mode");
         assert_eq!(s.proxy_mode, ProxyMode::Rule);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn leftover_core_log_level_field_is_ignored() {
+        let path = temp_settings_path("legacy-core-log-level");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": false,
+            "core_log_level": "warn"
+        }"#;
+        fs::write(&path, json).expect("write");
+        load_settings(&path).expect("unknown core_log_level must not fail load");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

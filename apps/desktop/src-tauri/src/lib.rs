@@ -311,7 +311,6 @@ pub fn run() {
             commands::ensure_tun_elevation,
             commands::remove_tun_elevation,
             commands::get_log_view,
-            commands::clear_logs,
             commands::get_runtime_config,
             commands::reveal_data_dir,
             commands::get_settings,

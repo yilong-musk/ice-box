@@ -24,6 +24,7 @@ import { t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
 import { AppearanceCard } from "./settings/Appearance";
+import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
 import { TunCard } from "./settings/Tun";
 import { UpdateCard } from "./settings/Update";
@@ -41,7 +42,7 @@ const defaults: AppSettings = {
   auto_default_rules: true,
   language: "system",
   check_app_updates: true,
-  core_log_level: "warn",
+  log_debug: false,
   tun: {
     enabled: false,
     interface_name: null,
@@ -72,7 +73,7 @@ function settingsOwnedPatch(form: AppSettings): SettingsPatch {
     auto_default_rules: form.auto_default_rules,
     language: form.language,
     check_app_updates: form.check_app_updates,
-    core_log_level: form.core_log_level,
+    log_debug: form.log_debug,
   };
 }
 
@@ -538,6 +539,13 @@ export function Settings({
             loaded={loaded}
             clearFieldError={clearFieldError}
             setFieldErrors={setFieldErrors}
+          />
+
+          <DataCard
+            form={form}
+            setForm={setForm}
+            busy={busy}
+            loaded={loaded}
             setError={setError}
           />
         </div>

@@ -30,9 +30,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Desktop `build.rs` no longer emits cargo warnings on a successful
   sing-box / GeoIP copy, and skips the copy when the bundled file is
   already current (avoids a `tauri dev` rebuild loop).
+- App and core logs stay a single 20 MiB file: overflow drops the oldest
+  5 MiB in place (same inode, line-aligned) instead of renaming to `.1` /
+  `.2`. The watchdog applies that cap; the Logs page is read-only.
+- Logs page defaults to connection routes and important events. Settings →
+  Data has a Debug logs switch for the full merged view (display-only, no
+  core reload) and the Open data directory action. Generated sing-box
+  `log.level` is `info` so connection lines are recorded.
 
 ### Fixed
 
+- New helper installs chown `/var/log/ice-box-core.log` to the authorized
+  user so the unelevated app can trim it when it exceeds 20 MiB.
 - Windows TUN DNS hijack no longer feeds non-DNS packets into the resolver:
   IPv4 port 53 is still hijacked first (#3878), but the post-sniff
   `protocol: dns` rule is gone (#4199) and IPv6 `:53` is dropped instead of
@@ -82,9 +91,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ACCESS_DENIED` as alive (CORE-3/CORE-4). The traffic supervisor recovers
   from a panicking stream (CORE-5). Clash API errors are `core.api_failed`
   (CORE-8).
-- App and core logs rotate at 20 MiB (keep 5 / 3). Generated core `log.level`
-  defaults to `warn`, with a Settings toggle for `info`. The Logs page can
-  truncate files in place (CORE-7).
+- App and core logs cap at 20 MiB by dropping the oldest 5 MiB in place.
+  Generated `log.level` is `info` so connection routes are recorded; the Logs
+  page defaults to those plus important events, with a Settings debug switch
+  for the full file (CORE-7).
 - Subscription profile commit renames the previous dir aside instead of
   deleting it; a leftover `.old-*` is restored on load (SUB-1). Node/group/
   rule caps truncate with a warning instead of hard-failing (SUB-2). Fetch

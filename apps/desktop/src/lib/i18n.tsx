@@ -220,7 +220,6 @@ const zh = {
 
   // --- logs page ---
   "logs.empty": "（空）",
-  "logs.clear": "清空日志",
 
   // --- settings page ---
   "settings.appearance": "外观",
@@ -267,9 +266,11 @@ const zh = {
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.autoDefaultRulesDesc":
     "订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP / 国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS 分流",
-  "settings.coreLogLevel": "详细核心日志（info）",
-  "settings.coreLogLevelDesc":
-    "默认 warn，减少长期运行占盘；调试时打开 info，变更会在下次应用配置后生效",
+  "settings.data": "数据",
+  "settings.dataDesc": "日志展示与本地文件",
+  "settings.logDebug": "调试模式",
+  "settings.logDebugDesc":
+    "默认日志页只显示连接与重要事件；打开后显示全量日志",
   "settings.openDataDir": "打开数据目录",
   "settings.helperStatusUnconfirmed":
     "辅助组件状态未确认，未更改 TUN 设置；请稍后重试",
@@ -369,7 +370,8 @@ const zh = {
   "error.proxy.restore_failed": "系统代理恢复失败",
   "error.proxy.backup_corrupt": "系统代理备份已损坏",
   "error.settings.reset": "设置文件无效，已恢复为默认值",
-  "error.logs.oversized": "日志文件超过 20 MiB，请在日志页清空",
+  "error.logs.oversized":
+    "日志超过 20 MiB 且自动裁剪失败。若核心日志由特权辅助组件写入，请在设置中重新安装辅助组件后再试",
   "error.sub.fetch_failed": "订阅下载失败",
   "error.sub.unknown_format": "无法识别的订阅格式",
   "error.sub.parse_failed": "订阅解析失败",
@@ -605,7 +607,6 @@ const en: Record<MessageKey, string> = {
 
   // --- logs page ---
   "logs.empty": "(empty)",
-  "logs.clear": "Clear logs",
 
   // --- settings page ---
   "settings.appearance": "Appearance",
@@ -652,9 +653,11 @@ const en: Record<MessageKey, string> = {
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.autoDefaultRulesDesc":
     "When a subscription carries no rules (e.g. share-link subscriptions), built-in split routing is attached automatically: private IPs / China IPs / China domains go direct and the rest goes through the selected node, with matching China / remote DNS split",
-  "settings.coreLogLevel": "Verbose core logs (info)",
-  "settings.coreLogLevelDesc":
-    "Default is warn to limit disk growth; turn on info for debug sessions. Takes effect after the next config apply",
+  "settings.data": "Data",
+  "settings.dataDesc": "Log display and local files",
+  "settings.logDebug": "Debug logs",
+  "settings.logDebugDesc":
+    "The Logs page shows connections and important events by default; turn on to show every log line",
   "settings.openDataDir": "Open Data Directory",
   "settings.helperStatusUnconfirmed":
     "Helper status unconfirmed; TUN settings unchanged. Try again later",
@@ -757,7 +760,8 @@ const en: Record<MessageKey, string> = {
   "error.proxy.restore_failed": "Failed to restore system proxy",
   "error.proxy.backup_corrupt": "System proxy backup is corrupt",
   "error.settings.reset": "Settings file was invalid and was reset to defaults",
-  "error.logs.oversized": "Log files exceeded 20 MiB; clear them on the Logs page",
+  "error.logs.oversized":
+    "Log files exceeded 20 MiB and auto-trim failed. If TUN uses the privileged helper, reinstall it from Settings and try again",
   "error.sub.fetch_failed": "Failed to download the subscription",
   "error.sub.unknown_format": "Unrecognized subscription format",
   "error.sub.parse_failed": "Failed to parse the subscription",

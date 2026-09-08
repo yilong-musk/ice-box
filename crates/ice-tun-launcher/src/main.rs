@@ -289,14 +289,14 @@ fn run() -> i32 {
 }
 
 #[cfg(target_os = "windows")]
-fn rotate_core_log(path: &std::path::Path) {
+fn cap_core_log(path: &std::path::Path) {
     const MAX_BYTES: u64 = 20 * 1024 * 1024;
     const KEEP: u32 = 3;
-    let Ok(meta) = std::fs::metadata(path) else {
-        return;
-    };
-    if meta.len() <= MAX_BYTES {
-        return;
+    let oversized = std::fs::metadata(path)
+        .map(|m| m.len() > MAX_BYTES)
+        .unwrap_or(false);
+    if oversized {
+        let _ = retain_log_tail(path, MAX_BYTES);
     }
     let rotated = |n: u32| {
         let mut name = path.file_name().unwrap_or_default().to_os_string();
@@ -306,16 +306,57 @@ fn rotate_core_log(path: &std::path::Path) {
             _ => std::path::PathBuf::from(name),
         }
     };
-    let _ = std::fs::remove_file(rotated(KEEP));
-    for i in (1..KEEP).rev() {
-        let from = rotated(i);
-        if from.exists() {
-            let _ = std::fs::rename(&from, rotated(i + 1));
+    for i in 1..=KEEP {
+        let _ = std::fs::remove_file(rotated(i));
+    }
+}
+
+/// Keep in sync with `ice_core::trim_log_file`.
+#[cfg(target_os = "windows")]
+fn retain_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let len = file.metadata()?.len();
+    let start = if len <= 1 {
+        0
+    } else {
+        let drop = (max_bytes / 4).max(1);
+        let over = len.saturating_sub(max_bytes);
+        drop.max(over).min(len - 1)
+    };
+    let kept = if start == 0 || len <= 1 {
+        file.seek(SeekFrom::Start(0))?;
+        let mut all = Vec::new();
+        file.read_to_end(&mut all)?;
+        all
+    } else {
+        let at_line_start = {
+            file.seek(SeekFrom::Start(start - 1))?;
+            let mut prev = [0u8; 1];
+            file.read_exact(&mut prev)?;
+            prev[0] == b'\n'
+        };
+        file.seek(SeekFrom::Start(start))?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)?;
+        if !at_line_start {
+            if let Some(i) = tail.iter().position(|&b| b == b'\n') {
+                if i + 1 < tail.len() {
+                    tail.drain(..=i);
+                }
+            }
         }
-    }
-    if path.exists() {
-        let _ = std::fs::rename(path, rotated(1));
-    }
+        tail
+    };
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&kept)?;
+    file.flush()?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -352,7 +393,7 @@ fn run_core(args: Args) -> i32 {
             return 2;
         }
     }
-    rotate_core_log(&args.log);
+    cap_core_log(&args.log);
 
     use std::os::windows::process::CommandExt;
 

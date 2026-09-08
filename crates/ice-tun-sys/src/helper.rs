@@ -189,6 +189,16 @@ impl HelperCoreCoordinator {
             timeout,
         )
     }
+
+    /// Truncate the helper's fixed core log in place. The daemon uses its
+    /// installed path; the client never supplies one.
+    pub fn truncate_core_log(&self) -> Result<(), TunError> {
+        let response = self.request(HelperCommand::TruncateCoreLog)?;
+        match response.into_error() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
 }
 
 impl CoreCoordinator for HelperCoreCoordinator {

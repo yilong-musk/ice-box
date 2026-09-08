@@ -61,7 +61,7 @@ const settings: AppSettings = {
   auto_default_rules: true,
   language: "en",
   check_app_updates: true,
-  core_log_level: "warn",
+  log_debug: false,
   tun: {
     enabled: false,
     interface_name: null,
@@ -259,8 +259,19 @@ export const api = {
   async uninstallHelper(): Promise<void> { await delay(); },
   async ensureTunElevation(): Promise<void> { await delay(); },
   async removeTunElevation(): Promise<void> { await delay(); },
-  async getLogView(): Promise<string[]> { await delay(); return ["12:04:31 route match api.github.com → Tokyo / edge-01", "12:04:28 health check Tokyo / edge-01 responded in 42 ms", "12:04:16 subscription Profile refreshed · 18 nodes", "12:03:52 dns Using fallback resolver 1.1.1.1"]; },
-  async clearLogs(): Promise<void> { await delay(); },
+  async getLogView(_n: number): Promise<string[]> {
+    await delay();
+    const user = [
+      "INFO 09-08 22:04:31 api.github.com:443 → Tokyo / edge-01",
+      "INFO 09-08 22:04:16 ice_core: subscription Profile refreshed",
+    ];
+    if (!settings.log_debug) return user;
+    return [
+      ...user,
+      "DEBUG 09-08 22:04:30 ice_core: probe loop tick",
+      "INFO 09-08 22:04:29 [TCP] dial api.github.com:443",
+    ];
+  },
   async getRuntimeConfig(): Promise<string> { return "{\n  \"route\": { \"final\": \"Tokyo / edge-01\" }\n}"; },
   async revealDataDir(): Promise<void> {},
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },

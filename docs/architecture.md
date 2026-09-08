@@ -721,7 +721,7 @@ Conventions:
 | `stop_system_proxy` | §8.1b disable — disable whichever capture backend is active (restore OS proxy or release TUN); keep core Running |
 | `recover_tun` | plan §4.3 — on-demand TUN recovery retry (journal recovery driver; never enables capture); returns an optional warning when cleanup is still uncertain |
 | `stop` | §8.2 — app quit: disable TUN capture first, restore OS proxy if applied, then kill core |
-| `get_log_view` | `{ n: number }` → text lines: merged app+core logs, warnings/errors and key events only (display filter, log files untouched) |
+| `get_log_view` | `{ n: number }` → text lines: merged app+core logs. Default is connections and important events; Settings `log_debug` shows every parsed line (display filter only, log files untouched) |
 | `get_runtime_config` | current `config.json` text (read-only) |
 | `reveal_data_dir` | open the data directory (opener plugin) |
 
@@ -799,10 +799,11 @@ v1 minimal UI set:
 
 ## 16. Logging and observability
 
-- App: `tracing` → `ice-box.log` (`ice_box_lib::runtime::init_logging`; size-rotated, keep 2 generations). Pid-file and size rotation helpers live in `ice-core`.
-- Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path), where the elevated core's output goes to the helper's fixed root-owned `/var/log/ice-box-core.log`; the log view merges that file in as an extra core source (best-effort, latched on the first helper-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner)
+- App: `tracing` → `ice-box.log` (`ice_box_lib::runtime::init_logging`; cap at 20 MiB by dropping the oldest 5 MiB in place, same inode). Pid-file and size-cap helpers live in `ice-core`.
+- Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path), where the elevated core's output goes to the helper's fixed root-owned `/var/log/ice-box-core.log`; the log view merges that file in as an extra core source (best-effort, latched on the first helper-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner). Generated `log.level` is `info` so per-connection routes are recorded; the 20 MiB in-place cap bounds disk.
+- Size cap: one file per source, 20 MiB. Overflow drops the oldest 5 MiB (line-aligned) on the same inode so a long-running core (`O_APPEND`) stays inside the cap. Spawn and the 2 s watchdog apply that cap; leftover `*.log.N` files from the old rename-rotation scheme are deleted.
 - UI `get_log_view`: merges the log files and **sorts by time** (same-timestamp lines keep file read order; display lines use a compact timestamp and omit source tags)
-- Display filter (UI only, never touches the log files): keep WARN/ERROR/FATAL; keep all app INFO (deliberate key events by developers); core INFO only keeps lifecycle keywords (started / stopped / ready / reload / restart), per-connection traffic noise is dropped; DEBUG/TRACE never shown
+- Display filter (UI only, never touches the log files): default view keeps WARN/ERROR/FATAL; all app INFO; core lifecycle INFO (started / stopped / ready / reload / restart); and per-connection outbound routing (`outbound connection to`). Other core INFO (dial chatter), DEBUG/TRACE, and `hijack-dns` unpack ERROR lines stay hidden. Settings `log_debug` skips that filter and shows every parsed line.
 - Read a tail window instead of the whole file into memory: at most 3000 lines scanned per source, display cap n ≤ 500
 - Sensitive data: subscription URLs may be logged; **node UUIDs / passwords must not be written to info logs** (debug requires an explicit switch, off by default)
 

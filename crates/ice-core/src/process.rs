@@ -98,7 +98,7 @@ impl ProcessSpawner for CommandSpawner {
                 CoreError::SpawnFailed(format!("create log dir {}: {e}", parent.display()))
             })?;
         }
-        let _ = crate::rotate_sized_log(log_file, crate::CORE_LOG_MAX_BYTES, crate::CORE_LOG_KEEP);
+        let _ = crate::cap_log_file(log_file, crate::CORE_LOG_MAX_BYTES, crate::CORE_LOG_KEEP);
 
         let log = OpenOptions::new()
             .create(true)

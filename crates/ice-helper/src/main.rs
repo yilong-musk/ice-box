@@ -4,7 +4,8 @@
 //!
 //! Runs as root under launchd. Binds a Unix socket, authenticates each peer
 //! by socket credential + per-installation token, and serves the narrow
-//! Start / Stop / Status contract. The core binary and data dir come from
+//! Start / Stop / Status / SetDns / TruncateCoreLog contract. The core binary
+//! and data dir come from
 //! the environment the installer records in the launchd plist; the client
 //! can never supply them.
 //!

@@ -74,7 +74,7 @@ fn direct_only_config_has_builtin_outbounds_and_direct_final() {
         "mode switching stays wired; every mode routes direct"
     );
     assert_eq!(cfg["experimental"]["clash_api"]["default_mode"], "Rule");
-    assert_eq!(cfg["log"]["level"], "warn");
+    assert_eq!(cfg["log"]["level"], "info");
     validate_config(&cfg).expect("generated config must pass CFG-1");
 }
 

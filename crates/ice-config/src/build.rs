@@ -16,6 +16,10 @@ use crate::selections::apply_group_selections;
 use crate::settings::{clash_mode_name, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
 
+/// Connection routes are INFO. The Logs page filters to those plus
+/// important events unless debug mode is on; the 20 MiB cap bounds disk.
+const GENERATED_LOG_LEVEL: &str = "info";
+
 pub fn build_direct_only_config(
     template: &LocalTemplate,
     capture_intent: CaptureIntent,
@@ -63,7 +67,7 @@ pub fn build_direct_only_config(
     }
 
     let config = json!({
-        "log": { "level": template.log_level.as_str(), "timestamp": true },
+        "log": { "level": GENERATED_LOG_LEVEL, "timestamp": true },
         "dns": minimal_dns_block(platform),
         "inbounds": inbounds,
         "outbounds": outbounds,
@@ -444,7 +448,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     });
 
     let config = RuntimeConfig {
-        log: json!({ "level": input.template.log_level.as_str(), "timestamp": true }),
+        log: json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true }),
         dns,
         inbounds,
         outbounds,

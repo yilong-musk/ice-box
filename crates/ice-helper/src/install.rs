@@ -287,12 +287,21 @@ pub fn install(data_dir: &Path, core_src: &Path, allowed_uid: u32) -> Result<(),
     chown_root(run_dir)?;
     set_mode(run_dir, 0o700)?;
 
-    // 4. Root-owned fixed log files (stale symlink can never be appended to).
-    for log in [CORE_LOG_DEST, HELPER_LOG_DEST] {
-        let _ = fs::remove_file(log);
-        fs::write(log, "").map_err(|e| format!("create log {log}: {e}"))?;
-        chown_root(Path::new(log))?;
-        set_mode(Path::new(log), 0o644)?;
+    // 4. Root-owned helper log; core log is owned by the installing uid so
+    // the unelevated app can truncate it in place (CORE-7) without replacing
+    // the path (the parent directory stays root-owned).
+    {
+        let helper_log = Path::new(HELPER_LOG_DEST);
+        let _ = fs::remove_file(helper_log);
+        fs::write(helper_log, "").map_err(|e| format!("create log {}: {e}", HELPER_LOG_DEST))?;
+        chown_root(helper_log)?;
+        set_mode(helper_log, 0o644)?;
+
+        let core_log = Path::new(CORE_LOG_DEST);
+        let _ = fs::remove_file(core_log);
+        fs::write(core_log, "").map_err(|e| format!("create log {}: {e}", CORE_LOG_DEST))?;
+        chown_uid(core_log, allowed_uid)?;
+        set_mode(core_log, 0o644)?;
     }
 
     // 5. Plist with pinned env, then launchctl bootstrap.

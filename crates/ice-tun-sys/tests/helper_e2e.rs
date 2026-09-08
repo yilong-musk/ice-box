@@ -294,5 +294,32 @@ fn helper_rejects_tor_outbound_config() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn truncate_core_log_empties_helper_log() {
+    let dir = temp_dir("tl");
+    let socket = dir.join("helper.sock");
+    let core_bin = fixture_core_bin(&dir);
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
+    std::fs::write(&config.core_log, vec![b'x'; 128]).unwrap();
+    std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+    let server = spawn_server(config, &socket);
+    for _ in 0..50 {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let coordinator = HelperCoreCoordinator::new(socket.clone(), "e2e-token".into(), dir.clone());
+    coordinator
+        .truncate_core_log()
+        .expect("truncate via helper");
+    assert_eq!(std::fs::read(dir.join("core.log")).unwrap(), b"");
+    assert!(!dir.join("core.log.1").exists());
+
+    stop_server(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[allow(dead_code)]
 fn _unused(_: &dyn PeerAuth) {}
