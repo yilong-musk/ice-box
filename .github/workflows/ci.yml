@@ -29,7 +29,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/website/package-lock.json
 
       - name: Install system dependencies
         run: |
@@ -40,6 +42,10 @@ jobs:
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
+
+      - name: Install website deps
+        run: npm ci
+        working-directory: apps/website
 
       - name: Workspace gate (G9.10)
         run: bash scripts/gate.sh
@@ -63,11 +69,17 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/website/package-lock.json
 
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
+
+      - name: Install website deps
+        run: npm ci
+        working-directory: apps/website
 
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh
@@ -122,11 +134,17 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/website/package-lock.json
 
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
+
+      - name: Install website deps
+        run: npm ci
+        working-directory: apps/website
 
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh win

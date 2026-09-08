@@ -159,9 +159,10 @@ verify SHA-256 against `third_party/sing-geoip/CHECKSUMS.sha256` (CI-8);
 the committed checksum file is the trust root, as with
 `third_party/sing-box/CHECKSUMS.sha256`.
 
-CI `scripts/gate.sh` runs `cargo test --workspace` (lib + integration +
-doc). The Windows job also runs `cargo test -p ice-proxy-sys` (macOS has
-the same named step). Ignored live tests and how to run them are listed in
+CI `scripts/gate.sh` runs `cargo test --workspace --exclude ice-box` (lib
++ integration + doc) and `cargo test -p ice-box --lib`. The Windows job
+also runs `cargo test -p ice-proxy-sys` (macOS has the same named step).
+Ignored live tests and how to run them are listed in
 [`testing.md`](testing.md).
 
 ## Known issues and workarounds

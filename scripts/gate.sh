@@ -13,11 +13,18 @@ echo "== cargo clippy =="
 cargo clippy --workspace --all-targets -- -D warnings
 
 echo "== cargo test (workspace: lib + integration + doc) =="
-cargo test --workspace
+# ice-box is a Tauri cdylib. `cargo test -p ice-box` without `--lib` also
+# builds that cdylib, and on Windows the lib test harness then fails at
+# process load with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). Other crates
+# still run lib + integration + doc tests.
+cargo test --workspace --exclude ice-box
+echo "== cargo test (ice-box lib) =="
+cargo test -p ice-box --lib
 
 echo "== tsc --noEmit =="
-(cd apps/desktop && npx tsc --noEmit)
-(cd apps/website && npx tsc --noEmit)
+# `npx tsc` resolves the stub npm package `tsc`, not `typescript`.
+(cd apps/desktop && npm run typecheck)
+(cd apps/website && npm run typecheck)
 cd apps/desktop
 
 echo "== vitest =="

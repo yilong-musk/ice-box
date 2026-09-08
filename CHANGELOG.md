@@ -15,11 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README redesigned around the product (hero, install, quick start, TUN) with a
   Simplified Chinese edition in `README.zh-CN.md`; the website tagline is now
   "Proxy, kept simple."
-- CI `scripts/gate.sh` runs `cargo test --workspace` (lib + integration +
-  doc tests), so the TUN integration suite in `crates/ice-tun-sys/tests/`
-  actually executes. The local pre-commit gate keeps `--lib` and adds
-  `cargo test -p ice-tun-sys --tests`. The Windows CI job runs
-  `ice-proxy-sys` tests.
+- CI `scripts/gate.sh` runs `cargo test --workspace --exclude ice-box`
+  (lib + integration + doc tests), so the TUN integration suite in
+  `crates/ice-tun-sys/tests/` actually executes, then
+  `cargo test -p ice-box --lib` for the Tauri desktop crate. The local
+  pre-commit gate keeps `--lib` and adds `cargo test -p ice-tun-sys
+  --tests`. The Windows CI job runs `ice-proxy-sys` tests.
 - Config generation no longer uses `cfg(target_os)` inside `ice-config` /
   `ice-subscription`: callers pass `HostPlatform` (`crates/ice-types`).
   `ice-engine` maps the compile-time target and is used by the desktop
@@ -37,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   day-of-week flag, not a description).
 - Windows TUN elevation no longer flashes a console window (UAC launches
   the GUI-subsystem `ice-tun-launcher` instead of `cmd.exe`).
+- CI typecheck uses `npm run typecheck` (not `npx tsc`, which installs the
+  stub `tsc` package) and installs `apps/website` dependencies so the Live
+  Demo typecheck actually runs.
 - Windows NSIS actually bundles `libcronet.dll` next to `sing-box.exe`
   (NaiveProxy). Earlier notes claimed it shipped, but it was only copied
   into `resources/` and omitted from `bundle.resources`.

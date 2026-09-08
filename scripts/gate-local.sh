@@ -18,9 +18,10 @@ echo "== cargo clippy =="
 cargo clippy --workspace --all-targets --exclude ice-box -- -D warnings
 
 echo "== cargo test (lib) =="
-# Fast path: unit tests only. CI `scripts/gate.sh` runs the full workspace
-# (lib + integration + doc). ice-box is excluded here because it needs
-# GTK/webkit, which many local machines lack.
+# Fast path: unit tests only. CI `scripts/gate.sh` runs lib + integration +
+# doc tests for every crate except ice-box, then `cargo test -p ice-box --lib`.
+# ice-box is excluded here because it needs GTK/webkit, which many local
+# machines lack.
 cargo test --workspace --lib --exclude ice-box
 
 echo "== cargo test (ice-tun-sys integration) =="
@@ -29,8 +30,9 @@ echo "== cargo test (ice-tun-sys integration) =="
 cargo test -p ice-tun-sys --tests
 
 echo "== tsc --noEmit =="
-(cd apps/desktop && npx tsc --noEmit)
-(cd apps/website && npx tsc --noEmit)
+# `npx tsc` resolves the stub npm package `tsc`, not `typescript`.
+(cd apps/desktop && npm run typecheck)
+(cd apps/website && npm run typecheck)
 
 echo "== vitest =="
 (cd apps/desktop && npm test)
