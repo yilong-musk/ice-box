@@ -41,6 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI typecheck uses `npm run typecheck` (not `npx tsc`, which installs the
   stub `tsc` package) and installs `apps/website` dependencies so the Live
   Demo typecheck actually runs.
+- Windows `cargo test -p ice-box --lib` embeds Common Controls v6 on the
+  test harness so it no longer dies at process load
+  (`STATUS_ENTRYPOINT_NOT_FOUND`); Tauri only put that manifest on the app
+  exe.
 - Windows NSIS actually bundles `libcronet.dll` next to `sing-box.exe`
   (NaiveProxy). Earlier notes claimed it shipped, but it was only copied
   into `resources/` and omitted from `bundle.resources`.

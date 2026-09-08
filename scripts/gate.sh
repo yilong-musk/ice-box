@@ -13,10 +13,9 @@ echo "== cargo clippy =="
 cargo clippy --workspace --all-targets -- -D warnings
 
 echo "== cargo test (workspace: lib + integration + doc) =="
-# ice-box is a Tauri cdylib. `cargo test -p ice-box` without `--lib` also
-# builds that cdylib, and on Windows the lib test harness then fails at
-# process load with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). Other crates
-# still run lib + integration + doc tests.
+# ice-box is the Tauri shell (cdylib, no crate integration tests). Test it
+# with `--lib`; other crates still run lib + integration + doc tests.
+# Windows lib-harness load (ComCtl32 v6) is handled in desktop build.rs.
 cargo test --workspace --exclude ice-box
 echo "== cargo test (ice-box lib) =="
 cargo test -p ice-box --lib

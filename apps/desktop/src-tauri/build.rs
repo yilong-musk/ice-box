@@ -212,6 +212,28 @@ fn copy_libcronet_resource(manifest_dir: &Path) {
     }
 }
 
+/// Embed Common Controls v6 so Windows *test* binaries can load.
+///
+/// `tauri_build` writes the v6 manifest only onto the app bin (`rustc-link-arg-bins`
+/// via winres). The lib unit-test harness is not a bin, so it binds System32
+/// ComCtl32 5.82, which lacks `TaskDialogIndirect` and dies at process load with
+/// `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139). `rustc-link-arg-tests` only covers
+/// `[[test]]` targets, so this uses `rustc-link-arg` (duplicate on the app bin is
+/// merged with Tauri's manifest).
+fn embed_comctl32_v6_for_windows_tests() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        return;
+    }
+    println!(
+        "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' \
+         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    );
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     copy_singbox_resource(&manifest_dir);
@@ -219,5 +241,6 @@ fn main() {
     copy_helper_resource(&manifest_dir);
     copy_tun_launcher_resource(&manifest_dir);
     copy_libcronet_resource(&manifest_dir);
+    embed_comctl32_v6_for_windows_tests();
     tauri_build::build()
 }

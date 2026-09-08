@@ -11,16 +11,17 @@ Companion: `scripts/gate.sh` (CI), `scripts/gate-local.sh` (pre-commit),
 | Command | Scope |
 |---|---|
 | `scripts/gate-local.sh` | `cargo fmt --check`, clippy (excluding `ice-box`), `cargo test --workspace --lib --exclude ice-box`, `cargo test -p ice-tun-sys --tests`, desktop + website `tsc`, vitest, updater-fixture script, Live Demo screenshot |
-| `scripts/gate.sh` (CI) | The above plus clippy for **all** crates, `cargo test --workspace --exclude ice-box` (lib + integration + doc), `cargo test -p ice-box --lib` (Tauri cdylib cannot use the full test target graph on Windows), Vite production build |
+| `scripts/gate.sh` (CI) | The above plus clippy for **all** crates, `cargo test --workspace --exclude ice-box` (lib + integration + doc), `cargo test -p ice-box --lib`, Vite production build |
 | CI macOS / Windows extra steps | `cargo test -p ice-box --lib 'g9_'` (headless acceptance), `cargo test -p ice-proxy-sys` |
 
 `cargo test --lib` never compiles or runs `crates/*/tests/*.rs`. Those
 integration binaries (TUN recovery, macOS/Windows backends, helper e2e)
 are the riskiest tests in the tree; CI now executes them via
 `cargo test --workspace --exclude ice-box`. The desktop crate is tested
-with `cargo test -p ice-box --lib` because a Tauri `cdylib` test harness
-fails to load on Windows (`STATUS_ENTRYPOINT_NOT_FOUND`) when Cargo also
-builds the cdylib target.
+with `cargo test -p ice-box --lib`. On Windows that harness needs the
+Common Controls v6 manifest (`apps/desktop/src-tauri/build.rs`); Tauri
+only embeds it on the app exe, and without it the test process dies at
+load (`STATUS_ENTRYPOINT_NOT_FOUND`).
 
 ## Ignored tests (need hardware, privileges, or the network)
 
