@@ -172,11 +172,52 @@ fn copy_tun_launcher_resource(manifest_dir: &Path) {
     }
 }
 
+/// Ensure `resources/libcronet.dll` exists on Windows so `tauri_build` accepts
+/// the bundle resource during cargo check / clippy / test. Copy from the
+/// fetched sing-box archive when present; otherwise touch a marker. The real
+/// DLL is copied by `prepare-singbox-resource.ps1` (beforeBuildCommand).
+fn copy_libcronet_resource(manifest_dir: &Path) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let repo_root = manifest_dir
+        .join("../../..")
+        .canonicalize()
+        .unwrap_or_else(|_| manifest_dir.join("../../.."));
+    let src = repo_root
+        .join("third_party/sing-box")
+        .join(target_dir_name())
+        .join("libcronet.dll");
+    let dest = manifest_dir.join("resources").join("libcronet.dll");
+    println!("cargo:rerun-if-changed={}", src.display());
+    if src.is_file() {
+        if let Err(err) = copy_if_stale(&src, &dest) {
+            println!(
+                "cargo:warning=copy libcronet {} → {}: {err}",
+                src.display(),
+                dest.display()
+            );
+        }
+        return;
+    }
+    if dest.is_file() {
+        return;
+    }
+    if let Err(err) = fs::create_dir_all(dest.parent().expect("parent")) {
+        println!("cargo:warning=create resources dir: {err}");
+        return;
+    }
+    if let Err(err) = fs::write(&dest, b"") {
+        println!("cargo:warning=create libcronet resource marker: {err}");
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     copy_singbox_resource(&manifest_dir);
     copy_geoip_resources(&manifest_dir);
     copy_helper_resource(&manifest_dir);
     copy_tun_launcher_resource(&manifest_dir);
+    copy_libcronet_resource(&manifest_dir);
     tauri_build::build()
 }

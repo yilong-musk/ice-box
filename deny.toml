@@ -11,7 +11,15 @@ feature-depth = 1
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Tauri 2 still pulls GTK3 (Linux webview) and urlpattern/unic-* transitives
+# that RustSec marks unmaintained. Fail only if a workspace crate depends on
+# those crates directly; yanked and vulnerability advisories still deny.
+unmaintained = "workspace"
+ignore = [
+    # glib 0.18 is pinned by gtk 0.18 / webkit2gtk 2.0 (Tauri 2 Linux). gtk3-rs
+    # is unmaintained; the 0.20 fix requires Tauri's GTK4 migration.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 unsoundness is pinned by Tauri 2 GTK3; no upgrade until GTK4" },
+]
 
 [licenses]
 version = 2

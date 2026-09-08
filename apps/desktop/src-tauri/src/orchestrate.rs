@@ -114,15 +114,13 @@ pub fn build_core_paths(
 fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        return vec![std::path::PathBuf::from(
+        vec![std::path::PathBuf::from(
             ice_tun_sys::install_paths::CORE_BIN_DEST,
-        )];
+        )]
     }
     #[cfg(windows)]
     {
-        return vec![
-            ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_data_dir()).join("sing-box.exe"),
-        ];
+        vec![ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_data_dir()).join("sing-box.exe")]
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     Vec::new()

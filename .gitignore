@@ -41,4 +41,5 @@ apps/desktop/src-tauri/resources/sing-box.exe
 apps/desktop/src-tauri/resources/geoip/
 apps/desktop/src-tauri/resources/ice-helper
 apps/desktop/src-tauri/resources/ice-tun-launcher.exe
+apps/desktop/src-tauri/resources/libcronet.dll
 !apps/desktop/src-tauri/resources/.gitkeep

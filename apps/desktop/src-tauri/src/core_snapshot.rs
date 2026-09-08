@@ -16,19 +16,10 @@ pub const WINDOW_HIDDEN: &str = "window://hidden";
 pub const WINDOW_SHOWN: &str = "window://shown";
 pub const TRAFFIC_SAMPLE: &str = "traffic://sample";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct CoreSnapshot {
     pub state: CoreState,
     pub generation: u64,
-}
-
-impl Default for CoreSnapshot {
-    fn default() -> Self {
-        Self {
-            state: CoreState::default(),
-            generation: 0,
-        }
-    }
 }
 
 pub struct CoreSnapshotHub {
