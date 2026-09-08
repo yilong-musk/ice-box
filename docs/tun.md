@@ -188,10 +188,9 @@ macOS emission is unchanged. Windows `ice-config` / `ice-subscription` emit:
 {
   "route": {
     "rules": [
-      { "port": [53], "action": "hijack-dns" },
+      { "ip_version": 4, "port": [53], "action": "hijack-dns" },
       { "process_name": ["ice-box", "sing-box"], "outbound": "direct" },
       { "action": "sniff" },
-      { "protocol": "dns", "action": "hijack-dns" },
       { "ip_cidr": ["<tun-cidr>", "<tun-cidr-v6>"], "action": "reject", "method": "drop" },
       { "network": "udp", "port": [443], "action": "reject" },
       { "ip_is_private": true, "outbound": "direct" },
@@ -216,7 +215,8 @@ Requirements:
 
 | Lock | Why |
 |------|-----|
-| Port-53 `hijack-dns` first | `protocol: dns` does not match in time on Windows (#3878); queries otherwise hit peer-reject or the #4455 self-loop |
+| IPv4 port-53 `hijack-dns` first | `protocol: dns` does not match in time on Windows (#3878); queries otherwise hit peer-reject or the #4455 self-loop. IPv6 `:53` is not hijacked (#4178); the peer-reject rule drops it |
+| No post-sniff `protocol: dns` hijack | sniff false-positives and UDP source-port reuse (#4199) would feed STUN / mDNS / LLMNR into the DNS engine |
 | TCP DNS only (DoT/DoH) | the core's UDP outbound is captured by its own TUN (weak-host routing; `auto_detect_interface` binds TCP only) |
 | Resolution anchor is an IP-hosted TCP server | a domain-hosted DoH `final` is a startup FATAL (`circular server dependency`) |
 | No `local` DNS server | adapter DNS is the TUN peer; `local` re-enters the TUN |

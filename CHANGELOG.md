@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows TUN DNS hijack no longer feeds non-DNS packets into the resolver:
+  IPv4 port 53 is still hijacked first (#3878), but the post-sniff
+  `protocol: dns` rule is gone (#4199) and IPv6 `:53` is dropped instead of
+  unpacked (#4178). The in-app log view hides leftover `unpack request`
+  ERROR lines (raw `sing-box.log` is unchanged).
 - Windows TUN no longer prompts UAC on every enable: the `ice-box-tun`
   scheduled-task pin is stored via UTF-16 XML import (`schtasks /D` is a
   day-of-week flag, not a description).

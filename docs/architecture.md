@@ -1143,8 +1143,9 @@ Exact inbound JSON, helper IPC, Windows emission, and known limits: `docs/tun.md
    requires a graceful core stop: stranded `strict_route` WFP filters black-hole host TCP.
 8. **Windows:** WinTUN is embedded in `sing-box.exe`. Elevation is the scheduled task
    `ice-box-tun` (`ice-tun-launcher.exe`, one UAC to create). Emission is Windows-only
-   (port-53 hijack first, TCP DNS, no fake-ip, no `local` server, UDP 443 reject).
-   Capture is IPv4 TCP only — see `docs/tun.md`.
+   (IPv4 port-53 hijack first, TCP DNS, no fake-ip, no `local` server, no
+   post-sniff `protocol: dns` hijack, UDP 443 reject). Capture is IPv4 TCP
+   only — see `docs/tun.md`.
 
 ### 24.6 Reserved bypass policy (first release, fixed)
 

@@ -5,9 +5,11 @@
 //! Display-only concern: merges the app log (ice-box.log, `tracing` format) and the
 //! core log (sing-box.log, sing-box format) into one time-ordered view, and keeps only
 //! lines with user value (WARN/ERROR/FATAL plus key lifecycle INFO and per-connection
-//! outbound routing INFO). Connection lines render as `LEVEL TIME TARGET → NODE`.
-//! Raw log files are never modified — full recording (info/debug/trace) is untouched
-//! for troubleshooting; the filter applies only at read/display time (architecture §16).
+//! outbound routing INFO). Core `hijack-dns` unpack failures are hidden (they are
+//! session noise, not capture failure). Connection lines render as
+//! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — full recording
+//! (info/debug/trace) is untouched for troubleshooting; the filter applies only at
+//! read/display time (architecture §16).
 
 use std::path::Path;
 
@@ -142,6 +144,9 @@ fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
 /// Keep only lines with user value; DEBUG/TRACE and core connection noise are hidden.
 /// `text` is the original file line (used for INFO keyword matching).
 fn display_worthy(source: Source, level: Level, text: &str) -> bool {
+    if source == Source::Core && core_dns_unpack_noise(text) {
+        return false;
+    }
     match level {
         Level::Warn | Level::Error | Level::Fatal => true,
         Level::Info => match source {
@@ -181,6 +186,13 @@ fn collect(
         }
     }
     Ok(())
+}
+
+/// sing-box logs `hijack-dns` payloads that fail to parse as DNS (STUN/mDNS
+/// glued to a UDP session, truncated IPv6 `:53`, etc.) as ERROR. They do not
+/// mean capture is down; hide them from the merged view only.
+fn core_dns_unpack_noise(text: &str) -> bool {
+    text.contains("process DNS packet: unpack request")
 }
 
 const CONNECTION_MARK: &str = ": outbound connection to ";
@@ -447,6 +459,21 @@ mod tests {
         ));
         assert!(!display_worthy(Source::App, Level::Debug, "noise"));
         assert!(!display_worthy(Source::Core, Level::Trace, "noise"));
+        assert!(!display_worthy(
+            Source::Core,
+            Level::Error,
+            "router: process DNS packet: unpack request: bad question name: dns: bad rdata"
+        ));
+        assert!(!display_worthy(
+            Source::Core,
+            Level::Error,
+            "router: process DNS packet: unpack request: bad question name: dns: buffer size too small"
+        ));
+        assert!(display_worthy(
+            Source::Core,
+            Level::Error,
+            "dns: exchange failed for example.com. IN A: read response: EOF"
+        ));
     }
 
     #[test]

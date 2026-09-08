@@ -495,6 +495,15 @@ pub fn tun_dns_hijack_rule() -> Value {
     json!({ "port": [53], "action": "hijack-dns" })
 }
 
+/// Windows TUN hijack: IPv4 destination port 53 only.
+///
+/// IPv6 capture is unusable on this pin (#4178); hijacking IPv6 `:53` feeds
+/// broken packets into the DNS engine (`bad rdata` / `buffer size too small`).
+/// Those packets hit the peer-reject rule instead.
+fn windows_tun_dns_hijack_rule() -> Value {
+    json!({ "ip_version": 4, "port": [53], "action": "hijack-dns" })
+}
+
 /// Reserved bypass route rules for a `Tun` config (locked in architecture
 /// §24.5.6 and `docs/tun.md`). Order is fixed: control path and local traffic
 /// are never captured or sniffed.
@@ -506,13 +515,14 @@ pub fn tun_dns_hijack_rule() -> Value {
 /// receive fake-ip answers; client DNS queries (browser etc.) fall through to
 /// the hijack rule and are answered by the engine.
 ///
-/// Windows shape (locked in `docs/tun.md`): the
-/// `{"port": [53]}` hijack must be the **first** rule — the
-/// `protocol: dns` match does not fire in time on Windows (1.13 regression,
-/// #3878) — followed by the process bypass, sniff, a second `protocol: dns`
-/// hijack, and the peer-reject rule (the TUN sub-ranges, dropped before
+/// Windows shape (locked in `docs/tun.md`): IPv4 port-53 `hijack-dns` must
+/// be the **first** rule — `{ "protocol": "dns" }` does not fire in time on
+/// Windows (1.13 regression, #3878) — followed by the process bypass, sniff,
+/// and the peer-reject rule (the TUN sub-ranges, dropped before
 /// `ip_is_private` can route the TUN peer into `direct` and re-enter the
-/// core; #4455 self-loop).
+/// core; #4455 self-loop). A second `{ "protocol": "dns" }` hijack after
+/// sniff is not emitted: sniff false-positives plus UDP source-port reuse
+/// (#4199) would send STUN / mDNS / LLMNR into the DNS engine.
 ///
 /// UDP user traffic (QUIC/HTTP3) is broken under the Windows shape — the
 /// core's UDP outbound is captured by its own TUN (`docs/tun.md`). UDP 443 is
@@ -530,10 +540,9 @@ pub fn tun_reserved_rules(tun: &TunSettings, platform: HostPlatform) -> Vec<Valu
 /// on any host.
 fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
     if windows {
-        let mut rules = vec![tun_dns_hijack_rule()];
+        let mut rules = vec![windows_tun_dns_hijack_rule()];
         rules.push(json!({ "process_name": ["ice-box", "sing-box"], "outbound": "direct" }));
         rules.push(json!({ "action": "sniff" }));
-        rules.push(json!({ "protocol": "dns", "action": "hijack-dns" }));
         let mut tun_cidrs = Vec::new();
         if let Some(cidr) = tun_network_cidr(&tun.ipv4_address) {
             tun_cidrs.push(json!(cidr));

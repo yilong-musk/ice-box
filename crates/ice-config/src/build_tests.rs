@@ -1182,28 +1182,34 @@ fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
 
 #[test]
 fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
-    // The locked Windows shape (`docs/tun.md`): port-53 hijack first
-    // (the `protocol: dns` match does not fire in time on Windows),
-    // process bypass, sniff, protocol-dns hijack, then the TUN
-    // sub-ranges rejected BEFORE `ip_is_private` can loop them back
-    // into the core (#4455). UDP 443 (QUIC/HTTP3) is rejected with the
-    // default ICMP method because UDP user traffic is broken under the
-    // Windows shape; a silent `block`/`drop` black-holes HTTP/3 and
-    // Chrome/Edge never fall back to the proven IPv4 TCP path.
+    // The locked Windows shape (`docs/tun.md`): IPv4 port-53 hijack first
+    // (`protocol: dns` does not fire in time on Windows), process bypass,
+    // sniff, then the TUN sub-ranges rejected BEFORE `ip_is_private` can
+    // loop them back into the core (#4455). No post-sniff `protocol: dns`
+    // hijack: that path feeds STUN/mDNS/LLMNR into the DNS engine (#4199).
+    // UDP 443 (QUIC/HTTP3) is rejected with the default ICMP method because
+    // UDP user traffic is broken under the Windows shape; a silent
+    // `block`/`drop` black-holes HTTP/3 and Chrome/Edge never fall back to
+    // the proven IPv4 TCP path.
     let tun = TunSettings {
         dns_hijack: false, // Windows always emits the hijack rules
         ..TunSettings::default()
     };
     let rules = tun_reserved_rules_for(&tun, true);
-    assert_eq!(rules.len(), 8);
+    assert_eq!(rules.len(), 7);
     assert_eq!(rules[0]["action"], "hijack-dns");
     assert_eq!(rules[0]["port"][0], 53);
+    assert_eq!(rules[0]["ip_version"], 4);
     assert_eq!(rules[1]["process_name"][0], "ice-box");
     assert_eq!(rules[1]["outbound"], "direct");
     assert_eq!(rules[2]["action"], "sniff");
-    assert_eq!(rules[3]["protocol"], "dns");
-    assert_eq!(rules[3]["action"], "hijack-dns");
-    let reject = &rules[4];
+    assert!(
+        rules
+            .iter()
+            .all(|r| r.get("protocol") != Some(&json!("dns"))),
+        "post-sniff protocol-dns hijack must not be emitted: {rules:?}"
+    );
+    let reject = &rules[3];
     assert_eq!(reject["action"], "reject");
     assert_eq!(reject["method"], "drop");
     let cidrs: Vec<&str> = reject["ip_cidr"]
@@ -1217,7 +1223,7 @@ fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
         vec!["10.0.0.0/30", "fdfe:dcba:9876::/126"],
         "peer-reject covers the TUN sub-ranges derived from the addresses"
     );
-    let quic = &rules[5];
+    let quic = &rules[4];
     assert_eq!(quic["network"], "udp");
     assert_eq!(quic["port"][0], 443);
     assert_eq!(quic["action"], "reject");
@@ -1225,8 +1231,8 @@ fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
         quic.get("method").is_none() && quic.get("outbound").is_none(),
         "default reject (ICMP) — not drop/block, so HTTP/3 fails fast"
     );
-    assert_eq!(rules[6]["ip_is_private"], true);
-    assert_eq!(rules[7]["ip_cidr"][0], "127.0.0.0/8");
+    assert_eq!(rules[5]["ip_is_private"], true);
+    assert_eq!(rules[6]["ip_cidr"][0], "127.0.0.0/8");
 
     let generic = tun_reserved_rules_for(&tun, false);
     assert_eq!(generic.len(), 4, "macOS/generic shape is unchanged");
@@ -1234,6 +1240,39 @@ fn windows_reserved_rules_put_port_53_hijack_first_and_reject_the_tun_peer() {
     assert!(
         generic.iter().all(|r| r["action"] != "reject"),
         "no peer-reject rule in the generic shape"
+    );
+}
+
+#[test]
+fn windows_tun_runtime_config_emits_ipv4_port_53_hijack_without_protocol_dns() {
+    let template = LocalTemplate {
+        tun: TunSettings {
+            enabled: true,
+            interface_name: Some("Wintun".into()),
+            ..TunSettings::default()
+        },
+        ..LocalTemplate::default()
+    };
+    let cfg = build_runtime_json(&BuildInput {
+        template,
+        profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Tun,
+        platform: HostPlatform::Windows,
+    })
+    .expect("windows tun build");
+    let rules = cfg["route"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["action"], "hijack-dns");
+    assert_eq!(rules[0]["ip_version"], 4);
+    assert_eq!(rules[0]["port"][0], 53);
+    assert!(
+        rules
+            .iter()
+            .all(|r| r.get("protocol") != Some(&json!("dns"))),
+        "protocol-dns hijack must not appear in the Windows TUN config"
     );
 }
 
