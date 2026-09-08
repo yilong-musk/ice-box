@@ -48,7 +48,10 @@ pub fn parse_clash_profile(
     // Group references resolve groups-first (plan §3.1): pre-register group names so
     // groups may reference other groups (e.g. Proxies → HK/JP/US sub-groups).
     if let Some(groups) = doc.get("proxy-groups").and_then(|v| v.as_array()) {
-        for g in groups.iter().take(groups::MAX_CLASH_GROUPS) {
+        for g in groups
+            .iter()
+            .take(crate::limits::Limits::default().max_groups)
+        {
             if let Some(name) = g.get("name").and_then(|v| v.as_str()) {
                 known.insert(name.to_string());
             }
@@ -112,13 +115,17 @@ pub fn parse_clash_profile(
         }
     }
 
-    Ok(NormalizedProfile {
-        nodes: proxy_result.nodes,
-        groups: group_result.groups,
-        route,
-        dns,
-        default_outbound,
-        parse_stats: stats,
+    Ok({
+        let mut profile = NormalizedProfile {
+            nodes: proxy_result.nodes,
+            groups: group_result.groups,
+            route,
+            dns,
+            default_outbound,
+            parse_stats: stats,
+        };
+        crate::prune::prune_dangling_refs(&mut profile);
+        profile
     })
 }
 

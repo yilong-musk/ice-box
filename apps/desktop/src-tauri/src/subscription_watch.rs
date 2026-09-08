@@ -106,25 +106,50 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
 /// startup grace period) so subscriptions that went stale while the app was
 /// closed refresh promptly instead of waiting for the first hourly tick.
 pub fn spawn_subscription_watchdog(app: AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(STARTUP_GRACE);
-        for _ in 0..STARTUP_RETRIES {
-            let Some(state) = app.try_state::<AppState>() else {
-                return;
-            };
-            if auto_update_due(state.inner(), &app) {
-                break;
-            }
+    std::thread::spawn(move || loop {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_subscription_watchdog_loop(&app);
+        }));
+        if panicked.is_err() {
+            tracing::error!("subscription watchdog panicked; restarting after a delay");
             std::thread::sleep(STARTUP_RETRY_DELAY);
+            continue;
         }
-        loop {
-            std::thread::sleep(AUTO_UPDATE_TICK);
-            let Some(state) = app.try_state::<AppState>() else {
-                break;
-            };
-            auto_update_due(state.inner(), &app);
-        }
+        break;
     });
+}
+
+fn run_subscription_watchdog_loop(app: &AppHandle) {
+    std::thread::sleep(STARTUP_GRACE);
+    for _ in 0..STARTUP_RETRIES {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            auto_update_due(state.inner(), app)
+        }));
+        match ok {
+            Ok(true) => break,
+            Ok(false) => std::thread::sleep(STARTUP_RETRY_DELAY),
+            Err(_) => {
+                tracing::error!("auto-update pass panicked; retrying");
+                std::thread::sleep(STARTUP_RETRY_DELAY);
+            }
+        }
+    }
+    loop {
+        std::thread::sleep(AUTO_UPDATE_TICK);
+        let Some(state) = app.try_state::<AppState>() else {
+            break;
+        };
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            auto_update_due(state.inner(), app);
+        }))
+        .is_err()
+        {
+            tracing::error!("auto-update pass panicked");
+        }
+    }
 }
 
 #[cfg(test)]

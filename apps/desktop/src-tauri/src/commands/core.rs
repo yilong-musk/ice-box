@@ -20,9 +20,7 @@ pub(crate) fn start_core_inner(app: &AppHandle, state: &AppState) -> Result<(), 
                 resource_dir(app).as_deref(),
                 CaptureIntent::Diagnostic,
             )?;
-            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = None;
-            }
+            clear_transient_recovery_warnings(state);
         }
     }
     attach_traffic(state, &settings);
@@ -46,9 +44,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
                 resource_dir(app).as_deref(),
                 CaptureIntent::Diagnostic,
             )?;
-            if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = None;
-            }
+            clear_transient_recovery_warnings(state);
         }
     }
     if settings.tun.enabled {
@@ -119,8 +115,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
         }
     }
     // Persist after capture is on so a crash/quit still restores next launch.
-    // Settings saves overwrite every other field; they must not clear this flag.
-    set_proxy_service_enabled(&state.paths.settings(), true)?;
+    set_proxy_service_enabled_for(&state.paths.settings(), true, host_platform())?;
     attach_traffic(state, &settings);
     Ok(())
 }
@@ -200,17 +195,29 @@ pub(crate) fn recover_launch_leftovers(state: &AppState) {
             proxy.as_ref(),
             endpoints.as_ref(),
         ) {
-            Ok(true) => {
+            Ok(outcome) if outcome.restored() => {
                 tracing::info!("restored system proxy from previous session");
+                if outcome == RecoverOutcome::RestoredFromCorrupt {
+                    append_recovery_warning(
+                        state,
+                        format!(
+                            "{}: proxy-backup.json was corrupt; system proxy was reset to defaults",
+                            ErrorCode::ProxyBackupCorrupt
+                        ),
+                    );
+                }
             }
-            Ok(false) => {
+            Ok(_) => {
                 tracing::debug!("no applied system proxy backup to restore");
             }
             Err(err) => {
                 tracing::error!(error = %err, "system proxy crash recovery failed");
                 append_recovery_warning(
                     state,
-                    format!("proxy.backup_corrupt: system proxy recovery failed: {err}"),
+                    format!(
+                        "{}: system proxy recovery failed: {err}",
+                        ErrorCode::ProxyBackupCorrupt
+                    ),
                 );
             }
         }
@@ -323,7 +330,7 @@ pub(crate) fn disable_active_backend_inner(
     state
         .capture
         .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, true)?;
-    set_proxy_service_enabled(&state.paths.settings(), false)?;
+    set_proxy_service_enabled_for(&state.paths.settings(), false, host_platform())?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         *slot = None;
     }

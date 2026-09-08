@@ -59,6 +59,7 @@ const tunStatus = {
 } as const;
 
 vi.mock("./api/tauri", () => ({
+  formatDiagnostic: (warning: string) => warning,
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),

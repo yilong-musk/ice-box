@@ -8,8 +8,7 @@ use ice_config::NormalizedOutbound;
 use serde_json::{json, Value};
 
 use super::names::resolve_member;
-
-pub const MAX_CLASH_GROUPS: usize = 128;
+use crate::limits::Limits;
 
 #[derive(Debug, Clone)]
 pub struct GroupParseResult {
@@ -31,14 +30,12 @@ pub fn parse_groups(doc: &Value, known: &HashSet<String>) -> GroupParseResult {
         };
     };
 
-    if items.len() > MAX_CLASH_GROUPS {
-        warnings.push(format!(
-            "proxy-groups count {} exceeds limit {MAX_CLASH_GROUPS}",
-            items.len()
-        ));
+    let max_groups = Limits::default().max_groups;
+    if items.len() > max_groups {
+        warnings.push(Limits::warning("groups", items.len() - max_groups));
     }
 
-    for (idx, group) in items.iter().enumerate().take(MAX_CLASH_GROUPS) {
+    for (idx, group) in items.iter().enumerate().take(max_groups) {
         match map_group(group, idx, known, &mut warnings) {
             Some(node) => groups.push(node),
             None => skipped += 1,

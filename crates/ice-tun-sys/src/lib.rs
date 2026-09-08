@@ -49,7 +49,7 @@ pub use coordinator::{
     DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
 };
 pub use error::{TunError, TunErrorCode};
-pub use ice_tun_pin::{format_tun_task_pin, sha256_of_file};
+pub use ice_tun_pin::{format_tun_task_pin, program_data_dir, protected_bin_dir, sha256_of_file};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
 pub use recovery::RecoveryDriver;

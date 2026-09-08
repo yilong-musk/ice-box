@@ -91,23 +91,35 @@ fn heal_tun_dns(state: &AppState) {
 }
 
 fn check_oversized_logs(state: &AppState) {
-    let oversized =
+    let mut oversized =
         ice_config::log_file_oversized(&state.paths.core_log(), ice_config::CORE_LOG_MAX_BYTES)
             || ice_config::log_file_oversized(
                 &state.paths.app_log(),
                 ice_config::SIZED_LOG_MAX_BYTES,
             );
+    if state.capture.helper_core_used() && !ice_tun_sys::dev_sudo_runner_enabled() {
+        oversized = oversized
+            || ice_config::log_file_oversized(
+                std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST),
+                ice_config::CORE_LOG_MAX_BYTES,
+            );
+    }
     if !oversized {
         return;
     }
     let Ok(mut slot) = state.proxy_recovery_warning.lock() else {
         return;
     };
-    if slot.as_ref().is_some_and(|s| s.contains("logs.oversized")) {
+    if slot
+        .as_ref()
+        .is_some_and(|s| s.contains(ice_config::ErrorCode::LogsOversized.as_str()))
+    {
         return;
     }
-    let warning =
-        "logs.oversized: log files exceeded 20 MiB; clear logs on the Logs page".to_string();
+    let warning = format!(
+        "{}: log files exceeded 20 MiB; clear logs on the Logs page",
+        ice_config::ErrorCode::LogsOversized
+    );
     *slot = Some(match slot.take() {
         Some(existing) if !existing.is_empty() => format!("{existing}；{warning}"),
         _ => warning,

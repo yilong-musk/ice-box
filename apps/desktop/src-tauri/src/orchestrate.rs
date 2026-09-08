@@ -80,6 +80,7 @@ pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>)
         tracing::info!(dir = %target.display(), copied, "geoip rule-sets ensured");
         break;
     }
+    ice_config::invalidate_geoip_code_cache();
     ensured.push(target.clone());
     target
 }
@@ -98,6 +99,7 @@ pub fn build_core_paths(
     };
     CorePaths {
         binary,
+        extra_binaries: elevated_core_binaries(),
         config: app_paths.config(),
         log_file: app_paths.core_log(),
         pid_file: app_paths.pid(),
@@ -107,6 +109,24 @@ pub fn build_core_paths(
         clash_api_port: settings.clash_api_port,
         allow_lan: settings.allow_lan,
     }
+}
+
+/// Protected sing-box copies started by the macOS helper / Windows launcher.
+fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
+    let mut extra = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        extra.push(std::path::PathBuf::from(
+            ice_tun_sys::install_paths::CORE_BIN_DEST,
+        ));
+    }
+    #[cfg(windows)]
+    {
+        extra.push(
+            ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_data_dir()).join("sing-box.exe"),
+        );
+    }
+    extra
 }
 
 pub fn endpoints_from_settings(settings: &AppSettings) -> ProxyEndpoints {
@@ -335,10 +355,17 @@ pub fn orchestrate_enable_system_proxy(
         return Ok(());
     }
     let backup_path = app_paths.proxy_backup();
-    if let Ok(record) = ice_proxy_sys::ProxyBackupFile::load(&backup_path) {
-        if record.applied || record.pending_apply {
-            restore_and_clear_flag(&backup_path, proxy).map_err(AppError::from)?;
+    match ice_proxy_sys::ProxyBackupFile::load(&backup_path) {
+        Ok(record) => {
+            if record.applied || record.pending_apply {
+                restore_and_clear_flag(&backup_path, proxy).map_err(AppError::from)?;
+            }
         }
+        Err(_) if backup_path.exists() => {
+            ice_proxy_sys::recover_if_applied_hinted(&backup_path, proxy, Some(&endpoints))
+                .map_err(AppError::from)?;
+        }
+        Err(_) => {}
     }
     apply_and_record(&backup_path, proxy, &endpoints).map_err(AppError::from)
 }

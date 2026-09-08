@@ -13,10 +13,11 @@ pub(crate) use crate::tray::{self, TrayLanguage};
 pub(crate) use crate::AppState;
 pub(crate) use ice_config::NormalizedOutbound;
 pub(crate) use ice_config::{
-    load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint, rule_type_of,
-    save_group_selections, save_rule_overrides, save_settings_for as persist_settings,
-    set_proxy_service_enabled, AppError, AppSettings, CaptureIntent, ErrorCode, NormalizedProfile,
-    ProxyMode, RuleOverrides, SettingsPatch,
+    load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint,
+    rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
+    save_settings_for as persist_settings, set_proxy_service_enabled,
+    set_proxy_service_enabled_for, AppError, AppSettings, CaptureIntent, ErrorCode,
+    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 pub(crate) use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
@@ -25,7 +26,7 @@ pub(crate) use ice_core::{
 pub(crate) use ice_engine::host_platform;
 pub(crate) use ice_proxy_sys::{
     disk_proxy_state, is_proxy_live_applied, proxy_backup_indicates_ownership,
-    recover_if_applied_hinted, DiskProxyState, ProxyEndpoints,
+    recover_if_applied_hinted, DiskProxyState, ProxyEndpoints, RecoverOutcome,
 };
 pub(crate) use ice_subscription::{
     active_subscription, list_profile_outbounds, load_active_profile_with_default_rules,
@@ -55,6 +56,27 @@ pub(crate) fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, A
         .orchestrate
         .lock()
         .map_err(|_| lock_poisoned("orchestrate"))
+}
+
+pub(crate) fn clear_transient_recovery_warnings(state: &AppState) {
+    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
+        *slot = slot.take().and_then(|s| {
+            let kept: Vec<&str> = s
+                .split('；')
+                .map(str::trim)
+                .filter(|part| {
+                    !part.is_empty()
+                        && (part.contains(ErrorCode::SettingsReset.as_str())
+                            || part.contains(ErrorCode::LogsOversized.as_str()))
+                })
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some(kept.join("；"))
+            }
+        });
+    }
 }
 
 pub(crate) fn append_recovery_warning(state: &AppState, warning: String) {

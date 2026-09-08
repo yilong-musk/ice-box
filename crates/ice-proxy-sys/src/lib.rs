@@ -25,7 +25,7 @@ pub use windows::WindowsSystemProxy;
 pub use backup_file::{
     disk_proxy_state, is_proxy_applied_on_disk, is_proxy_live_applied,
     proxy_backup_indicates_ownership, recover_if_applied, recover_if_applied_hinted,
-    DiskProxyState, ProxyBackupFile,
+    DiskProxyState, ProxyBackupFile, RecoverOutcome,
 };
 pub use bypass::{bypass_domains, BYPASS_COMMON, BYPASS_WINDOWS, BYPASS_WINDOWS_EXTRA};
 pub use record::{apply_and_record, restore_and_clear_flag};

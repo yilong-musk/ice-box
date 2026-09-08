@@ -603,7 +603,17 @@ pub struct LoadSettingsOutcome {
 /// Parse / validation failure: rename to `settings.json.invalid-<timestamp>`
 /// and return defaults plus `reset_reason` (`settings.reset`).
 pub fn load_settings(path: &Path) -> Result<AppSettings, AppError> {
-    Ok(load_settings_detailed(path).settings)
+    if !path.exists() {
+        return Ok(AppSettings::default());
+    }
+    match try_load_settings(path) {
+        Ok(settings) => Ok(settings),
+        Err(SettingsLoadError::Io(err)) => Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("read settings: {err}"),
+        )),
+        Err(SettingsLoadError::Invalid(_)) => Ok(load_settings_detailed(path).settings),
+    }
 }
 
 /// Like [`load_settings`], but surfaces whether the file was reset.
@@ -619,7 +629,14 @@ pub fn load_settings_detailed(path: &Path) -> LoadSettingsOutcome {
             settings,
             reset_reason: None,
         },
-        Err(reason) => {
+        Err(SettingsLoadError::Io(reason)) => {
+            tracing::warn!(path = %path.display(), reason = %reason, "settings.json could not be read");
+            LoadSettingsOutcome {
+                settings: AppSettings::default(),
+                reset_reason: None,
+            }
+        }
+        Err(SettingsLoadError::Invalid(reason)) => {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -648,13 +665,18 @@ pub fn load_settings_detailed(path: &Path) -> LoadSettingsOutcome {
     }
 }
 
-fn try_load_settings(path: &Path) -> Result<AppSettings, String> {
-    let raw = fs::read_to_string(path).map_err(|e| format!("read settings: {e}"))?;
-    let settings: AppSettings =
-        serde_json::from_str(&raw).map_err(|e| format!("parse settings: {e}"))?;
+enum SettingsLoadError {
+    Io(String),
+    Invalid(String),
+}
+
+fn try_load_settings(path: &Path) -> Result<AppSettings, SettingsLoadError> {
+    let raw = fs::read_to_string(path).map_err(|e| SettingsLoadError::Io(e.to_string()))?;
+    let settings: AppSettings = serde_json::from_str(&raw)
+        .map_err(|e| SettingsLoadError::Invalid(format!("parse settings: {e}")))?;
     settings
         .validate()
-        .map_err(|e| format!("validate settings: {e}"))?;
+        .map_err(|e| SettingsLoadError::Invalid(format!("validate settings: {e}")))?;
     Ok(settings)
 }
 
@@ -682,12 +704,20 @@ pub fn save_settings_for(
 /// Quit / crash cleanup must not call this with `false`: stopping capture on
 /// exit is not a user-off.
 pub fn set_proxy_service_enabled(path: &Path, enabled: bool) -> Result<(), AppError> {
+    set_proxy_service_enabled_for(path, enabled, HostPlatform::Linux)
+}
+
+pub fn set_proxy_service_enabled_for(
+    path: &Path,
+    enabled: bool,
+    platform: HostPlatform,
+) -> Result<(), AppError> {
     let mut settings = load_settings(path)?;
     if settings.proxy_service_enabled == enabled {
         return Ok(());
     }
     settings.proxy_service_enabled = enabled;
-    save_settings(path, &settings)
+    save_settings_for(path, &settings, platform)
 }
 
 #[cfg(test)]

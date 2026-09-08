@@ -25,11 +25,10 @@ pub const MAX_ROUTE_RULES: usize = 10_000;
 /// Paths and policy the privileged caller already owns.
 #[derive(Debug, Clone)]
 pub struct GuardContext {
-    /// App data dir (reserved for callers; rule-set paths must still live
-    /// under [`Self::resources_dir`]).
+    /// App data dir. `route.rule_set[].path` may canonicalise here (GeoIP
+    /// copies live under `data_dir/geoip`) or under [`Self::resources_dir`].
     pub data_dir: PathBuf,
-    /// Bundled resources directory. `route.rule_set[].path` must canonicalise
-    /// inside it (typically the app `resources/` folder that contains `geoip/`).
+    /// Bundled resources directory.
     pub resources_dir: PathBuf,
     /// When set, `log` is replaced so `output` is this helper-owned file.
     pub log_output: Option<PathBuf>,
@@ -85,6 +84,7 @@ const ALLOWED_OUTBOUND_TYPES: &[&str] = &[
     "socks",
     "anytls",
     "wireguard",
+    "shadowtls",
 ];
 
 const MIXED_INBOUND_KEYS: &[&str] = &["type", "tag", "listen", "listen_port"];
@@ -159,6 +159,9 @@ pub fn sanitize_for_elevated_core(cfg: &mut Value, ctx: &GuardContext) -> Result
         return Err(GuardError::new("/outbounds", "outbounds must not be empty"));
     }
 
+    reject_ungated_top_level(cfg)?;
+    validate_inbounds(cfg)?;
+
     if let Some(rule_len) = cfg
         .get("route")
         .and_then(|r| r.get("rules"))
@@ -198,6 +201,18 @@ pub fn minimal_allowed_config() -> Value {
             "clash_api": { "external_controller": "127.0.0.1:19090" }
         }
     })
+}
+
+fn reject_ungated_top_level(cfg: &Value) -> Result<(), GuardError> {
+    for key in ["endpoints", "services"] {
+        if cfg.get(key).is_some() {
+            return Err(GuardError::new(
+                format!("/{key}"),
+                format!("{key} is not allowed in an elevated config"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_inbounds(cfg: &Value) -> Result<(), GuardError> {
@@ -319,46 +334,72 @@ fn validate_rule_set_paths(cfg: &Value, ctx: &GuardContext) -> Result<(), GuardE
     else {
         return Ok(());
     };
-    let resources = ctx.resources_dir.canonicalize().map_err(|err| {
-        GuardError::new(
-            "/route/rule_set",
-            format!(
-                "resources_dir {} cannot be canonicalised: {err}",
-                ctx.resources_dir.display()
-            ),
-        )
-    })?;
+    let roots = allowed_rule_set_roots(ctx)?;
     for (idx, set) in sets.iter().enumerate() {
         let pointer = format!("/route/rule_set/{idx}/path");
         let Some(raw) = set.get("path").and_then(|v| v.as_str()) else {
             continue;
         };
-        let candidate = {
-            let p = Path::new(raw);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                ctx.resources_dir.join(p)
-            }
+        let p = Path::new(raw);
+        let candidates: Vec<PathBuf> = if p.is_absolute() {
+            vec![p.to_path_buf()]
+        } else {
+            vec![ctx.resources_dir.join(p), ctx.data_dir.join(p)]
         };
-        let canon = candidate.canonicalize().map_err(|err| {
-            GuardError::new(
-                &pointer,
-                format!("rule_set path {} cannot be canonicalised: {err}", raw),
-            )
-        })?;
-        if !canon.starts_with(&resources) {
-            return Err(GuardError::new(
-                pointer,
-                format!(
-                    "rule_set path {} is outside resources_dir {}",
-                    raw,
-                    ctx.resources_dir.display()
-                ),
-            ));
+        let mut last_err = None;
+        let mut accepted = false;
+        for candidate in candidates {
+            match candidate.canonicalize() {
+                Ok(canon) => {
+                    if roots.iter().any(|root| canon.starts_with(root)) {
+                        accepted = true;
+                        break;
+                    }
+                    last_err = Some(GuardError::new(
+                        pointer.clone(),
+                        format!(
+                            "rule_set path {} is outside data_dir {} and resources_dir {}",
+                            raw,
+                            ctx.data_dir.display(),
+                            ctx.resources_dir.display()
+                        ),
+                    ));
+                }
+                Err(err) => {
+                    last_err = Some(GuardError::new(
+                        pointer.clone(),
+                        format!("rule_set path {} cannot be canonicalised: {err}", raw),
+                    ));
+                }
+            }
+        }
+        if !accepted {
+            return Err(last_err.unwrap_or_else(|| {
+                GuardError::new(&pointer, format!("rule_set path {raw} is not allowed"))
+            }));
         }
     }
     Ok(())
+}
+
+fn allowed_rule_set_roots(ctx: &GuardContext) -> Result<Vec<PathBuf>, GuardError> {
+    let mut roots = Vec::new();
+    for path in [&ctx.resources_dir, &ctx.data_dir] {
+        if let Ok(p) = path.canonicalize() {
+            roots.push(p);
+        }
+    }
+    if roots.is_empty() {
+        return Err(GuardError::new(
+            "/route/rule_set",
+            format!(
+                "neither resources_dir {} nor data_dir {} can be canonicalised",
+                ctx.resources_dir.display(),
+                ctx.data_dir.display()
+            ),
+        ));
+    }
+    Ok(roots)
 }
 
 fn apply_helper_overrides(cfg: &mut Value, ctx: &GuardContext) {
@@ -433,6 +474,9 @@ fn walk_forbidden(
 }
 
 fn skip_forbidden_at(key: &str, pointer: &str, ctx: Option<&GuardContext>) -> bool {
+    if key == "path" && is_url_style_path_pointer(pointer) {
+        return true;
+    }
     if key == "path" && is_rule_set_path_pointer(pointer) {
         return true;
     }
@@ -444,6 +488,22 @@ fn skip_forbidden_at(key: &str, pointer: &str, ctx: Option<&GuardContext>) -> bo
         && ctx.is_some_and(|c| c.cache_file_path.is_some())
     {
         return true;
+    }
+    false
+}
+
+fn is_url_style_path_pointer(pointer: &str) -> bool {
+    // WS / HTTP / HTTPUpgrade transport URL path, not a filesystem path.
+    // `check_outbound` walks a single outbound from `""`, so the pointer is
+    // `/transport/path`; the full-config walk uses `/outbounds/{i}/transport/path`.
+    if pointer == "/transport/path" || pointer.ends_with("/transport/path") {
+        return true;
+    }
+    // DNS-over-HTTPS `path` (typically `/dns-query`).
+    if let Some(rest) = pointer.strip_prefix("/dns/servers/") {
+        if let Some((idx, key)) = rest.split_once('/') {
+            return key == "path" && !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit());
+        }
     }
     false
 }
@@ -464,6 +524,9 @@ fn is_forbidden_key(key: &str) -> bool {
         "path"
             | "executable_path"
             | "data_directory"
+            | "state_directory"
+            | "working_directory"
+            | "home_directory"
             | "output"
             | "external_ui"
             | "external_ui_download_url"
@@ -706,5 +769,97 @@ mod tests {
         let err = sanitize(json!({}), &ctx(&dir)).expect_err("empty");
         assert!(err.pointer.contains("outbounds") || err.message.contains("outbounds"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ws_transport_path_is_allowed() {
+        let dir = temp_dir("ws");
+        let mut cfg = minimal_allowed_config();
+        cfg["outbounds"] = json!([{
+            "type": "vmess",
+            "tag": "n",
+            "server": "1.1.1.1",
+            "server_port": 443,
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "transport": { "type": "ws", "path": "/ws", "headers": { "Host": "cdn.example.com" } }
+        }]);
+        sanitize(cfg.clone(), &ctx(&dir)).expect("ws transport path");
+        check_outbound(&cfg["outbounds"][0]).expect("check_outbound ws");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doh_dns_server_path_is_allowed() {
+        let dir = temp_dir("doh");
+        let mut cfg = minimal_allowed_config();
+        cfg["dns"] = json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "server_port": 443,
+                  "path": "/dns-query", "detour": "direct" }
+            ],
+            "final": "remote-dns"
+        });
+        sanitize(cfg, &ctx(&dir)).expect("doh path");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn geoip_rule_set_in_data_dir_is_accepted() {
+        let base = temp_dir("geoip-split");
+        let data = base.join("data");
+        let resources = base.join("app-resources");
+        let srs = data.join("geoip").join("geoip-cn.srs");
+        fs::create_dir_all(srs.parent().unwrap()).unwrap();
+        fs::create_dir_all(&resources).unwrap();
+        fs::write(&srs, b"x").unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "geoip-cn",
+            "format": "binary",
+            "path": srs.to_string_lossy(),
+        }]);
+        let ctx = GuardContext {
+            data_dir: data,
+            resources_dir: resources,
+            log_output: None,
+            cache_file_path: None,
+        };
+        sanitize(cfg, &ctx).expect("geoip under data_dir");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn endpoints_and_services_are_rejected() {
+        let dir = temp_dir("ep");
+        let mut cfg = minimal_allowed_config();
+        cfg["endpoints"] = json!([{
+            "type": "wireguard",
+            "tag": "wg",
+            "system": true,
+            "state_directory": "/etc/cron.d"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("endpoints");
+        assert_eq!(err.pointer, "/endpoints");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["services"] = json!([{ "type": "derp", "tag": "derp" }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("services");
+        assert_eq!(err.pointer, "/services");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn check_outbound_accepts_shadowtls() {
+        check_outbound(&json!({
+            "type": "shadowtls",
+            "tag": "st",
+            "server": "1.1.1.1",
+            "server_port": 443,
+            "password": "x",
+            "version": 3
+        }))
+        .expect("shadowtls");
     }
 }

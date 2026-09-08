@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::Utc;
 use ice_config::{
@@ -15,6 +16,8 @@ use uuid::Uuid;
 
 use crate::error::SubscriptionError;
 use crate::{SubscriptionIndex, SubscriptionMeta};
+
+static COMMIT_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct SubscriptionPaths {
     root: PathBuf,
@@ -102,6 +105,7 @@ fn commit_staged_subscription(
     profile: &NormalizedProfile,
     meta: &SubscriptionMeta,
 ) -> Result<(), SubscriptionError> {
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let staging = paths.staging_dir(id);
     if staging.exists() {
         fs::remove_dir_all(&staging)?;
@@ -126,7 +130,7 @@ fn commit_staged_subscription(
     } else if let Err(err) = fs::rename(&staging, &final_dir) {
         return Err(SubscriptionError::Io(err));
     }
-    sweep_old_profile_dirs(paths, Some(id));
+    sweep_old_profile_dirs_locked(paths, Some(id));
     Ok(())
 }
 
@@ -149,6 +153,11 @@ pub fn recover_subscription_dirs(paths: &SubscriptionPaths) {
 }
 
 fn sweep_old_profile_dirs(paths: &SubscriptionPaths, only: Option<Uuid>) {
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    sweep_old_profile_dirs_locked(paths, only);
+}
+
+fn sweep_old_profile_dirs_locked(paths: &SubscriptionPaths, only: Option<Uuid>) {
     let Ok(entries) = fs::read_dir(paths.root()) else {
         return;
     };

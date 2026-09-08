@@ -5,7 +5,7 @@
 //! Transitions still serialize on `AppState.core`. Status polling and the
 //! UI event read an immutable snapshot and never take that mutex.
 
-use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -95,12 +95,18 @@ impl CoreHandle for PublishingCore {
     }
 
     fn start(&mut self, paths: &CorePaths) -> Result<(), CoreError> {
+        let mut preview = self.inner.state();
+        preview.status = CoreStatus::Starting;
+        self.hub.publish(preview);
         let result = self.inner.start(paths);
         self.publish();
         result
     }
 
     fn stop(&mut self, pid_file: &Path) -> Result<(), CoreError> {
+        let mut preview = self.inner.state();
+        preview.status = CoreStatus::Stopping;
+        self.hub.publish(preview);
         let result = self.inner.stop(pid_file);
         self.publish();
         result
@@ -130,6 +136,9 @@ impl CoreHandle for PublishingCore {
     }
 
     fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError> {
+        let mut preview = self.inner.state();
+        preview.status = CoreStatus::Starting;
+        self.hub.publish(preview);
         let result = self.inner.adopt_external(pid, paths);
         self.publish();
         result

@@ -264,6 +264,9 @@ const ERROR_MESSAGE_KEYS = {
   "proxy.apply_failed": "error.proxy.apply_failed",
   "proxy.apply_failed_core_reloaded": "error.proxy.apply_failed_core_reloaded",
   "proxy.restore_failed": "error.proxy.restore_failed",
+  "proxy.backup_corrupt": "error.proxy.backup_corrupt",
+  "settings.reset": "error.settings.reset",
+  "logs.oversized": "error.logs.oversized",
   "sub.fetch_failed": "error.sub.fetch_failed",
   "sub.unknown_format": "error.sub.unknown_format",
   "sub.parse_failed": "error.sub.parse_failed",
@@ -306,6 +309,25 @@ export function formatInvokeError(err: unknown): string {
     if (typeof o.message === "string") return o.message;
   }
   return String(err);
+}
+
+/** Translate a recovery-banner fragment that starts with a known error code. */
+export function formatDiagnostic(warning: string): string {
+  return warning
+    .split("；")
+    .map((part) => {
+      const trimmed = part.trim();
+      const colon = trimmed.indexOf(":");
+      const code = (colon >= 0 ? trimmed.slice(0, colon) : trimmed).trim();
+      if (isErrorCode(code)) {
+        const label = t(ERROR_MESSAGE_KEYS[code]);
+        const rest = colon >= 0 ? trimmed.slice(colon + 1).trim() : "";
+        return rest ? `${label}: ${rest}` : label;
+      }
+      return trimmed;
+    })
+    .filter(Boolean)
+    .join("；");
 }
 
 export const api = {

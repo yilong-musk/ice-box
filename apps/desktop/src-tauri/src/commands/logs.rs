@@ -72,11 +72,14 @@ pub async fn clear_logs(app: AppHandle) -> Result<(), AppError> {
             *cache = None;
         }
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            if slot.as_ref().is_some_and(|s| s.contains("logs.oversized")) {
+            if slot
+                .as_ref()
+                .is_some_and(|s| s.contains(ErrorCode::LogsOversized.as_str()))
+            {
                 *slot = slot.take().and_then(|s| {
                     let next = s
                         .split('；')
-                        .filter(|part| !part.contains("logs.oversized"))
+                        .filter(|part| !part.contains(ErrorCode::LogsOversized.as_str()))
                         .collect::<Vec<_>>()
                         .join("；");
                     if next.is_empty() {

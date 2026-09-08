@@ -277,7 +277,14 @@ fn waitid_reports_exited(pid: u32) -> bool {
             &mut info,
             libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
         );
-        rc == 0 && info.si_pid == pid as libc::pid_t
+        rc == 0 && {
+            // Linux exposes `si_pid()` as a method; macOS/BSD keep a field.
+            #[cfg(target_os = "linux")]
+            let reported = info.si_pid();
+            #[cfg(not(target_os = "linux"))]
+            let reported = info.si_pid;
+            reported == pid as libc::pid_t
+        }
     }
 }
 

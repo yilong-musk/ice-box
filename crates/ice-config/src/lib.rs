@@ -29,18 +29,18 @@ pub use pid::{clear_pid, parse_pid_contents, purge_invalid_pid_file, read_pid, w
 pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
 pub use redact::{redact_config_json, redact_config_str};
 pub use rule_overrides::{
-    load_rule_overrides, rule_fingerprint, rule_type_of, save_rule_overrides, RuleOverrides,
-    RULE_TYPE_KEYS,
+    load_rule_overrides, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
+    save_rule_overrides, RuleOverrides, RULE_TYPE_KEYS,
 };
 pub use selections::{
     apply_group_selections, load_group_selections, save_group_selections, GroupSelections,
 };
 pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, load_settings, load_settings_detailed,
-    save_settings, save_settings_for, set_proxy_service_enabled, AppSettings, CoreLogLevel,
-    LanguagePreference, LoadSettingsOutcome, ProxyMode, SettingsPatch, TunSettings,
-    TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU,
-    TUN_DEFAULT_STACK,
+    save_settings, save_settings_for, set_proxy_service_enabled, set_proxy_service_enabled_for,
+    AppSettings, CoreLogLevel, LanguagePreference, LoadSettingsOutcome, ProxyMode, SettingsPatch,
+    TunSettings, TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS,
+    TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 
 use serde::{Deserialize, Serialize};
@@ -851,14 +851,21 @@ fn tun_inbound(tun: &TunSettings) -> Value {
 /// `geoip` rule option). Rules whose `geoip-{code}.srs` file is missing from
 /// `geoip_rule_set_dir` are dropped (counted via tracing warn) instead of failing the build.
 /// Rules using the removed `geosite` option are dropped the same way.
-type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, HashSet<String>)>;
+type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
+
+fn geoip_code_cache() -> &'static Mutex<GeoipCodeCache> {
+    static CACHE: Mutex<GeoipCodeCache> = Mutex::new(None);
+    &CACHE
+}
 
 fn geoip_codes_present(dir: &Path) -> HashSet<String> {
-    static CACHE: Mutex<GeoipCodeCache> = Mutex::new(None);
     let mtime = fs::metadata(dir).and_then(|m| m.modified()).ok();
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((cached_dir, cached_mtime, codes)) = cache.as_ref() {
-        if cached_dir == dir && *cached_mtime == mtime {
+    let count = fs::read_dir(dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    let mut cache = geoip_code_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached_dir, cached_mtime, cached_count, codes)) = cache.as_ref() {
+        if cached_dir == dir && *cached_mtime == mtime && *cached_count == count {
             return codes.clone();
         }
     }
@@ -875,8 +882,16 @@ fn geoip_codes_present(dir: &Path) -> HashSet<String> {
             }
         }
     }
-    *cache = Some((dir.to_path_buf(), mtime, codes.clone()));
+    *cache = Some((dir.to_path_buf(), mtime, count, codes.clone()));
     codes
+}
+
+/// Drop the GeoIP directory listing cache (call after copying rule-sets).
+pub fn invalidate_geoip_code_cache() {
+    geoip_code_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
 }
 
 fn expand_geoip_rules(
@@ -1228,7 +1243,8 @@ pub fn write_runtime_config_bytes(
         if let Some(parent) = bak_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(config_path, bak_path)?;
+        let bytes = fs::read(config_path)?;
+        write_bytes_atomic(bak_path, &bytes)?;
     }
     write_bytes_atomic(config_path, rendered.as_bytes())
 }
@@ -1362,6 +1378,24 @@ mod build_tests {
         });
         let err = validate_config(&dup).unwrap_err();
         assert!(err.to_string().contains("/outbounds/1/tag"), "{err}");
+
+        let dup_in = json!({
+            "inbounds": [
+                {"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890},
+                {"type":"tun","tag":"in"}
+            ],
+            "outbounds": [{"type":"direct","tag":"direct"}]
+        });
+        let err = validate_config(&dup_in).unwrap_err();
+        assert!(err.to_string().contains("/inbounds/1/tag"), "{err}");
+
+        let bad_rule = json!({
+            "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],
+            "outbounds": [{"type":"direct","tag":"direct"}],
+            "route": {"rules": [{"domain_suffix": ["x.com"], "outbound": "ghost"}]}
+        });
+        let err = validate_config(&bad_rule).unwrap_err();
+        assert!(err.to_string().contains("/route/rules/0/outbound"), "{err}");
 
         let bad_final = json!({
             "inbounds": [{"type":"mixed","tag":"in","listen":"127.0.0.1","listen_port":17890}],

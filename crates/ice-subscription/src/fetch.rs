@@ -409,6 +409,30 @@ pub enum MockFetchMode {
     Timeout,
     TooLarge,
     Fail(String),
+    /// Panic on the first `get` (shared across clones), then behave as `Ok`.
+    PanicOnce(PanicOnceMode),
+}
+
+/// Payload for [`MockFetchMode::PanicOnce`].
+#[derive(Debug, Clone)]
+pub struct PanicOnceMode {
+    pub response: FetchResponse,
+    remaining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PanicOnceMode {
+    pub fn new(response: FetchResponse) -> Self {
+        Self {
+            response,
+            remaining: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Arm so the next `get` panics; later calls return [`Self::response`].
+    pub fn arm(&self) {
+        self.remaining
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Mock fetcher for unit tests.
@@ -445,6 +469,15 @@ impl HttpFetcher for MockFetcher {
                 "body exceeds {MAX_BODY_BYTES} bytes"
             ))),
             MockFetchMode::Fail(msg) => Err(SubscriptionError::FetchFailed(msg.clone())),
+            MockFetchMode::PanicOnce(once) => {
+                if once
+                    .remaining
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    panic!("injected fetch panic");
+                }
+                Ok(once.response.clone())
+            }
         }
     }
 }

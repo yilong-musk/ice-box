@@ -198,7 +198,7 @@ fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Resul
         return Ok(body);
     }
     if encoding.eq_ignore_ascii_case("gzip") || encoding.eq_ignore_ascii_case("x-gzip") {
-        let mut decoder = GzDecoder::new(body.as_slice());
+        let mut decoder = GzDecoder::new(body.as_slice()).take(MAX_BODY_BYTES as u64 + 1);
         let mut out = Vec::new();
         decoder
             .read_to_end(&mut out)
@@ -236,7 +236,11 @@ fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
     }
     let raw_body = &raw[(header_end + 4)..];
     let body = extract_body(raw_body, &headers)?;
-    let body = decode_content_encoding(body, &headers)?;
+    let body = if body.is_empty() || matches!(status, 100..=199 | 204 | 304) {
+        body
+    } else {
+        decode_content_encoding(body, &headers)?
+    };
     Ok(RawHttpResponse {
         status,
         headers,
@@ -320,5 +324,13 @@ mod tests {
         let a = tls_client_config().expect("platform verifier");
         let b = tls_client_config().expect("platform verifier");
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn parse_skips_gzip_on_empty_not_modified() {
+        let raw = b"HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\n\r\n";
+        let resp = parse_http_response(raw).unwrap();
+        assert_eq!(resp.status, 304);
+        assert!(resp.body.is_empty());
     }
 }

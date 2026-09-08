@@ -90,12 +90,8 @@ pub(crate) fn tun_task_paths(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<(PathBuf, PathBuf), AppError> {
-    let resource = resource_dir(app).ok_or_else(|| {
-        AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            "cannot resolve the bundled resources directory",
-        )
-    })?;
+    let resource = resource_dir(app)
+        .ok_or_else(|| launcher_failed("cannot resolve the bundled resources directory"))?;
     let launcher = resource.join("ice-tun-launcher.exe");
     let data_dir = state.paths.root().to_path_buf();
     Ok((launcher, data_dir))
@@ -109,19 +105,22 @@ pub(crate) fn run_elevated_launcher(launcher: &Path, args: &[String]) -> Result<
     // ShellExecute cannot pass CREATE_NO_WINDOW.
     match ice_tun_sys::run_elevated_wait(launcher, args) {
         Ok(0) => Ok(()),
-        Ok(_) => Err(AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            "the one-time TUN elevation setup was not granted; enable TUN again to retry",
-        )),
+        Ok(code) => Err(launcher_failed(format!(
+            "the TUN launcher exited with status {code}"
+        ))),
         Err(err) if err.raw_os_error() == Some(1223) => Err(AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
             "the one-time TUN elevation setup was not granted; enable TUN again to retry",
         )),
-        Err(err) => Err(AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!("spawn elevated TUN launcher: {err}"),
-        )),
+        Err(err) => Err(launcher_failed(format!(
+            "spawn elevated TUN launcher: {err}"
+        ))),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn launcher_failed(message: impl Into<String>) -> AppError {
+    AppError::with_code(ErrorCode::TunHelperInstallFailed, message)
 }
 
 #[cfg(target_os = "windows")]
@@ -131,34 +130,25 @@ pub(crate) fn ensure_tun_elevation_inner(
 ) -> Result<(), AppError> {
     let (launcher, data_dir) = tun_task_paths(app, state)?;
     if !launcher.is_file() {
-        return Err(AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!(
-                "TUN task launcher not found at {} (reinstall the app)",
-                launcher.display()
-            ),
-        ));
+        return Err(launcher_failed(format!(
+            "TUN task launcher not found at {} (reinstall the app)",
+            launcher.display()
+        )));
     }
     let core = launcher
         .parent()
         .map(|dir| dir.join("sing-box.exe"))
         .ok_or_else(|| {
-            AppError::with_code(
-                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-                format!(
-                    "TUN task launcher path {} has no parent",
-                    launcher.display()
-                ),
-            )
+            launcher_failed(format!(
+                "TUN task launcher path {} has no parent",
+                launcher.display()
+            ))
         })?;
     if !core.is_file() {
-        return Err(AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-            format!(
-                "TUN core binary not found at {} (reinstall the app)",
-                core.display()
-            ),
-        ));
+        return Err(launcher_failed(format!(
+            "TUN core binary not found at {} (reinstall the app)",
+            core.display()
+        )));
     }
     // Recreate when the task is missing *or* the stored pin / Command no
     // longer matches the protected copies (app update, or a replaced binary).
@@ -176,18 +166,13 @@ pub(crate) fn ensure_tun_elevation_inner(
             .args(&install_args)
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
-            .map_err(|err| {
-                AppError::with_code(
-                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-                    format!("create the TUN scheduled task: {err}"),
-                )
-            });
+            .map_err(|err| launcher_failed(format!("create the TUN scheduled task: {err}")));
         match status {
             Ok(status) if status.success() => Ok(()),
-            Ok(_) => Err(AppError::with_code(
-                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-                "the TUN scheduled task could not be created",
-            )),
+            Ok(status) => Err(launcher_failed(format!(
+                "the TUN scheduled task could not be created (exit {})",
+                status.code().unwrap_or(-1)
+            ))),
             Err(err) => Err(err),
         }
     } else {
@@ -197,8 +182,7 @@ pub(crate) fn ensure_tun_elevation_inner(
     create_result?;
     if !pin_ok {
         tracing::warn!("TUN scheduled task missing or pin not persisted after the setup run");
-        return Err(AppError::with_code(
-            crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+        return Err(launcher_failed(
             "the TUN scheduled task pin was not stored; enable TUN again to retry",
         ));
     }
@@ -224,29 +208,27 @@ pub(crate) fn remove_tun_elevation_inner(
     if !ice_tun_sys::tun_task_exists() && !launcher.is_file() {
         return Ok(());
     }
+    if !launcher.is_file() {
+        return Err(launcher_failed(format!(
+            "TUN task exists but the launcher is missing at {} (reinstall the app)",
+            launcher.display()
+        )));
+    }
     let args = vec!["--delete-task".to_string()];
-    if ice_tun_sys::process_is_elevated() && launcher.is_file() {
+    if ice_tun_sys::process_is_elevated() {
         use std::os::windows::process::CommandExt;
         let status = std::process::Command::new(&launcher)
             .args(&args)
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()
-            .map_err(|err| {
-                AppError::with_code(
-                    crate::windows_elevation::ERR_ELEVATION_CANCELLED,
-                    format!("delete the TUN scheduled task: {err}"),
-                )
-            })?;
+            .map_err(|err| launcher_failed(format!("delete the TUN scheduled task: {err}")))?;
         if !status.success() {
-            return Err(AppError::with_code(
-                crate::windows_elevation::ERR_ELEVATION_CANCELLED,
+            return Err(launcher_failed(
                 "the TUN scheduled task could not be deleted",
             ));
         }
-    } else if launcher.is_file() {
-        run_elevated_launcher(&launcher, &args)?;
     } else {
-        return Ok(());
+        run_elevated_launcher(&launcher, &args)?;
     }
     reset_tun_task_cache(state);
     Ok(())

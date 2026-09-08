@@ -333,7 +333,7 @@ export function Settings({
     if (Object.keys(errs).length > 0) {
       throw new Error(t("settings.tunNotSaved"));
     }
-    await api.saveSettings(settingsOwnedPatch(candidate));
+    await api.saveSettings({ tun: { enabled } });
     setForm(candidate);
   }
 

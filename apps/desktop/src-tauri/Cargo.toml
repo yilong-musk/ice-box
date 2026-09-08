@@ -37,4 +37,5 @@ url = "2.5.8"
 
 [dev-dependencies]
 ice-config = { workspace = true, features = ["test-hooks"] }
+ice-core = { workspace = true, features = ["test-hooks"] }
 

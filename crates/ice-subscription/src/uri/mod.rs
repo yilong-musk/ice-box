@@ -22,8 +22,9 @@ use ice_config::{NormalizedOutbound, NormalizedProfile, NormalizedRoute, Profile
 use percent_encoding::percent_decode_str;
 
 use crate::error::SubscriptionError;
+use crate::limits::Limits;
 
-/// Upper bound on URI lines (mirrors `MAX_CLASH_PROXIES`).
+/// Upper bound on URI lines (mirrors [`Limits::default`].max_nodes).
 pub const MAX_URI_LINES: usize = 500;
 
 /// Schemes recognized as proxy share links.
@@ -88,7 +89,7 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
             continue;
         }
         line_count += 1;
-        if line_count > MAX_URI_LINES {
+        if line_count > Limits::default().max_nodes {
             truncated += 1;
             continue;
         }

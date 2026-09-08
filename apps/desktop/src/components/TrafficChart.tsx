@@ -69,6 +69,18 @@ export function TrafficChart({ running, paused = false, className }: Props) {
 
     let cancelled = false;
 
+    const mergePoints = (prev: Point[], incoming: Point[]): Point[] => {
+      const cutoff = Date.now() - WINDOW_SECONDS * 1000;
+      const byTime = new Map<number, Point>();
+      for (const p of prev) {
+        if (p.t >= cutoff) byTime.set(p.t, p);
+      }
+      for (const p of incoming) {
+        if (p.t >= cutoff) byTime.set(p.t, p);
+      }
+      return [...byTime.values()].sort((a, b) => a.t - b.t);
+    };
+
     const tick = async () => {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
@@ -86,11 +98,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
           generationRef.current = snap.generation;
           setPoints(snap.points);
         } else if (snap.points.length > 0) {
-          setPoints((prev) => {
-            const merged = [...prev, ...snap.points];
-            const cutoff = Date.now() - WINDOW_SECONDS * 1000;
-            return merged.filter((p) => p.t >= cutoff);
-          });
+          setPoints((prev) => mergePoints(prev, snap.points));
         }
         cursorRef.current = snap.cursor;
       } catch (e) {
@@ -114,13 +122,8 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     if (typeof api.listenTrafficSample === "function") {
       void api.listenTrafficSample((sample) => {
         if (cancelled || document.visibilityState === "hidden") return;
-        cursorRef.current = sample.t;
         setLatest({ up: sample.up, down: sample.down });
-        setPoints((prev) => {
-          const merged = [...prev, sample];
-          const cutoff = Date.now() - WINDOW_SECONDS * 1000;
-          return merged.filter((p) => p.t >= cutoff);
-        });
+        setPoints((prev) => mergePoints(prev, [sample]));
       }).then((u) => {
         unlisten = u;
       });

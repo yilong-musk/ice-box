@@ -66,6 +66,10 @@ fn legacy_rule_fingerprint(rule: &Value) -> String {
     serde_json::to_string(rule).unwrap_or_default()
 }
 
+pub fn rule_matches_fingerprint(rule: &Value, fingerprint: &str) -> bool {
+    rule_fingerprint(rule) == fingerprint || legacy_rule_fingerprint(rule) == fingerprint
+}
+
 /// Classify a rule by its first recognized matcher key.
 pub fn rule_type_of(rule: &Value) -> &'static str {
     let Some(obj) = rule.as_object() else {
@@ -102,6 +106,19 @@ impl RuleOverrides {
             || self.disabled.contains(&legacy_rule_fingerprint(rule))
     }
 
+    /// Enable/disable using both SHA-256 and legacy canonical-JSON keys.
+    pub fn set_rule_disabled(&mut self, rule: &Value, disabled: bool) {
+        let sha = rule_fingerprint(rule);
+        let legacy = legacy_rule_fingerprint(rule);
+        if disabled {
+            self.disabled.insert(sha);
+            self.disabled.remove(&legacy);
+        } else {
+            self.disabled.remove(&sha);
+            self.disabled.remove(&legacy);
+        }
+    }
+
     pub fn set_disabled(&mut self, fingerprint: String, disabled: bool) {
         if disabled {
             self.disabled.insert(fingerprint);
@@ -110,9 +127,34 @@ impl RuleOverrides {
         }
     }
 
+    /// Rewrite legacy canonical-JSON fingerprints to SHA-256. Returns true
+    /// when the set changed and should be persisted.
+    pub fn migrate_legacy_fingerprints<'a>(
+        &mut self,
+        rules: impl IntoIterator<Item = &'a Value>,
+    ) -> bool {
+        let mut changed = false;
+        for rule in rules {
+            let legacy = legacy_rule_fingerprint(rule);
+            if self.disabled.remove(&legacy) {
+                self.disabled.insert(rule_fingerprint(rule));
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn remove_custom(&mut self, fingerprint: &str) {
-        self.custom
-            .retain(|rule| rule_fingerprint(rule) != fingerprint);
+        self.custom.retain(|rule| {
+            if rule_fingerprint(rule) == fingerprint || legacy_rule_fingerprint(rule) == fingerprint
+            {
+                self.disabled.remove(&rule_fingerprint(rule));
+                self.disabled.remove(&legacy_rule_fingerprint(rule));
+                false
+            } else {
+                true
+            }
+        });
         self.disabled.remove(fingerprint);
     }
 }

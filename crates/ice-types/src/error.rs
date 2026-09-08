@@ -34,6 +34,12 @@ pub enum ErrorCode {
     ProxyApplyFailedCoreReloaded,
     #[serde(rename = "proxy.restore_failed")]
     ProxyRestoreFailed,
+    #[serde(rename = "proxy.backup_corrupt")]
+    ProxyBackupCorrupt,
+    #[serde(rename = "settings.reset")]
+    SettingsReset,
+    #[serde(rename = "logs.oversized")]
+    LogsOversized,
     #[serde(rename = "sub.fetch_failed")]
     SubFetchFailed,
     #[serde(rename = "sub.unknown_format")]
@@ -98,6 +104,9 @@ impl ErrorCode {
         Self::ProxyApplyFailed,
         Self::ProxyApplyFailedCoreReloaded,
         Self::ProxyRestoreFailed,
+        Self::ProxyBackupCorrupt,
+        Self::SettingsReset,
+        Self::LogsOversized,
         Self::SubFetchFailed,
         Self::SubUnknownFormat,
         Self::SubParseFailed,
@@ -137,6 +146,9 @@ impl ErrorCode {
             Self::ProxyApplyFailed => "proxy.apply_failed",
             Self::ProxyApplyFailedCoreReloaded => "proxy.apply_failed_core_reloaded",
             Self::ProxyRestoreFailed => "proxy.restore_failed",
+            Self::ProxyBackupCorrupt => "proxy.backup_corrupt",
+            Self::SettingsReset => "settings.reset",
+            Self::LogsOversized => "logs.oversized",
             Self::SubFetchFailed => "sub.fetch_failed",
             Self::SubUnknownFormat => "sub.unknown_format",
             Self::SubParseFailed => "sub.parse_failed",
@@ -261,5 +273,15 @@ mod tests {
             assert!(seen.insert(code.as_str()), "duplicate {}", code.as_str());
         }
         assert_eq!(seen.len(), ErrorCode::ALL.len());
+        let mut match_count = 0usize;
+        for code in ErrorCode::ALL {
+            let _ = code.as_str();
+            match_count += 1;
+        }
+        assert_eq!(
+            match_count,
+            ErrorCode::ALL.len(),
+            "ErrorCode::ALL must list every as_str arm"
+        );
     }
 }

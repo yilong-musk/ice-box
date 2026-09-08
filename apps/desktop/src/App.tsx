@@ -17,7 +17,7 @@ import {
   Settings as SettingsIcon,
   Waypoints,
 } from "lucide-react";
-import { api, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
+import { api, formatDiagnostic, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
 import { Subscriptions } from "./pages/Subscriptions";
@@ -297,7 +297,7 @@ function AppShell() {
             {status?.proxy_recovery_warning && (
               <div className="px-4 pt-3">
                 <ErrorAlert>
-                  {status.proxy_recovery_warning}
+                  {formatDiagnostic(status.proxy_recovery_warning)}
                 </ErrorAlert>
               </div>
             )}

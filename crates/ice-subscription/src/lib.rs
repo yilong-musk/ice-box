@@ -10,6 +10,7 @@ mod error;
 mod fetch;
 mod limits;
 mod merge;
+mod prune;
 mod store;
 mod tls_fetch;
 mod uri;
@@ -19,18 +20,15 @@ mod url;
 const MAX_FETCH_CONCURRENCY: usize = 8;
 
 #[cfg(test)]
-static PANIC_NEXT_FETCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(test)]
 mod tests_g5 {
     use super::{
         detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
         normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
         parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
         write_subscription_error, AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate,
-        HttpFetcher, MockFetchMode, MockFetcher, SubscriptionError, SubscriptionFormat,
-        SubscriptionManager, SubscriptionMeta, SubscriptionPaths, CLASH_SUPPORTED_TYPES,
-        MAX_CLASH_PROXIES, MAX_URI_LINES,
+        HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionError,
+        SubscriptionFormat, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
+        CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
     };
     use base64::Engine;
     use chrono::{Duration as ChronoDuration, Utc};
@@ -1170,20 +1168,21 @@ mod tests_g5 {
         let paths = temp_subs("panic-worker");
         let body =
             r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1080}]}"#;
+        let once = PanicOnceMode::new(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            content_disposition: None,
+        });
         let fetcher = MockFetcher {
             bypasses_proxy: true,
-            mode: MockFetchMode::Ok(FetchResponse {
-                body: body.into(),
-                not_modified: false,
-                etag: None,
-                last_modified: None,
-                content_disposition: None,
-            }),
+            mode: MockFetchMode::PanicOnce(once.clone()),
         };
         let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
         let a = mgr.add("https://example.com/a", None, false, None).unwrap();
         let b = mgr.add("https://example.com/b", None, false, None).unwrap();
-        super::PANIC_NEXT_FETCH.store(true, Ordering::SeqCst);
+        once.arm();
         let results = mgr.fetch_ids(vec![a.id, b.id]);
         assert_eq!(results.len(), 2);
         assert!(
@@ -1209,8 +1208,8 @@ pub use clash::{
 pub use decode::maybe_decode_base64;
 pub use error::SubscriptionError;
 pub use fetch::{
-    DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode, MockFetcher, FETCH_TIMEOUT,
-    MAX_BODY_BYTES,
+    DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
+    FETCH_TIMEOUT, MAX_BODY_BYTES,
 };
 pub use merge::{
     active_subscription, list_profile_outbounds, load_active_profile,
@@ -1572,13 +1571,17 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         }
     };
 
-    Ok(NormalizedProfile {
-        nodes,
-        groups,
-        route,
-        dns: value.get("dns").cloned(),
-        default_outbound,
-        parse_stats,
+    Ok({
+        let mut profile = NormalizedProfile {
+            nodes,
+            groups,
+            route,
+            dns: value.get("dns").cloned(),
+            default_outbound,
+            parse_stats,
+        };
+        crate::prune::prune_dangling_refs(&mut profile);
+        profile
     })
 }
 
@@ -1784,10 +1787,6 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Network fetch phase of an update: load meta, validate URL, GET (no disk writes).
     pub fn fetch_update(&self, id: Uuid) -> Result<FetchedUpdate, SubscriptionError> {
-        #[cfg(test)]
-        if PANIC_NEXT_FETCH.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            panic!("injected fetch panic");
-        }
         assert!(self.fetcher.bypasses_system_proxy());
 
         let index = load_index(&self.paths)?;

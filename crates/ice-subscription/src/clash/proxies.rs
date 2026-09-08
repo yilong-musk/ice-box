@@ -5,10 +5,12 @@
 use ice_config::NormalizedOutbound;
 use serde_json::{json, Value};
 
+use crate::limits::Limits;
+
 /// Supported Clash proxy types for v1 (architecture checklist).
 pub const CLASH_SUPPORTED_TYPES: &[&str] = &["ss", "vmess", "trojan", "socks", "socks5", "http"];
 
-/// Upper bound on `proxies` array length to limit memory / config size.
+/// Same cap as [`Limits::default`].max_nodes (kept for tests / re-exports).
 pub const MAX_CLASH_PROXIES: usize = 500;
 
 #[derive(Debug, Clone)]
@@ -30,11 +32,12 @@ pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
         .and_then(|v| v.as_array())
         .ok_or(SkipReason::Incomplete)?;
 
-    let truncated = proxies.len().saturating_sub(MAX_CLASH_PROXIES);
+    let max_nodes = Limits::default().max_nodes;
+    let truncated = proxies.len().saturating_sub(max_nodes);
     let mut nodes = Vec::new();
     let mut skipped = 0usize;
 
-    for (idx, proxy) in proxies.iter().enumerate().take(MAX_CLASH_PROXIES) {
+    for (idx, proxy) in proxies.iter().enumerate().take(max_nodes) {
         match map_proxy(proxy, idx) {
             Ok(node) => nodes.push(node),
             Err(SkipReason::Unsupported | SkipReason::Incomplete) => skipped += 1,

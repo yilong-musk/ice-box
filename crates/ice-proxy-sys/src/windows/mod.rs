@@ -90,6 +90,7 @@ impl WindowsSystemProxy {
     }
 
     /// Test-only constructor pointing at a temporary hive.
+    #[cfg(test)]
     #[doc(hidden)]
     pub fn with_key_path(key_path: String) -> Self {
         Self { key_path }

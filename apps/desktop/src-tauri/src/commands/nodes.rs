@@ -22,10 +22,7 @@ pub async fn list_nodes(app: AppHandle) -> Result<Vec<NodeInfo>, AppError> {
         };
         let settings = current_settings(&state.paths)?;
         let selections = load_group_selections(&state.paths.group_selections());
-        let core_running = {
-            let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-            core.state().status == CoreStatus::Running
-        };
+        let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
         let live = if core_running {
             let endpoints = clash_endpoints(&settings);
             proxy_groups(&endpoints).ok()
@@ -155,7 +152,15 @@ pub struct ListRulesResponse {
 }
 
 pub(crate) fn load_overrides(state: &AppState) -> RuleOverrides {
-    load_rule_overrides(&state.paths.rule_overrides())
+    let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
+    if let Ok(Some(entry)) = cached_profile(state) {
+        let mut rules: Vec<_> = entry.profile.route.rules.clone();
+        rules.extend(overrides.custom.clone());
+        if overrides.migrate_legacy_fingerprints(rules.iter()) {
+            let _ = save_rule_overrides(&state.paths.rule_overrides(), &overrides);
+        }
+    }
+    overrides
 }
 
 pub(crate) fn rule_exists(
@@ -167,11 +172,11 @@ pub(crate) fn rule_exists(
         .route
         .rules
         .iter()
-        .any(|r| rule_fingerprint(r) == fingerprint)
+        .any(|r| rule_matches_fingerprint(r, fingerprint))
         || overrides
             .custom
             .iter()
-            .any(|r| rule_fingerprint(r) == fingerprint)
+            .any(|r| rule_matches_fingerprint(r, fingerprint))
 }
 
 /// Persist rule overrides then Apply (hot reload when running), like subscription mutations.
@@ -204,13 +209,13 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
             .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
-        if overrides.is_disabled(&fp) {
+        if overrides.is_rule_disabled(rule) {
             disabled += 1;
         }
         *counts.entry(rule_type_of(rule)).or_default() += 1;
     }
     for rule in &overrides.custom {
-        if overrides.is_disabled(&rule_fingerprint(rule)) {
+        if overrides.is_rule_disabled(rule) {
             disabled += 1;
         }
     }
@@ -284,7 +289,7 @@ pub(crate) fn query_rules(
             continue;
         }
         let fp = rule_fingerprint(rule);
-        let disabled = overrides.is_disabled(&fp);
+        let disabled = overrides.is_rule_disabled(rule);
         if !matches_filter(
             rule_type_of(rule),
             disabled,
@@ -312,7 +317,7 @@ pub(crate) fn query_rules(
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
             .unwrap_or_else(|| std::borrow::Cow::Owned(rule_fingerprint(rule)));
-        let disabled = overrides.is_disabled(&fp);
+        let disabled = overrides.is_rule_disabled(rule);
         if keyword_matches(&keyword, &keyword_texts, idx, rule)
             && matches_filter(
                 rule_type_of(rule),
@@ -419,15 +424,26 @@ pub(crate) fn persist_rule_disabled(
     state: &AppState,
     req: &SetRuleDisabledRequest,
 ) -> Result<(), AppError> {
-    let profile = active_profile(state)?;
     let mut overrides = load_overrides(state);
+    let profile = active_profile(state)?;
     if !rule_exists(&profile, &overrides, &req.fingerprint) {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "unknown rule fingerprint",
         ));
     }
-    overrides.set_disabled(req.fingerprint.clone(), req.disabled);
+    if let Some(rule) = profile
+        .route
+        .rules
+        .iter()
+        .chain(overrides.custom.iter())
+        .find(|r| rule_matches_fingerprint(r, &req.fingerprint))
+        .cloned()
+    {
+        overrides.set_rule_disabled(&rule, req.disabled);
+    } else {
+        overrides.set_disabled(req.fingerprint.clone(), req.disabled);
+    }
     save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
     Ok(())
 }

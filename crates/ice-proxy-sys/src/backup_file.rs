@@ -227,16 +227,30 @@ pub(crate) fn proxy_backup_matches_endpoints(
 /// If `proxy-backup.json` exists with `applied == true`, call `restore` once,
 /// then set `applied = false` and keep the file. Never calls `apply`.
 ///
+/// Result of [`recover_if_applied_hinted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoverOutcome {
+    None,
+    Restored,
+    RestoredFromCorrupt,
+}
+
+impl RecoverOutcome {
+    pub fn restored(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 /// A corrupt file is `Unknown`: probe live state and, when it still looks like
-/// ice-box's proxy (or is enabled with no hint), restore to defaults and replace
-/// the file. Never treated as "not applied".
+/// ice-box's proxy, restore to defaults and replace the file. Without endpoints,
+/// a live enabled proxy is never treated as ours (PROXY-1).
 ///
 /// Returns `true` when a restore was performed.
 pub fn recover_if_applied(
     backup_path: &Path,
     proxy: &dyn SystemProxy,
 ) -> Result<bool, ProxySysError> {
-    recover_if_applied_hinted(backup_path, proxy, None)
+    Ok(recover_if_applied_hinted(backup_path, proxy, None)?.restored())
 }
 
 /// Like [`recover_if_applied`], using `endpoints` to decide whether a corrupt
@@ -245,9 +259,9 @@ pub fn recover_if_applied_hinted(
     backup_path: &Path,
     proxy: &dyn SystemProxy,
     endpoints: Option<&ProxyEndpoints>,
-) -> Result<bool, ProxySysError> {
+) -> Result<RecoverOutcome, ProxySysError> {
     if !backup_path.exists() {
-        return Ok(false);
+        return Ok(RecoverOutcome::None);
     }
 
     let mut record = match ProxyBackupFile::load(backup_path) {
@@ -255,14 +269,14 @@ pub fn recover_if_applied_hinted(
         Err(_) => return recover_unknown_backup(backup_path, proxy, endpoints),
     };
     if !record.applied && !record.pending_apply {
-        return Ok(false);
+        return Ok(RecoverOutcome::None);
     }
 
     proxy.restore(&record.backup)?;
     record.applied = false;
     record.pending_apply = false;
     record.save(backup_path)?;
-    Ok(true)
+    Ok(RecoverOutcome::Restored)
 }
 
 fn write_clean_not_applied(backup_path: &Path) -> Result<(), ProxySysError> {
@@ -285,19 +299,23 @@ fn recover_unknown_backup(
     backup_path: &Path,
     proxy: &dyn SystemProxy,
     endpoints: Option<&ProxyEndpoints>,
-) -> Result<bool, ProxySysError> {
+) -> Result<RecoverOutcome, ProxySysError> {
     let current = proxy.backup()?;
     let ours = match endpoints {
         Some(ep) => current.enabled && proxy_backup_matches_endpoints(&current, ep),
-        None => current.enabled,
+        None => false,
     };
     if !ours {
         write_clean_not_applied(backup_path)?;
-        return Ok(false);
+        return Ok(RecoverOutcome::None);
     }
+    tracing::warn!(
+        path = %backup_path.display(),
+        "proxy-backup.json was corrupt; restoring OS proxy to defaults"
+    );
     proxy.restore(&ProxyBackup::default())?;
     write_clean_not_applied(backup_path)?;
-    Ok(true)
+    Ok(RecoverOutcome::RestoredFromCorrupt)
 }
 
 #[cfg(test)]
@@ -786,7 +804,7 @@ mod tests {
         };
         assert!(is_proxy_live_applied(&proxy, &path, &endpoints));
         let did = recover_if_applied_hinted(&path, &proxy, Some(&endpoints)).expect("recover");
-        assert!(did);
+        assert_eq!(did, RecoverOutcome::RestoredFromCorrupt);
         assert_eq!(proxy.restore_calls.get(), 1);
         assert_eq!(disk_proxy_state(&path), DiskProxyState::NotApplied);
 

@@ -15,8 +15,10 @@ pub use binary::{
 };
 pub use clash_api::{
     get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode, traffic_sample,
-    GroupState, MockClashApi, RecordedRequest, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
+    GroupState, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
 };
+#[cfg(any(test, feature = "test-hooks"))]
+pub use clash_api::{MockClashApi, RecordedRequest};
 pub use error::CoreError;
 pub use health::{
     tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,
@@ -82,6 +84,9 @@ impl Default for CoreState {
 #[derive(Debug, Clone)]
 pub struct CorePaths {
     pub binary: PathBuf,
+    /// Extra images that may be the live process when the elevated helper
+    /// or Windows launcher starts a protected copy of sing-box (SEC-6).
+    pub extra_binaries: Vec<PathBuf>,
     pub config: PathBuf,
     pub log_file: PathBuf,
     pub pid_file: PathBuf,
@@ -96,6 +101,14 @@ pub struct CorePaths {
 }
 
 impl CorePaths {
+    /// Bundled binary plus protected copies that an elevated start may run.
+    fn adopt_binaries(&self) -> Vec<&Path> {
+        let mut out = Vec::with_capacity(self.extra_binaries.len() + 1);
+        out.push(self.binary.as_path());
+        out.extend(self.extra_binaries.iter().map(PathBuf::as_path));
+        out
+    }
+
     pub fn health_endpoints(&self) -> HealthEndpoints {
         HealthEndpoints {
             host: self.clash_api_host.clone(),
@@ -234,7 +247,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         if !looks_like_singbox_process(pid) {
             return Err(CoreError::AdoptRejected(pid));
         }
-        if paths.binary.is_file() && !process_image_matches_core(pid, &paths.binary) {
+        if !process_image_matches_any(pid, &paths.adopt_binaries()) {
             return Err(CoreError::AdoptRejected(pid));
         }
 
@@ -899,10 +912,9 @@ fn reclaim_orphan_cores_windows(config_path: &Path) -> usize {
 
 #[cfg(windows)]
 fn process_command_line(pid: u32) -> Option<String> {
+    use windows_sys::Wdk::System::Threading::NtQueryInformationProcess;
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        NtQueryInformationProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
     const PROCESS_COMMAND_LINE_INFORMATION: i32 = 60;
 
@@ -1150,6 +1162,18 @@ fn process_image_path(pid: u32) -> Option<String> {
     }
 }
 
+fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
+    let existing: Vec<&Path> = cores.iter().copied().filter(|p| p.is_file()).collect();
+    if existing.is_empty() {
+        // No on-disk candidate (tests use a dummy path): identity is the
+        // `looks_like_singbox_process` check above.
+        return true;
+    }
+    existing
+        .iter()
+        .any(|core| process_image_matches_core(pid, core))
+}
+
 fn process_image_matches_core(pid: u32, core: &Path) -> bool {
     let Some(image) = process_image_path(pid) else {
         return false;
@@ -1264,6 +1288,7 @@ mod tests {
         }
         CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config: dir.join("config.json"),
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
@@ -1716,6 +1741,7 @@ mod tests {
 
         let paths = CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config,
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
@@ -1921,6 +1947,7 @@ mod tests {
 
         let paths = CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config: config.clone(),
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
@@ -2021,6 +2048,7 @@ mod tests {
         let dir = temp_root("ports-lan");
         let paths = CorePaths {
             binary: dir.join("x"),
+            extra_binaries: Vec::new(),
             config: dir.join("c.json"),
             log_file: dir.join("l.log"),
             pid_file: dir.join("p.pid"),

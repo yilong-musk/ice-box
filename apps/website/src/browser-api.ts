@@ -131,6 +131,10 @@ export function formatInvokeError(err: unknown): string {
   return String(err);
 }
 
+export function formatDiagnostic(warning: string): string {
+  return warning;
+}
+
 type DesktopApi = typeof import("../../../apps/desktop/src/api/tauri").api;
 
 export const api = {

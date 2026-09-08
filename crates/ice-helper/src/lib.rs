@@ -115,7 +115,7 @@ mod imp {
     }
 
     /// Reads the peer uid from the socket (`getpeereid` on macOS; `SO_PEERCRED`
-    /// on Linux). Used by `main`; tests inject [`FixedPeerAuth`].
+    /// on Linux). Used by `main`; tests inject a fixed uid.
     pub struct SocketPeerAuth;
 
     #[cfg(target_os = "macos")]
@@ -161,8 +161,10 @@ mod imp {
     }
 
     /// Test-only peer auth with a fixed uid.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub struct FixedPeerAuth(pub u32);
 
+    #[cfg(any(test, feature = "test-hooks"))]
     impl PeerAuth for FixedPeerAuth {
         fn peer_uid(&self, _stream: &UnixStream) -> Result<u32, TunError> {
             Ok(self.0)
@@ -1341,7 +1343,7 @@ mod imp {
     }
 } // mod imp
 
+#[cfg(all(unix, any(test, feature = "test-hooks")))]
+pub use imp::FixedPeerAuth;
 #[cfg(unix)]
-pub use imp::{
-    serve_connection, FixedPeerAuth, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
-};
+pub use imp::{serve_connection, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth};

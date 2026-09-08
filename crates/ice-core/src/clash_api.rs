@@ -350,6 +350,7 @@ fn percent_encode_query(s: &str) -> String {
 }
 
 /// Test-only recorded HTTP request (shared mock Clash API, see [`MockClashApi`]).
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct RecordedRequest {
@@ -361,6 +362,7 @@ pub struct RecordedRequest {
 /// Test-only stateful mock of the sing-box Clash API, shared with the desktop crate's
 /// orchestrate tests. It serves `GET /configs` with the current mode and applies a mode
 /// change on 2xx `PATCH /configs`. Not part of the public API.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub struct MockClashApi {
     pub addr: std::net::SocketAddr,
@@ -370,6 +372,7 @@ pub struct MockClashApi {
     stop: std::sync::mpsc::Sender<()>,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl MockClashApi {
     /// Spawn a mock where a 2xx `PATCH /configs` records the request, applies the new mode,
     /// and `GET /configs` returns it; non-2xx `patch_status` makes every request fail with
@@ -564,6 +567,7 @@ impl MockClashApi {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl Drop for MockClashApi {
     fn drop(&mut self) {
         let _ = self.stop.send(());

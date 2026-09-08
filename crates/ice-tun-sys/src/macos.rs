@@ -57,6 +57,11 @@ const INTERFACE_APPEAR_DELAY_MS: u64 = 200;
 /// one family or route must fail closed, not be recorded as owned).
 const APPLY_CONVERGE_TRIES: u32 = 15;
 const APPLY_CONVERGE_DELAY_MS: u64 = 200;
+/// Bounded retry when a DNS probe errors (unknown). Fail closed after this
+/// many attempts so a single transient `networksetup` failure is not treated
+/// as a lost capture, without stalling the verify watchdog.
+const DNS_PROBE_TRIES: u32 = 5;
+const DNS_PROBE_DELAY_MS: u64 = 50;
 /// Bounded wait for the kernel to tear down the adapter after a core stop
 /// (spike: SIGTERM removes routes + interface; `kill -9` flushes them with
 /// the fd close within ~2 s).
@@ -619,17 +624,27 @@ impl MacosTunBackend {
     /// "not owned".
     fn dns_matches_after(&self, after: &DnsSnapshot) -> Option<bool> {
         let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-        match self.host.dns_servers(&service) {
-            Ok(current) => Some(current == expected),
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    service = %service,
-                    "macos tun dns probe failed"
-                );
-                None
+        let mut last_err = None;
+        for attempt in 0..DNS_PROBE_TRIES {
+            match self.host.dns_servers(&service) {
+                Ok(current) => return Some(current == expected),
+                Err(err) => {
+                    last_err = Some(err);
+                    if attempt + 1 < DNS_PROBE_TRIES {
+                        std::thread::sleep(Duration::from_millis(DNS_PROBE_DELAY_MS));
+                    }
+                }
             }
         }
+        if let Some(err) = last_err {
+            tracing::error!(
+                error = %err,
+                service = %service,
+                tries = DNS_PROBE_TRIES,
+                "macos tun dns probe failed"
+            );
+        }
+        None
     }
 
     /// `(dns_consistent, dns_owned)` for an applied capture.

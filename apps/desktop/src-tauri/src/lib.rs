@@ -166,7 +166,7 @@ pub fn run() {
             let (core, core_snapshot) = wrap_core(core);
             let settings_reset_warning = load_settings_detailed(&paths.settings())
                 .reset_reason
-                .map(|reason| format!("settings.reset: {reason}"));
+                .map(|reason| format!("{}: {reason}", ice_config::ErrorCode::SettingsReset));
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
             let resource_dir = app.path().resource_dir().ok();
@@ -482,14 +482,24 @@ mod tests {
     }
 
     #[test]
-    fn error_codes_ts_lists_every_rust_variant() {
+    fn error_codes_ts_matches_rust() {
         let ts = include_str!("../../src/api/errorCodes.ts");
-        for code in ice_config::ErrorCode::ALL {
-            let needle = format!("\"{}\"", code.as_str());
-            assert!(
-                ts.contains(&needle),
-                "apps/desktop/src/api/errorCodes.ts missing {needle}"
-            );
+        let rust: std::collections::HashSet<&str> = ice_config::ErrorCode::ALL
+            .iter()
+            .map(|code| code.as_str())
+            .collect();
+        let mut from_ts = std::collections::HashSet::new();
+        for line in ts.lines() {
+            let trimmed = line.trim().trim_end_matches(',');
+            if let Some(code) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                if code.contains('.') {
+                    from_ts.insert(code);
+                }
+            }
         }
+        assert_eq!(
+            rust, from_ts,
+            "ErrorCode::ALL and apps/desktop/src/api/errorCodes.ts ERROR_CODES must be the same set"
+        );
     }
 }

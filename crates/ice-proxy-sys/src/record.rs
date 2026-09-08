@@ -99,7 +99,10 @@ pub fn restore_and_clear_flag(
     }
     let mut record = match ProxyBackupFile::load(backup_path) {
         Ok(record) => record,
-        Err(_) => return crate::recover_if_applied(backup_path, proxy),
+        Err(_) => {
+            return crate::recover_if_applied_hinted(backup_path, proxy, None)
+                .map(|outcome| outcome.restored())
+        }
     };
     if !record.applied && !record.pending_apply {
         return Ok(false);

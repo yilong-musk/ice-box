@@ -19,7 +19,7 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
     run_blocking("save_settings", move || {
         let state = app.state::<AppState>();
         let _orch = lock_orchestrate(&state)?;
-        let previous = current_settings(&state.paths).unwrap_or_default();
+        let previous = current_settings(&state.paths)?;
         // Home start/stop own `proxy_service_enabled`; the patch type has no
         // such field, so a Settings/Home save cannot clobber on/off.
         let settings = previous.apply_patch(&patch);

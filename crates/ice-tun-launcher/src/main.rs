@@ -157,6 +157,7 @@ fn install_protected(data_dir: &Path) -> i32 {
         return 2;
     }
     let program_data = ice_tun_pin::program_data_dir();
+    let install_dir = ice_tun_pin::protected_install_dir(&program_data);
     let bin_dir = ice_tun_pin::protected_bin_dir(&program_data);
     let run_dir = ice_tun_pin::protected_run_dir(&program_data);
     if std::fs::create_dir_all(&bin_dir).is_err() || std::fs::create_dir_all(&run_dir).is_err() {
@@ -179,7 +180,10 @@ fn install_protected(data_dir: &Path) -> i32 {
             }
         }
     }
-    if apply_acl(&bin_dir, true, true).is_err() || apply_acl(&run_dir, true, false).is_err() {
+    if apply_acl(&install_dir, true, true).is_err()
+        || apply_acl(&bin_dir, true, true).is_err()
+        || apply_acl(&run_dir, true, false).is_err()
+    {
         return 2;
     }
     if write_resources_pointer(&program_data, &src_dir).is_err() {
