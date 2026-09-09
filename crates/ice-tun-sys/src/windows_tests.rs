@@ -20,6 +20,10 @@ Idx     Met         MTU          State          Name
             (17, "Wintun".to_string()),
         ]
     );
+    let rows = parse_netsh_interface_rows(output);
+    assert_eq!(rows[2].index, 17);
+    assert!(rows[2].up, "connected listing rows must parse as up");
+    assert_eq!(rows[2].name, "Wintun");
 }
 
 #[test]

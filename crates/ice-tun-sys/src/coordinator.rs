@@ -93,18 +93,23 @@ pub struct SudoCoreCoordinator {
     child: Option<Child>,
 }
 
-/// How long to wait for the elevated core to stay alive during startup
-/// (config/bind errors surface as an early exit) before handing over to the
-/// backend's interface verification.
-const STARTUP_LIVENESS_WAIT: Duration = Duration::from_millis(2000);
+/// How long a freshly spawned elevated core must stay alive before we hand
+/// off to adapter / health probes. Config and bind crashes usually exit in
+/// this window; sleeping a multi-second “still running” delay only slowed
+/// the success path (the backend already waits for the adapter).
+const STARTUP_CRASH_WINDOW: Duration = Duration::from_millis(100);
 const LIVENESS_POLL: Duration = Duration::from_millis(100);
+/// Bounded wait for the scheduled-task launcher to write the handshake pid
+/// after `schtasks /Run` (Task Scheduler dispatch can be slow).
+#[cfg(target_os = "windows")]
+const TASK_PIDFILE_WAIT: Duration = Duration::from_secs(20);
 /// Bounded wait for the root-owned core to die after SIGTERM, then SIGKILL.
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
 /// Shared verify path for Child-based coordinators: callers implement
-/// only the spawn seam; this waits until the process is still alive after
-/// [`STARTUP_LIVENESS_WAIT`].
+/// only the spawn seam; this fails if the process exits inside
+/// [`STARTUP_CRASH_WINDOW`].
 fn verify_then_start_child(
     spawn: impl FnOnce() -> Result<Child, TunError>,
     log_path: &Path,
@@ -115,7 +120,7 @@ fn verify_then_start_child(
 }
 
 fn wait_for_child_liveness(child: &mut Child, log_path: &Path) -> Result<(), TunError> {
-    let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
+    let deadline = Instant::now() + STARTUP_CRASH_WINDOW;
     loop {
         match child.try_wait() {
             Ok(Some(code)) => {
@@ -151,8 +156,8 @@ fn wait_for_pid_liveness(
     log_hint: &Path,
     is_alive: impl Fn(u32) -> bool,
 ) -> Result<(), TunError> {
-    let deadline = Instant::now() + STARTUP_LIVENESS_WAIT;
-    while Instant::now() < deadline {
+    let deadline = Instant::now() + STARTUP_CRASH_WINDOW;
+    loop {
         if !is_alive(pid) {
             return Err(TunError::new(
                 ErrorCode::TunHealthcheckFailed,
@@ -162,9 +167,11 @@ fn wait_for_pid_liveness(
                 ),
             ));
         }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
         std::thread::sleep(LIVENESS_POLL);
     }
-    Ok(())
 }
 
 impl SudoCoreCoordinator {
@@ -1080,19 +1087,11 @@ pub fn tun_task_pin_matches(launcher: &Path) -> bool {
     }
 }
 
-/// Read the scheduled-task XML and refuse a replaced protected launcher or core.
-/// Start hashes only the Program Files copies (what `schtasks /Run` executes).
-#[cfg(target_os = "windows")]
-fn verify_task_binaries(_launcher: &Path) -> Result<(), TunError> {
-    let (pin, protected, protected_core) = load_verified_task_pin()?;
-    pin_must_match(&pin, &protected, &protected_core, "protected")
-}
-
 /// Ensure hashes the per-user copies (detect app updates) and the protected
 /// copies (detect tampering). Missing either side triggers re-elevation.
 #[cfg(target_os = "windows")]
 fn verify_task_for_ensure(user_launcher: &Path) -> Result<(), TunError> {
-    let (pin, protected, protected_core) = load_verified_task_pin()?;
+    let (pin, protected, protected_core, _) = load_verified_task_pin()?;
     pin_must_match(&pin, &protected, &protected_core, "protected")?;
     if ice_tun_pin::path_is_protected_launcher(user_launcher, &ice_tun_pin::program_files_dir()) {
         return Ok(());
@@ -1110,7 +1109,8 @@ fn verify_task_for_ensure(user_launcher: &Path) -> Result<(), TunError> {
 }
 
 #[cfg(target_os = "windows")]
-fn load_verified_task_pin() -> Result<(ice_tun_pin::TunTaskPin, PathBuf, PathBuf), TunError> {
+fn load_verified_task_pin() -> Result<(ice_tun_pin::TunTaskPin, PathBuf, PathBuf, String), TunError>
+{
     let xml = query_tun_task_xml().ok_or_else(|| {
         TunError::new(
             ErrorCode::TunPermissionRequired,
@@ -1146,7 +1146,7 @@ fn load_verified_task_pin() -> Result<(ice_tun_pin::TunTaskPin, PathBuf, PathBuf
             ),
         )
     })?;
-    Ok((pin, protected, protected_core))
+    Ok((pin, protected, protected_core, xml))
 }
 
 #[cfg(target_os = "windows")]
@@ -1264,10 +1264,24 @@ impl TaskCoreCoordinator {
         }
     }
 
+    fn previous_task_instance_running(&self) -> bool {
+        if self.pid.is_some_and(pid_is_alive_windows) {
+            return true;
+        }
+        if let Ok(contents) = std::fs::read_to_string(&self.pidfile) {
+            if let Ok(pid) = contents.trim().parse::<u32>() {
+                if pid != 0 && pid_is_alive_windows(pid) {
+                    return true;
+                }
+            }
+        }
+        protected_launcher_is_running()
+    }
+
     fn wait_for_pidfile(&self) -> Result<u32, TunError> {
         // The task start + launcher spawn take a moment; the launcher writes
         // the pid file within seconds of `schtasks /Run`.
-        let deadline = Instant::now() + STARTUP_LIVENESS_WAIT * 10;
+        let deadline = Instant::now() + TASK_PIDFILE_WAIT;
         loop {
             if let Ok(contents) = std::fs::read_to_string(&self.pidfile) {
                 if let Ok(pid) = contents.trim().parse::<u32>() {
@@ -1374,31 +1388,25 @@ impl CoreCoordinator for TaskCoreCoordinator {
     // the runtime path is validated for equality so a moved data dir cannot
     // silently run a stale config.
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
-        if !tun_task_exists() {
-            return Err(TunError::new(
-                ErrorCode::TunPermissionRequired,
-                format!(
-                    "the TUN scheduled task {TUN_TASK_NAME} is missing; run the one-time elevation setup (ensure_tun_elevation) before enabling capture"
-                ),
-            ));
-        }
         if !self.launcher.is_file() {
             return Err(TunError::new(
                 ErrorCode::TunApplyFailed,
                 format!("TUN task launcher not found at {}", self.launcher.display()),
             ));
         }
-        verify_task_binaries(&self.launcher)?;
-        let xml = query_tun_task_xml().ok_or_else(|| {
-            TunError::new(
-                ErrorCode::TunApplyFailed,
-                format!("the TUN scheduled task {TUN_TASK_NAME} XML could not be read"),
-            )
-        })?;
+        let (pin, protected, protected_core, xml) = load_verified_task_pin()?;
+        pin_must_match(&pin, &protected, &protected_core, "protected")?;
         ice_tun_pin::task_config_path_matches(&xml, config_path)
             .map_err(|msg| TunError::new(ErrorCode::TunApplyFailed, msg))?;
-        self.end_task();
-        self.reset_handshake()?;
+        // `schtasks /End` is a full Task Scheduler round-trip. Skip it when
+        // the previous instance is already gone (the usual toggle path).
+        if self.previous_task_instance_running() {
+            self.end_task();
+            self.reset_handshake()?;
+        } else {
+            let _ = std::fs::remove_file(&self.pidfile);
+            self.pid = None;
+        }
         self.run_task()?;
         let pid = match self.wait_for_pidfile() {
             Ok(pid) => pid,
@@ -1506,6 +1514,17 @@ mod tests {
         let err = wait_for_pid_liveness(1, Path::new("pidfile"), |_| false)
             .expect_err("dead pid must fail liveness");
         assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
+    }
+
+    #[test]
+    fn wait_for_pid_liveness_returns_before_the_old_two_second_window() {
+        let started = Instant::now();
+        wait_for_pid_liveness(1, Path::new("pidfile"), |_| true).expect("alive pid");
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "success path must not sleep a multi-second liveness window, got {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

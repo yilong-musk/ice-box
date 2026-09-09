@@ -21,8 +21,11 @@
 //! hosts. App-side verify accepts those wrappers only when Arguments still
 //! pin the protected launcher (or its sibling run script) and `--data`.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
@@ -597,8 +600,37 @@ pub fn encode_utf16_le_bom(text: &str) -> Vec<u8> {
 
 /// SHA-256 of a file, lowercase hex (pinned in the scheduled-task description).
 /// Hashed in a streaming loop so a tens-of-MB `sing-box.exe` is never fully
-/// buffered.
+/// buffered. Repeat calls for the same path/len/mtime reuse the digest so
+/// TUN start/stop does not re-read the core on every toggle.
 pub fn sha256_of_file(path: &Path) -> Result<String, String> {
+    let meta = std::fs::metadata(path).ok();
+    let fingerprint = meta.as_ref().map(|meta| (meta.len(), meta.modified().ok()));
+    if let Some((len, modified)) = fingerprint {
+        if let Ok(cache) = sha256_cache().lock() {
+            if let Some(hit) = cache.get(path) {
+                if hit.len == len && hit.modified == modified {
+                    return Ok(hit.digest.clone());
+                }
+            }
+        }
+    }
+    let sha = sha256_of_file_uncached(path)?;
+    if let Some((len, modified)) = fingerprint {
+        if let Ok(mut cache) = sha256_cache().lock() {
+            cache.insert(
+                path.to_path_buf(),
+                Sha256CacheEntry {
+                    len,
+                    modified,
+                    digest: sha.clone(),
+                },
+            );
+        }
+    }
+    Ok(sha)
+}
+
+fn sha256_of_file_uncached(path: &Path) -> Result<String, String> {
     let mut file =
         std::fs::File::open(path).map_err(|err| format!("read {}: {err}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -613,6 +645,17 @@ pub fn sha256_of_file(path: &Path) -> Result<String, String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+struct Sha256CacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    digest: String,
+}
+
+fn sha256_cache() -> &'static Mutex<HashMap<PathBuf, Sha256CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Sha256CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// SHA-256 of bytes, lowercase hex.
@@ -779,6 +822,15 @@ mod tests {
         assert_eq!(
             sha256_of_file(&file).expect("sum"),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        assert_eq!(
+            sha256_of_file(&file).expect("cached"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        std::fs::write(&file, b"hello!").unwrap();
+        assert_eq!(
+            sha256_of_file(&file).expect("rewritten"),
+            sha256_hex(b"hello!")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

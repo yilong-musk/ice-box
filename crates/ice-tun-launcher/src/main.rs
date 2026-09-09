@@ -54,7 +54,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
-const POLL_INTERVAL: Duration = Duration::from_millis(300);
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(target_os = "windows")]
 const TERM_GRACE: Duration = Duration::from_secs(5);
 #[cfg(target_os = "windows")]
