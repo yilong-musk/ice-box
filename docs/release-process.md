@@ -160,8 +160,10 @@ the committed checksum file is the trust root, as with
 `third_party/sing-box/CHECKSUMS.sha256`.
 
 CI `scripts/gate.sh` runs `cargo test --workspace --exclude ice-box` (lib
-+ integration + doc) and `cargo test -p ice-box --lib`. The Windows job
-also runs `cargo test -p ice-proxy-sys` (macOS has the same named step).
++ integration + doc) and `cargo test -p ice-box --lib`. Linux runs the
+full gate (`GATE_SCOPE=all`). macOS and Windows each have a rust-only
+test job (`GATE_SCOPE=rust`) in parallel with a packaging job; `g9_*`
+and `ice-proxy-sys` are covered by that test job, not by extra steps.
 Ignored live tests and how to run them are listed in
 [`testing.md`](testing.md).
 

@@ -12,7 +12,22 @@ Companion: `scripts/gate.sh` (CI), `scripts/gate-local.sh` (pre-commit),
 |---|---|
 | `scripts/gate-local.sh` | `cargo fmt --check`, clippy (excluding `ice-box`), `cargo test --workspace --lib --exclude ice-box`, `cargo test -p ice-tun-sys --tests`, desktop + website `tsc`, vitest, updater-fixture script, Live Demo screenshot |
 | `scripts/gate.sh` (CI) | The above plus clippy for **all** crates, `cargo test --workspace --exclude ice-box` (lib + integration + doc), `cargo test -p ice-box --lib`, Vite production build |
-| CI macOS / Windows extra steps | `cargo test -p ice-box --lib 'g9_'` (headless acceptance), `cargo test -p ice-proxy-sys` |
+
+`gate.sh` splits into two halves via `GATE_SCOPE`. It defaults to `all`;
+CI's `gate (linux)` job runs that, while the macOS and Windows **test**
+jobs run `GATE_SCOPE=rust` (fmt, clippy, cargo test). Their frontend half
+is platform independent, so running it once on Linux is enough, and each
+OS **build** job's `tauri build` re-runs `npm run build` from its
+beforeBuildCommand. The `g9_*` headless acceptance tests and
+`ice-proxy-sys` run on every platform as part of `cargo test --workspace`
+/ `cargo test -p ice-box --lib`; there are no separate CI steps for them.
+
+macOS and Windows test/build run in parallel. The required check names
+(`gate + build (macOS dmg)`, `gate + build (Windows nsis)`) are aggregator
+jobs so branch protection does not change. CI packaging overrides the
+workspace release profile (`lto = false`, `codegen-units = 16`,
+`opt-level = 1`, no strip); `release.yml` does not, and still ships the
+real profile.
 
 `cargo test --lib` never compiles or runs `crates/*/tests/*.rs`. Those
 integration binaries (TUN recovery, macOS/Windows backends, helper e2e)
