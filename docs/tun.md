@@ -160,15 +160,22 @@ auto-triggered) runs `ice-tun-launcher.exe`:
   console flash). Refuses standard-user accounts (over-the-shoulder UAC
   would register the task as a different administrator). UAC launches the
   GUI-subsystem `ice-tun-launcher.exe` with `--install --data <dir>
-  --user-sid <sid>`. That elevated step copies `ice-tun-launcher.exe`,
+  --user-sid <sid>`. That elevated step ends and deletes any leftover
+  `ice-box-tun` task (including a pre-migration `%ProgramData%\ice-box\bin`
+  Command) *before* replacing files, copies `ice-tun-launcher.exe`,
   `sing-box.exe`, and `libcronet.dll` (plus `wintun.dll` if present) to
   `%ProgramFiles%\ice-box\` (standard users cannot pre-create that tree),
   takes ownership as Administrators, ACLs the directory and each file
   (SYSTEM + Administrators full; Users read/execute), and registers the
-  task from an in-memory XML string via `ITaskService::RegisterTask` so
-  the SHA-256 pin of the **protected copies** lives in
+  task from XML via `ITaskService::RegisterTask` (BSTR without a UTF-16
+  encoding declaration). If COM import fails, it falls back to
+  `schtasks /Create /XML /F` from an admin-owned UTF-16 LE+BOM file under
+  `%ProgramData%\ice-box\run` that is deleted after import. The SHA-256 pin
+  of the **protected copies** lives in
   `RegistrationInfo/Description` and `Principal/UserId` is the interactive
-  SID. The task `Command` points at the Program Files launcher; `Run`
+  SID. A failed install writes `last-install-error.txt` in that run dir
+  (Users read) so the unelevated app can show the COM/`schtasks` detail.
+  The task `Command` points at the Program Files launcher; `Run`
   refuses `current_exe()` outside that directory. Config is sanitised and
   written to `%ProgramData%\ice-box\run\config.json` (admin-owned) before
   spawn. Core log, pid file, and the sanitised config live in that run

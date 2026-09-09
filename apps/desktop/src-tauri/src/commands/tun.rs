@@ -103,22 +103,43 @@ pub(crate) fn run_elevated_launcher(launcher: &Path, args: &[String]) -> Result<
     // ShellExecute cannot pass CREATE_NO_WINDOW.
     match ice_tun_sys::run_elevated_wait(launcher, args) {
         Ok(0) => Ok(()),
-        Ok(code) => Err(launcher_failed(format!(
-            "the TUN launcher exited with status {code}"
-        ))),
+        Ok(code) => {
+            let message = launcher_exit_message(code);
+            tracing::error!(exit = code, error = %message, "TUN launcher install failed");
+            Err(launcher_failed(message))
+        }
         Err(err) if err.raw_os_error() == Some(1223) => Err(AppError::with_code(
             crate::windows_elevation::ERR_ELEVATION_CANCELLED,
             "the one-time TUN elevation setup was not granted; enable TUN again to retry",
         )),
-        Err(err) => Err(launcher_failed(format!(
-            "spawn elevated TUN launcher: {err}"
-        ))),
+        Err(err) => {
+            tracing::error!(error = %err, "spawn elevated TUN launcher failed");
+            Err(launcher_failed(format!(
+                "spawn elevated TUN launcher: {err}"
+            )))
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
 fn launcher_failed(message: impl Into<String>) -> AppError {
     AppError::with_code(ErrorCode::TunHelperInstallFailed, message)
+}
+
+#[cfg(target_os = "windows")]
+fn last_install_error() -> Option<String> {
+    ice_tun_sys::read_last_tun_install_error(&ice_tun_sys::protected_install_error_path(
+        &ice_tun_sys::program_data_dir(),
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn launcher_exit_message(code: impl std::fmt::Display) -> String {
+    let mut message = format!("the TUN launcher exited with status {code}");
+    if let Some(detail) = last_install_error() {
+        message = format!("{message}: {detail}");
+    }
+    message
 }
 
 #[cfg(target_os = "windows")]
@@ -177,22 +198,30 @@ pub(crate) fn ensure_tun_elevation_inner(
             .map_err(|err| launcher_failed(format!("create the TUN scheduled task: {err}")));
         match status {
             Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(launcher_failed(format!(
-                "the TUN scheduled task could not be created (exit {})",
-                status.code().unwrap_or(-1)
-            ))),
+            Ok(status) => {
+                let code = status.code().unwrap_or(-1);
+                let message = launcher_exit_message(code);
+                tracing::error!(exit = code, error = %message, "TUN launcher install failed");
+                Err(launcher_failed(message))
+            }
             Err(err) => Err(err),
         }
     } else {
         run_elevated_launcher(&launcher, &install_args)
     };
     let pin_ok = ice_tun_sys::tun_task_exists() && ice_tun_sys::tun_task_pin_matches(&launcher);
-    create_result?;
+    if let Err(err) = create_result {
+        tracing::error!(error = %err.message, "TUN elevation setup failed");
+        return Err(err);
+    }
     if !pin_ok {
-        tracing::warn!("TUN scheduled task missing or pin not persisted after the setup run");
-        return Err(launcher_failed(
-            "the TUN scheduled task pin was not stored; enable TUN again to retry",
-        ));
+        let mut message =
+            "the TUN scheduled task pin was not stored; enable TUN again to retry".to_string();
+        if let Some(detail) = last_install_error() {
+            message = format!("{message}: {detail}");
+        }
+        tracing::error!(error = %message, "TUN scheduled task missing or pin not persisted after the setup run");
+        return Err(launcher_failed(message));
     }
     reset_tun_task_cache(state);
     tracing::info!("TUN scheduled task installed (one-time elevation complete)");

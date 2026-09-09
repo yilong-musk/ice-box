@@ -23,8 +23,9 @@
 //! Usage:
 //! - `ice-tun-launcher --data <app-data-dir>` — run the elevated core
 //! - `ice-tun-launcher --install --data <app-data-dir> --user-sid <sid>` —
-//!   one-time UAC: copy binaries to `%ProgramFiles%\ice-box`, register the
-//!   task from an in-memory XML string
+//!   one-time UAC: remove any leftover `ice-box-tun` task, copy binaries to
+//!   `%ProgramFiles%\ice-box`, register the task (`ITaskService::RegisterTask`,
+//!   with `schtasks /Create /XML` fallback from an admin-owned UTF-16 file)
 //! - `ice-tun-launcher --delete-task` — remove the scheduled task and
 //!   protected copies
 //!
@@ -129,74 +130,154 @@ fn delete_task() -> i32 {
 }
 
 #[cfg(target_os = "windows")]
-fn install_protected(data_dir: &Path, user_sid: &str) -> i32 {
-    if data_dir.as_os_str().is_empty() || !ice_tun_pin::is_windows_sid(user_sid) {
-        return 2;
+fn write_install_error(detail: &str) {
+    let path = ice_tun_pin::protected_install_error_path(&ice_tun_pin::program_data_dir());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(_) => return 2,
-    };
-    let src_dir = match exe.parent() {
-        Some(dir) => dir.to_path_buf(),
-        None => return 2,
-    };
-    let core_src = src_dir.join("sing-box.exe");
-    if !core_src.is_file() {
-        eprintln!("sing-box.exe not found next to {}", exe.display());
-        return 2;
-    }
+    let _ = std::fs::write(&path, format!("{detail}\n"));
+    let _ = acl::apply_acl(&path, false, acl::UsersAccess::Read);
+}
+
+#[cfg(target_os = "windows")]
+fn clear_install_error() {
+    let path = ice_tun_pin::protected_install_error_path(&ice_tun_pin::program_data_dir());
+    let _ = std::fs::remove_file(path);
+}
+
+/// Stop and delete a leftover `ice-box-tun` *before* protected copies are
+/// replaced. Updating a Highest-privilege task whose `Command` exe was
+/// already wiped (the ProgramData → Program Files migration) fails closed.
+#[cfg(target_os = "windows")]
+fn remove_leftover_task() {
     let _ = silent_schtasks(Command::new("schtasks.exe").args([
         "/End",
         "/TN",
         ice_tun_pin::TUN_TASK_NAME,
     ]));
     std::thread::sleep(Duration::from_millis(500));
+    let _ = silent_schtasks(Command::new("schtasks.exe").args([
+        "/Delete",
+        "/TN",
+        ice_tun_pin::TUN_TASK_NAME,
+        "/F",
+    ]));
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+/// Admin-owned UTF-16 LE + BOM file under the protected run dir, then
+/// `schtasks /Create /XML /F`. The file is deleted after import so a
+/// user-writable XML is never the registration source.
+#[cfg(target_os = "windows")]
+fn register_task_schtasks_xml(xml: &str, run_dir: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let xml_path = run_dir.join("ice-box-tun.xml");
+    std::fs::write(&xml_path, ice_tun_pin::encode_utf16_le_bom(xml))
+        .map_err(|err| format!("write {}: {err}", xml_path.display()))?;
+    let _ = acl::apply_acl(&xml_path, false, acl::UsersAccess::None);
+    let _ = acl::set_owner_administrators(&xml_path, false);
+    let output = Command::new("schtasks.exe")
+        .args(["/Create", "/TN", ice_tun_pin::TUN_TASK_NAME, "/XML"])
+        .arg(&xml_path)
+        .arg("/F")
+        .stdin(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|err| format!("spawn schtasks /Create /XML: {err}"))?;
+    let _ = std::fs::remove_file(&xml_path);
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stdout = ice_tun_pin::decode_schtasks_output(&output.stdout);
+        let stderr = ice_tun_pin::decode_schtasks_output(&output.stderr);
+        Err(format!(
+            "schtasks /Create /XML exited {}: {} {}",
+            output.status.code().unwrap_or(-1),
+            stdout.trim(),
+            stderr.trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn register_ice_box_tun_task(xml: &str, run_dir: &Path) -> Result<(), String> {
+    let com_xml = ice_tun_pin::task_xml_for_com_bstr(xml);
+    match task_com::register_task_xml(&com_xml) {
+        Ok(()) => Ok(()),
+        Err(com_err) => {
+            register_task_schtasks_xml(xml, run_dir).map_err(|sch| format!("{com_err}; {sch}"))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_protected(data_dir: &Path, user_sid: &str) -> i32 {
+    match install_protected_inner(data_dir, user_sid) {
+        Ok(()) => {
+            clear_install_error();
+            0
+        }
+        Err(err) => {
+            write_install_error(&err);
+            eprintln!("{err}");
+            2
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_protected_inner(data_dir: &Path, user_sid: &str) -> Result<(), String> {
+    if data_dir.as_os_str().is_empty() || !ice_tun_pin::is_windows_sid(user_sid) {
+        return Err("install requires --data <dir> and --user-sid <SID>".into());
+    }
+    let exe = std::env::current_exe().map_err(|err| format!("resolve own executable: {err}"))?;
+    let src_dir = exe
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| format!("helper path {} has no parent", exe.display()))?;
+    let core_src = src_dir.join("sing-box.exe");
+    if !core_src.is_file() {
+        return Err(format!("sing-box.exe not found next to {}", exe.display()));
+    }
+
+    remove_leftover_task();
+    acl::remove_protected_tree(&ice_tun_pin::legacy_protected_bin_dir(
+        &ice_tun_pin::program_data_dir(),
+    ));
 
     let program_files = ice_tun_pin::program_files_dir();
     let program_data = ice_tun_pin::program_data_dir();
     let bin_dir = ice_tun_pin::protected_bin_dir(&program_files);
     let data_root = ice_tun_pin::protected_data_dir(&program_data);
     let run_dir = ice_tun_pin::protected_run_dir(&program_data);
-    if acl::wipe_and_create_dir(&bin_dir, acl::UsersAccess::ReadExecute).is_err() {
-        return 2;
-    }
-    if acl::wipe_and_create_dir(&data_root, acl::UsersAccess::Read).is_err() {
-        return 2;
-    }
-    if acl::wipe_and_create_dir(&run_dir, acl::UsersAccess::Read).is_err() {
-        return 2;
-    }
+    acl::wipe_and_create_dir(&bin_dir, acl::UsersAccess::ReadExecute)
+        .map_err(|()| format!("create protected bin dir {}", bin_dir.display()))?;
+    acl::wipe_and_create_dir(&data_root, acl::UsersAccess::Read)
+        .map_err(|()| format!("create protected data dir {}", data_root.display()))?;
+    acl::wipe_and_create_dir(&run_dir, acl::UsersAccess::Read)
+        .map_err(|()| format!("create protected run dir {}", run_dir.display()))?;
 
     let dest_launcher = ice_tun_pin::protected_launcher_path(&program_files);
     let dest_core = bin_dir.join("sing-box.exe");
-    if acl::copy_protected_file(&exe, &dest_launcher, acl::UsersAccess::ReadExecute).is_err() {
-        return 2;
-    }
-    if acl::copy_protected_file(&core_src, &dest_core, acl::UsersAccess::ReadExecute).is_err() {
-        return 2;
-    }
+    acl::copy_protected_file(&exe, &dest_launcher, acl::UsersAccess::ReadExecute)
+        .map_err(|()| format!("copy launcher to {}", dest_launcher.display()))?;
+    acl::copy_protected_file(&core_src, &dest_core, acl::UsersAccess::ReadExecute)
+        .map_err(|()| format!("copy core to {}", dest_core.display()))?;
     for name in ["libcronet.dll", "wintun.dll"] {
         let src = src_dir.join(name);
         if src.is_file() {
             let dest = bin_dir.join(name);
-            if acl::copy_protected_file(&src, &dest, acl::UsersAccess::ReadExecute).is_err() {
-                return 2;
-            }
+            acl::copy_protected_file(&src, &dest, acl::UsersAccess::ReadExecute)
+                .map_err(|()| format!("copy {name} to {}", dest.display()))?;
         }
     }
-    if write_resources_pointer(&bin_dir, &src_dir).is_err() {
-        return 2;
-    }
-    let Ok(launcher_sha) = ice_tun_pin::sha256_of_file(&dest_launcher) else {
-        return 2;
-    };
-    let Ok(core_sha) = ice_tun_pin::sha256_of_file(&dest_core) else {
-        return 2;
-    };
+    write_resources_pointer(&bin_dir, &src_dir)
+        .map_err(|()| "write resources-dir.txt".to_string())?;
+    let launcher_sha = ice_tun_pin::sha256_of_file(&dest_launcher)?;
+    let core_sha = ice_tun_pin::sha256_of_file(&dest_core)?;
     let pin = ice_tun_pin::format_tun_task_pin(&launcher_sha, &core_sha);
     let xml = ice_tun_pin::render_tun_task_xml(&dest_launcher, data_dir, &pin, user_sid);
-    task_com::register_task_xml(&xml)
+    register_ice_box_tun_task(&xml, &run_dir)
 }
 
 #[cfg(target_os = "windows")]

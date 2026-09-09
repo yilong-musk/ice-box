@@ -26,7 +26,7 @@ describe("apply warning helpers", () => {
     });
     expect(w).toEqual({ code: "core.invalid_state", message: "reload failed" });
     expect(formatApplyWarning(w!)).toBe(
-      `${t("error.core.invalid_state")} (core.invalid_state)`,
+      `${t("error.core.invalid_state")} (core.invalid_state): reload failed`,
     );
   });
 

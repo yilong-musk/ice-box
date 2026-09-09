@@ -54,7 +54,8 @@ pub use coordinator::{
 pub use error::{ErrorCode, TunError};
 pub use ice_tun_pin::{
     format_tun_task_pin, program_data_dir, program_files_dir, protected_bin_dir,
-    protected_core_log_path, protected_pidfile_path, sha256_of_file, TUN_STOP_EVENT_NAME,
+    protected_core_log_path, protected_install_error_path, protected_pidfile_path,
+    read_last_tun_install_error, sha256_of_file, TUN_STOP_EVENT_NAME,
 };
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};

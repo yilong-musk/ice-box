@@ -326,7 +326,12 @@ export function formatInvokeError(err: unknown): string {
     const o = err as Record<string, unknown>;
     if (typeof o.code === "string" && typeof o.message === "string") {
       if (isErrorCode(o.code)) {
-        return `${t(ERROR_MESSAGE_KEYS[o.code])} (${o.code})`;
+        const label = `${t(ERROR_MESSAGE_KEYS[o.code])} (${o.code})`;
+        const detail = o.message.trim();
+        if (detail && !label.includes(detail)) {
+          return `${label}: ${detail}`;
+        }
+        return label;
       }
       return `${o.code}: ${o.message}`;
     }

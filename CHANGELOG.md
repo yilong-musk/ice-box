@@ -40,6 +40,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows TUN one-time elevation no longer leaves a leftover `ice-box-tun`
+  task pointing at the deleted `%ProgramData%\ice-box\bin` launcher after an
+  app update: the elevated installer deletes the old task before replacing
+  files, registers via COM, and falls back to `schtasks /Create /XML` from
+  an admin-owned UTF-16 file. Install failures are written to
+  `last-install-error.txt` and shown in the UI instead of a bare
+  `tun.helper_install_failed` code.
 - New helper installs chown `/var/log/ice-box-core.log` to the authorized
   user so the unelevated app can trim it when it exceeds 20 MiB.
 - Windows TUN DNS hijack no longer feeds non-DNS packets into the resolver:

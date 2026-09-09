@@ -269,6 +269,40 @@ pub fn protected_pidfile_path(program_data: &Path) -> PathBuf {
     protected_run_dir(program_data).join("tun-task.pid")
 }
 
+/// Pre-ProgramFiles copies (`%ProgramData%\ice-box\bin`). Left behind across
+/// the path migration; the elevated installer deletes this tree after the
+/// leftover `ice-box-tun` task has been removed.
+pub fn legacy_protected_bin_dir(program_data: &Path) -> PathBuf {
+    protected_data_dir(program_data).join("bin")
+}
+
+/// Written by the elevated installer on failure so the unelevated app can
+/// surface a COM / `schtasks` detail (the GUI-subsystem launcher has no
+/// console). Users-read; overwritten on the next install attempt.
+pub fn protected_install_error_path(program_data: &Path) -> PathBuf {
+    protected_run_dir(program_data).join("last-install-error.txt")
+}
+
+/// Read [`protected_install_error_path`]. `None` when missing or empty.
+pub fn read_last_tun_install_error(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// `ITaskService::RegisterTask` takes a BSTR already in UTF-16. Declaring
+/// `encoding="UTF-16"` in the prologue (correct for a BOM file handed to
+/// `schtasks /Create /XML`) has been observed to fail XML validation on the
+/// COM path. Strip the encoding so the parser treats the BSTR as native
+/// Unicode.
+pub fn task_xml_for_com_bstr(xml: &str) -> String {
+    xml.replacen(" encoding=\"UTF-16\"", "", 1)
+}
+
 pub fn path_is_protected_launcher(exe: &Path, program_files: &Path) -> bool {
     command_matches_launcher(
         &exe.display().to_string(),
@@ -742,5 +776,54 @@ mod tests {
             protected_pidfile_path(pd),
             PathBuf::from("/programdata/ice-box/run/tun-task.pid")
         );
+        assert_eq!(
+            legacy_protected_bin_dir(pd),
+            PathBuf::from("/programdata/ice-box/bin")
+        );
+        assert_eq!(
+            protected_install_error_path(pd),
+            PathBuf::from("/programdata/ice-box/run/last-install-error.txt")
+        );
+    }
+
+    #[test]
+    fn task_xml_for_com_bstr_strips_utf16_encoding_declaration() {
+        let pin = format_tun_task_pin(LAUNCHER, CORE);
+        let xml = render_tun_task_xml(
+            Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe"),
+            Path::new(r"C:\data"),
+            &pin,
+            USER_SID,
+        );
+        assert!(xml.contains("encoding=\"UTF-16\""));
+        let com = task_xml_for_com_bstr(&xml);
+        assert!(
+            !com.contains("encoding="),
+            "COM BSTR must not declare UTF-16: {com}"
+        );
+        assert!(com.contains("<?xml version=\"1.0\"?>"));
+        assert_eq!(com, task_xml_for_com_bstr(&com), "idempotent");
+    }
+
+    #[test]
+    fn read_last_tun_install_error_skips_missing_and_blank() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-tun-pin-install-err-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("last-install-error.txt");
+        assert!(read_last_tun_install_error(&path).is_none());
+        std::fs::write(&path, "   \n").expect("blank");
+        assert!(read_last_tun_install_error(&path).is_none());
+        std::fs::write(&path, "ITaskService::RegisterTask failed: 0x80041318\n").expect("write");
+        assert_eq!(
+            read_last_tun_install_error(&path).as_deref(),
+            Some("ITaskService::RegisterTask failed: 0x80041318")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
