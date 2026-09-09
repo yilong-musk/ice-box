@@ -10,6 +10,15 @@ const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
 
+/** Color the whole line by its compact `LEVEL` prefix. INFO/DEBUG/TRACE stay default. */
+function logLineClass(line: string): string | undefined {
+  const space = line.indexOf(" ");
+  const level = space === -1 ? line : line.slice(0, space);
+  if (level === "WARN") return "text-warn";
+  if (level === "ERROR" || level === "FATAL") return "text-destructive";
+  return undefined;
+}
+
 export function Logs({ active = true }: { active?: boolean }) {
   useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
@@ -75,7 +84,13 @@ export function Logs({ active = true }: { active?: boolean }) {
         onScroll={handleScroll}
         aria-live="polite"
       >
-        {lines.length === 0 ? t("logs.empty") : lines.join("\n")}
+        {lines.length === 0
+          ? t("logs.empty")
+          : lines.map((line, i) => (
+              <div key={i} className={logLineClass(line)}>
+                {line}
+              </div>
+            ))}
       </pre>
     </div>
   );

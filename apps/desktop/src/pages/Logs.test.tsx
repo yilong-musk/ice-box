@@ -18,6 +18,7 @@ const POLL_MS = 2000;
 
 const baseTail = [
   "INFO 08-23 13:47:02 ice_core: sing-box ready",
+  "WARN 08-23 13:47:04 ice_proxy_sys: proxy apply slow",
   "ERROR 08-23 13:47:06 outbound: dial tcp: connection refused",
 ];
 
@@ -48,6 +49,21 @@ describe("Logs", () => {
     expect(container.querySelector("[data-slot='card']")).toBeNull();
     const logView = view.getByTestId("log-view");
     expect(logView.parentElement).toBe(view.getByTestId("logs-panel"));
+  });
+
+  it("colors warn and error lines without changing info", async () => {
+    const { container } = render(<Logs />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(/proxy apply slow/)).toBeInTheDocument();
+    });
+    const info = view.getByText(/sing-box ready/);
+    const warn = view.getByText(/proxy apply slow/);
+    const error = view.getByText(/connection refused/);
+    expect(info).not.toHaveClass("text-warn");
+    expect(info).not.toHaveClass("text-destructive");
+    expect(warn).toHaveClass("text-warn");
+    expect(error).toHaveClass("text-destructive");
   });
 
   it("polls automatically", async () => {
