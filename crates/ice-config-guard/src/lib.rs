@@ -6,9 +6,10 @@
 //!
 //! The unprivileged app (and a remote subscription) can write `config.json`.
 //! This crate is the privileged-side content filter: unknown inbound keys,
-//! disallowed outbound types, and filesystem-referencing keys are rejected
-//! with a JSON pointer in the error. Callers write the sanitised object to a
-//! root/admin-owned path and start sing-box from that copy.
+//! disallowed outbound types, remote `route.rule_set` URLs, and
+//! filesystem-referencing keys are rejected with a JSON pointer in the error.
+//! Callers write the sanitised object to a root/admin-owned path and start
+//! sing-box from that copy.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -336,9 +337,41 @@ fn validate_rule_set_paths(cfg: &Value, ctx: &GuardContext) -> Result<(), GuardE
     };
     let roots = allowed_rule_set_roots(ctx)?;
     for (idx, set) in sets.iter().enumerate() {
-        let pointer = format!("/route/rule_set/{idx}/path");
-        let Some(raw) = set.get("path").and_then(|v| v.as_str()) else {
-            continue;
+        let base = format!("/route/rule_set/{idx}");
+        let obj = set
+            .as_object()
+            .ok_or_else(|| GuardError::new(&base, "rule_set must be a JSON object"))?;
+        for url_key in ["url", "download_url"] {
+            if obj.contains_key(url_key) {
+                return Err(GuardError::new(
+                    format!("{base}/{url_key}"),
+                    format!("rule_set {url_key} is not allowed in an elevated config"),
+                ));
+            }
+        }
+        match obj.get("type").and_then(Value::as_str) {
+            Some("local") => {}
+            Some(other) => {
+                return Err(GuardError::new(
+                    format!("{base}/type"),
+                    format!(
+                        "rule_set type {other:?} is not allowed; elevated configs may only use type \"local\""
+                    ),
+                ));
+            }
+            None => {
+                return Err(GuardError::new(
+                    format!("{base}/type"),
+                    "rule_set type is required and must be \"local\"",
+                ));
+            }
+        }
+        let pointer = format!("{base}/path");
+        let Some(raw) = obj.get("path").and_then(|v| v.as_str()) else {
+            return Err(GuardError::new(
+                &pointer,
+                "rule_set path is required for type \"local\"",
+            ));
         };
         let p = Path::new(raw);
         let candidates: Vec<PathBuf> = if p.is_absolute() {
@@ -671,6 +704,67 @@ mod tests {
             "path": srs.to_string_lossy(),
         }]);
         sanitize(cfg, &ctx(&dir)).expect("inside resources");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remote_rule_set_url_is_rejected() {
+        let dir = temp_dir("rs-remote");
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "remote",
+            "tag": "evil",
+            "format": "binary",
+            "url": "https://127.0.0.1/latest/meta-data/"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("remote url");
+        assert_eq!(err.pointer, "/route/rule_set/0/url");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remote_rule_set_type_is_rejected() {
+        let dir = temp_dir("rs-remote-type");
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "remote",
+            "tag": "evil",
+            "format": "binary"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("remote type");
+        assert_eq!(err.pointer, "/route/rule_set/0/type");
+        assert!(err.message.contains("local"), "{}", err.message);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_rule_set_download_url_is_rejected() {
+        let dir = temp_dir("rs-download-url");
+        fs::write(dir.join("geoip-cn.srs"), b"x").unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "geoip-cn",
+            "format": "binary",
+            "path": dir.join("geoip-cn.srs").to_string_lossy(),
+            "download_url": "https://169.254.169.254/latest/meta-data/"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("download_url");
+        assert_eq!(err.pointer, "/route/rule_set/0/download_url");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_rule_set_without_path_is_rejected() {
+        let dir = temp_dir("rs-no-path");
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "geoip-cn",
+            "format": "binary"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("missing path");
+        assert_eq!(err.pointer, "/route/rule_set/0/path");
         let _ = fs::remove_dir_all(&dir);
     }
 

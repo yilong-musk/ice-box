@@ -111,6 +111,9 @@ jobs:
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh
 
+      - name: Fetch GeoIP rule-sets
+        run: ./scripts/fetch-geoip.sh
+
       - name: Build app bundle (tauri build)
         run: npm run tauri build
         working-directory: apps/desktop
@@ -194,6 +197,9 @@ jobs:
 
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh win
+
+      - name: Fetch GeoIP rule-sets
+        run: ./scripts/fetch-geoip.sh
 
       - name: Build app bundle (tauri build, NSIS)
         run: npm run build:win

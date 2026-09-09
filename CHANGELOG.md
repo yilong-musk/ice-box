@@ -40,6 +40,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- CI and Release packaging jobs run `scripts/fetch-geoip.sh` before
+  `tauri build`. After CI-6 stopped committing GeoIP `.srs` files, those
+  jobs only fetched sing-box, so `prepare-singbox-resource` failed on a
+  missing `third_party/sing-geoip/rule-set`.
+- Elevated config sanitiser rejects `route.rule_set` entries that are
+  `type: remote` or carry `url` / `download_url`. A malicious subscription
+  could previously skip the path check and let root/Administrator sing-box
+  fetch an attacker URL (SSRF).
 - Windows TUN one-time elevation no longer leaves a leftover `ice-box-tun`
   task pointing at the deleted `%ProgramData%\ice-box\bin` launcher after an
   app update: the elevated installer deletes the old task before replacing

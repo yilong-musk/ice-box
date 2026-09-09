@@ -43,6 +43,9 @@ jobs:
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh mac-arm64
 
+      - name: Fetch GeoIP rule-sets
+        run: ./scripts/fetch-geoip.sh
+
       - name: Workspace gate (G9.10)
         run: bash scripts/gate.sh
 
@@ -123,6 +126,9 @@ jobs:
 
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh win
+
+      - name: Fetch GeoIP rule-sets
+        run: ./scripts/fetch-geoip.sh
 
       - name: Workspace gate (G9.10)
         run: bash scripts/gate.sh
