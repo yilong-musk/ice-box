@@ -50,6 +50,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (PowerShell / `cmd.exe` last). Install failures are written to
   `last-install-error.txt` and shown in the UI instead of a bare
   `tun.helper_install_failed` code.
+- Windows TUN adopt no longer rejects the elevated `Program Files` sing-box
+  (`core.adopt_rejected`): identity compared the first whitespace token of
+  the image path (`C:\Program`) instead of the full exe.
 - New helper installs chown `/var/log/ice-box-core.log` to the authorized
   user so the unelevated app can trim it when it exceeds 20 MiB.
 - Windows TUN DNS hijack no longer feeds non-DNS packets into the resolver:

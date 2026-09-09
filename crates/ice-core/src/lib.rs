@@ -251,9 +251,20 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             return Err(reject_op(self.state.status, CoreOp::Start));
         }
         if !looks_like_singbox_process(pid) {
+            tracing::error!(
+                pid,
+                image = process_image_path(pid).as_deref(),
+                "adopt rejected: process image is not named sing-box"
+            );
             return Err(CoreError::AdoptRejected(pid));
         }
         if !process_image_matches_any(pid, &paths.adopt_binaries()) {
+            tracing::error!(
+                pid,
+                image = process_image_path(pid).as_deref(),
+                candidates = ?paths.adopt_binaries(),
+                "adopt rejected: process image does not match a bundled or protected sing-box"
+            );
             return Err(CoreError::AdoptRejected(pid));
         }
 
@@ -1144,18 +1155,41 @@ fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
         // `looks_like_singbox_process` check above.
         return true;
     }
-    existing
-        .iter()
-        .any(|core| process_image_matches_core(pid, core))
-}
-
-fn process_image_matches_core(pid: u32, core: &Path) -> bool {
     let Some(image) = process_image_path(pid) else {
         return false;
     };
-    let image_path = Path::new(image.split_whitespace().next().unwrap_or(&image));
+    existing
+        .iter()
+        .any(|core| process_image_string_matches_core(&image, core))
+}
+
+/// Windows `QueryFullProcessImageNameW` is the exe path and may contain
+/// spaces (`C:\Program Files\...`). Unix `ps -o command=` is `exe args...`.
+fn adopt_image_exe_path(image: &str) -> &Path {
+    let trimmed = image.trim().trim_matches('"');
+    if looks_like_windows_image_path(trimmed) {
+        Path::new(trimmed)
+    } else {
+        Path::new(trimmed.split_whitespace().next().unwrap_or(trimmed))
+    }
+}
+
+fn looks_like_windows_image_path(image: &str) -> bool {
+    let bytes = image.as_bytes();
+    (bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        || image.starts_with("\\\\")
+        || image.starts_with("//")
+}
+
+fn process_image_string_matches_core(image: &str, core: &Path) -> bool {
+    let image_path = adopt_image_exe_path(image);
     if let (Ok(left), Ok(right)) = (image_path.canonicalize(), core.canonicalize()) {
         return left == right;
+    }
+    let left = image_path.to_string_lossy().replace('/', "\\");
+    let right = core.to_string_lossy().replace('/', "\\");
+    if left.eq_ignore_ascii_case(&right) {
+        return true;
     }
     let image_name = image_path
         .file_name()
@@ -1300,6 +1334,45 @@ mod tests {
         assert!(matches!(err, CoreError::AdoptRejected(_)));
         assert_eq!(err.code(), ice_types::ErrorCode::CoreAdoptRejected);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adopt_image_exe_path_keeps_windows_program_files_spaces() {
+        assert_eq!(
+            adopt_image_exe_path(r"C:\Program Files\ice-box\sing-box.exe"),
+            Path::new(r"C:\Program Files\ice-box\sing-box.exe")
+        );
+        assert_eq!(
+            adopt_image_exe_path(r#" "C:\Program Files\ice-box\sing-box.exe" "#),
+            Path::new(r"C:\Program Files\ice-box\sing-box.exe")
+        );
+        assert_eq!(
+            adopt_image_exe_path("/opt/ice-box/sing-box run -c /tmp/config.json"),
+            Path::new("/opt/ice-box/sing-box")
+        );
+    }
+
+    #[test]
+    fn process_image_string_matches_core_accepts_program_files_path() {
+        let protected = Path::new(r"C:\Program Files\ice-box\sing-box.exe");
+        assert!(process_image_string_matches_core(
+            r"C:\Program Files\ice-box\sing-box.exe",
+            protected
+        ));
+        assert!(process_image_string_matches_core(
+            r"c:\program files\ice-box\sing-box.exe",
+            protected
+        ));
+        // First-token split used to turn this into `C:\Program` and reject.
+        assert_ne!(
+            Path::new(
+                r"C:\Program Files\ice-box\sing-box.exe"
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+            ),
+            protected
+        );
     }
 
     #[cfg(unix)]
