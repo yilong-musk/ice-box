@@ -45,7 +45,7 @@ impl StopEvent {
         if ok == 0 || sd.is_null() {
             return Err(());
         }
-        let mut attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        let attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>()
                 as u32,
             lpSecurityDescriptor: sd,
@@ -55,7 +55,7 @@ impl StopEvent {
         // Manual-reset: one SetEvent wakes the poll loop. ResetEvent clears a
         // leftover signaled object if CreateEventW opened an existing name
         // (lpEventAttributes is ignored for an already-created event).
-        let handle = unsafe { CreateEventW(&mut attrs, 1, 0, name.as_ptr()) };
+        let handle = unsafe { CreateEventW(&attrs, 1, 0, name.as_ptr()) };
         unsafe {
             let _ = LocalFree(sd as _);
         }
