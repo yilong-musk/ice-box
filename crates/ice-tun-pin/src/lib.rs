@@ -6,12 +6,15 @@
 //! crate does not depend on a binary crate.
 //!
 //! The per-user install directory is writable, so `ice-tun-launcher.exe` and
-//! `sing-box.exe` can be replaced by the same account. The scheduled task is
-//! created elevated from UTF-16 XML so the SHA-256 pin lives in
+//! `sing-box.exe` can be replaced by the same account. Protected copies live
+//! under `%ProgramFiles%\ice-box` (standard users cannot pre-create that
+//! tree). The scheduled task is created elevated from an in-memory XML
+//! string (`ITaskService::RegisterTask`) so the SHA-256 pin lives in
 //! `RegistrationInfo/Description` (`schtasks /D` is a day-of-week flag and
 //! cannot store a description). `schtasks /Run` and this launcher refuse to
 //! start when the on-disk files do not match.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -21,6 +24,12 @@ pub const TUN_TASK_NAME: &str = "ice-box-tun";
 
 /// Prefix of the scheduled-task description that carries the binary pin.
 pub const TUN_TASK_PIN_PREFIX: &str = "ice-box-pin:";
+
+/// Named event the unelevated app signals to request a graceful TUN stop.
+/// Created by the elevated launcher in the Global namespace with a DACL that
+/// grants the interactive user `EVENT_MODIFY_STATE` and a Medium integrity
+/// label so a medium-IL client can set it.
+pub const TUN_STOP_EVENT_NAME: &str = r"Global\ice-box-tun-stop";
 
 /// SHA-256 pin of the launcher and the sibling `sing-box.exe`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,12 +43,9 @@ pub struct TunTaskPin {
 pub enum LauncherCommand {
     /// Run the elevated TUN core (`--data <app-data-dir>`).
     Run { data_dir: PathBuf },
-    /// Copy binaries to `%ProgramData%\ice-box\bin`, render the task XML in
-    /// memory, and import it (`--install --data <app-data-dir>`).
-    Install { data_dir: PathBuf },
-    /// Import the UTF-16 task XML (`--install-task --xml <path>`). Legacy;
-    /// the app now uses [`LauncherCommand::Install`].
-    InstallTask { xml: PathBuf },
+    /// Copy binaries to `%ProgramFiles%\ice-box`, render the task XML in
+    /// memory, and register it (`--install --data <dir> --user-sid <sid>`).
+    Install { data_dir: PathBuf, user_sid: String },
     /// Delete the `ice-box-tun` scheduled task (`--delete-task`).
     DeleteTask,
 }
@@ -47,41 +53,54 @@ pub enum LauncherCommand {
 /// Parse launcher argv (without argv0). Used by the binary and host-free tests.
 pub fn parse_launcher_command(args: &[String]) -> Option<LauncherCommand> {
     let mut data_dir = None;
-    let mut xml = None;
-    let mut install_task = false;
+    let mut user_sid = None;
     let mut install = false;
     let mut delete = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--install-task" => install_task = true,
             "--install" => install = true,
             "--delete-task" => delete = true,
             "--data" | "--data-dir" => {
                 i += 1;
                 data_dir = Some(PathBuf::from(args.get(i)?));
             }
-            "--xml" => {
+            "--user-sid" => {
                 i += 1;
-                xml = Some(PathBuf::from(args.get(i)?));
+                user_sid = Some(args.get(i)?.clone());
             }
             _ => return None,
         }
         i += 1;
     }
-    match (install, install_task, delete, xml, data_dir) {
-        (false, true, false, Some(xml), None) if !xml.as_os_str().is_empty() => {
-            Some(LauncherCommand::InstallTask { xml })
+    match (install, delete, user_sid, data_dir) {
+        (true, false, Some(user_sid), Some(data_dir))
+            if !data_dir.as_os_str().is_empty() && is_windows_sid(&user_sid) =>
+        {
+            Some(LauncherCommand::Install { data_dir, user_sid })
         }
-        (true, false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
-            Some(LauncherCommand::Install { data_dir })
-        }
-        (false, false, true, None, None) => Some(LauncherCommand::DeleteTask),
-        (false, false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
+        (false, true, None, None) => Some(LauncherCommand::DeleteTask),
+        (false, false, None, Some(data_dir)) if !data_dir.as_os_str().is_empty() => {
             Some(LauncherCommand::Run { data_dir })
         }
         _ => None,
     }
+}
+
+/// `S-1-5-…` security identifier (revision, authority, at least one sub-authority).
+pub fn is_windows_sid(value: &str) -> bool {
+    let rest = match value.strip_prefix("S-") {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let mut n = 0usize;
+    for part in rest.split('-') {
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        n += 1;
+    }
+    n >= 3
 }
 
 /// Render the task description stored in `RegistrationInfo/Description`.
@@ -160,6 +179,11 @@ pub fn extract_tun_task_args_from_xml(xml: &str) -> Option<String> {
     xml_tag_value(xml, "Arguments")
 }
 
+/// Principal/UserId from `schtasks /Query /XML`.
+pub fn extract_tun_task_user_id_from_xml(xml: &str) -> Option<String> {
+    xml_tag_value(xml, "UserId")
+}
+
 /// Parse `--data` / `--data-dir` from a scheduled-task Arguments string.
 pub fn parse_data_dir_from_task_args(args: &str) -> Option<PathBuf> {
     let parts = split_windows_cmd_args(args);
@@ -205,6 +229,13 @@ pub fn command_matches_launcher(command: &str, launcher: &Path) -> bool {
     Path::new(trimmed) == launcher || trimmed.eq_ignore_ascii_case(&launcher.display().to_string())
 }
 
+/// `%ProgramFiles%`, or `C:\Program Files` when the env var is unset.
+pub fn program_files_dir() -> PathBuf {
+    std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+}
+
 /// `%ProgramData%`, or `C:\ProgramData` when the env var is unset.
 pub fn program_data_dir() -> PathBuf {
     std::env::var_os("ProgramData")
@@ -212,26 +243,36 @@ pub fn program_data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
 }
 
-pub fn protected_install_dir(program_data: &Path) -> PathBuf {
+/// Protected binaries (`ice-tun-launcher.exe`, `sing-box.exe`, DLLs).
+pub fn protected_bin_dir(program_files: &Path) -> PathBuf {
+    program_files.join("ice-box")
+}
+
+/// Admin-owned runtime tree (`run\config.json`, logs, pid).
+pub fn protected_data_dir(program_data: &Path) -> PathBuf {
     program_data.join("ice-box")
 }
 
-pub fn protected_bin_dir(program_data: &Path) -> PathBuf {
-    protected_install_dir(program_data).join("bin")
-}
-
 pub fn protected_run_dir(program_data: &Path) -> PathBuf {
-    protected_install_dir(program_data).join("run")
+    protected_data_dir(program_data).join("run")
 }
 
-pub fn protected_launcher_path(program_data: &Path) -> PathBuf {
-    protected_bin_dir(program_data).join("ice-tun-launcher.exe")
+pub fn protected_launcher_path(program_files: &Path) -> PathBuf {
+    protected_bin_dir(program_files).join("ice-tun-launcher.exe")
 }
 
-pub fn path_is_protected_launcher(exe: &Path, program_data: &Path) -> bool {
+pub fn protected_core_log_path(program_data: &Path) -> PathBuf {
+    protected_run_dir(program_data).join("sing-box.log")
+}
+
+pub fn protected_pidfile_path(program_data: &Path) -> PathBuf {
+    protected_run_dir(program_data).join("tun-task.pid")
+}
+
+pub fn path_is_protected_launcher(exe: &Path, program_files: &Path) -> bool {
     command_matches_launcher(
         &exe.display().to_string(),
-        &protected_launcher_path(program_data),
+        &protected_launcher_path(program_files),
     )
 }
 
@@ -242,6 +283,20 @@ pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), St
     if !command_matches_launcher(&command, expected_launcher) {
         return Err(
             "scheduled-task Command does not match the protected launcher; re-run elevation setup"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// `UserId` must be the interactive user's SID (the unelevated app, not an
+/// over-the-shoulder administrator typed at UAC).
+pub fn verify_task_user_id(xml: &str, expected_sid: &str) -> Result<(), String> {
+    let user_id = extract_tun_task_user_id_from_xml(xml)
+        .ok_or_else(|| "scheduled-task XML is missing Principal/UserId".to_string())?;
+    if !user_id.eq_ignore_ascii_case(expected_sid) {
+        return Err(
+            "scheduled-task UserId does not match the interactive user; re-run elevation setup"
                 .into(),
         );
     }
@@ -271,16 +326,19 @@ fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
     left.eq_ignore_ascii_case(&right)
 }
 
-/// Task Scheduler 1.2 XML for `ice-box-tun`. `schtasks /Create /XML` is the
-/// only supported way to persist [`format_tun_task_pin`] — `/D` is a day of
-/// week, not a description. The time trigger is in the past so the task
-/// never auto-starts; `AllowStartOnDemand` keeps `schtasks /Run` working.
+/// Task Scheduler 1.2 XML for `ice-box-tun`. `ITaskService::RegisterTask`
+/// takes this string in memory — no on-disk XML. Privilege, the on-demand
+/// action, and the SHA-256 pin live here. `schtasks /D` is a day of week,
+/// not a description. The time trigger is in the past so the task never
+/// auto-starts; `AllowStartOnDemand` keeps `schtasks /Run` working.
 /// `ExecutionTimeLimit` is unlimited so a long-lived TUN core is not killed
-/// at the 72-hour default.
-pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str) -> String {
+/// at the 72-hour default. `UserId` is the interactive user's SID so an
+/// over-the-shoulder UAC admin cannot silently own the task.
+pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str, user_sid: &str) -> String {
     let command = xml_escape(&launcher.display().to_string());
     let arguments = xml_escape(&format!("--data \"{}\"", data_dir.display()));
     let description = xml_escape(pin);
+    let user_id = xml_escape(user_sid);
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -296,6 +354,7 @@ pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str) -> Strin
   </Triggers>
   <Principals>
     <Principal id="Author">
+      <UserId>{user_id}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
@@ -340,9 +399,23 @@ pub fn encode_utf16_le_bom(text: &str) -> Vec<u8> {
 }
 
 /// SHA-256 of a file, lowercase hex (pinned in the scheduled-task description).
+/// Hashed in a streaming loop so a tens-of-MB `sing-box.exe` is never fully
+/// buffered.
 pub fn sha256_of_file(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    Ok(sha256_hex(&bytes))
+    let mut file =
+        std::fs::File::open(path).map_err(|err| format!("read {}: {err}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|err| format!("read {}: {err}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// SHA-256 of bytes, lowercase hex.
@@ -393,6 +466,7 @@ mod tests {
 
     const LAUNCHER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const CORE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const USER_SID: &str = "S-1-5-21-1-2-3-1001";
 
     #[test]
     fn pin_roundtrip_is_stable_and_rejects_junk() {
@@ -439,9 +513,10 @@ mod tests {
         let pin = format_tun_task_pin(LAUNCHER, CORE);
         let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
         let data = Path::new(r"C:\Users\O'Brien\AppData\Roaming\com.yilong-musk.icebox");
-        let xml = render_tun_task_xml(launcher, data, &pin);
+        let xml = render_tun_task_xml(launcher, data, &pin, USER_SID);
         assert!(xml.contains(&format!("<Description>{pin}</Description>")));
         assert!(xml.contains(r"<URI>\ice-box-tun</URI>"));
+        assert!(xml.contains(&format!("<UserId>{USER_SID}</UserId>")));
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<AllowStartOnDemand>true</AllowStartOnDemand>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
@@ -470,6 +545,7 @@ mod tests {
             Path::new(r"C:\a&b\ice-tun-launcher.exe"),
             Path::new(r"C:\data"),
             &pin,
+            USER_SID,
         );
         assert!(xml.contains(r"<Command>C:\a&amp;b\ice-tun-launcher.exe</Command>"));
         assert!(command_matches_launcher(
@@ -484,6 +560,7 @@ mod tests {
             Path::new(r"C:\ice-box\ice-tun-launcher.exe"),
             Path::new(r"C:\data"),
             &format_tun_task_pin(LAUNCHER, CORE),
+            USER_SID,
         );
         let encoded = encode_utf16_le_bom(&xml);
         assert_eq!(&encoded[..2], [0xFF, 0xFE]);
@@ -563,35 +640,48 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_launcher_command(&[
-                "--xml".into(),
-                r"C:\data\ice-box-tun.xml".into(),
-                "--install-task".into(),
-            ]),
-            Some(LauncherCommand::InstallTask {
-                xml: PathBuf::from(r"C:\data\ice-box-tun.xml"),
-            })
-        );
-        assert_eq!(
             parse_launcher_command(&["--delete-task".into()]),
             Some(LauncherCommand::DeleteTask)
         );
         assert_eq!(
-            parse_launcher_command(&["--install".into(), "--data".into(), r"C:\data".into(),]),
+            parse_launcher_command(&[
+                "--install".into(),
+                "--data".into(),
+                r"C:\data".into(),
+                "--user-sid".into(),
+                USER_SID.into(),
+            ]),
             Some(LauncherCommand::Install {
                 data_dir: PathBuf::from(r"C:\data"),
+                user_sid: USER_SID.to_string(),
             })
         );
         assert_eq!(
-            parse_launcher_command(&["--install".into(), "--data-dir".into(), r"C:\data".into(),]),
+            parse_launcher_command(&[
+                "--install".into(),
+                "--data-dir".into(),
+                r"C:\data".into(),
+                "--user-sid".into(),
+                USER_SID.into(),
+            ]),
             Some(LauncherCommand::Install {
                 data_dir: PathBuf::from(r"C:\data"),
+                user_sid: USER_SID.to_string(),
             })
         );
-        assert!(parse_launcher_command(&["--install-task".into()]).is_none());
         assert!(
-            parse_launcher_command(&["--install-task".into(), "--delete-task".into()]).is_none()
+            parse_launcher_command(&["--install".into(), "--data".into(), r"C:\data".into()])
+                .is_none()
         );
+        assert!(parse_launcher_command(&[
+            "--install".into(),
+            "--data".into(),
+            r"C:\data".into(),
+            "--user-sid".into(),
+            "not-a-sid".into(),
+        ])
+        .is_none());
+        assert!(parse_launcher_command(&["--install-task".into()]).is_none());
         assert!(parse_launcher_command(&[
             "--data".into(),
             r"C:\data".into(),
@@ -602,14 +692,28 @@ mod tests {
     }
 
     #[test]
+    fn is_windows_sid_accepts_user_and_well_known() {
+        assert!(is_windows_sid(USER_SID));
+        assert!(is_windows_sid("S-1-5-18"));
+        assert!(is_windows_sid("S-1-5-32-544"));
+        assert!(!is_windows_sid(""));
+        assert!(!is_windows_sid("S-1-5"));
+        assert!(!is_windows_sid("S-1-5-21-abc"));
+        assert!(!is_windows_sid("not-a-sid"));
+    }
+
+    #[test]
     fn extract_args_and_verify_command_from_rendered_xml() {
-        let launcher = Path::new(r"C:\ProgramData\ice-box\bin\ice-tun-launcher.exe");
+        let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
         let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
-        let xml = render_tun_task_xml(launcher, data_dir, "ice-box-pin:aa:bb");
+        let xml = render_tun_task_xml(launcher, data_dir, "ice-box-pin:aa:bb", USER_SID);
         assert!(verify_task_command(&xml, launcher).is_ok());
+        verify_task_user_id(&xml, USER_SID).expect("user id");
         let other = Path::new(r"C:\Users\admin\ice-tun-launcher.exe");
         let err = verify_task_command(&xml, other).expect_err("command mismatch");
         assert!(err.contains("Command"), "{err}");
+        let sid_err = verify_task_user_id(&xml, "S-1-5-21-9-9-9-9").expect_err("sid mismatch");
+        assert!(sid_err.contains("UserId"), "{sid_err}");
         assert_eq!(
             parse_data_dir_from_task_args(&extract_tun_task_args_from_xml(&xml).unwrap())
                 .as_deref(),
@@ -622,12 +726,21 @@ mod tests {
     }
 
     #[test]
-    fn protected_launcher_path_joins_programdata() {
+    fn protected_launcher_path_joins_programfiles() {
+        let pf = Path::new("/programfiles");
+        assert_eq!(
+            protected_launcher_path(pf),
+            PathBuf::from("/programfiles/ice-box/ice-tun-launcher.exe")
+        );
+        assert!(path_is_protected_launcher(&protected_launcher_path(pf), pf));
         let pd = Path::new("/programdata");
         assert_eq!(
-            protected_launcher_path(pd),
-            PathBuf::from("/programdata/ice-box/bin/ice-tun-launcher.exe")
+            protected_core_log_path(pd),
+            PathBuf::from("/programdata/ice-box/run/sing-box.log")
         );
-        assert!(path_is_protected_launcher(&protected_launcher_path(pd), pd));
+        assert_eq!(
+            protected_pidfile_path(pd),
+            PathBuf::from("/programdata/ice-box/run/tun-task.pid")
+        );
     }
 }

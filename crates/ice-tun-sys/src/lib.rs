@@ -42,14 +42,20 @@ pub use backend::{
     TunConfig, TunHealth, TunStack,
 };
 #[cfg(target_os = "windows")]
-pub use coordinator::{process_is_elevated, run_elevated_wait};
+pub use coordinator::{
+    current_user_is_local_admin, current_user_sid_string, process_is_elevated, run_elevated_wait,
+    signal_tun_stop_event,
+};
 pub use coordinator::{
     quote_windows_args, schtasks_command_line, tun_task_exists, tun_task_has_pin,
     tun_task_pin_matches, tun_task_xml_create_args, write_tun_task_xml, CoreCoordinator,
     DeferredCoreCoordinator, SudoCoreCoordinator, TUN_TASK_NAME,
 };
 pub use error::{ErrorCode, TunError};
-pub use ice_tun_pin::{format_tun_task_pin, program_data_dir, protected_bin_dir, sha256_of_file};
+pub use ice_tun_pin::{
+    format_tun_task_pin, program_data_dir, program_files_dir, protected_bin_dir,
+    protected_core_log_path, protected_pidfile_path, sha256_of_file, TUN_STOP_EVENT_NAME,
+};
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
 pub use recovery::RecoveryDriver;
@@ -123,10 +129,10 @@ pub fn create_backend(
                     if !launcher.is_file() {
                         return None;
                     }
-                    let pidfile = config_path.parent()?.join("tun-task.pid");
-                    let stopfile = config_path.parent()?.join("tun-task.stop");
+                    let pidfile =
+                        ice_tun_pin::protected_pidfile_path(&ice_tun_pin::program_data_dir());
                     let coordinator =
-                        crate::coordinator::TaskCoreCoordinator::new(launcher, pidfile, stopfile);
+                        crate::coordinator::TaskCoreCoordinator::new(launcher, pidfile);
                     if crate::coordinator::tun_task_exists() {
                         Some(coordinator)
                     } else {
@@ -161,6 +167,25 @@ pub fn create_backend(
         let _ = (owner_token, config_path, binary, log_path);
         let reason = "tun.unsupportedPlatform";
         Box::new(UnsupportedTunBackend::new(reason))
+    }
+}
+
+/// Elevated core stdout/stderr: macOS helper log, or the Windows
+/// ProgramData run-dir log. `None` on platforms with no privileged core log.
+pub fn elevated_core_log_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(ice_tun_pin::protected_core_log_path(
+            &ice_tun_pin::program_data_dir(),
+        ))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(PathBuf::from(install_paths::CORE_LOG_DEST))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
     }
 }
 

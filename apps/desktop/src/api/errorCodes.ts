@@ -37,6 +37,7 @@ export const ERROR_CODES = [
   "tun.helper_install_cancelled",
   "tun.helper_not_ready",
   "tun.elevation_cancelled",
+  "tun.elevation_requires_admin",
   "update.check_failed",
   "update.feed_unavailable",
   "update.install_failed",

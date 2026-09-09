@@ -295,6 +295,7 @@ const ERROR_MESSAGE_KEYS = {
   "tun.helper_install_cancelled": "error.tun.helper_install_cancelled",
   "tun.helper_not_ready": "error.tun.helper_not_ready",
   "tun.elevation_cancelled": "error.tun.elevation_cancelled",
+  "tun.elevation_requires_admin": "error.tun.elevation_requires_admin",
   "update.check_failed": "error.update.check_failed",
   "update.feed_unavailable": "error.update.feed_unavailable",
   "update.install_failed": "error.update.install_failed",

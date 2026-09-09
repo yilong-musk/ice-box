@@ -157,21 +157,29 @@ Windows. A per-user scheduled task `ice-box-tun` (highest privilege, never
 auto-triggered) runs `ice-tun-launcher.exe`:
 
 - one-time setup: `ensure_tun_elevation` (one UAC, no app relaunch, no
-  console flash). UAC launches the GUI-subsystem `ice-tun-launcher.exe`
-  with `--install --data <dir>`. That elevated step copies
-  `ice-tun-launcher.exe`, `sing-box.exe`, and `libcronet.dll` (plus
-  `wintun.dll` if present) to `%ProgramData%\ice-box\bin\` (SYSTEM +
-  Administrators full; Users read/execute), renders the task XML in
-  memory, writes it under `%ProgramData%\ice-box\` with an admin-only ACL,
-  and imports it so the SHA-256 pin of the **protected copies** lives in
-  `RegistrationInfo/Description`. The task `Command` points at the
-  ProgramData launcher; `Run` refuses `current_exe()` outside that
-  directory. Config is sanitised and written to
-  `%ProgramData%\ice-box\run\config.json` before spawn. The per-user NSIS
-  installer does not create the task (it is not elevated); uninstall still
-  deletes it and the protected copies.
-- start = `schtasks /Run`; stop = stop-file + graceful `taskkill /T` (no `/F`)
-  then `schtasks /End` fallback;
+  console flash). Refuses standard-user accounts (over-the-shoulder UAC
+  would register the task as a different administrator). UAC launches the
+  GUI-subsystem `ice-tun-launcher.exe` with `--install --data <dir>
+  --user-sid <sid>`. That elevated step copies `ice-tun-launcher.exe`,
+  `sing-box.exe`, and `libcronet.dll` (plus `wintun.dll` if present) to
+  `%ProgramFiles%\ice-box\` (standard users cannot pre-create that tree),
+  takes ownership as Administrators, ACLs the directory and each file
+  (SYSTEM + Administrators full; Users read/execute), and registers the
+  task from an in-memory XML string via `ITaskService::RegisterTask` so
+  the SHA-256 pin of the **protected copies** lives in
+  `RegistrationInfo/Description` and `Principal/UserId` is the interactive
+  SID. The task `Command` points at the Program Files launcher; `Run`
+  refuses `current_exe()` outside that directory. Config is sanitised and
+  written to `%ProgramData%\ice-box\run\config.json` (admin-owned) before
+  spawn. Core log, pid file, and the sanitised config live in that run
+  dir (Users read-only). Graceful stop uses a Global named event with a
+  DACL rather than a user-writable stop file. The per-user NSIS installer
+  does not create the task (it is not elevated); uninstall deletes the
+  task and, with a UAC prompt, the protected copies.
+- start = `schtasks /Run` after waiting for a previous instance to exit
+  (`/End` is asynchronous; `IgnoreNew` would otherwise drop the new run);
+  stop = named stop event + graceful `taskkill /T` (no `/F`) then
+  `schtasks /End` fallback;
 - liveness = handshake pid file + `PROCESS_QUERY_LIMITED_INFORMATION`;
 - `schtasks` probes are exit-code based (locale output is never parsed);
 - `WindowsElevatedCoreCoordinator` remains a fail-closed fallback if the task

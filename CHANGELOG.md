@@ -66,9 +66,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and Windows launcher sanitise JSON (`ice-config-guard`) and start from a
   root/admin-owned copy (`tun.config_rejected`). Subscription parse skips
   disallowed outbound types with warnings.
-- Windows TUN copies launcher/core into `%ProgramData%\ice-box\bin`,
-  imports task XML from that directory (not the user data dir), and
-  verifies `Exec/Command` plus the baked `--data` config path.
+- Windows TUN copies launcher/core into `%ProgramFiles%\ice-box` (not
+  `%ProgramData%`, which authenticated users can pre-create and keep
+  WRITE_DAC), registers the task from an in-memory XML string
+  (`ITaskService::RegisterTask`), pins `Principal/UserId` to the
+  interactive SID, writes core log/pid under `%ProgramData%\ice-box\run`
+  with Users read-only, and stops via a DACL'd named event. Standard-user
+  over-the-shoulder UAC is refused (`tun.elevation_requires_admin`).
 - Helper token file is `0600` owned by the installing uid (uid check
   remains the primary control).
 - `adopt_external` refuses pids that are not the bundled sing-box

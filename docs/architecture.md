@@ -800,7 +800,7 @@ v1 minimal UI set:
 ## 16. Logging and observability
 
 - App: `tracing` → `ice-box.log` (`ice_box_lib::runtime::init_logging`; cap at 20 MiB by dropping the oldest 5 MiB in place, same inode). Pid-file and size-cap helpers live in `ice-core`.
-- Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path), where the elevated core's output goes to the helper's fixed root-owned `/var/log/ice-box-core.log`; the log view merges that file in as an extra core source (best-effort, latched on the first helper-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner). Generated `log.level` is `info` so per-connection routes are recorded; the 20 MiB in-place cap bounds disk.
+- Core: stdout/stderr → `sing-box.log`, except while TUN capture runs through the privileged helper (macOS production path, `/var/log/ice-box-core.log`) or the Windows scheduled-task launcher (`%ProgramData%\ice-box\run\sing-box.log`, admin-owned, Users read). The log view merges that extra core source (best-effort, latched on the first helper/task-managed TUN enable in the app session so a finished TUN session's core lines stay visible; never merged under the dev `sudo` runner). Generated `log.level` is `info` so per-connection routes are recorded; the 20 MiB in-place cap bounds disk.
 - Size cap: one file per source, 20 MiB. Overflow drops the oldest 5 MiB (line-aligned) on the same inode so a long-running core (`O_APPEND`) stays inside the cap. Spawn and the 2 s watchdog apply that cap; leftover `*.log.N` files from the old rename-rotation scheme are deleted.
 - UI `get_log_view`: merges the log files and **sorts by time** (same-timestamp lines keep file read order; display lines use a compact timestamp and omit source tags)
 - Display filter (UI only, never touches the log files): default view keeps WARN/ERROR/FATAL; all app INFO; core lifecycle INFO (started / stopped / ready / reload / restart); and per-connection outbound routing (`outbound connection to`). Other core INFO (dial chatter), DEBUG/TRACE, and `hijack-dns` unpack ERROR lines stay hidden. Settings `log_debug` skips that filter and shows every parsed line.
@@ -857,6 +857,7 @@ TUN capture codes (TUN slice, §24):
 | `tun.config_rejected` | elevated start refused config after the content allowlist |
 | `tun.helper_stale` / `tun.helper_install_failed` / `tun.helper_install_cancelled` / `tun.helper_not_ready` | macOS helper install / version drift |
 | `tun.elevation_cancelled` | Windows one-time UAC cancelled |
+| `tun.elevation_requires_admin` | Windows TUN setup refused: interactive user is not an Administrator |
 
 The Rust enum `ice_types::ErrorCode` (re-exported as `ice_config::ErrorCode`) is the single IPC source of truth (including `tun.*` / `update.*`). `TunError` in `ice-types` uses those `tun.*` variants. The desktop UI types `apps/desktop/src/api/errorCodes.ts` against the same strings.
 
@@ -1143,7 +1144,8 @@ Exact inbound JSON, helper IPC, Windows emission, and known limits: `docs/tun.md
    utun and flushes its routes. Journal + verification remain the contract. Windows
    requires a graceful core stop: stranded `strict_route` WFP filters black-hole host TCP.
 8. **Windows:** WinTUN is embedded in `sing-box.exe`. Elevation is the scheduled task
-   `ice-box-tun` (`ice-tun-launcher.exe`, one UAC to create). Emission is Windows-only
+   `ice-box-tun` (`ice-tun-launcher.exe` under `%ProgramFiles%\ice-box`, one UAC to create;
+   the interactive user must already be an Administrator). Emission is Windows-only
    (IPv4 port-53 hijack first, TCP DNS, no fake-ip, no `local` server, no
    post-sniff `protocol: dns` hijack, UDP 443 reject). Capture is IPv4 TCP
    only — see `docs/tun.md`.

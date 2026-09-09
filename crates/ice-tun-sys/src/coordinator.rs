@@ -746,6 +746,137 @@ pub fn process_is_elevated() -> bool {
     }
 }
 
+/// Interactive user SID (`S-1-5-21-…`), including when the process token is
+/// the UAC-filtered (medium IL) token of an Administrator.
+#[cfg(target_os = "windows")]
+pub fn current_user_sid_string() -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
+        let mut needed = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            let _ = CloseHandle(token);
+            return None;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let ok = GetTokenInformation(
+            token,
+            TokenUser,
+            buf.as_mut_ptr() as *mut _,
+            needed,
+            &mut needed,
+        );
+        let _ = CloseHandle(token);
+        if ok == 0 {
+            return None;
+        }
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut sid_str = std::ptr::null_mut();
+        if ConvertSidToStringSidW(user.User.Sid, &mut sid_str) == 0 || sid_str.is_null() {
+            return None;
+        }
+        let mut len = 0usize;
+        while *sid_str.add(len) != 0 {
+            len += 1;
+        }
+        let value = String::from_utf16_lossy(std::slice::from_raw_parts(sid_str, len));
+        let _ = LocalFree(sid_str as _);
+        Some(value)
+    }
+}
+
+/// Whether the interactive user is a member of Administrators, including the
+/// UAC-filtered token where the group is `SE_GROUP_USE_FOR_DENY_ONLY`.
+/// Standard users are false — over-the-shoulder UAC cannot make TUN work.
+#[cfg(target_os = "windows")]
+pub fn current_user_is_local_admin() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, EqualSid, GetTokenInformation, TokenGroups,
+        WinBuiltinAdministratorsSid, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_GROUPS,
+        TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut needed = 0u32;
+        let _ = GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            let _ = CloseHandle(token);
+            return false;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let ok = GetTokenInformation(
+            token,
+            TokenGroups,
+            buf.as_mut_ptr() as *mut _,
+            needed,
+            &mut needed,
+        );
+        let _ = CloseHandle(token);
+        if ok == 0 {
+            return false;
+        }
+        let mut admin_sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut admin_len = SECURITY_MAX_SID_SIZE;
+        if CreateWellKnownSid(
+            WinBuiltinAdministratorsSid,
+            std::ptr::null_mut(),
+            admin_sid.as_mut_ptr() as *mut _,
+            &mut admin_len,
+        ) == 0
+        {
+            return false;
+        }
+        let groups = &*(buf.as_ptr() as *const TOKEN_GROUPS);
+        let first = std::ptr::addr_of!(groups.Groups) as *const SID_AND_ATTRIBUTES;
+        for i in 0..groups.GroupCount as usize {
+            let saa = &*first.add(i);
+            if EqualSid(saa.Sid, admin_sid.as_ptr() as *mut _) != 0 {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Signal the elevated launcher to stop the core (named event with a DACL).
+#[cfg(target_os = "windows")]
+pub fn signal_tun_stop_event() -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
+
+    fn wide_z(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
+        value.as_ref().encode_wide().chain(Some(0)).collect()
+    }
+
+    let name = wide_z(ice_tun_pin::TUN_STOP_EVENT_NAME);
+    let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    let ok = unsafe { SetEvent(handle) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 /// Fixed name of the scheduled task that runs the TUN core elevated (plan B:
 /// scheduled-task elevation). The task is created once with the
 /// highest-privilege flag (the creating moment is the only elevation the
@@ -808,8 +939,9 @@ pub fn write_tun_task_xml(
     launcher: &Path,
     data_dir: &Path,
     pin: &str,
+    user_sid: &str,
 ) -> std::io::Result<()> {
-    let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, pin);
+    let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, pin, user_sid);
     std::fs::write(xml_path, ice_tun_pin::encode_utf16_le_bom(&xml))
 }
 
@@ -862,6 +994,9 @@ pub fn schtasks_command_line(args: &[String]) -> String {
 pub fn run_elevated_wait(exe: &Path, args: &[String]) -> std::io::Result<u32> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, WaitForSingleObject, INFINITE,
     };
@@ -891,34 +1026,43 @@ pub fn run_elevated_wait(exe: &Path, args: &[String]) -> std::io::Result<u32> {
     };
     info.nShow = SW_HIDE;
 
-    let ok = unsafe { ShellExecuteExW(&mut info) };
-    if ok == 0 {
-        let err = unsafe { GetLastError() };
-        return Err(std::io::Error::from_raw_os_error(err as i32));
-    }
-    if info.hProcess.is_null() {
-        return Err(std::io::Error::other(
-            "elevated process handle was not returned",
-        ));
-    }
-    let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
-    if wait != WAIT_OBJECT_0 {
+    // ShellExecuteEx can load COM shell extensions; MSDN requires CoInitialize.
+    let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+    let uninit = hr == 0 || hr == 1; // S_OK or S_FALSE
+    let result = (|| {
+        let ok = unsafe { ShellExecuteExW(&mut info) };
+        if ok == 0 {
+            let err = unsafe { GetLastError() };
+            return Err(std::io::Error::from_raw_os_error(err as i32));
+        }
+        if info.hProcess.is_null() {
+            return Err(std::io::Error::other(
+                "elevated process handle was not returned",
+            ));
+        }
+        let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
+        if wait != WAIT_OBJECT_0 {
+            unsafe {
+                let _ = CloseHandle(info.hProcess);
+            }
+            return Err(std::io::Error::other(
+                "waiting for the elevated process failed",
+            ));
+        }
+        let mut code = 0u32;
+        let got = unsafe { GetExitCodeProcess(info.hProcess, &mut code) };
         unsafe {
             let _ = CloseHandle(info.hProcess);
         }
-        return Err(std::io::Error::other(
-            "waiting for the elevated process failed",
-        ));
+        if got == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(code)
+    })();
+    if uninit {
+        unsafe { CoUninitialize() };
     }
-    let mut code = 0u32;
-    let got = unsafe { GetExitCodeProcess(info.hProcess, &mut code) };
-    unsafe {
-        let _ = CloseHandle(info.hProcess);
-    }
-    if got == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(code)
+    result
 }
 
 /// Whether the TUN scheduled task exists and its description pin matches the
@@ -927,7 +1071,7 @@ pub fn run_elevated_wait(exe: &Path, args: &[String]) -> std::io::Result<u32> {
 pub fn tun_task_pin_matches(launcher: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
-        verify_task_binaries(launcher).is_ok()
+        verify_task_for_ensure(launcher).is_ok()
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -936,9 +1080,37 @@ pub fn tun_task_pin_matches(launcher: &Path) -> bool {
     }
 }
 
-/// Read the scheduled-task XML and refuse a replaced launcher or core.
+/// Read the scheduled-task XML and refuse a replaced protected launcher or core.
+/// Start hashes only the Program Files copies (what `schtasks /Run` executes).
 #[cfg(target_os = "windows")]
-fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
+fn verify_task_binaries(_launcher: &Path) -> Result<(), TunError> {
+    let (pin, protected, protected_core) = load_verified_task_pin()?;
+    pin_must_match(&pin, &protected, &protected_core, "protected")
+}
+
+/// Ensure hashes the per-user copies (detect app updates) and the protected
+/// copies (detect tampering). Missing either side triggers re-elevation.
+#[cfg(target_os = "windows")]
+fn verify_task_for_ensure(user_launcher: &Path) -> Result<(), TunError> {
+    let (pin, protected, protected_core) = load_verified_task_pin()?;
+    pin_must_match(&pin, &protected, &protected_core, "protected")?;
+    if ice_tun_pin::path_is_protected_launcher(user_launcher, &ice_tun_pin::program_files_dir()) {
+        return Ok(());
+    }
+    let core = ice_tun_pin::core_beside_launcher(user_launcher).ok_or_else(|| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!(
+                "TUN task launcher path {} has no parent",
+                user_launcher.display()
+            ),
+        )
+    })?;
+    pin_must_match(&pin, user_launcher, &core, "bundled")
+}
+
+#[cfg(target_os = "windows")]
+fn load_verified_task_pin() -> Result<(ice_tun_pin::TunTaskPin, PathBuf, PathBuf), TunError> {
     let xml = query_tun_task_xml().ok_or_else(|| {
         TunError::new(
             ErrorCode::TunPermissionRequired,
@@ -953,9 +1125,17 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             ),
         )
     })?;
-    let program_data = ice_tun_pin::program_data_dir();
-    let protected = ice_tun_pin::protected_launcher_path(&program_data);
+    let program_files = ice_tun_pin::program_files_dir();
+    let protected = ice_tun_pin::protected_launcher_path(&program_files);
     ice_tun_pin::verify_task_command(&xml, &protected)
+        .map_err(|msg| TunError::new(ErrorCode::TunPermissionRequired, msg))?;
+    let sid = current_user_sid_string().ok_or_else(|| {
+        TunError::new(
+            ErrorCode::TunPermissionRequired,
+            "cannot resolve the interactive user SID",
+        )
+    })?;
+    ice_tun_pin::verify_task_user_id(&xml, &sid)
         .map_err(|msg| TunError::new(ErrorCode::TunPermissionRequired, msg))?;
     let protected_core = ice_tun_pin::core_beside_launcher(&protected).ok_or_else(|| {
         TunError::new(
@@ -966,46 +1146,27 @@ fn verify_task_binaries(launcher: &Path) -> Result<(), TunError> {
             ),
         )
     })?;
-    match ice_tun_pin::pin_matches_files(&pin, &protected, &protected_core) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(TunError::new(
-                ErrorCode::TunApplyFailed,
-                format!(
-                    "protected TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
-                    protected_core.display()
-                ),
-            ))
-        }
-        Err(err) => return Err(TunError::new(ErrorCode::TunApplyFailed, err)),
+    Ok((pin, protected, protected_core))
+}
+
+#[cfg(target_os = "windows")]
+fn pin_must_match(
+    pin: &ice_tun_pin::TunTaskPin,
+    launcher: &Path,
+    core: &Path,
+    label: &str,
+) -> Result<(), TunError> {
+    match ice_tun_pin::pin_matches_files(pin, launcher, core) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!(
+                "{label} TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
+                core.display()
+            ),
+        )),
+        Err(err) => Err(TunError::new(ErrorCode::TunApplyFailed, err)),
     }
-    // User-install drift: a replaced per-user copy must trigger re-elevation
-    // so the protected copies are refreshed.
-    if !ice_tun_pin::path_is_protected_launcher(launcher, &program_data) {
-        let core = ice_tun_pin::core_beside_launcher(launcher).ok_or_else(|| {
-            TunError::new(
-                ErrorCode::TunApplyFailed,
-                format!(
-                    "TUN task launcher path {} has no parent",
-                    launcher.display()
-                ),
-            )
-        })?;
-        match ice_tun_pin::pin_matches_files(&pin, launcher, &core) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(TunError::new(
-                    ErrorCode::TunApplyFailed,
-                    format!(
-                        "TUN launcher or {} does not match the scheduled-task sha256 pin; refusing to start",
-                        core.display()
-                    ),
-                ))
-            }
-            Err(err) => return Err(TunError::new(ErrorCode::TunApplyFailed, err)),
-        }
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1026,24 +1187,22 @@ fn query_tun_task_xml() -> Option<String> {
 /// Elevated runner for the Windows TUN path through the scheduled task
 /// (plan B). The app process never needs to be elevated: the task (created
 /// once) carries the highest-privilege token, and `schtasks /Run` / `/End`
-/// trigger and terminate it without UAC. The task action is the bundled
+/// trigger and terminate it without UAC. The task action is the protected
 /// `ice-tun-launcher`, which spawns sing-box, writes its pid to the
-/// handshake pid file, and honors a graceful-stop request via the stop file.
+/// handshake pid file, and honors a graceful-stop request via a named event.
 #[cfg(target_os = "windows")]
 pub struct TaskCoreCoordinator {
     launcher: PathBuf,
     pidfile: PathBuf,
-    stopfile: PathBuf,
     pid: Option<u32>,
 }
 
 #[cfg(target_os = "windows")]
 impl TaskCoreCoordinator {
-    pub fn new(launcher: PathBuf, pidfile: PathBuf, stopfile: PathBuf) -> Self {
+    pub fn new(launcher: PathBuf, pidfile: PathBuf) -> Self {
         Self {
             launcher,
             pidfile,
-            stopfile,
             pid: None,
         }
     }
@@ -1070,18 +1229,39 @@ impl TaskCoreCoordinator {
     }
 
     fn reset_handshake(&mut self) -> Result<(), TunError> {
-        // Wait out a previously recorded core (the /End above kills the task
-        // tree hard, so the launcher cannot clean the pid file itself).
+        self.wait_until_previous_instance_gone();
+        if protected_launcher_is_running() {
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                "previous TUN task instance is still running after schtasks /End; a new /Run would be ignored",
+            ));
+        }
+        let _ = std::fs::remove_file(&self.pidfile);
+        self.pid = None;
+        Ok(())
+    }
+
+    fn wait_until_previous_instance_gone(&self) {
         if let Some(pid) = self.pid {
             let deadline = Instant::now() + TERM_GRACE;
             while Instant::now() < deadline && pid_is_alive_windows(pid) {
                 std::thread::sleep(LIVENESS_POLL);
             }
         }
-        let _ = std::fs::remove_file(&self.stopfile);
-        let _ = std::fs::remove_file(&self.pidfile);
-        self.pid = None;
-        Ok(())
+        if let Ok(contents) = std::fs::read_to_string(&self.pidfile) {
+            if let Ok(pid) = contents.trim().parse::<u32>() {
+                if pid != 0 {
+                    let deadline = Instant::now() + TERM_GRACE;
+                    while Instant::now() < deadline && pid_is_alive_windows(pid) {
+                        std::thread::sleep(LIVENESS_POLL);
+                    }
+                }
+            }
+        }
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline && protected_launcher_is_running() {
+            std::thread::sleep(LIVENESS_POLL);
+        }
     }
 
     fn wait_for_pidfile(&self) -> Result<u32, TunError> {
@@ -1133,6 +1313,59 @@ fn pid_is_alive_windows(pid: u32) -> bool {
     let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
     unsafe { CloseHandle(handle) };
     queried != 0 && exit_code == STILL_ACTIVE as u32
+}
+
+/// Whether a process whose image is the protected Program Files launcher is
+/// still running. Used after `schtasks /End` (asynchronous) so `/Run` is not
+/// silently ignored under `MultipleInstancesPolicy=IgnoreNew`.
+#[cfg(target_os = "windows")]
+fn protected_launcher_is_running() -> bool {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let expected = ice_tun_pin::protected_launcher_path(&ice_tun_pin::program_files_dir());
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot.is_null() || snapshot == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    let mut entry = unsafe { std::mem::zeroed::<PROCESSENTRY32W>() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut running = false;
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while more {
+        let handle =
+            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID) };
+        if !handle.is_null() {
+            let mut buf = [0u16; 32768];
+            let mut size = buf.len() as u32;
+            if unsafe { QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size) } != 0
+                && size > 0
+            {
+                let path = std::ffi::OsString::from_wide(&buf[..size as usize]);
+                if ice_tun_pin::command_matches_launcher(&path.to_string_lossy(), &expected) {
+                    running = true;
+                }
+            }
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+        }
+        if running {
+            break;
+        }
+        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
+    running
 }
 
 #[cfg(target_os = "windows")]
@@ -1189,9 +1422,9 @@ impl CoreCoordinator for TaskCoreCoordinator {
         // Graceful-first (`docs/tun.md`): the strict-route
         // WFP filters sing-box installs are removed on its graceful shutdown
         // path only; a hard kill strands them and black-holes host TCP (V11).
-        // The elevated launcher honors the stop file with the same
+        // The elevated launcher honors the named stop event with the same
         // graceful-then-forced sequence the dev runner uses.
-        if let Err(err) = std::fs::write(&self.stopfile, "stop") {
+        if let Err(err) = signal_tun_stop_event() {
             return Err(TunError::new(
                 ErrorCode::TunRestoreFailed,
                 format!("request TUN core stop: {err}"),
@@ -1332,7 +1565,7 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         );
-        write_tun_task_xml(&xml_path, launcher, &dir, &pin).expect("write");
+        write_tun_task_xml(&xml_path, launcher, &dir, &pin, "S-1-5-21-1-2-3-1001").expect("write");
         let bytes = std::fs::read(&xml_path).expect("read");
         let xml = ice_tun_pin::decode_schtasks_output(&bytes);
         assert_eq!(
@@ -1350,15 +1583,16 @@ mod tests {
 
     #[test]
     fn task_xml_command_mismatch_is_rejected_even_when_pin_matches() {
-        let launcher = Path::new(r"C:\ProgramData\ice-box\bin\ice-tun-launcher.exe");
+        let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
         let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
         let pin = ice_tun_pin::format_tun_task_pin(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         );
-        let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, &pin);
+        let xml = ice_tun_pin::render_tun_task_xml(launcher, data_dir, &pin, "S-1-5-21-1-2-3-1001");
         assert!(ice_tun_pin::extract_tun_task_pin_from_xml(&xml).is_some());
         ice_tun_pin::verify_task_command(&xml, launcher).expect("protected command");
+        ice_tun_pin::verify_task_user_id(&xml, "S-1-5-21-1-2-3-1001").expect("user id");
         let err = ice_tun_pin::verify_task_command(
             &xml,
             Path::new(r"C:\Users\admin\ice-tun-launcher.exe"),
@@ -1376,8 +1610,8 @@ mod tests {
     #[test]
     fn quote_windows_args_quotes_spaces_but_not_apostrophes() {
         let args = [
-            "--install-task".to_string(),
-            "--xml".to_string(),
+            "--install".to_string(),
+            "--user-sid".to_string(),
             r#"C:\Users\O'Brien\ice-box-tun.xml"#.to_string(),
         ];
         let line = quote_windows_args(&args);

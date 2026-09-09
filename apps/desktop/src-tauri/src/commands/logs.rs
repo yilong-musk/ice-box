@@ -17,9 +17,11 @@ pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<Str
         // app-data path, so it must not read the helper log. The capture
         // controller latches helper usage for the app session, so the merge
         // also persists after a TUN session ends.
-        let helper_log = (state.capture.helper_core_used()
+        let extra_core_log = (state.capture.helper_core_used()
             && !ice_tun_sys::dev_sudo_runner_enabled())
-        .then(|| std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST));
+        .then(ice_tun_sys::elevated_core_log_path)
+        .flatten();
+        let extra_core_log = extra_core_log.as_deref();
         let debug = current_settings(&state.paths)
             .map(|s| s.log_debug)
             .unwrap_or(false);
@@ -29,7 +31,7 @@ pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<Str
         let sigs = vec![
             file_sig(&state.paths.app_log()),
             file_sig(&state.paths.core_log()),
-            helper_log.and_then(file_sig),
+            extra_core_log.and_then(file_sig),
             file_sig(&state.paths.settings()),
         ];
         if let Ok(cache) = state.log_view_cache.lock() {
@@ -42,7 +44,7 @@ pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<Str
         let lines = crate::log_view::read_log_view(
             &state.paths.app_log(),
             &state.paths.core_log(),
-            helper_log,
+            extra_core_log,
             req.n,
             debug,
         )?;
@@ -74,22 +76,25 @@ pub(crate) fn cap_oversized_logs(state: &AppState) {
         failed = true;
     }
     if state.capture.helper_core_used() && !ice_tun_sys::dev_sudo_runner_enabled() {
-        let helper_log = std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST);
-        match ice_core::cap_log_file(
-            helper_log,
-            ice_core::CORE_LOG_MAX_BYTES,
-            ice_core::CORE_LOG_KEEP,
-        ) {
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                // Last resort: the helper's TruncateCoreLog empties the file.
-                if ice_core::log_file_oversized(helper_log, ice_core::CORE_LOG_MAX_BYTES)
-                    && truncate_helper_core_log(state).is_err()
-                {
-                    failed = true;
+        if let Some(helper_log) = ice_tun_sys::elevated_core_log_path() {
+            match ice_core::cap_log_file(
+                &helper_log,
+                ice_core::CORE_LOG_MAX_BYTES,
+                ice_core::CORE_LOG_KEEP,
+            ) {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    #[cfg(unix)]
+                    {
+                        if ice_core::log_file_oversized(&helper_log, ice_core::CORE_LOG_MAX_BYTES)
+                            && truncate_helper_core_log(state).is_err()
+                        {
+                            failed = true;
+                        }
+                    }
                 }
+                Err(_) => failed = true,
             }
-            Err(_) => failed = true,
         }
     }
     if failed {
@@ -118,6 +123,7 @@ fn clear_oversized_warning(state: &AppState) {
     }
 }
 
+#[cfg(unix)]
 fn map_truncate_err(label: &str, err: std::io::Error) -> AppError {
     AppError::new(ErrorCode::LogsOversized, format!("truncate {label}: {err}"))
 }
@@ -125,30 +131,28 @@ fn map_truncate_err(label: &str, err: std::io::Error) -> AppError {
 /// `/var/log/ice-box-core.log` is created by the privileged helper. Trim as
 /// the user first (install/start now chown it to the authorized uid); if that
 /// is denied, ask the helper to empty the same inode.
-#[cfg_attr(not(unix), allow(unused_variables))]
+#[cfg(unix)]
 fn truncate_helper_core_log(state: &AppState) -> Result<(), AppError> {
-    let helper_log = std::path::Path::new(ice_tun_sys::install_paths::CORE_LOG_DEST);
-    match ice_core::truncate_log_file(helper_log, ice_core::CORE_LOG_KEEP) {
+    let helper_log = match ice_tun_sys::elevated_core_log_path() {
+        Some(path) => path,
+        None => {
+            return Err(map_truncate_err(
+                "helper core log",
+                std::io::Error::from(std::io::ErrorKind::NotFound),
+            ))
+        }
+    };
+    match ice_core::truncate_log_file(&helper_log, ice_core::CORE_LOG_KEEP) {
         Ok(()) => return Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {}
         Err(err) => return Err(map_truncate_err("helper core log", err)),
     }
-    #[cfg(unix)]
-    {
-        let helper = ice_tun_sys::helper::HelperCoreCoordinator::from_data_dir(state.paths.root())
-            .map_err(AppError::from)?;
-        helper
-            .truncate_core_log()
-            .map_err(|e| AppError::new(ErrorCode::LogsOversized, e.to_string()))?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        Err(map_truncate_err(
-            "helper core log",
-            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        ))
-    }
+    let helper = ice_tun_sys::helper::HelperCoreCoordinator::from_data_dir(state.paths.root())
+        .map_err(AppError::from)?;
+    helper
+        .truncate_core_log()
+        .map_err(|e| AppError::new(ErrorCode::LogsOversized, e.to_string()))?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -392,6 +392,7 @@ const zh = {
   "error.tun.helper_install_cancelled": "已取消安装辅助组件",
   "error.tun.helper_not_ready": "辅助组件未就绪",
   "error.tun.elevation_cancelled": "已取消管理员授权",
+  "error.tun.elevation_requires_admin": "TUN 需要当前 Windows 用户属于 Administrators，不能用其他管理员账号通过 UAC 提权",
   "error.update.check_failed": "检查更新失败",
   "error.update.feed_unavailable": "更新目录暂不可用",
   "error.update.install_failed": "安装更新失败",
@@ -782,6 +783,8 @@ const en: Record<MessageKey, string> = {
   "error.tun.helper_install_cancelled": "Helper install was cancelled",
   "error.tun.helper_not_ready": "Helper is not ready",
   "error.tun.elevation_cancelled": "Administrator authorization was cancelled",
+  "error.tun.elevation_requires_admin":
+    "TUN requires the signed-in Windows user to be an Administrator; signing in as a different admin at the UAC prompt will not work",
   "error.update.check_failed": "Failed to check for updates",
   "error.update.feed_unavailable": "Update catalog is not available yet",
   "error.update.install_failed": "Failed to install the update",

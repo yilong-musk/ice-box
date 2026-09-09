@@ -1814,6 +1814,7 @@ dependencies = [
  "ice-config-guard",
  "ice-tun-pin",
  "serde_json",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

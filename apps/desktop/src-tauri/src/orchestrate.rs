@@ -120,7 +120,7 @@ fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
     }
     #[cfg(windows)]
     {
-        vec![ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_data_dir()).join("sing-box.exe")]
+        vec![ice_tun_sys::protected_bin_dir(&ice_tun_sys::program_files_dir()).join("sing-box.exe")]
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     Vec::new()

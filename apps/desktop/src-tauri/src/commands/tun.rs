@@ -126,6 +126,14 @@ pub(crate) fn ensure_tun_elevation_inner(
     app: &AppHandle,
     state: &AppState,
 ) -> Result<(), AppError> {
+    if !ice_tun_sys::current_user_is_local_admin() {
+        return Err(AppError::with_code(
+            ErrorCode::TunElevationRequiresAdmin,
+            "TUN capture needs the signed-in Windows user to be a member of Administrators; signing in with a different administrator at the UAC prompt will not work",
+        ));
+    }
+    let user_sid = ice_tun_sys::current_user_sid_string()
+        .ok_or_else(|| launcher_failed("cannot resolve the interactive user SID"))?;
     let (launcher, data_dir) = tun_task_paths(app, state)?;
     if !launcher.is_file() {
         return Err(launcher_failed(format!(
@@ -157,6 +165,8 @@ pub(crate) fn ensure_tun_elevation_inner(
         "--install".to_string(),
         "--data".to_string(),
         data_dir.to_string_lossy().into_owned(),
+        "--user-sid".to_string(),
+        user_sid,
     ];
     let create_result = if ice_tun_sys::process_is_elevated() {
         use std::os::windows::process::CommandExt;

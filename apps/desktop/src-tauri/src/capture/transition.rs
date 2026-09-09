@@ -117,10 +117,9 @@ impl CaptureController {
         inner.transition_id = None;
         inner.tun_interface = tun_interface;
         // A successful TUN transition outside the dev `sudo` runner means the
-        // elevated core was spawned by the helper and wrote to the helper's
-        // fixed core log; latch it so the log view keeps merging that file
-        // after TUN stops (the app-data core log is frozen during the helper
-        // session).
+        // elevated core wrote to the helper log (macOS) or the ProgramData
+        // run-dir log (Windows scheduled task). Latch so the log view keeps
+        // merging that file after TUN stops.
         if active == TrafficCapture::Tun && !ice_tun_sys::dev_sudo_runner_enabled() {
             inner.helper_core_used = true;
         }

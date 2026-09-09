@@ -7,13 +7,13 @@
 //! this binary with the highest-privilege token. The launcher:
 //!
 //! 1. spawns the bundled sing-box with the runtime config, redirecting its
-//!    output to the core log,
+//!    output to the protected core log,
 //! 2. writes the child pid to the handshake pid file (the app reads it),
-//! 3. polls the stop file: when it appears (the app requests a graceful
-//!    stop), it sends the graceful close first (`taskkill /T` without `/F`,
-//!    which sing-box uses to remove its WFP filters and routes — the
-//!    strict-route filters must not be stranded, they black-hole host TCP),
-//!    then the forced `/F` fallback,
+//! 3. waits on a named stop event: when signaled (the app requests a
+//!    graceful stop), it sends the graceful close first (`taskkill /T`
+//!    without `/F`, which sing-box uses to remove its WFP filters and
+//!    routes — the strict-route filters must not be stranded, they
+//!    black-hole host TCP), then the forced `/F` fallback,
 //! 4. removes the pid file and exits when the core is gone or stops itself.
 //!
 //! The scheduled task may also be ended hard (`schtasks /End`), which kills
@@ -22,20 +22,24 @@
 //!
 //! Usage:
 //! - `ice-tun-launcher --data <app-data-dir>` — run the elevated core
-//! - `ice-tun-launcher --install --data <app-data-dir>` — one-time UAC:
-//!   copy binaries to `%ProgramData%\ice-box\bin`, render and import the task
-//! - `ice-tun-launcher --install-task --xml <task.xml>` — legacy XML import
+//! - `ice-tun-launcher --install --data <app-data-dir> --user-sid <sid>` —
+//!   one-time UAC: copy binaries to `%ProgramFiles%\ice-box`, register the
+//!   task from an in-memory XML string
 //! - `ice-tun-launcher --delete-task` — remove the scheduled task and
 //!   protected copies
 //!
 //! Before spawning sing-box the launcher checks the SHA-256 pin stored in
-//! the `ice-box-tun` scheduled-task description (written via XML import at
-//! elevated create time). A replaced `sing-box.exe` is refused.
+//! the `ice-box-tun` scheduled-task description (written at elevated create
+//! time). A replaced `sing-box.exe` is refused.
 
-// A GUI-subsystem binary: the scheduled task starts it elevated, and a
-// console subsystem would flash a black window on every `schtasks /Run`
-// and on the one-time UAC install (which used to wrap `cmd.exe`).
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
+#[cfg(target_os = "windows")]
+mod acl;
+#[cfg(target_os = "windows")]
+mod stop_event;
+#[cfg(target_os = "windows")]
+mod task_com;
 
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
@@ -50,6 +54,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(300);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(target_os = "windows")]
+const LOG_CAP_EVERY: Duration = Duration::from_secs(60);
 
 #[cfg(target_os = "windows")]
 struct Args {
@@ -57,7 +63,6 @@ struct Args {
     config: PathBuf,
     log: PathBuf,
     pidfile: PathBuf,
-    stopfile: PathBuf,
 }
 
 #[cfg(target_os = "windows")]
@@ -65,16 +70,13 @@ fn args_from_data_dir(data_dir: PathBuf) -> Option<Args> {
     if data_dir.as_os_str().is_empty() {
         return None;
     }
-    // Derive every other path from the app data dir (fixed layout) so the
-    // scheduled task's `/TR` action stays far below schtasks's 261-char
-    // limit: only the data dir is baked into the task.
     let exe_dir = std::env::current_exe().ok()?.parent().map(PathBuf::from)?;
+    let program_data = ice_tun_pin::program_data_dir();
     Some(Args {
         binary: exe_dir.join("sing-box.exe"),
         config: data_dir.join("config.json"),
-        log: data_dir.join("logs").join("sing-box.log"),
-        pidfile: data_dir.join("tun-task.pid"),
-        stopfile: data_dir.join("tun-task.stop"),
+        log: ice_tun_pin::protected_core_log_path(&program_data),
+        pidfile: ice_tun_pin::protected_pidfile_path(&program_data),
     })
 }
 
@@ -87,8 +89,6 @@ fn taskkill(pid: u32, forced: bool) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        // CREATE_NO_WINDOW: the launcher is a GUI-subsystem process; a
-        // console child would flash a black window on every stop.
         .creation_flags(CREATE_NO_WINDOW);
     if forced {
         command.arg("/F");
@@ -112,19 +112,6 @@ fn silent_schtasks(command: &mut Command) -> i32 {
 }
 
 #[cfg(target_os = "windows")]
-fn install_task(xml: &Path) -> i32 {
-    if !xml.is_file() {
-        return 2;
-    }
-    silent_schtasks(
-        Command::new("schtasks.exe")
-            .args(["/Create", "/TN", ice_tun_pin::TUN_TASK_NAME, "/XML"])
-            .arg(xml)
-            .arg("/F"),
-    )
-}
-
-#[cfg(target_os = "windows")]
 fn delete_task() -> i32 {
     let code = silent_schtasks(Command::new("schtasks.exe").args([
         "/Delete",
@@ -132,15 +119,18 @@ fn delete_task() -> i32 {
         ice_tun_pin::TUN_TASK_NAME,
         "/F",
     ]));
-    let program_data = ice_tun_pin::program_data_dir();
-    let install_dir = ice_tun_pin::protected_install_dir(&program_data);
-    let _ = std::fs::remove_dir_all(&install_dir);
+    acl::remove_protected_tree(&ice_tun_pin::protected_bin_dir(
+        &ice_tun_pin::program_files_dir(),
+    ));
+    acl::remove_protected_tree(&ice_tun_pin::protected_data_dir(
+        &ice_tun_pin::program_data_dir(),
+    ));
     code
 }
 
 #[cfg(target_os = "windows")]
-fn install_protected(data_dir: &Path) -> i32 {
-    if data_dir.as_os_str().is_empty() {
+fn install_protected(data_dir: &Path, user_sid: &str) -> i32 {
+    if data_dir.as_os_str().is_empty() || !ice_tun_pin::is_windows_sid(user_sid) {
         return 2;
     }
     let exe = match std::env::current_exe() {
@@ -156,37 +146,46 @@ fn install_protected(data_dir: &Path) -> i32 {
         eprintln!("sing-box.exe not found next to {}", exe.display());
         return 2;
     }
+    let _ = silent_schtasks(Command::new("schtasks.exe").args([
+        "/End",
+        "/TN",
+        ice_tun_pin::TUN_TASK_NAME,
+    ]));
+    std::thread::sleep(Duration::from_millis(500));
+
+    let program_files = ice_tun_pin::program_files_dir();
     let program_data = ice_tun_pin::program_data_dir();
-    let install_dir = ice_tun_pin::protected_install_dir(&program_data);
-    let bin_dir = ice_tun_pin::protected_bin_dir(&program_data);
+    let bin_dir = ice_tun_pin::protected_bin_dir(&program_files);
+    let data_root = ice_tun_pin::protected_data_dir(&program_data);
     let run_dir = ice_tun_pin::protected_run_dir(&program_data);
-    if std::fs::create_dir_all(&bin_dir).is_err() || std::fs::create_dir_all(&run_dir).is_err() {
+    if acl::wipe_and_create_dir(&bin_dir, acl::UsersAccess::ReadExecute).is_err() {
         return 2;
     }
-    let dest_launcher = ice_tun_pin::protected_launcher_path(&program_data);
+    if acl::wipe_and_create_dir(&data_root, acl::UsersAccess::Read).is_err() {
+        return 2;
+    }
+    if acl::wipe_and_create_dir(&run_dir, acl::UsersAccess::Read).is_err() {
+        return 2;
+    }
+
+    let dest_launcher = ice_tun_pin::protected_launcher_path(&program_files);
     let dest_core = bin_dir.join("sing-box.exe");
-    if copy_protected_file(&exe, &dest_launcher).is_err() {
+    if acl::copy_protected_file(&exe, &dest_launcher, acl::UsersAccess::ReadExecute).is_err() {
         return 2;
     }
-    if copy_protected_file(&core_src, &dest_core).is_err() {
+    if acl::copy_protected_file(&core_src, &dest_core, acl::UsersAccess::ReadExecute).is_err() {
         return 2;
     }
     for name in ["libcronet.dll", "wintun.dll"] {
         let src = src_dir.join(name);
         if src.is_file() {
             let dest = bin_dir.join(name);
-            if copy_protected_file(&src, &dest).is_err() {
+            if acl::copy_protected_file(&src, &dest, acl::UsersAccess::ReadExecute).is_err() {
                 return 2;
             }
         }
     }
-    if apply_acl(&install_dir, true, true).is_err()
-        || apply_acl(&bin_dir, true, true).is_err()
-        || apply_acl(&run_dir, true, false).is_err()
-    {
-        return 2;
-    }
-    if write_resources_pointer(&program_data, &src_dir).is_err() {
+    if write_resources_pointer(&bin_dir, &src_dir).is_err() {
         return 2;
     }
     let Ok(launcher_sha) = ice_tun_pin::sha256_of_file(&dest_launcher) else {
@@ -196,67 +195,21 @@ fn install_protected(data_dir: &Path) -> i32 {
         return 2;
     };
     let pin = ice_tun_pin::format_tun_task_pin(&launcher_sha, &core_sha);
-    let xml = ice_tun_pin::render_tun_task_xml(&dest_launcher, data_dir, &pin);
-    let xml_path = ice_tun_pin::protected_install_dir(&program_data).join("ice-box-tun.xml");
-    let bytes = ice_tun_pin::encode_utf16_le_bom(&xml);
-    if std::fs::write(&xml_path, bytes).is_err() {
-        return 2;
-    }
-    let _ = apply_acl(&xml_path, false, false);
-    let code = install_task(&xml_path);
-    let _ = std::fs::remove_file(&xml_path);
-    code
+    let xml = ice_tun_pin::render_tun_task_xml(&dest_launcher, data_dir, &pin, user_sid);
+    task_com::register_task_xml(&xml)
 }
 
 #[cfg(target_os = "windows")]
-fn copy_protected_file(src: &Path, dest: &Path) -> Result<(), ()> {
-    std::fs::copy(src, dest).map(|_| ()).map_err(|_| ())
-}
-
-/// SYSTEM + Administrators full; optionally Users read/execute.
-#[cfg(target_os = "windows")]
-fn apply_acl(path: &Path, directory: bool, users_rx: bool) -> Result<(), ()> {
-    let inherit = if directory { "(OI)(CI)" } else { "" };
-    let mut grants = vec![
-        format!("*S-1-5-18:{inherit}F"),
-        format!("*S-1-5-32-544:{inherit}F"),
-    ];
-    if users_rx {
-        grants.push(format!("*S-1-5-32-545:{inherit}RX"));
-    }
-    icacls(path, &["/inheritance:r".to_string()])?;
-    let mut extra = vec!["/grant:r".to_string()];
-    extra.extend(grants);
-    icacls(path, &extra)
-}
-
-#[cfg(target_os = "windows")]
-fn icacls(path: &Path, extra: &[String]) -> Result<(), ()> {
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new("icacls.exe");
-    cmd.arg(path).args(extra);
-    match cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        _ => Err(()),
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn write_resources_pointer(program_data: &Path, resources: &Path) -> Result<(), ()> {
-    let path = ice_tun_pin::protected_install_dir(program_data).join("resources-dir.txt");
+fn write_resources_pointer(bin_dir: &Path, resources: &Path) -> Result<(), ()> {
+    let path = bin_dir.join("resources-dir.txt");
     std::fs::write(&path, resources.to_string_lossy().as_bytes()).map_err(|_| ())?;
-    apply_acl(&path, false, false)
+    acl::apply_acl(&path, false, acl::UsersAccess::None)?;
+    acl::set_owner_administrators(&path, false)
 }
 
 #[cfg(target_os = "windows")]
-fn read_resources_pointer(program_data: &Path) -> Option<PathBuf> {
-    let path = ice_tun_pin::protected_install_dir(program_data).join("resources-dir.txt");
+fn read_resources_pointer(program_files: &Path) -> Option<PathBuf> {
+    let path = ice_tun_pin::protected_bin_dir(program_files).join("resources-dir.txt");
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -270,8 +223,9 @@ fn read_resources_pointer(program_data: &Path) -> Option<PathBuf> {
 fn run() -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match ice_tun_pin::parse_launcher_command(&argv) {
-        Some(ice_tun_pin::LauncherCommand::Install { data_dir }) => install_protected(&data_dir),
-        Some(ice_tun_pin::LauncherCommand::InstallTask { xml }) => install_task(&xml),
+        Some(ice_tun_pin::LauncherCommand::Install { data_dir, user_sid }) => {
+            install_protected(&data_dir, &user_sid)
+        }
         Some(ice_tun_pin::LauncherCommand::DeleteTask) => delete_task(),
         Some(ice_tun_pin::LauncherCommand::Run { data_dir }) => {
             let Some(args) = args_from_data_dir(data_dir) else {
@@ -281,7 +235,7 @@ fn run() -> i32 {
         }
         None => {
             eprintln!(
-                "usage: ice-tun-launcher --data <app-data-dir>\n       ice-tun-launcher --install --data <app-data-dir>\n       ice-tun-launcher --delete-task"
+                "usage: ice-tun-launcher --data <app-data-dir>\n       ice-tun-launcher --install --data <app-data-dir> --user-sid <sid>\n       ice-tun-launcher --delete-task"
             );
             2
         }
@@ -361,13 +315,14 @@ fn retain_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<()
 
 #[cfg(target_os = "windows")]
 fn run_core(args: Args) -> i32 {
+    let program_files = ice_tun_pin::program_files_dir();
     let program_data = ice_tun_pin::program_data_dir();
     let Ok(exe) = std::env::current_exe() else {
         return 2;
     };
-    if !ice_tun_pin::path_is_protected_launcher(&exe, &program_data) {
+    if !ice_tun_pin::path_is_protected_launcher(&exe, &program_files) {
         eprintln!(
-            "refusing to run {} (not the protected ProgramData launcher)",
+            "refusing to run {} (not the protected Program Files launcher)",
             exe.display()
         );
         return 2;
@@ -380,20 +335,29 @@ fn run_core(args: Args) -> i32 {
         eprintln!("{err}");
         return 2;
     }
-    let protected_config = match sanitize_user_config(&args.config, &args.log, &program_data) {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("{err}");
-            return 2;
-        }
-    };
+    let protected_config =
+        match sanitize_user_config(&args.config, &args.log, &program_data, &program_files) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("{err}");
+                return 2;
+            }
+        };
     if let Some(parent) = args.log.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            eprintln!("cannot create log dir {}", parent.display());
+        if !parent.exists() {
+            eprintln!("protected log dir missing {}", parent.display());
             return 2;
         }
     }
     cap_core_log(&args.log);
+
+    let stop = match stop_event::StopEvent::create() {
+        Ok(stop) => stop,
+        Err(_) => {
+            eprintln!("cannot create the TUN stop event");
+            return 2;
+        }
+    };
 
     use std::os::windows::process::CommandExt;
 
@@ -408,6 +372,7 @@ fn run_core(args: Args) -> i32 {
             return 2;
         }
     };
+    let _ = acl::apply_acl(&args.log, false, acl::UsersAccess::Read);
     let log_err = match log.try_clone() {
         Ok(clone) => clone,
         Err(err) => {
@@ -441,10 +406,11 @@ fn run_core(args: Args) -> i32 {
         let _ = child.kill();
         return 2;
     }
+    let _ = acl::apply_acl(&args.pidfile, false, acl::UsersAccess::Read);
 
+    let mut last_cap = Instant::now();
     loop {
-        // Graceful stop requested by the app (stop file present).
-        if args.stopfile.exists() {
+        if stop.wait_signaled(POLL_INTERVAL.as_millis() as u32) {
             graceful_stop(pid);
             let deadline = Instant::now() + TERM_GRACE;
             while Instant::now() < deadline {
@@ -456,14 +422,15 @@ fn run_core(args: Args) -> i32 {
             if child.try_wait().ok().flatten().is_none() {
                 taskkill(pid, true);
             }
-            let _ = std::fs::remove_file(&args.stopfile);
             break;
         }
-        // The core exited on its own.
         if child.try_wait().ok().flatten().is_some() {
             break;
         }
-        std::thread::sleep(POLL_INTERVAL);
+        if last_cap.elapsed() >= LOG_CAP_EVERY {
+            cap_core_log(&args.log);
+            last_cap = Instant::now();
+        }
     }
     let _ = child.wait();
     let _ = std::fs::remove_file(&args.pidfile);
@@ -476,6 +443,7 @@ fn sanitize_user_config(
     user_config: &Path,
     core_log: &Path,
     program_data: &Path,
+    program_files: &Path,
 ) -> Result<PathBuf, String> {
     if !user_config.is_file() {
         return Err(format!("config not found at {}", user_config.display()));
@@ -494,15 +462,16 @@ fn sanitize_user_config(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let resources_dir = read_resources_pointer(program_data).unwrap_or_else(|| {
+    let resources_dir = read_resources_pointer(program_files).unwrap_or_else(|| {
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| data_dir.clone())
     });
     let run_dir = ice_tun_pin::protected_run_dir(program_data);
-    std::fs::create_dir_all(&run_dir)
-        .map_err(|err| format!("create {}: {err}", run_dir.display()))?;
+    if !run_dir.is_dir() {
+        return Err(format!("protected run dir missing {}", run_dir.display()));
+    }
     let dest = run_dir.join("config.json");
     let ctx = ice_config_guard::GuardContext {
         data_dir,
@@ -513,7 +482,7 @@ fn sanitize_user_config(
     ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx).map_err(|err| err.to_string())?;
     let bytes = serde_json::to_vec(&cfg).map_err(|err| format!("encode config: {err}"))?;
     std::fs::write(&dest, bytes).map_err(|err| format!("write {}: {err}", dest.display()))?;
-    let _ = apply_acl(&dest, false, false);
+    let _ = acl::apply_acl(&dest, false, acl::UsersAccess::None);
     Ok(dest)
 }
 

@@ -80,6 +80,8 @@ pub enum ErrorCode {
     TunHelperNotReady,
     #[serde(rename = "tun.elevation_cancelled")]
     TunElevationCancelled,
+    #[serde(rename = "tun.elevation_requires_admin")]
+    TunElevationRequiresAdmin,
     #[serde(rename = "update.check_failed")]
     UpdateCheckFailed,
     #[serde(rename = "update.feed_unavailable")]
@@ -127,6 +129,7 @@ impl ErrorCode {
         Self::TunHelperInstallCancelled,
         Self::TunHelperNotReady,
         Self::TunElevationCancelled,
+        Self::TunElevationRequiresAdmin,
         Self::UpdateCheckFailed,
         Self::UpdateFeedUnavailable,
         Self::UpdateInstallFailed,
@@ -169,6 +172,7 @@ impl ErrorCode {
             Self::TunHelperInstallCancelled => "tun.helper_install_cancelled",
             Self::TunHelperNotReady => "tun.helper_not_ready",
             Self::TunElevationCancelled => "tun.elevation_cancelled",
+            Self::TunElevationRequiresAdmin => "tun.elevation_requires_admin",
             Self::UpdateCheckFailed => "update.check_failed",
             Self::UpdateFeedUnavailable => "update.feed_unavailable",
             Self::UpdateInstallFailed => "update.install_failed",
