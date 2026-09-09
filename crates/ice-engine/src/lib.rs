@@ -23,12 +23,13 @@ pub use ice_subscription::{
     active_subscription, apply_builtin_default_rules, detect_format, list_profile_outbounds,
     load_active_profile, load_active_profile_with_default_rules, load_index, maybe_decode_base64,
     normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox, parse_singbox_profile,
-    parse_subscription, read_profile, recover_subscription_dirs, redact_subscription_url_for_log,
-    redact_subscription_url_for_ui, remove_subscription, resolve_selected_tag, set_active,
-    set_auto_update, set_enabled, write_subscription_error, write_subscription_success,
-    AutoUpdateInterval, DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager,
-    MockFetchMode, MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat,
-    SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
+    parse_subscription, read_index, read_profile, recover_subscription_dirs,
+    redact_subscription_url_for_log, redact_subscription_url_for_ui, remove_subscription,
+    resolve_selected_tag, set_active, set_auto_update, set_enabled, write_subscription_error,
+    write_subscription_success, AutoUpdateInterval, DirectFetcher, FetchResponse, HttpFetcher,
+    MemorySubscriptionManager, MockFetchMode, MockFetcher, ProfileCache, SubscriptionError,
+    SubscriptionFormat, SubscriptionIndex, SubscriptionManager, SubscriptionMeta,
+    SubscriptionPaths,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 

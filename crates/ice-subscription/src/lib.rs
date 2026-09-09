@@ -41,9 +41,9 @@ pub use merge::{
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
     commit_subscription_success, load_index, mark_refreshed_in_index, mark_subscription_refreshed,
-    read_nodes, read_profile, recover_subscription_dirs, remove_subscription, save_index,
-    set_active, set_auto_update, set_enabled, write_subscription_error, write_subscription_success,
-    SubscriptionPaths,
+    read_index, read_nodes, read_profile, recover_subscription_dirs, remove_subscription,
+    save_index, set_active, set_auto_update, set_enabled, write_subscription_error,
+    write_subscription_success, SubscriptionPaths,
 };
 pub use uri::{
     apply_builtin_default_rules, looks_like_uri_list, parse_uri_list_profile, MAX_URI_LINES,

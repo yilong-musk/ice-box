@@ -163,6 +163,7 @@ fn collect_status_does_not_block_on_core_lock() {
     *state.helper_probe_cache.lock().unwrap() = Some((Instant::now(), false));
     let _ = crate::helper_install::helper_core_stale(state.capture.resource_dir());
     let _ = cached_tun_task_ready(&state);
+    collect_status(state.as_ref()).expect("warmup");
     let (locked_tx, locked_rx) = std::sync::mpsc::channel();
     let bg = state.clone();
     let handle = std::thread::spawn(move || {
@@ -175,7 +176,15 @@ fn collect_status_does_not_block_on_core_lock() {
     collect_status(state.as_ref()).expect("status");
     let elapsed = t0.elapsed();
     assert!(
-        elapsed < std::time::Duration::from_millis(50),
+        state.core.try_lock().is_err(),
+        "core lock must still be held; collect_status must not have waited for it"
+    );
+    // Holder sleeps 3s. 50ms was a false fail under parallel `cargo test`:
+    // `load_index` recovered leftover dirs under a process-wide commit lock.
+    // Status now reads the index without that lock; 500ms matches the
+    // sibling proxy-lock poll budget and is still well under the hold.
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
         "collect_status waited {elapsed:?}; it must not take the core lock"
     );
     handle.join().expect("holder");

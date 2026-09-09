@@ -434,7 +434,8 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
     let core_state = state.core_snapshot.load().state.clone();
     let running = core_state.status == CoreStatus::Running;
     let paths = SubscriptionPaths::from_app(&state.paths);
-    let count = ice_engine::load_index(&paths)
+    // `load_index` also sweeps leftover dirs under a process-wide commit lock.
+    let count = ice_engine::read_index(&paths)
         .map(|i| i.items.len())
         .unwrap_or(0);
     let proxy_recovery_warning = state

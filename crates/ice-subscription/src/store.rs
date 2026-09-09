@@ -72,15 +72,34 @@ impl SubscriptionPaths {
 }
 
 pub fn load_index(paths: &SubscriptionPaths) -> Result<SubscriptionIndex, SubscriptionError> {
+    load_index_from_disk(paths, true)
+}
+
+/// Read `index.json` without sweeping leftover `.old-*` dirs.
+///
+/// Status polls use this so they never take the process-wide commit lock
+/// (recovery runs on writes, startup, and other `load_index` callers).
+pub fn read_index(paths: &SubscriptionPaths) -> Result<SubscriptionIndex, SubscriptionError> {
+    load_index_from_disk(paths, false)
+}
+
+fn load_index_from_disk(
+    paths: &SubscriptionPaths,
+    recover: bool,
+) -> Result<SubscriptionIndex, SubscriptionError> {
     let path = paths.index();
     if !path.exists() {
-        recover_subscription_dirs(paths);
+        if recover {
+            recover_subscription_dirs(paths);
+        }
         return Ok(SubscriptionIndex::default());
     }
     let raw = fs::read_to_string(&path)?;
     let mut index: SubscriptionIndex = serde_json::from_str(&raw)?;
     migrate_index_active(&mut index);
-    recover_subscription_dirs(paths);
+    if recover {
+        recover_subscription_dirs(paths);
+    }
     Ok(index)
 }
 
@@ -660,6 +679,53 @@ mod tests {
         let loaded = read_profile(&paths, id).expect("profile restored from .old");
         assert_eq!(loaded.nodes[0].tag, "kept");
         assert!(!old.exists(), "restored .old dir is consumed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_index_does_not_block_on_commit_lock() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-store-read-index-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: crate::SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+            tag: "n1".into(),
+            outbound: std::sync::Arc::new(serde_json::json!({"type":"direct","tag":"n1"})),
+        }]);
+        write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
+
+        let _held = COMMIT_LOCK.lock().unwrap();
+        let started = std::time::Instant::now();
+        let index = read_index(&paths).unwrap();
+        assert_eq!(index.items.len(), 1);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "read_index waited {:?}",
+            started.elapsed()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
