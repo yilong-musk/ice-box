@@ -25,7 +25,11 @@
 //! - `ice-tun-launcher --install --data <app-data-dir> --user-sid <sid>` —
 //!   one-time UAC: remove any leftover `ice-box-tun` task, copy binaries to
 //!   `%ProgramFiles%\ice-box`, register the task (`ITaskService::RegisterTask`,
-//!   with `schtasks /Create /XML` fallback from an admin-owned UTF-16 file)
+//!   with `schtasks /Create /XML` fallback from an admin-owned UTF-16 file).
+//!   If Task Scheduler rejects the unsigned launcher as `Exec/Command`
+//!   (`0x80004005`), register a Microsoft-signed GUI host (`wscript.exe`)
+//!   that waits on an admin-owned `ice-tun-run.vbs`; PowerShell and `cmd.exe`
+//!   are last-resort hosts.
 //! - `ice-tun-launcher --delete-task` — remove the scheduled task and
 //!   protected copies
 //!
@@ -188,8 +192,8 @@ fn register_task_schtasks_xml(xml: &str, run_dir: &Path) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
-        let stdout = ice_tun_pin::decode_schtasks_output(&output.stdout);
-        let stderr = ice_tun_pin::decode_schtasks_output(&output.stderr);
+        let stdout = decode_captured_output(&output.stdout);
+        let stderr = decode_captured_output(&output.stderr);
         Err(format!(
             "schtasks /Create /XML exited {}: {} {}",
             output.status.code().unwrap_or(-1),
@@ -197,6 +201,58 @@ fn register_task_schtasks_xml(xml: &str, run_dir: &Path) -> Result<(), String> {
             stderr.trim()
         ))
     }
+}
+
+/// `schtasks` console text is OEM/ACP on zh-CN Windows, not UTF-8. UTF-16
+/// BOM (XML query) still goes through [`ice_tun_pin::decode_schtasks_output`].
+#[cfg(target_os = "windows")]
+fn decode_captured_output(bytes: &[u8]) -> String {
+    if bytes.len() >= 2
+        && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF))
+    {
+        return ice_tun_pin::decode_schtasks_output(bytes);
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    decode_oem_bytes(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn decode_oem_bytes(bytes: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar};
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    let code_page = unsafe { GetOEMCP() };
+    let needed = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; needed as usize];
+    let n = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            wide.as_mut_ptr(),
+            needed,
+        )
+    };
+    if n <= 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&wide[..n as usize]))
 }
 
 #[cfg(target_os = "windows")]
@@ -276,8 +332,83 @@ fn install_protected_inner(data_dir: &Path, user_sid: &str) -> Result<(), String
     let launcher_sha = ice_tun_pin::sha256_of_file(&dest_launcher)?;
     let core_sha = ice_tun_pin::sha256_of_file(&dest_core)?;
     let pin = ice_tun_pin::format_tun_task_pin(&launcher_sha, &core_sha);
-    let xml = ice_tun_pin::render_tun_task_xml(&dest_launcher, data_dir, &pin, user_sid);
-    register_ice_box_tun_task(&xml, &run_dir)
+    register_ice_box_tun_task_with_host_fallback(&dest_launcher, data_dir, &pin, user_sid, &run_dir)
+}
+
+/// Windows 11 Task Scheduler has been observed to reject an unsigned
+/// `ice-tun-launcher.exe` as `Exec/Command` (`0x80004005`) while still
+/// accepting Microsoft-signed hosts. Try the launcher first, then GUI
+/// `wscript.exe`, then hidden PowerShell, then `cmd.exe`.
+#[cfg(target_os = "windows")]
+fn register_ice_box_tun_task_with_host_fallback(
+    dest_launcher: &Path,
+    data_dir: &Path,
+    pin: &str,
+    user_sid: &str,
+    run_dir: &Path,
+) -> Result<(), String> {
+    let mut errors: Vec<String> = Vec::new();
+
+    let direct = ice_tun_pin::render_tun_task_xml(dest_launcher, data_dir, pin, user_sid);
+    match register_ice_box_tun_task(&direct, run_dir) {
+        Ok(()) => return Ok(()),
+        Err(err) => errors.push(format!("direct launcher: {err}")),
+    }
+
+    remove_leftover_task();
+    let script = dest_launcher
+        .parent()
+        .ok_or_else(|| format!("launcher path {} has no parent", dest_launcher.display()))?
+        .join(ice_tun_pin::TUN_RUN_SCRIPT_NAME);
+    write_tun_run_script(&script, dest_launcher)?;
+    let wscript = ice_tun_pin::render_tun_task_xml_exec(
+        &ice_tun_pin::wscript_exe(),
+        &ice_tun_pin::wscript_task_arguments(&script, data_dir),
+        pin,
+        user_sid,
+    );
+    match register_ice_box_tun_task(&wscript, run_dir) {
+        Ok(()) => return Ok(()),
+        Err(err) => errors.push(format!("wscript wrapper: {err}")),
+    }
+
+    remove_leftover_task();
+    let powershell = ice_tun_pin::render_tun_task_xml_exec(
+        &ice_tun_pin::powershell_exe(),
+        &ice_tun_pin::powershell_task_arguments(dest_launcher, data_dir),
+        pin,
+        user_sid,
+    );
+    match register_ice_box_tun_task(&powershell, run_dir) {
+        Ok(()) => return Ok(()),
+        Err(err) => errors.push(format!("powershell wrapper: {err}")),
+    }
+
+    remove_leftover_task();
+    let cmd = ice_tun_pin::render_tun_task_xml_exec(
+        &ice_tun_pin::cmd_exe(),
+        &ice_tun_pin::cmd_task_arguments(dest_launcher, data_dir),
+        pin,
+        user_sid,
+    );
+    match register_ice_box_tun_task(&cmd, run_dir) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            errors.push(format!("cmd wrapper: {err}"));
+            Err(errors.join("; "))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_tun_run_script(script: &Path, launcher: &Path) -> Result<(), String> {
+    std::fs::write(script, ice_tun_pin::render_tun_run_vbs(launcher))
+        .map_err(|err| format!("write {}: {err}", script.display()))?;
+    acl::apply_acl(script, false, acl::UsersAccess::ReadExecute)
+        .map_err(|()| format!("acl {}", script.display()))?;
+    acl::set_owner_administrators(script, false)
+        .map_err(|()| format!("owner {}", script.display()))?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

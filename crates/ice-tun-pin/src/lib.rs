@@ -13,6 +13,13 @@
 //! `RegistrationInfo/Description` (`schtasks /D` is a day-of-week flag and
 //! cannot store a description). `schtasks /Run` and this launcher refuse to
 //! start when the on-disk files do not match.
+//!
+//! Some Windows 11 builds reject an unsigned `ice-tun-launcher.exe` as the
+//! task `Exec/Command` (`0x80004005`). The installer then registers a
+//! Microsoft-signed GUI host (`wscript.exe`) that waits on an admin-owned
+//! `.vbs` next to the launcher; PowerShell and `cmd.exe` are last-resort
+//! hosts. App-side verify accepts those wrappers only when Arguments still
+//! pin the protected launcher (or its sibling run script) and `--data`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -24,6 +31,10 @@ pub const TUN_TASK_NAME: &str = "ice-box-tun";
 
 /// Prefix of the scheduled-task description that carries the binary pin.
 pub const TUN_TASK_PIN_PREFIX: &str = "ice-box-pin:";
+
+/// Admin-owned VBScript that `wscript.exe` runs when Task Scheduler refuses
+/// an unsigned `ice-tun-launcher.exe` as `Exec/Command`.
+pub const TUN_RUN_SCRIPT_NAME: &str = "ice-tun-run.vbs";
 
 /// Named event the unelevated app signals to request a graceful TUN stop.
 /// Created by the elevated launcher in the Global namespace with a DACL that
@@ -261,6 +272,115 @@ pub fn protected_launcher_path(program_files: &Path) -> PathBuf {
     protected_bin_dir(program_files).join("ice-tun-launcher.exe")
 }
 
+/// Sibling of the protected launcher; executed by [`wscript_exe`].
+pub fn protected_run_script_path(program_files: &Path) -> PathBuf {
+    protected_bin_dir(program_files).join(TUN_RUN_SCRIPT_NAME)
+}
+
+/// `%SystemRoot%\System32`, or `C:\Windows\System32` when the env var is unset.
+pub fn windows_system32_dir() -> PathBuf {
+    std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("System32")
+}
+
+/// GUI-subsystem Microsoft host; no console flash.
+pub fn wscript_exe() -> PathBuf {
+    windows_system32_dir().join("wscript.exe")
+}
+
+pub fn cmd_exe() -> PathBuf {
+    windows_system32_dir().join("cmd.exe")
+}
+
+pub fn powershell_exe() -> PathBuf {
+    windows_system32_dir()
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")
+}
+
+/// VBScript that starts the protected launcher and waits (window style 0).
+pub fn render_tun_run_vbs(launcher: &Path) -> String {
+    let launcher_lit = vbs_string_literal(&launcher.display().to_string());
+    format!(
+        r#"Option Explicit
+Dim launcher, dataDir, i, sh, cmd
+launcher = {launcher_lit}
+dataDir = ""
+For i = 0 To WScript.Arguments.Count - 1
+  If StrComp(WScript.Arguments(i), "--data", 1) = 0 Or StrComp(WScript.Arguments(i), "--data-dir", 1) = 0 Then
+    If i + 1 <= WScript.Arguments.Count - 1 Then
+      dataDir = WScript.Arguments(i + 1)
+    End If
+  End If
+Next
+If Len(dataDir) = 0 Then
+  WScript.Quit 2
+End If
+dataDir = Replace(dataDir, Chr(34), Chr(34) & Chr(34))
+Set sh = CreateObject("WScript.Shell")
+cmd = Chr(34) & launcher & Chr(34) & " --data " & Chr(34) & dataDir & Chr(34)
+WScript.Quit sh.Run(cmd, 0, True)
+"#
+    )
+}
+
+fn vbs_string_literal(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+/// `wscript.exe //B "<script>" --data "<dir>"`.
+pub fn wscript_task_arguments(script: &Path, data_dir: &Path) -> String {
+    format!(
+        "//B \"{}\" --data \"{}\"",
+        script.display(),
+        data_dir.display()
+    )
+}
+
+/// Hidden PowerShell that waits on the protected launcher. Trailing `--data`
+/// is for [`parse_data_dir_from_task_args`]; `Start-Process` also gets it.
+pub fn powershell_task_arguments(launcher: &Path, data_dir: &Path) -> String {
+    let launch = launcher.display().to_string().replace('\'', "''");
+    let data = data_dir.display().to_string().replace('\'', "''");
+    format!(
+        "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '{launch}' -ArgumentList '--data','{data}' -Wait -WindowStyle Hidden\" --data \"{}\"",
+        data_dir.display()
+    )
+}
+
+/// Last-resort console host (may flash). `start /b /wait` keeps the task
+/// process alive for the TUN core lifetime.
+pub fn cmd_task_arguments(launcher: &Path, data_dir: &Path) -> String {
+    format!(
+        "/c start /b /wait \"\" \"{}\" --data \"{}\"",
+        launcher.display(),
+        data_dir.display()
+    )
+}
+
+fn task_args_contain_path(args: &str, path: &Path) -> bool {
+    let needle = path.display().to_string().replace('/', "\\");
+    if needle.is_empty() {
+        return false;
+    }
+    let haystack = args.replace('/', "\\");
+    haystack
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+fn require_task_data_dir(args: &str) -> Result<(), String> {
+    if parse_data_dir_from_task_args(args).is_none() {
+        Err("scheduled-task Arguments are missing --data; re-run elevation setup".into())
+    } else {
+        Ok(())
+    }
+}
+
 pub fn protected_core_log_path(program_data: &Path) -> PathBuf {
     protected_run_dir(program_data).join("sing-box.log")
 }
@@ -310,17 +430,44 @@ pub fn path_is_protected_launcher(exe: &Path, program_files: &Path) -> bool {
     )
 }
 
-/// `Command` must be `expected_launcher`. Used by the app-side pin check.
+/// `Command` must be the protected launcher, or a Microsoft-signed host
+/// whose Arguments still pin that launcher (Windows 11 Task Scheduler
+/// rejects some unsigned Exec images with `0x80004005`).
 pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), String> {
     let command = extract_tun_task_command_from_xml(xml)
         .ok_or_else(|| "scheduled-task XML is missing Exec/Command".to_string())?;
-    if !command_matches_launcher(&command, expected_launcher) {
-        return Err(
-            "scheduled-task Command does not match the protected launcher; re-run elevation setup"
-                .into(),
-        );
+    if command_matches_launcher(&command, expected_launcher) {
+        return Ok(());
     }
-    Ok(())
+    let args = extract_tun_task_args_from_xml(xml).unwrap_or_default();
+    if command_matches_launcher(&command, &wscript_exe()) {
+        let script = expected_launcher
+            .parent()
+            .ok_or_else(|| "protected launcher path has no parent".to_string())?
+            .join(TUN_RUN_SCRIPT_NAME);
+        if !task_args_contain_path(&args, &script) {
+            return Err(
+                "scheduled-task wscript Arguments do not reference the protected run script; re-run elevation setup"
+                    .into(),
+            );
+        }
+        return require_task_data_dir(&args);
+    }
+    if command_matches_launcher(&command, &powershell_exe())
+        || command_matches_launcher(&command, &cmd_exe())
+    {
+        if !task_args_contain_path(&args, expected_launcher) {
+            return Err(
+                "scheduled-task Arguments do not reference the protected launcher; re-run elevation setup"
+                    .into(),
+            );
+        }
+        return require_task_data_dir(&args);
+    }
+    Err(
+        "scheduled-task Command does not match the protected launcher; re-run elevation setup"
+            .into(),
+    )
 }
 
 /// `UserId` must be the interactive user's SID (the unelevated app, not an
@@ -360,6 +507,17 @@ fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
     left.eq_ignore_ascii_case(&right)
 }
 
+/// Task Scheduler 1.2 XML for `ice-box-tun` with `Command` = the protected
+/// launcher. See [`render_tun_task_xml_exec`] for signed-host wrappers.
+pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str, user_sid: &str) -> String {
+    render_tun_task_xml_exec(
+        launcher,
+        &format!("--data \"{}\"", data_dir.display()),
+        pin,
+        user_sid,
+    )
+}
+
 /// Task Scheduler 1.2 XML for `ice-box-tun`. `ITaskService::RegisterTask`
 /// takes this string in memory — no on-disk XML. Privilege, the on-demand
 /// action, and the SHA-256 pin live here. `schtasks /D` is a day of week,
@@ -368,9 +526,14 @@ fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
 /// `ExecutionTimeLimit` is unlimited so a long-lived TUN core is not killed
 /// at the 72-hour default. `UserId` is the interactive user's SID so an
 /// over-the-shoulder UAC admin cannot silently own the task.
-pub fn render_tun_task_xml(launcher: &Path, data_dir: &Path, pin: &str, user_sid: &str) -> String {
-    let command = xml_escape(&launcher.display().to_string());
-    let arguments = xml_escape(&format!("--data \"{}\"", data_dir.display()));
+pub fn render_tun_task_xml_exec(
+    command: &Path,
+    arguments: &str,
+    pin: &str,
+    user_sid: &str,
+) -> String {
+    let command = xml_escape(&command.display().to_string());
+    let arguments = xml_escape(arguments);
     let description = xml_escape(pin);
     let user_id = xml_escape(user_sid);
     format!(
@@ -784,6 +947,83 @@ mod tests {
             protected_install_error_path(pd),
             PathBuf::from("/programdata/ice-box/run/last-install-error.txt")
         );
+        assert_eq!(
+            protected_run_script_path(pf),
+            PathBuf::from("/programfiles/ice-box/ice-tun-run.vbs")
+        );
+    }
+
+    #[test]
+    fn verify_task_command_accepts_signed_host_wrappers() {
+        let launcher = Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe");
+        let data_dir = Path::new(r"C:\Users\admin\AppData\Roaming\com.yilong-musk.icebox");
+        let pin = "ice-box-pin:aa:bb";
+        let script = Path::new(r"C:\Program Files\ice-box\ice-tun-run.vbs");
+
+        let wscript_xml = render_tun_task_xml_exec(
+            &wscript_exe(),
+            &wscript_task_arguments(script, data_dir),
+            pin,
+            USER_SID,
+        );
+        verify_task_command(&wscript_xml, launcher).expect("wscript wrapper");
+        task_config_path_matches(&wscript_xml, &data_dir.join("config.json"))
+            .expect("wscript data");
+
+        let wrong_script = render_tun_task_xml_exec(
+            &wscript_exe(),
+            &wscript_task_arguments(Path::new(r"C:\Temp\evil.vbs"), data_dir),
+            pin,
+            USER_SID,
+        );
+        let err = verify_task_command(&wrong_script, launcher).expect_err("wrong vbs");
+        assert!(err.contains("run script"), "{err}");
+
+        let ps_xml = render_tun_task_xml_exec(
+            &powershell_exe(),
+            &powershell_task_arguments(launcher, data_dir),
+            pin,
+            USER_SID,
+        );
+        verify_task_command(&ps_xml, launcher).expect("powershell wrapper");
+        task_config_path_matches(&ps_xml, &data_dir.join("config.json")).expect("powershell data");
+
+        let cmd_xml = render_tun_task_xml_exec(
+            &cmd_exe(),
+            &cmd_task_arguments(launcher, data_dir),
+            pin,
+            USER_SID,
+        );
+        verify_task_command(&cmd_xml, launcher).expect("cmd wrapper");
+
+        let notepad = render_tun_task_xml_exec(
+            Path::new(r"C:\Windows\System32\notepad.exe"),
+            &format!("--data \"{}\"", data_dir.display()),
+            pin,
+            USER_SID,
+        );
+        let err = verify_task_command(&notepad, launcher).expect_err("unsigned host rejected");
+        assert!(err.contains("Command"), "{err}");
+
+        let cmd_without_launcher = render_tun_task_xml_exec(
+            &cmd_exe(),
+            &format!("/c echo hi --data \"{}\"", data_dir.display()),
+            pin,
+            USER_SID,
+        );
+        let err =
+            verify_task_command(&cmd_without_launcher, launcher).expect_err("cmd missing launcher");
+        assert!(err.contains("protected launcher"), "{err}");
+    }
+
+    #[test]
+    fn render_tun_run_vbs_embeds_launcher_and_escapes_quotes() {
+        let vbs = render_tun_run_vbs(Path::new(r"C:\Program Files\ice-box\ice-tun-launcher.exe"));
+        assert!(vbs.contains(r#"launcher = "C:\Program Files\ice-box\ice-tun-launcher.exe""#));
+        assert!(vbs.contains("WScript.Shell"));
+        assert!(vbs.contains("sh.Run(cmd, 0, True)"));
+        let quoted = render_tun_run_vbs(Path::new(r#"C:\ice"box\ice-tun-launcher.exe"#));
+        assert!(quoted.contains("ice\"\"box"));
     }
 
     #[test]

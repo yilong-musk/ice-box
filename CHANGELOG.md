@@ -44,7 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   task pointing at the deleted `%ProgramData%\ice-box\bin` launcher after an
   app update: the elevated installer deletes the old task before replacing
   files, registers via COM, and falls back to `schtasks /Create /XML` from
-  an admin-owned UTF-16 file. Install failures are written to
+  an admin-owned UTF-16 file. When Task Scheduler rejects the unsigned
+  launcher as `Exec/Command` (`0x80004005`), install registers
+  Microsoft-signed `wscript.exe` plus an admin-owned `ice-tun-run.vbs`
+  (PowerShell / `cmd.exe` last). Install failures are written to
   `last-install-error.txt` and shown in the UI instead of a bare
   `tun.helper_install_failed` code.
 - New helper installs chown `/var/log/ice-box-core.log` to the authorized

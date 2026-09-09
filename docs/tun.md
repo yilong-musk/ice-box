@@ -170,13 +170,19 @@ auto-triggered) runs `ice-tun-launcher.exe`:
   task from XML via `ITaskService::RegisterTask` (BSTR without a UTF-16
   encoding declaration). If COM import fails, it falls back to
   `schtasks /Create /XML /F` from an admin-owned UTF-16 LE+BOM file under
-  `%ProgramData%\ice-box\run` that is deleted after import. The SHA-256 pin
+  `%ProgramData%\ice-box\run` that is deleted after import. Windows 11 Task
+  Scheduler may reject an unsigned `ice-tun-launcher.exe` as `Exec/Command`
+  (`0x80004005`); the installer then registers Microsoft-signed
+  `wscript.exe` (GUI, no console flash) running admin-owned
+  `%ProgramFiles%\ice-box\ice-tun-run.vbs`, which waits on the protected
+  launcher. Hidden PowerShell and `cmd.exe` are last-resort hosts. The
+  unelevated app accepts those wrappers only when Arguments still pin the
+  protected launcher (or the sibling `.vbs`) and `--data`. The SHA-256 pin
   of the **protected copies** lives in
   `RegistrationInfo/Description` and `Principal/UserId` is the interactive
   SID. A failed install writes `last-install-error.txt` in that run dir
   (Users read) so the unelevated app can show the COM/`schtasks` detail.
-  The task `Command` points at the Program Files launcher; `Run`
-  refuses `current_exe()` outside that directory. Config is sanitised and
+  `Run` refuses `current_exe()` outside Program Files. Config is sanitised and
   written to `%ProgramData%\ice-box\run\config.json` (admin-owned) before
   spawn. Core log, pid file, and the sanitised config live in that run
   dir (Users read-only). Graceful stop uses a Global named event with a
