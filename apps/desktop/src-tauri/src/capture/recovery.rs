@@ -168,7 +168,7 @@ impl CaptureController {
         }
     }
 
-    /// Recovery (inside the orchestration lock, plan §4.4): discard an
+    /// Recovery (inside the orchestration lock, `docs/tun.md`): discard an
     /// interrupted settings transaction, then run the journal recovery
     /// driver. Never enables capture. Returns a UI warning when anything
     /// needs attention. Used by startup (after orphan-core reclamation)
@@ -251,7 +251,7 @@ impl CaptureController {
     }
 
     /// Serialized live-TUN reconfigure when TUN topology changed while TUN
-    /// capture is already active (plan §4.3). `tun.enabled` is *not* a live
+    /// capture is already active (`docs/tun.md`). `tun.enabled` is *not* a live
     /// switch: flipping it is a next-start desire and is persisted without
     /// calling this. Writes the pending record first; commits `settings.json`
     /// only after the requested backend is healthy; on failure rolls back to
@@ -316,7 +316,7 @@ impl CaptureController {
                     Ok(None)
                 }
                 // TUN topology change while TUN stays enabled: explicit
-                // stop/reconfigure/start (plan §4.3, no in-place mutation).
+                // stop/reconfigure/start (`docs/tun.md`, no in-place mutation).
                 (TrafficCapture::Tun, true, true) => {
                     self.disable_active_backend(previous, core, proxy, binary.clone(), true)?;
                     self.enable_tun(&candidate, core, binary.clone())
@@ -422,7 +422,7 @@ impl CaptureController {
     }
 
     /// Reconcile a transition candidate's selected tag against the active
-    /// profile, without writing disk (plan §4.3 commit-after-health).
+    /// profile, without writing disk (`docs/tun.md` commit-after-health).
     pub(crate) fn reconciled_candidate(&self, settings: &AppSettings) -> AppSettings {
         use ice_engine::{load_active_profile, load_index, SubscriptionPaths};
         let sub_paths = SubscriptionPaths::from_app(&self.paths);
@@ -435,7 +435,7 @@ impl CaptureController {
         }
     }
 
-    /// Policy-only apply while TUN capture is active (plan §4.3). The
+    /// Policy-only apply while TUN capture is active (`docs/tun.md`). The
     /// elevated core cannot be signalled by the app (SIGHUP from a non-root
     /// process fails with EPERM), so every config change runs the
     /// stop/reconfigure/start sequence through the backend: the controller

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! WinInet + WinHTTP system proxy (architecture §13.3, plan slice 4b).
+//! WinInet + WinHTTP system proxy.
 //!
 //! Live hive: per-connection WinInet API is the source of truth. `apply` writes
 //! `PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT` on every named connection (LAN, RAS/VPN,
@@ -223,7 +223,7 @@ fn apply_live(endpoints: &ProxyEndpoints, snapshot: &LiveSnapshot) -> Result<(),
         ) {
             // LAN is required. A bad RAS/VPN name (or a stale Connections-key
             // entry) must not roll back a successful LAN apply — same skip rule
-            // as restore (§13.3). Chinese dial-up names are a known WinInet footgun.
+            // as restore. Chinese dial-up names are a known WinInet footgun.
             if skip_named_connection_failure(conn) {
                 tracing::warn!(
                     connection = conn.name.as_deref().unwrap_or(""),

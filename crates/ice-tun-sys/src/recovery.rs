@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Startup / watchdog recovery driver (plan §4.4).
+//! Startup / watchdog recovery driver (`docs/tun.md`).
 //!
 //! The driver is the *only* path that resolves an outstanding journal. It
 //! verifies the owner token, never enables capture, resumes an idempotent

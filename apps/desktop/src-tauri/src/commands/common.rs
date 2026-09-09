@@ -138,7 +138,7 @@ pub struct StatusResponse {
     pub system_proxy_recorded: Option<bool>,
     /// False on platforms without a real system-proxy backend (e.g. Linux Noop).
     pub system_proxy_available: bool,
-    // --- TUN capture status (plan §4.3) ---
+    // --- TUN capture status ---
     /// Derived only from the runtime capture controller.
     pub traffic_capture: TrafficCapture,
     /// Committed settings desire (`settings.tun.enabled`).

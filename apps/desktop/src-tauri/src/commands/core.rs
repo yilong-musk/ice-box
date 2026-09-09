@@ -29,7 +29,7 @@ pub(crate) fn start_core_inner(app: &AppHandle, state: &AppState) -> Result<(), 
 }
 
 /// Home「启动代理服务」: ensure core is running on the Diagnostic config, then
-/// start the configured capture backend (system proxy or TUN, plan §2).
+/// start the configured capture backend (system proxy or TUN, `docs/tun.md`).
 pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
@@ -63,7 +63,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
             .capture
             .enable_tun(&settings, &mut **core, binary.clone())?;
         // Persist the resolved interface name only after the transition is
-        // healthy (plan §4.3 commit-after-health).
+        // healthy (`docs/tun.md` commit-after-health).
         if resolved
             .as_ref()
             .is_some_and(|name| settings.tun.interface_name.as_deref() != Some(name.as_str()))
@@ -321,7 +321,7 @@ pub async fn restore_launch_proxy(app: AppHandle) -> Result<(), AppError> {
 }
 
 /// Home「停止代理服务」: disable whichever capture backend is active. The IPC
-/// name is retained for compatibility (plan §4.3); it delegates to the
+/// name is retained for compatibility (`docs/tun.md`); it delegates to the
 /// controller, so it restores the OS proxy for the system-proxy backend and
 /// releases TUN capture (core may stay Running on the Diagnostic config).
 pub(crate) fn disable_active_backend_inner(

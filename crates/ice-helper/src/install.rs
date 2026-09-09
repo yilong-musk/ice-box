@@ -9,7 +9,7 @@
 //! installation logic (plist, token, ownership, pinned hash), shared by the
 //! app's in-app installer and the manual/CI script.
 //!
-//! Security model (unchanged from the script, plan §7):
+//! Security model (unchanged from the script, `docs/tun.md`):
 //!
 //! - The install must be started as root ([`require_root`]).
 //! - The source core binary must be a regular file a non-root user cannot

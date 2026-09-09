@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! macOS TUN backend (architecture §24.5; `docs/tun.md`).
+//! macOS TUN backend (`docs/tun.md`).
 //!
 //! Native sing-box ownership model (T0 lock): the elevated core — run by the
 //! injected [`CoreCoordinator`] — owns the utun adapter, its addresses, and
@@ -698,7 +698,7 @@ impl TunBackend for MacosTunBackend {
                 "tun config requires at least one address",
             ));
         }
-        // Dual-stack lock (§24.5 point 4): an IPv4-only tun installs no IPv6
+        // Dual-stack requirement (`docs/tun.md`): an IPv4-only tun installs no IPv6
         // routes and silently leaks IPv6; IPv4 itself is mandatory.
         if !routes::has_v4(&config.addresses) {
             return Err(TunError::new(

@@ -144,7 +144,7 @@ impl CaptureController {
         Ok(())
     }
 
-    /// Enable TUN capture (plan §4.3). Preconditions (checked here): platform
+    /// Enable TUN capture (`docs/tun.md`). Preconditions (checked here): platform
     /// gate green, no active system proxy, no in-flight transition, not in
     /// `RecoveryRequired`. The core must already be Running on the Diagnostic
     /// config (the Home start path ensures it); this stops the app-managed
@@ -437,7 +437,7 @@ impl CaptureController {
 
         // The resolved interface name is NOT persisted here: the caller
         // commits `settings.json` only after the transition is healthy
-        // (plan §4.3 commit-after-health), so a later commit failure cannot
+        // (`docs/tun.md` commit-after-health), so a later commit failure cannot
         // leave a half-committed settings file.
         Ok(resolved_name)
     }
@@ -489,7 +489,7 @@ impl CaptureController {
         }
     }
 
-    /// Disable whichever backend is active (plan §4.3): restores the OS proxy
+    /// Disable whichever backend is active (`docs/tun.md`): restores the OS proxy
     /// for the system-proxy backend, or releases TUN capture and — when
     /// `restart_diagnostic` — brings the app-managed core back on the
     /// Mixed-only config. Idempotent when nothing is active.

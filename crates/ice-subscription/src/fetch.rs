@@ -11,7 +11,7 @@ use crate::url::{
     addrs_are_fake_ip, pin_url_to_ip, resolve_allowed_fetch_addrs, validate_subscription_url,
 };
 
-/// Hard body size limit (architecture / plan).
+/// Hard body size limit (8 MiB).
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Reject header values that would break HTTP framing (CRLF injection).

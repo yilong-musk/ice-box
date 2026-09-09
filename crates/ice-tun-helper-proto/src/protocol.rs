@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Privileged-helper wire protocol (plan §5 T5).
+//! Privileged-helper wire protocol (`docs/tun.md`).
 //!
 //! The macOS production path runs the core elevated inside a small
-//! launchd helper daemon (T0 lock §24.5.2). This module is the *shared*
+//! launchd helper daemon (`docs/tun.md`). This module is the *shared*
 //! contract between the app-side client ([`ice_tun_sys::helper::HelperCoreCoordinator`])
 //! and the daemon (`crates/ice-helper`). It is deliberately host-free: pure
 //! types, framing, and path validation with no OS calls, so it tests on all
@@ -13,7 +13,7 @@
 //! line capped at [`MAX_FRAME_BYTES`]. The daemon rejects anything else
 //! without reading unbounded input.
 //!
-//! Security model (plan §7): the helper accepts a fixed command set and
+//! Security model (`docs/tun.md`): the helper accepts a fixed command set and
 //! never accepts a binary path, route target, interface name, or arbitrary
 //! shell input from the client. The `config` path must canonicalize into the
 //! app data directory the daemon was installed with; the `SetDns` service
@@ -43,7 +43,7 @@ pub const DEFAULT_SOCKET_PATH: &str = "/var/run/ice-box-helper.sock";
 /// uses one or two resolvers).
 pub const MAX_DNS_SERVERS: usize = 4;
 
-/// Commands the helper accepts (plan §7: narrow surface, nothing else).
+/// Commands the helper accepts (`docs/tun.md`: narrow surface, nothing else).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum HelperCommand {
@@ -134,7 +134,7 @@ pub struct HelperResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Stable `tun.*` code on failure (plan §4.5 / §5 T2).
+    /// Stable `tun.*` code on failure.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Cross-platform sing-box config generation engine (facade, architecture §22).
+//! Cross-platform sing-box config generation engine facade.
 //!
 //! Single entry point for the config pipeline: subscription import → normalized
 //! profile → final sing-box config. Hosts (currently the Tauri desktop shell)
@@ -99,7 +99,7 @@ pub fn build_config(input: &BuildInput) -> Result<RuntimeConfig, EngineError> {
 /// `geoip_rule_set_dir` points at bundled `geoip-{code}.srs` rule-set files;
 /// GEOIP rules without a matching file are dropped at build time.
 /// `capture_intent` is supplied explicitly by the caller and never inferred
-/// from `tun.enabled` alone (plan §4.1).
+/// from `tun.enabled` alone (`docs/tun.md`).
 pub fn subscription_to_config(
     raw: &str,
     template: LocalTemplate,

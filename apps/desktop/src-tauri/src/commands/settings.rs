@@ -48,7 +48,7 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
             && settings.tun.enabled
             && tun_topology_changed(&previous.tun, &settings.tun);
         if tun_transition {
-            // Serialized topology apply (plan §4.3): the pending record is
+            // Serialized topology apply (`docs/tun.md`): the pending record is
             // committed only after the requested backend is healthy.
             let binary = binary_for(&app)?;
             let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;

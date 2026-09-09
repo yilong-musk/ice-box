@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Windows TUN live acceptance (plan §6 "Live Windows acceptance").
+# Windows TUN live acceptance (`docs/testing.md`).
 #
 # `windows_tun_ready` is green (flipped 2026-09-03 after the V1–V11 host
 # spike); this script is the live gate that exercises the native-path

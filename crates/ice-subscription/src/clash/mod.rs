@@ -45,7 +45,7 @@ pub fn parse_clash_profile(
     known.insert("direct".into());
     known.insert("block".into());
 
-    // Group references resolve groups-first (plan §3.1): pre-register group names so
+    // Group references resolve groups-first: pre-register group names so
     // groups may reference other groups (e.g. Proxies → HK/JP/US sub-groups).
     if let Some(groups) = doc.get("proxy-groups").and_then(|v| v.as_array()) {
         for g in groups

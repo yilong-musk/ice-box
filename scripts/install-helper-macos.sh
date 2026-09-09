@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Install the ice-box privileged helper as a launchd daemon (plan §5 T5).
+# Install the ice-box privileged helper as a launchd daemon (`docs/tun.md`).
 #
 # Thin wrapper over the helper's own privileged `install` mode: the install
 # logic (token, plist, ownership, pinned SHA-256, launchctl) lives in

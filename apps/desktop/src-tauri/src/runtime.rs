@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Desktop-shell process runtime helpers (architecture review ARCH-1).
+//! Desktop-shell process runtime helpers.
 //!
 //! Tracing initialization lives here so `ice-config` stays a pure config
 //! builder. Size-cap helpers live in `ice-core` (the process layer also

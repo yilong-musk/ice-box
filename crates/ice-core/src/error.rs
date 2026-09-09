@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Core errors mapped to architecture §17 codes.
+//! Core errors mapped to shared IPC error codes.
 
 use ice_types::{AppError, ErrorCode, UiMessage};
 

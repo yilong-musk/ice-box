@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Settings DTOs with no I/O (architecture review ARCH-1).
+//! Settings DTOs with no I/O.
 //!
 //! Load/save lives in `ice-config`. Validation is pure.
 
@@ -67,7 +67,7 @@ pub const fn default_auto_set_system_proxy() -> bool {
 pub const TUN_DEFAULT_IPV4_ADDRESS: &str = "10.0.0.1/30";
 /// Locked default TUN adapter IPv6 address (CIDR, ULA).
 ///
-/// Required, not optional (architecture §24.5 point 4): an IPv4-only tun installs no
+/// Required, not optional (dual-stack requirement in `docs/tun.md`): an IPv4-only tun installs no
 /// IPv6 routes and silently leaks IPv6. The ULA gateway sits inside the excluded
 /// `fc00::/7`, so the adapter stays reachable.
 pub const TUN_DEFAULT_IPV6_ADDRESS: &str = "fdfe:dcba:9876::1/126";
@@ -102,7 +102,7 @@ pub fn default_tun_stack() -> String {
     TUN_DEFAULT_STACK.into()
 }
 
-/// Validated TUN capture parameters (plan §4.1; defaults locked by the T0 spike).
+/// Validated TUN capture parameters (`docs/tun.md`).
 ///
 /// Only `enabled` is a user-facing switch. The remaining fields are validated
 /// implementation parameters with locked defaults; they are not additional capture
@@ -110,7 +110,7 @@ pub fn default_tun_stack() -> String {
 /// `settings.json` files load unchanged — missing TUN fields mean disabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TunSettings {
-    /// Desired capture backend for the next proxy-service start (plan §2).
+    /// Desired capture backend for the next proxy-service start (`docs/tun.md`).
     /// This is a *desired* value: the active backend is owned by the runtime
     /// controller and reported separately in status.
     #[serde(default)]
@@ -123,8 +123,8 @@ pub struct TunSettings {
     /// Adapter IPv4 address as CIDR (e.g. `10.0.0.1/30`), never a bare host.
     #[serde(default = "default_tun_ipv4_address")]
     pub ipv4_address: String,
-    /// Adapter IPv6 address as CIDR. **Required** (dual-stack lock §24.5.4):
-    /// an IPv4-only tun silently leaks IPv6.
+    /// Adapter IPv6 address as CIDR. **Required** (dual-stack requirement in
+    /// `docs/tun.md`): an IPv4-only tun silently leaks IPv6.
     #[serde(default = "default_tun_ipv6_address")]
     pub ipv6_address: String,
     #[serde(default = "default_tun_mtu")]
@@ -168,9 +168,9 @@ impl Default for TunSettings {
 
 impl TunSettings {
     /// Validate addresses, prefixes, MTU, stack, and interface name without
-    /// mutating or writing disk (plan §4.1). Platform-exact interface rules
+    /// mutating or writing disk (`docs/tun.md`). Platform-exact interface rules
     /// (e.g. macOS `utun<N>`) are enforced for [`HostPlatform::MacOs`]; further
-    /// host checks belong to the platform backend (`ice-tun-sys`, T2).
+    /// host checks belong to the platform backend (`ice-tun-sys`).
     pub fn validate(&self) -> Result<(), AppError> {
         self.validate_for(HostPlatform::Linux)
     }
@@ -299,7 +299,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub proxy_mode: ProxyMode,
     /// TUN capture parameters. Defaults to disabled for existing `settings.json`
-    /// files; no settings migration ever enables TUN implicitly (plan §2.6).
+    /// files; no settings migration ever enables TUN implicitly (`docs/tun.md`).
     #[serde(default)]
     pub tun: TunSettings,
     /// When true, subscriptions whose body carries no routing rules get the

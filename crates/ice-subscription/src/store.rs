@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Disk layout under `subscriptions/` (architecture §6).
+//! Disk layout under `subscriptions/`.
 
 use std::collections::HashMap;
 use std::fs;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Fault-injection recovery tests (plan T0 exit gate).
+//! Fault-injection recovery tests.
 //!
 //! Every test drives the host-free `FakeTunBackend` against a real journal
 //! file and the `RecoveryDriver`, injecting a failure after *each* journaled

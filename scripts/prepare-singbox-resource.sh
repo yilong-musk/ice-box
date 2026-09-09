@@ -43,7 +43,7 @@ else
   exit 1
 fi
 
-# Privileged helper daemon (plan §5 T5, macOS): embedded into the bundle so
+# Privileged helper daemon (macOS): embedded into the bundle so
 # the installer/release pipeline can install it into /Library/PrivilegedHelperTools.
 case "$ICE_PLATFORM_ALIAS" in
   mac-arm64 | mac-x64)
@@ -58,7 +58,7 @@ case "$ICE_PLATFORM_ALIAS" in
     fi
     ;;
   win)
-    # Windows archive companions (Windows TUN packaging, plan §5 T5): the
+    # Windows archive companions (Windows TUN packaging): the
     # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
     # is embedded in the pinned binary — the T0 spike re-verifies this before
     # the Windows TUN gate flips.

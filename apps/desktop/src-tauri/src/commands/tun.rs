@@ -3,7 +3,7 @@
 use super::core::disable_active_backend_inner;
 use super::*;
 
-/// Home「重试恢复」: on-demand retry of TUN recovery (plan §4.3 / §4.4). Runs
+/// Home「重试恢复」: on-demand retry of TUN recovery (`docs/tun.md`). Runs
 /// the journal recovery driver under the orchestration lock; never enables
 /// capture. Returns a warning message when cleanup is still uncertain.
 #[tauri::command]

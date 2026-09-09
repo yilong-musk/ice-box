@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `settings.json` load / save (architecture §6.1).
+//! `settings.json` load / save.
 
 use std::fs;
 use std::path::Path;
@@ -23,7 +23,7 @@ pub struct LoadSettingsOutcome {
     pub reset_reason: Option<String>,
 }
 
-/// Missing file → architecture §6.1 defaults (does not create the file).
+/// Missing file → `AppSettings::default()` (does not create the file).
 /// Parse / validation failure: rename to `settings.json.invalid-<timestamp>`
 /// and return defaults plus `reset_reason` (`settings.reset`).
 pub fn load_settings(path: &Path) -> Result<AppSettings, AppError> {
@@ -540,7 +540,7 @@ mod tests {
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
-    // --- TUN settings (slice T1, plan §4.1) ---
+    // --- TUN settings ---
 
     #[test]
     fn legacy_settings_without_tun_loads_disabled_with_locked_defaults() {

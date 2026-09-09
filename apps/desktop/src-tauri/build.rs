@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Copy platform sing-box into `resources/` for Tauri bundling (architecture §4.3).
+//! Copy platform sing-box into `resources/` for Tauri bundling.
 
 use std::env;
 use std::fs;
@@ -129,7 +129,7 @@ fn copy_geoip_resources(manifest_dir: &Path) {
     }
 }
 
-/// Ensure `resources/ice-helper` exists for the Tauri bundle (plan §5 T5).
+/// Ensure `resources/ice-helper` exists for the Tauri bundle.
 /// The production path builds the real daemon (`prepare-singbox-resource.sh`
 /// does it in beforeBuildCommand); plain `cargo check` / test / clippy on a
 /// fresh checkout gets a marker so the workspace gate stays green without a

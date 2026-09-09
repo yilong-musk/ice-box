@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Windows backend tests (plan §5 T2 shared exit gate; `windows_tun_ready`
-//! green since 2026-09-03 — host-free on every CI platform).
+//! Windows backend tests (`windows_tun_ready` green since 2026-09-03;
+//! host-free on every CI platform).
 //!
 //! The backend logic runs against a fake `WindowsHost` (simulated `netsh` /
 //! `route print` state) and a fake `CoreCoordinator` that starts/stops the

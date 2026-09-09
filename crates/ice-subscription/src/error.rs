@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Subscription errors mapped to architecture §17.
+//! Subscription errors mapped to shared IPC error codes.
 
 use ice_config::{AppError, ErrorCode, UiMessage};
 

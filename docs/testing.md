@@ -1,86 +1,59 @@
 # Testing
 
-How automated tests are split, which ones CI actually runs, and which
-`#[ignore]` tests need a real host.
+Run commands from the repository root. Development prerequisites are in the
+[README](../README.md#development); release requirements are in
+[release-process.md](release-process.md).
 
-Companion: `scripts/gate.sh` (CI), `scripts/gate-local.sh` (pre-commit),
-`docs/release-process.md` (local vs CI gates).
+## Automated gates
 
-## What runs where
+| Command | Coverage |
+|---------|----------|
+| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website typechecks; Vitest; updater fixtures; demo screenshot |
+| `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, and production build |
 
-| Command | Scope |
-|---|---|
-| `scripts/gate-local.sh` | `cargo fmt --check`, clippy (excluding `ice-box`), `cargo test --workspace --lib --exclude ice-box`, `cargo test -p ice-tun-sys --tests`, desktop + website `tsc`, vitest, updater-fixture script, Live Demo screenshot |
-| `scripts/gate.sh` (CI) | The above plus clippy for **all** crates, `cargo test --workspace --exclude ice-box` (lib + integration + doc), `cargo test -p ice-box --lib`, Vite production build |
+The local gate omits desktop Rust tests because GTK/WebKit dependencies may be
+unavailable. Its screenshot step refreshes the documentation image when the
+version or relevant UI files change. CI skips screenshot capture.
 
-`gate.sh` splits into two halves via `GATE_SCOPE`. It defaults to `all`;
-CI's `gate (linux)` job runs that, while the macOS and Windows **test**
-jobs run `GATE_SCOPE=rust` (fmt, clippy, cargo test). Their frontend half
-is platform independent, so running it once on Linux is enough, and each
-OS **build** job's `tauri build` re-runs `npm run build` from its
-beforeBuildCommand. The `g9_*` headless acceptance tests and
-`ice-proxy-sys` run on every platform as part of `cargo test --workspace`
-/ `cargo test -p ice-box --lib`; there are no separate CI steps for them.
+CI runs the full gate on Linux and `GATE_SCOPE=rust` on macOS/Windows; packaging
+jobs build separately. `GATE_SCOPE=frontend` runs only the frontend half.
+The [gate scripts](../scripts/gate.sh) and [CI workflow](../.github/workflows/ci.yml)
+define the exact commands.
 
-macOS and Windows test/build run in parallel. The required check names
-(`gate + build (macOS dmg)`, `gate + build (Windows nsis)`) are aggregator
-jobs so branch protection does not change. CI packaging overrides the
-workspace release profile (`lto = false`, `codegen-units = 16`,
-`opt-level = 1`, no strip); `release.yml` does not, and still ships the
-real profile.
+`cargo test --lib` does not run `crates/*/tests/`. The local gate explicitly
+includes `ice-tun-sys` integration tests; CI covers all non-desktop integration
+and doc tests. Gates exclude all `#[ignore]` tests.
 
-`cargo test --lib` never compiles or runs `crates/*/tests/*.rs`. Those
-integration binaries (TUN recovery, macOS/Windows backends, helper e2e)
-are the riskiest tests in the tree; CI now executes them via
-`cargo test --workspace --exclude ice-box`. The desktop crate is tested
-with `cargo test -p ice-box --lib`. On Windows that harness needs the
-Common Controls v6 manifest (`apps/desktop/src-tauri/build.rs`); Tauri
-only embeds it on the app exe, and without it the test process dies at
-load (`STATUS_ENTRYPOINT_NOT_FOUND`).
+## Live tests
 
-## Ignored tests (need hardware, privileges, or the network)
+Run relevant ignored tests when changing the corresponding subsystem. TUN,
+core, and system-proxy tests can modify host networking; use a disposable test
+host and stop the app first. Core/TUN tests require the bundled binary
+(`bash scripts/fetch-singbox.sh`, or add `win` for Windows).
 
-Each `#[ignore]` has a reason string in source. They are **not** run by
-the gates. Run them by hand when changing the matching subsystem.
+| Test | Command | Prerequisite |
+|------|---------|--------------|
+| macOS host probes | `cargo test -p ice-tun-sys --test macos_backend -- --ignored` | Real Mac |
+| Windows host probes | `cargo test -p ice-tun-sys --test windows_backend -- --ignored` | Real Windows host with elevation |
+| macOS TUN (G9.12) | `bash scripts/run-acceptance-macos-tun.sh` | Cache sudo credentials with `sudo -v` first |
+| macOS helper (G9.13) | `bash scripts/run-acceptance-macos-tun.sh --helper` | Authorization for helper install/uninstall |
+| macOS restart recovery (G9.15) | `cargo test -p ice-box --lib g9_15 -- --ignored --nocapture` | Installed helper; unset `ICE_BOX_TUN_DEV_SUDO`; uses the installed app data directory |
+| Windows TUN (G9.14) | `bash scripts/run-acceptance-windows-tun.sh` | Elevated Bash shell and MSVC toolchain |
+| System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS/Windows host |
+| HTTPS fetch | `cargo test -p ice-subscription --lib https_fetch_succeeds -- --ignored` | Network access |
 
-### Live TUN / helper (destructive on the host)
+The helper script covers G9.13 and uninstalls the helper afterwards; G9.15 needs
+a separately installed helper. Its data directory defaults to the installed
+app's directory and can be set with `ICE_BOX_TUN_LIVE_DATA_DIR`.
 
-| Test | File | Manual command |
-|---|---|---|
-| macOS live host reads | `crates/ice-tun-sys/tests/macos_backend.rs` | `cargo test -p ice-tun-sys --test macos_backend -- --ignored` on a real Mac |
-| Windows live host + elevation | `crates/ice-tun-sys/tests/windows_backend.rs` | `scripts/run-acceptance-windows-tun.sh` |
-| macOS TUN gate (sudo) | `apps/desktop/src-tauri/src/acceptance.rs` (`g9_12…`) | `scripts/run-acceptance-macos-tun.sh` |
-| macOS helper install/enable | `acceptance.rs` (`g9_13…`) | `scripts/run-acceptance-macos-tun.sh --helper` |
-| Windows TUN gate (elevated) | `acceptance.rs` (`g9_14…`) | `scripts/run-acceptance-windows-tun.sh` |
-
-### Live sing-box (bundled binary, mutates ports / proxy)
-
-All in `apps/desktop/src-tauri/src/acceptance.rs`, marked
-`live: real sing-box…`. Run with a fetched binary:
+For ordinary live core acceptance, use a serial run with the privileged TUN
+cases excluded:
 
 ```bash
-./scripts/fetch-singbox.sh
-cargo test -p ice-box --lib -- --ignored --nocapture
+cargo test -p ice-box --lib acceptance::live:: -- --ignored --nocapture \
+  --test-threads=1 --skip g9_12 --skip g9_13 --skip g9_14 --skip g9_15
 ```
 
-These cover: start/stop, system proxy, reload, port change, logs, a full
-Clash profile, Clash API group state, and Clash API mode switch.
-
-### Live system proxy (mutates OS settings)
-
-| Test | File |
-|---|---|
-| WinInet apply/restore | `crates/ice-proxy-sys/src/lib.rs` (`proxy_sys: mutates real WinInet Internet Settings`) |
-| macOS `networksetup` apply/restore | `crates/ice-proxy-sys/src/lib.rs` (`proxy_sys: mutates real macOS network settings`) |
-
-Run only on a disposable host: `cargo test -p ice-proxy-sys -- --ignored`.
-
-### Network
-
-| Test | File |
-|---|---|
-| Live HTTPS fetch after SSRF validation | `crates/ice-subscription/src/fetch.rs` |
-
-```bash
-cargo test -p ice-subscription --lib -- --ignored
-```
+This covers core lifecycle, reload, system-proxy restoration/port changes,
+logs, and Clash profile/group/mode behavior. Test definitions and individual
+ignore reasons live in [acceptance.rs](../apps/desktop/src-tauri/src/acceptance.rs).

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Fail-closed backend for platforms whose TUN gate is pending or failed
-//! (plan §3.2 / §5 T2).
+//! (`docs/tun.md`).
 //!
 //! `capability()` reports `supported=false` with the stable reason; every
 //! operation returns `tun.not_supported` and never mutates the host. This is

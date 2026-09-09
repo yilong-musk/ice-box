@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Host-free helpers for the Windows TUN scheduled-task binary pin (ARCH-2).
+//! Host-free helpers for the Windows TUN scheduled-task binary pin.
 //!
 //! Shared by `ice-tun-sys` and the `ice-tun-launcher` binary so the library
 //! crate does not depend on a binary crate.

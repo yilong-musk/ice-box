@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Start / Stop / Apply orchestration (architecture §8). Does not touch system proxy from crates.
+//! Start / Stop / Apply orchestration. Does not touch system proxy from crates.
 
 use ice_config::{
     clash_mode_name, config_to_pretty_json, load_group_selections, load_rule_overrides,
@@ -160,7 +160,7 @@ pub fn reconcile_selected_tag_in_settings(
 /// Resolve `selected_tag` against the active profile **without** writing disk.
 ///
 /// The capture controller uses this to pre-reconcile a transition candidate so
-/// `generate_config` never persists settings mid-transition (plan §4.3 commits
+/// `generate_config` never persists settings mid-transition (`docs/tun.md` commits
 /// `settings.json` only after the requested backend is healthy).
 pub fn reconcile_selected_tag(settings: &AppSettings, profile: &NormalizedProfile) -> AppSettings {
     let resolved = resolve_selected_tag(settings.selected_tag.as_deref(), profile);
@@ -242,8 +242,8 @@ pub fn patch_selected_tag_default(
 /// whether the config changed on disk (no-op applies are detected and skip the
 /// write, the .bak rotation, and — in [`orchestrate_apply`] — the reload).
 ///
-/// `capture_intent` is supplied explicitly by the caller (plan §4.1): automatic core start
-/// and every pre-T3 path pass [`CaptureIntent::Diagnostic`]; the TUN controller (slice T3)
+/// `capture_intent` is supplied explicitly by the caller (`docs/tun.md`): automatic core start
+/// and diagnostic paths pass [`CaptureIntent::Diagnostic`]; the TUN controller
 /// passes `Tun` only during a TUN capture transition.
 ///
 /// Host production paths use [`generate_config_with_cache`]. This wrapper is
@@ -332,7 +332,7 @@ pub fn resolve_binary(resource_dir: Option<&Path>) -> Result<PathBuf, AppError> 
 ///
 /// Automatic core start always uses [`CaptureIntent::Diagnostic`]: the TUN
 /// inbound exists in `config.json` only while a TUN capture transition is in
-/// flight or active (architecture §24.1).
+/// flight or active (`docs/tun.md`, product model).
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn orchestrate_start(
     app_paths: &AppPaths,
@@ -461,7 +461,6 @@ pub fn restore_proxy_after_unexpected_core_exit(
 }
 
 /// Apply subscriptions/settings to disk; if Running, reload (and sync system proxy when needed).
-// Argument count is consolidated by the TUN CaptureController restructure (slice T3).
 #[allow(clippy::too_many_arguments)]
 pub fn orchestrate_apply(
     app_paths: &AppPaths,
@@ -635,7 +634,6 @@ pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
 /// The rebuild + reload fallback is dispatched through [`orchestrate_apply`]; the TUN
 /// controller wires a TUN-aware apply via [`orchestrate_set_proxy_mode_with_apply`]
 /// because the elevated core cannot be signalled by the app.
-// Argument count is consolidated by the TUN CaptureController restructure (slice T3).
 // Currently exercised by the orchestration tests; the shell uses the `_with_apply`
 // variant so the fallback can route through the capture controller while TUN is active.
 #[allow(dead_code)]

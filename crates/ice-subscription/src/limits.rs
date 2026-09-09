@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared subscription size caps (architecture §11.4). Over-limit input is
+//! Shared subscription size caps. Over-limit input is
 //! truncated with a warning; parsers never hard-fail on size.
 
 use ice_config::UiMessage;

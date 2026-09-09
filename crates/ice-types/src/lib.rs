@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared DTOs with no `cfg(target_os)` (architecture review ARCH-1).
+//! Shared DTOs with no `cfg(target_os)`.
 //!
 //! `AppPaths` is path layout only (`ensure_dirs` is std `create_dir_all`).
 //! Listen/SSRF helpers and `AppSettings` (no I/O) are pure. Load/save of
@@ -25,7 +25,7 @@ pub use settings::{
 };
 pub use ui::{UiMessage, UI_RAW_KEY};
 
-/// sing-box core version the config generator targets (architecture §12 / §22).
+/// sing-box core version the config generator targets.
 ///
 /// Re-exported by `ice-engine` as the public pin. Bundled desktop binaries
 /// (`third_party/sing-box/VERSION`) must match; generated config features

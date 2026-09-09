@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Size cap for the core process and the desktop shell (ARCH-1 / CORE-7).
+//! Size cap for the core process and the desktop shell.
 //!
 //! A single file stays at most [`SIZED_LOG_MAX_BYTES`]. Overflow drops the
 //! oldest [`SIZED_LOG_TRIM_BYTES`] in place (same inode, line-aligned) so a
@@ -12,7 +12,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-/// Shrink when a log file exceeds 20 MiB (architecture review CORE-7).
+/// Shrink when a log file exceeds 20 MiB.
 pub const SIZED_LOG_MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Oldest bytes dropped at the 20 MiB cap (`SIZED_LOG_MAX_BYTES / 4`).
 pub const SIZED_LOG_TRIM_BYTES: u64 = 5 * 1024 * 1024;

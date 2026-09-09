@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! TUN capture runtime controller (plan §4.3, slice T3).
+//! TUN capture runtime controller (`docs/tun.md`).
 //!
 //! `CaptureController` is the single owner of the active capture backend and
 //! the TUN capture state machine. Every start / stop / apply / reload / quit /
@@ -89,7 +89,7 @@ fn wait_for_core_ports_released(settings: &AppSettings) -> bool {
     false
 }
 
-/// The backend that currently captures traffic (plan §4.3 status payload).
+/// The backend that currently captures traffic (`docs/tun.md` status payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrafficCapture {
@@ -101,7 +101,7 @@ pub enum TrafficCapture {
     Tun,
 }
 
-/// TUN capture lifecycle (plan §4.3).
+/// TUN capture lifecycle (`docs/tun.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TunStatus {
@@ -114,7 +114,7 @@ pub enum TunStatus {
     RecoveryRequired,
 }
 
-/// Status payload fragment (plan §4.3). `traffic_capture` is derived only
+/// Status payload fragment (`docs/tun.md`). `traffic_capture` is derived only
 /// from the controller; `configured_tun` is the committed settings desire.
 #[derive(Debug, Clone, Serialize)]
 pub struct CaptureStatus {
@@ -135,7 +135,7 @@ pub struct CaptureStatus {
     pub tun_ui_hidden: bool,
 }
 
-/// Interrupted settings-transaction record (plan §4.3). `settings.json` is
+/// Interrupted settings-transaction record (`docs/tun.md`). `settings.json` is
 /// never touched until the transition succeeds, so a leftover record on
 /// startup simply means "the committed settings are still the old state".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,7 +156,7 @@ struct CaptureInner {
     helper_core_used: bool,
 }
 
-/// The runtime capture controller (plan §4.3).
+/// The runtime capture controller (`docs/tun.md`).
 pub struct CaptureController {
     paths: AppPaths,
     owner: String,
@@ -240,7 +240,7 @@ fn tun_config_from_settings(settings: &AppSettings) -> TunConfig {
     }
 }
 
-/// Whether two TUN settings change the capture topology (plan §4.3). The
+/// Whether two TUN settings change the capture topology (`docs/tun.md`). The
 /// interface name is excluded: it is resolved per transition by the backend.
 pub fn tun_topology_changed(a: &TunSettings, b: &TunSettings) -> bool {
     a.ipv4_address != b.ipv4_address

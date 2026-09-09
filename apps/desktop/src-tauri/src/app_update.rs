@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-app update checks and installation (architecture §25).
+//! In-app update checks and installation.
 //!
 //! Integrity is minisign via `tauri-plugin-updater`. Apple / Authenticode
 //! signing is not required. Prompt throttle and skipped-version state live in

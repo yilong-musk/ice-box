@@ -2,7 +2,7 @@
 
 //! Rule overrides: disabled subscription rules + user-added custom rules.
 //!
-//! Persisted at `rules.json` in the app data dir (architecture §6). Disabled rules are
+//! Persisted at `rules.json` in the app data dir. Disabled rules are
 //! keyed by a stable fingerprint (SHA-256 of the canonical JSON of the rule
 //! object; older files stored the JSON string itself), so the state
 //! survives subscription updates / profile switches as long as the rule content is
@@ -83,7 +83,7 @@ pub fn rule_type_of(rule: &Value) -> &'static str {
     "other"
 }
 
-/// User-level rule overrides (architecture §14.5).
+/// User-level rule overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuleOverrides {
     /// Fingerprints of rules skipped at config build time.

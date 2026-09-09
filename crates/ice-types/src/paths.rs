@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Application data directory layout (architecture §6).
+//! Application data directory layout.
 //!
 //! Path joins only, plus `ensure_dirs` (`std::fs::create_dir_all`). Settings
 //! load/save stays in `ice-config`.
@@ -28,7 +28,7 @@ impl AppPaths {
         self.root.join("settings.json")
     }
 
-    /// App-update check throttle / skip state (architecture §25).
+    /// App-update check throttle / skip state.
     pub fn update_check(&self) -> PathBuf {
         self.root.join("update-check.json")
     }
@@ -45,12 +45,12 @@ impl AppPaths {
         self.root.join("proxy-backup.json")
     }
 
-    /// TUN mutation journal + ownership records (plan §4.4 / architecture §24.4).
+    /// TUN mutation journal + ownership records (`docs/tun.md`, mutation journal).
     pub fn tun_state(&self) -> PathBuf {
         self.root.join("tun-state.json")
     }
 
-    /// Settings transaction pending record (plan §4.3): written before a live
+    /// Settings transaction pending record (`docs/tun.md`): written before a live
     /// capture-backend transition, committed only after health checks pass,
     /// cleared after commit; startup treats a leftover as an interrupted
     /// transition and restores the committed settings.

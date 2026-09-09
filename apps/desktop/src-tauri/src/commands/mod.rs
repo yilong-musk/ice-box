@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Tauri IPC commands (architecture §14).
+//! Tauri IPC commands.
 
 mod common;
 mod core;

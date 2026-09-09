@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::limits::Limits;
 
-/// Supported Clash proxy types for v1 (architecture checklist).
+/// Supported Clash proxy types.
 pub const CLASH_SUPPORTED_TYPES: &[&str] = &["ss", "vmess", "trojan", "socks", "socks5", "http"];
 
 /// Same cap as [`Limits::default`].max_nodes (kept for tests / re-exports).

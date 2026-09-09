@@ -55,22 +55,7 @@
 
 ## TUN 模式
 
-TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。可在设置或主页中启用。这个开关只决定*下一次*启动时的抓取方式；停止服务时，无论当前是哪种抓取方式都会被完整拆除。
-
-| | macOS | Windows |
-|---|---|---|
-| **准备** | 首次启用时通过系统授权对话框安装一个小型特权辅助组件。 | 首次启用时弹出一次 UAC，创建 `ice-box-tun` 计划任务；之后的启动和停止不再提示。 |
-| **覆盖范围** | IPv4 + IPv6 双栈，TCP 与 UDP。 | 当前内核下**仅 IPv4 TCP**。 |
-
-Windows TUN 在当前固定内核上的能力：
-
-| 可用 | 不可用 |
-|---|---|
-| IPv4 HTTPS 及其他 TCP 流量 | UDP / QUIC / HTTP3 |
-| 经 DoT / DoH 的系统 DNS | IPv6 |
-| 用于诊断的 Mixed 入站 | fake-ip DNS |
-
-Windows 上需要 UDP 或 IPv6？请使用系统代理。完整的配置形态、提权模型和取舍见 [`docs/tun.md`](docs/tun.md)。
+TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。启用方式、开关行为、平台覆盖范围和限制统一见 [`docs/tun.md`](docs/tun.md)。
 
 ## 开发
 
@@ -96,15 +81,16 @@ npm run dev
 apps/desktop    React 界面 + Tauri 外壳
 apps/website    GitHub Pages 站点与在线演示
 crates/         Rust 工作区：subscription、config、engine、proxy-sys、tun-sys、helper
-docs/           架构、TUN、发布流程
+docs/           架构、TUN、测试、发布流程
 ```
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | 实现规范：进程模型、状态机、配置生成、IPC 契约 |
-| [`docs/tun.md`](docs/tun.md) | TUN 抓取：各平台配置形态、提权、已知限制、实机门禁 |
+| [`docs/architecture.md`](docs/architecture.md) | 系统结构、模块职责、数据流与设计边界 |
+| [`docs/tun.md`](docs/tun.md) | TUN 行为、状态机、恢复机制、平台配置与限制 |
+| [`docs/testing.md`](docs/testing.md) | 本地与 CI 门禁范围、手动实机测试 |
 | [`docs/release-process.md`](docs/release-process.md) | 版本号、更新日志、门禁、打标签、发布流水线 |
 | [`CHANGELOG.md`](CHANGELOG.md) | 每个版本的变更 |
 

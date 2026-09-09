@@ -9,7 +9,7 @@
 //! shows every parsed line. Core `hijack-dns` unpack failures stay hidden in the
 //! default view (session noise, not capture failure). Connection lines render as
 //! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — the filter
-//! applies only at read/display time (architecture §16).
+//! applies only at read/display time.
 
 use std::path::Path;
 

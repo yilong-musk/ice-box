@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `tun-state.json`: the TUN mutation journal (plan §4.4).
+//! `tun-state.json`: the TUN mutation journal (`docs/tun.md`).
 //!
 //! The journal is a mutation log, not a final-state snapshot. It records
 //! ownership (`owner_token`, `owned` flags), the last completed mutation
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use ice_types::{ErrorCode, TunError};
 
-/// Capture lifecycle states (plan §4.3). `clean` means verified: no owned
+/// Capture lifecycle states (`docs/tun.md`). `clean` means verified: no owned
 /// resource remains. `recovery_required` is fail-closed: ownership or
 /// cleanup could not be verified and new TUN activation stays rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

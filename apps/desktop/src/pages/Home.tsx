@@ -337,7 +337,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   }
 
   // Core follows the app; this control toggles whichever capture backend is
-  // active (system proxy or TUN, plan §2) — the frontend never chooses.
+  // active (system proxy or TUN, `docs/tun.md`) — the frontend never chooses.
   const running = core?.status === "running";
   const proxyAvailable = status?.system_proxy_available !== false;
   const proxyLive = status?.system_proxy_applied === true;
@@ -351,7 +351,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const tunAvailable = status?.tun_available === true && !tunUiHidden;
   // When TUN is the configured backend but the platform gate is pending /
   // failed, the button stays disabled and the unavailable reason is shown
-  // (plan §2: the setting remains a desired value, never a misleading state).
+  // (`docs/tun.md`: the setting remains a desired value, never a misleading state).
   const canEnableProxy =
     !busy &&
     !proxyLive &&
@@ -404,7 +404,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     });
   }
 
-  /** Fallback offered after a TUN failure (plan §4.6): disable the TUN
+  /** Fallback offered after a TUN failure (`docs/tun.md`): disable the TUN
    * setting, then start the system proxy. Only offered when no TUN
    * resource is active and cleanup is not uncertain. */
   function onFallbackToSystemProxy() {

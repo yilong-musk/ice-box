@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Host-free fake backend for orchestration and fault-injection tests
-//! (plan T0 exit gate: "Inject failures after every journaled mutation in
-//! a host-free fake controller and prove that startup recovery is
-//! idempotent").
+//! Host-free fake backend for orchestration and fault-injection tests.
+//! Injects failures after every journaled mutation so startup recovery can
+//! be proven idempotent.
 //!
 //! The fake simulates the OS resource state (interface, addresses, routes,
 //! DNS), is idempotent, and writes the same journal steps a real backend
-//! writes. It models IPv4 *and* IPv6 routes (dual-stack lock, architecture
-//! §24.5), so a dual-stack or IPv6-only config can never pass health checks
+//! writes. It models IPv4 *and* IPv6 routes (dual-stack requirement in
+//! `docs/tun.md`), so a dual-stack or IPv6-only config can never pass health checks
 //! while IPv6 leaks. `FaultPlan` scripted failures can fire after any
 //! journaled mutation — including the crash window between an OS mutation
 //! and its journal record, where the fake rolls the mutation back so an

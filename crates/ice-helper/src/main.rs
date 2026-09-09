@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Privileged helper daemon entry (plan §5 T5, macOS production path).
+//! Privileged helper daemon entry (`docs/tun.md`, macOS production path).
 //!
 //! Runs as root under launchd. Binds a Unix socket, authenticates each peer
 //! by socket credential + per-installation token, and serves the narrow
@@ -15,7 +15,7 @@
 //! logic. See `install.rs`.
 //!
 //! The daemon never enables capture itself, never touches routes, adapters,
-//! or DNS, and never accepts arbitrary commands (plan §7): sing-box owns the
+//! or DNS, and never accepts arbitrary commands (`docs/tun.md`): sing-box owns the
 //! TUN resources; this process only runs and terminates it.
 //!
 //! Non-unix builds are a stub so the workspace gate stays green on Windows

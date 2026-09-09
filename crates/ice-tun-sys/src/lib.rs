@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! TUN capture platform boundary (plan §4.5, T0 slice).
+//! TUN capture platform boundary (`docs/tun.md`).
 //!
 //! `ice-tun-sys` owns the TUN mutation journal, the platform backend
 //! contract, and the startup/watchdog recovery driver. It performs no
@@ -8,17 +8,11 @@
 //! mutation boundary. System-proxy backup data is never reused for TUN
 //! state (see `ice-proxy-sys`).
 //!
-//! T0 shipped the host-free core (journal + contract + fake backend +
-//! recovery) and the fault-injection tests that prove recovery is
-//! idempotent. T2 adds the macOS backend (native sing-box ownership,
-//! `MacosTunBackend`), the fail-closed `UnsupportedTunBackend` for
-//! platforms whose gate is pending, the shared auto-route model, and
-//! the `CoreCoordinator` boundary for the elevated core. T3 wires the
-//! dev `sudo` runner (`SudoCoreCoordinator`, opt-in via
-//! `ICE_BOX_TUN_DEV_SUDO`) so the macOS live gate runs on a real host;
-//! without the opt-in `DeferredCoreCoordinator` fails cleanly with
-//! `tun.permission_required`, and the production helper remains
-//! slice T5.
+//! Host-free tests cover the journal, backend contract, fake backend, and
+//! recovery idempotence. macOS uses the native backend with a privileged
+//! helper (or a dev-only `sudo` runner). Other platforms get a fail-closed
+//! backend until their gate is green. Without a helper or sudo opt-in,
+//! `DeferredCoreCoordinator` fails cleanly with `tun.permission_required`.
 
 use std::path::PathBuf;
 
@@ -65,7 +59,7 @@ pub use windows::{
     ProcessWindowsHost, WindowsHost, WindowsInterfaceState, WindowsTunBackend, DEFAULT_WINTUN_NAME,
 };
 
-/// Create the platform backend selected for this host (plan §3.2 / §5 T2).
+/// Create the platform backend selected for this host (`docs/tun.md`).
 ///
 /// macOS (gate green) gets the native-path backend; every other platform
 /// gets a fail-closed backend whose capability reports `supported=false`
@@ -73,11 +67,11 @@ pub use windows::{
 ///
 /// `config_path` is the runtime `config.json` the injected core coordinator
 /// starts; `owner_token` identifies this installation in the journal.
-/// `binary` / `log_path` feed the dev `sudo` runner (macOS live gate,
-/// plan §5 T3): `binary` is `None` when the bundled sing-box could not be
-/// resolved, which keeps the fail-closed deferred runner in place.
+/// `binary` / `log_path` feed the dev `sudo` runner (macOS live gate):
+/// `binary` is `None` when the bundled sing-box could not be resolved,
+/// which keeps the fail-closed deferred runner in place.
 ///
-/// Coordinator selection on macOS (T5 production path): the explicit
+/// Coordinator selection on macOS (`docs/tun.md`): the explicit
 /// `ICE_BOX_TUN_DEV_SUDO` opt-in wins (live gate), otherwise the privileged
 /// helper is used when it is installed and authorized (probed
 /// read-only via a `Status` frame at construction), otherwise the fail-closed
@@ -218,9 +212,9 @@ fn helper_coordinator(config_path: &std::path::Path) -> Option<Box<dyn CoreCoord
     }
 }
 
-/// Dev-only opt-in for the `sudo` runner (plan §5 T3 exit gate, macOS live
-/// gate). Set `ICE_BOX_TUN_DEV_SUDO=1` to run the macOS native TUN path with
-/// a cached root credential instead of the installed privileged helper (T5).
+/// Dev-only opt-in for the `sudo` runner (macOS live tests).
+/// Set `ICE_BOX_TUN_DEV_SUDO=1` to run the macOS native TUN path with
+/// a cached root credential instead of the installed privileged helper.
 /// Anything else (unset, empty, `0`) keeps the fail-closed deferred runner:
 /// no OS mutation happens without an explicit opt-in.
 pub fn dev_sudo_runner_enabled() -> bool {

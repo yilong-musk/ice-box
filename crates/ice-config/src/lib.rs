@@ -51,7 +51,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// The runtime capture intent for a generated config (plan §4.1).
+/// The runtime capture intent for a generated config (`docs/tun.md`).
 ///
 /// Supplied explicitly by orchestration; never inferred from `tun.enabled`
 /// alone. `Diagnostic` is the default and matches the pre-TUN behavior exactly.
@@ -67,7 +67,7 @@ pub enum CaptureIntent {
     Tun,
 }
 
-/// TUN T0 gate status for the current platform (plan §3.2, §5 T1).
+/// TUN gate status for the current platform (`docs/tun.md`).
 ///
 /// `ready == false` means this platform must never generate or activate a TUN
 /// config; the stable reason feeds `tun_available=false` in status.
@@ -215,11 +215,11 @@ pub struct BuildInput {
     pub rule_overrides: RuleOverrides,
     /// Runtime capture intent: `Tun` adds the TUN inbound + reserved bypass
     /// rules; `Diagnostic` keeps the Mixed-only shape. Never inferred from
-    /// `tun.enabled` alone (plan §4.1).
+    /// `tun.enabled` alone (`docs/tun.md`).
     #[serde(default)]
     pub capture_intent: CaptureIntent,
     /// Target OS for DNS / TUN reserved-rule emission. Never inferred from
-    /// the compile-time target inside this crate (ARCH-1).
+    /// the compile-time target inside this crate.
     #[serde(default)]
     pub platform: HostPlatform,
 }

@@ -91,7 +91,7 @@ pub fn build_direct_only_config(
     Ok(config)
 }
 
-/// Validate listen ports before build (architecture §12.3).
+/// Validate listen ports before build.
 pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
     if template.mixed_port < 1024 || template.clash_api_port < 1024 {
         return Err(ConfigError::invalid("port must be in 1024..=65535"));
@@ -303,7 +303,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         if capture_intent == CaptureIntent::Tun {
-            // Reserved bypass rules precede `clash_mode` (T0 lock, §24.5.6):
+            // Reserved bypass rules precede `clash_mode` (`docs/tun.md`):
             // the control path, private/loopback/link-local/multicast
             // destinations, and the TUN endpoint are never captured or
             // sniffed, even in Global/Direct mode.
@@ -508,8 +508,8 @@ fn windows_tun_dns_hijack_rule() -> Value {
     json!({ "ip_version": 4, "port": [53], "action": "hijack-dns" })
 }
 
-/// Reserved bypass route rules for a `Tun` config (locked in architecture
-/// §24.5.6 and `docs/tun.md`). Order is fixed: control path and local traffic
+/// Reserved bypass route rules for a `Tun` config (locked in `docs/tun.md`).
+/// Order is fixed: control path and local traffic
 /// are never captured or sniffed.
 ///
 /// macOS / generic shape: the `hijack-dns` rule is inserted directly after
@@ -589,7 +589,7 @@ fn tun_reserved_rules_for(tun: &TunSettings, windows: bool) -> Vec<Value> {
     }));
     // The sniff action at this pin never rewrites destinations; the sniffed
     // domain lands in `metadata.Domain`, so sniff must precede every
-    // domain-matching rule (T0 spike §1.1).
+    // domain-matching rule (`docs/tun.md`).
     rules.push(json!({ "action": "sniff" }));
     rules
 }
@@ -632,7 +632,7 @@ fn tun_network_cidr(address: &str) -> Option<String> {
     }
 }
 
-/// The locked TUN inbound shape for the bundled sing-box 1.13.19 (T0 spike §5):
+/// The locked TUN inbound shape for the bundled sing-box 1.13.19 (`docs/tun.md`):
 /// dual-stack `address` list, sub-range auto_route, and the fixed
 /// `route_exclude_address` / `loopback_address` sets. `interface_name` is
 /// required at build time (validated by [`validate_tun_capture`]).
@@ -1054,7 +1054,7 @@ fn validate_intent_inbounds(inbounds: &[Value], intent: CaptureIntent) -> Result
     Ok(())
 }
 
-/// Structural intent validation (plan §4.2.7): a `Diagnostic` config must never
+/// Structural intent validation (`docs/tun.md`): a `Diagnostic` config must never
 /// contain a TUN inbound, and a `Tun` activation config must carry exactly one
 /// TUN inbound plus the Mixed inbound. A Mixed-only config is never accepted as
 /// a TUN activation config.
@@ -1110,7 +1110,7 @@ pub fn write_runtime_config_bytes(
     write_bytes_atomic(config_path, rendered.as_bytes())
 }
 
-/// Restore `config.json` from `config.json.bak` after a failed reload (architecture §8.3).
+/// Restore `config.json` from `config.json.bak` after a failed reload.
 /// Returns `true` when the backup file existed and was copied.
 pub fn restore_runtime_config_from_bak(
     config_path: &Path,

@@ -985,7 +985,7 @@ impl TunBackend for WindowsTunBackend {
                 "tun config requires at least one address",
             ));
         }
-        // Dual-stack lock (§24.5 point 4): an IPv4-only tun silently leaks
+        // Dual-stack requirement (`docs/tun.md`): an IPv4-only tun silently leaks
         // IPv6; IPv4 itself is mandatory.
         if !routes::has_v4(&config.addresses) {
             return Err(TunError::new(

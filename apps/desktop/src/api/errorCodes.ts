@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** Stable IPC error codes generated from `ice_config::ErrorCode` (ARCH-3). */
+/** Stable IPC error codes generated from `ice_config::ErrorCode`. */
 
 export const ERROR_CODES = [
   "core.not_found",

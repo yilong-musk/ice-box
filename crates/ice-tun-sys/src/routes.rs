@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared auto-route model and route-probe helpers (plan §5 T2).
+//! Shared auto-route model and route-probe helpers (`docs/tun.md`).
 //!
 //! The sub-range sets sing-box installs for `auto_route` on macOS (verified
 //! live in the T0 spike). Both the host-free fake backend and the macOS
@@ -11,7 +11,7 @@
 use crate::backend::TunConfig;
 
 /// Sub-ranges sing-box installs for `auto_route` on macOS (the darwin
-/// sub-range trick — `autoRouteUseSubRanges`, T0 spike §5) when the config
+/// sub-range trick — `autoRouteUseSubRanges`) when the config
 /// carries IPv4 addresses.
 pub const AUTO_ROUTE_RANGES: &[&str] = &[
     "1.0.0.0/8",
@@ -25,7 +25,7 @@ pub const AUTO_ROUTE_RANGES: &[&str] = &[
 ];
 
 /// IPv6 sub-ranges installed alongside the IPv4 ranges whenever the config
-/// carries IPv6 addresses (dual-stack lock, architecture §24.5 point 4).
+/// carries IPv6 addresses (dual-stack requirement in `docs/tun.md`).
 /// sing-box starts at `100::/8` on Darwin; a route for `::/1` would be treated
 /// as a default route by the macOS route API and is not part of its sub-range
 /// set.
@@ -42,9 +42,9 @@ pub fn has_v6(addresses: &[String]) -> bool {
 }
 
 /// All destinations the native path installs for this config: the IPv4 and
-/// IPv6 sub-range sets when `auto_route` is on (the macOS sub-range trick,
-/// T0 spike §5). Connected routes for TUN addresses are deliberately not
-/// included: the locked `route_exclude_address` policy sends those private or
+/// IPv6 sub-range sets when `auto_route` is on (the macOS sub-range trick).
+/// Connected routes for TUN addresses are deliberately not included: the
+/// locked `route_exclude_address` policy sends those private or
 /// ULA destinations through the pre-existing host route, as confirmed by the
 /// live acceptance gate.
 pub fn auto_route_destinations(config: &TunConfig) -> Vec<String> {

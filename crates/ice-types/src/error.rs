@@ -2,7 +2,7 @@
 
 //! Unified IPC / UI error shape: `{ code, message }`.
 //!
-//! Codes follow architecture §17 (dotted snake_case segments). ARCH-3: this
+//! Codes use dotted snake_case segments. This
 //! enum is the single source of truth for `core.*` / `config.*` / `proxy.*` /
 //! `sub.*` / `tun.*` / `update.*` / `app.*` codes returned to the UI.
 
@@ -216,7 +216,7 @@ impl AppError {
     }
 
     /// Same as [`Self::new`]. The `ErrorCode` argument is what stops new
-    /// string-literal codes from compiling (ARCH-3).
+    /// string-literal codes from compiling.
     pub fn with_code(code: ErrorCode, message: impl Into<String>) -> Self {
         Self::new(code, message)
     }
@@ -239,7 +239,7 @@ impl fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
-/// TUN subsystem error. `code` is always a `tun.*` [`ErrorCode`] (ARCH-3).
+/// TUN subsystem error. `code` is always a `tun.*` [`ErrorCode`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunError {
     pub code: ErrorCode,

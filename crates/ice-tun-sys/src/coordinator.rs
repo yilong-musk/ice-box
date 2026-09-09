@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Core coordination for the native sing-box ownership path (plan §5 T2).
+//! Core coordination for the native sing-box ownership path (`docs/tun.md`).
 //!
-//! macOS T0 lock (§24.5.2): adapter creation, address assignment, and route
+//! macOS elevation (`docs/tun.md`): adapter creation, address assignment, and route
 //! installation are privileged, so the bundled sing-box must run elevated.
 //! Production uses the privileged helper daemon (installed once via
 //! launchd); a `sudo` wrapper is dev-only. `ice-tun-sys` never spawns the
-//! core itself (architecture §22 keeps it free of `ice-core`); the
+//! core itself (the capture backend stays independent of `ice-core`); the
 //! orchestration layer injects a `CoreCoordinator` that runs the core as
 //! root, and sing-box owns the adapter / addresses / routes.
 
@@ -39,10 +39,10 @@ pub trait CoreCoordinator {
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError>;
 }
 
-/// T2 placeholder: the real privileged runner (helper IPC or the dev `sudo`
-/// wrapper) is wired by orchestration in slice T3. Until then, a TUN
-/// transition fails cleanly with `tun.permission_required` and no OS
-/// mutation happens.
+/// Fail-closed coordinator used when no privileged runner is available.
+/// A TUN transition fails cleanly with `tun.permission_required` and no OS
+/// mutation happens until the helper is installed or the dev sudo path is
+/// opted in.
 #[derive(Debug, Default)]
 pub struct DeferredCoreCoordinator;
 
@@ -50,7 +50,7 @@ impl CoreCoordinator for DeferredCoreCoordinator {
     fn start_with_config(&mut self, _config_path: &Path) -> Result<u32, TunError> {
         Err(TunError::new(
             ErrorCode::TunPermissionRequired,
-            "privileged sing-box runner is not wired yet (slice T3): install and authorize the helper, or use the dev sudo path",
+            "privileged sing-box runner is not available: install and authorize the helper, or use the dev sudo path",
         ))
     }
 
@@ -61,16 +61,16 @@ impl CoreCoordinator for DeferredCoreCoordinator {
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
             ErrorCode::TunPermissionRequired,
-            "privileged DNS mutation is not wired yet (no elevated runner): install and authorize the helper, or use the dev sudo path",
+            "privileged DNS mutation is not available (no elevated runner): install and authorize the helper, or use the dev sudo path",
         ))
     }
 }
 
-/// Dev-only elevated runner (plan §5 T3 exit gate, macOS live gate).
+/// Dev-only elevated runner (macOS live tests).
 ///
 /// Runs the bundled core as root through `sudo -n` so the native sing-box
-/// path can be exercised on a real host before the helper (T5)
-/// exists. Explicit opt-in only: `create_backend` wires it when
+/// path can be exercised on a real host without the installed helper.
+/// Explicit opt-in only: `create_backend` wires it when
 /// `ICE_BOX_TUN_DEV_SUDO` is set; otherwise the fail-closed
 /// [`DeferredCoreCoordinator`] stays in place and no OS mutation happens.
 ///
@@ -102,7 +102,7 @@ const LIVENESS_POLL: Duration = Duration::from_millis(100);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
-/// Shared verify path for Child-based coordinators (ARCH-5): callers implement
+/// Shared verify path for Child-based coordinators: callers implement
 /// only the spawn seam; this waits until the process is still alive after
 /// [`STARTUP_LIVENESS_WAIT`].
 fn verify_then_start_child(

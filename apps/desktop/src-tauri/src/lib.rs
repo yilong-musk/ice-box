@@ -98,7 +98,7 @@ pub struct AppState {
     _instance_lock: std::fs::File,
     /// Persistent Clash `/traffic` stream; survives home-page unmounts.
     pub traffic: TrafficMonitor,
-    /// TUN capture runtime controller (plan §4.3): owns the active backend,
+    /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
     /// the capture state machine, and the recovery journal.
     pub capture: CaptureController,
     /// mtime-keyed cache of the parsed active profile (+ rule fingerprints);

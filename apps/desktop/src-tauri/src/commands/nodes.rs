@@ -188,7 +188,7 @@ pub(crate) fn apply_after_rule_change(
     Ok(apply_after_subscription_change(app, state, &settings))
 }
 
-/// Rules for the active subscription only (single-active model, architecture §11.5).
+/// Rules for the active subscription only (single-active model).
 pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> {
     let cached = cached_profile(state)?;
     let empty = NormalizedProfile::from_nodes_only(vec![]);

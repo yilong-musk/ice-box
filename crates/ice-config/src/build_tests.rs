@@ -886,7 +886,7 @@ fn restore_runtime_config_from_bak_missing_returns_false() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// --- Slice T1: CaptureIntent, TUN config generation, structural intent checks ---
+// --- CaptureIntent, TUN config generation, structural intent checks ---
 
 #[test]
 fn tun_gate_status_is_stable_per_platform() {

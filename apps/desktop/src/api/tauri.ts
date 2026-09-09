@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** Typed wrappers around Tauri invoke (architecture §14). */
+/** Typed wrappers around Tauri invoke. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -27,10 +27,10 @@ export type CoreState = {
   inbound_port: number | null;
 };
 
-/** Active traffic-capture backend (plan §4.3; derived only from the runtime controller). */
+/** Active traffic-capture backend (`docs/tun.md`; derived only from the runtime controller). */
 export type TrafficCapture = "inactive" | "system_proxy" | "tun";
 
-/** TUN capture lifecycle (plan §4.3). */
+/** TUN capture lifecycle (`docs/tun.md`). */
 export type TunStatus =
   | "disabled"
   | "preparing"
@@ -49,7 +49,7 @@ export type StatusResponse = {
   system_proxy_recorded: boolean | null;
   /** False when the platform has no system-proxy backend (e.g. Linux). */
   system_proxy_available: boolean;
-  // --- TUN capture status (plan §4.3) ---
+  // --- TUN capture status ---
   /** `inactive` means no backend is claimed; `tun_status=recovery_required` blocks fallback. */
   traffic_capture: TrafficCapture;
   /** Committed settings desire (`settings.tun.enabled`); not proof TUN is active. */
@@ -84,7 +84,7 @@ export type StatusResponse = {
 
 export type ProxyMode = "rule" | "global" | "direct";
 
-/** Validated TUN capture parameters (plan §4.1). Only `enabled` is user-facing. */
+/** Validated TUN capture parameters (`docs/tun.md`). Only `enabled` is user-facing. */
 export type TunSettings = {
   enabled: boolean;
   interface_name: string | null;
@@ -387,7 +387,7 @@ export const api = {
   start: () => invoke<void>("start"),
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),
-  /** On-demand TUN recovery retry (plan §4.3); never enables capture. */
+  /** On-demand TUN recovery retry (`docs/tun.md`); never enables capture. */
   recoverTun: () => invoke<UiMessage[]>("recover_tun"),
   /** Install + authorize the privileged helper via the system authorization
    * dialog (unsigned elevation path). macOS only; cancel modifies nothing. */

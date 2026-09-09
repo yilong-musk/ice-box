@@ -36,7 +36,7 @@ use tauri::Manager;
 /// Bundle resource name of the helper binary.
 const HELPER_RESOURCE_NAME: &str = "ice-helper";
 
-/// Stable error codes surfaced to the UI (plan §4.5 extension).
+/// Stable error codes surfaced to the UI.
 pub const ERR_HELPER_INSTALL_FAILED: ErrorCode = ErrorCode::TunHelperInstallFailed;
 pub const ERR_HELPER_INSTALL_CANCELLED: ErrorCode = ErrorCode::TunHelperInstallCancelled;
 /// The elevated install reported OK but the daemon did not accept status

@@ -141,7 +141,7 @@ pub enum CoreOp {
     Reload,
 }
 
-/// Whether `op` is allowed from `status` (architecture §7.1).
+/// Whether `op` is allowed from `status`.
 pub fn is_op_allowed(status: CoreStatus, op: CoreOp) -> bool {
     match (status, op) {
         (CoreStatus::Stopped | CoreStatus::Error, CoreOp::Start) => true,
@@ -2060,7 +2060,7 @@ mod tests {
         let outcome = core.reload(&paths).expect("reload");
         assert_eq!(core.state().status, CoreStatus::Running);
         // SIGHUP keeps the process (Unix); Windows has no in-process reload and the
-        // controller restarts the process from config.json (Slice 4c §9.1 / §9.2).
+        // controller restarts the process from config.json.
         #[cfg(unix)]
         assert_eq!(outcome, ReloadOutcome::HotReloaded);
         #[cfg(unix)]

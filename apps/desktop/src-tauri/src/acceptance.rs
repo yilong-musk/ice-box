@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Headless acceptance scenarios (plan G9.1 / G9.6 / G9.7). Live UI/proxy cases are covered by the macOS release gate.
+//! Headless acceptance scenarios (G9.1 / G9.6 / G9.7). Live UI/proxy cases are covered by the macOS release gate.
 
 #[cfg(test)]
 mod tests {
@@ -881,7 +881,7 @@ mod live {
         println!("G9.11 ok: Rule -> Global -> Direct -> Rule via rebuild + reload, no restart");
     }
 
-    /// macOS TUN live gate (plan §6 live acceptance; §5 T3 exit gate).
+    /// macOS TUN live gate (`docs/testing.md`).
     /// Uses the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`, cached root
     /// credential or NOPASSWD) to exercise the native-path enable →
     /// traffic → disable roundtrip on a real host. Run via
@@ -969,7 +969,7 @@ mod live {
     }
 
     /// macOS TUN live gate through the **production privileged helper**
-    /// (plan §5 T5). Runs the native-path enable → traffic → disable
+    /// (`docs/testing.md`). Runs the native-path enable → traffic → disable
     /// roundtrip via the installed launchd helper instead of the dev `sudo`
     /// runner. Run via `scripts/run-acceptance-macos-tun.sh --helper`,
     /// which installs the helper (sudo) with the real app data dir,
@@ -1205,7 +1205,7 @@ mod live {
         println!("G9.15 ok: TUN survived an app restart; reclaim + auto-start + re-enable + disable stayed healthy");
     }
 
-    /// Windows TUN live gate (plan §6 live Windows acceptance; the
+    /// Windows TUN live gate (`docs/testing.md`; the
     /// `windows_tun_ready` live gate (flipped 2026-09-03): the production
     /// Windows backend generates the real Tun config on this host. Requires
     /// an already-elevated context (run the acceptance suite from an
