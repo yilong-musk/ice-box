@@ -4,12 +4,13 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
-import { clearNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
+import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Nodes } from "./Nodes";
 
 const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getStatus = vi.fn();
+const setSelectedNode = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
 
@@ -18,7 +19,7 @@ vi.mock("../api/tauri", () => ({
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
     getStatus: (...args: unknown[]) => getStatus(...args),
-    setSelectedNode: vi.fn(),
+    setSelectedNode: (...args: unknown[]) => setSelectedNode(...args),
     setGroupSelection: (...args: unknown[]) => setGroupSelection(...args),
     testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
   },
@@ -65,6 +66,7 @@ describe("Nodes", () => {
       system_proxy_available: true,
     });
     setGroupSelection.mockResolvedValue(undefined);
+    setSelectedNode.mockResolvedValue(undefined);
     testNodeDelay.mockImplementation(async (tag: string) => ({
       tag,
       delay_ms: 42,
@@ -88,6 +90,74 @@ describe("Nodes", () => {
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+  });
+
+  it("publishes the selected node to the shared snapshot", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
+    });
+    const selectButtons = view.getAllByRole("button", { name: t("nodes.select") });
+    const enabled = selectButtons.filter((btn) => !(btn as HTMLButtonElement).disabled);
+    fireEvent.click(enabled[0]);
+    await waitFor(() => {
+      expect(setSelectedNode).toHaveBeenCalledWith("node-b");
+    });
+    await waitFor(() => {
+      expect(readNodesSnapshot()?.selectedTag).toBe("node-b");
+    });
+  });
+
+  it("publishes a completed node switch even when the pane is hidden", async () => {
+    let resolveSelect: () => void = () => {};
+    setSelectedNode.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSelect = resolve;
+        }),
+    );
+    const { container, rerender } = render(<Nodes active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
+    });
+    const selectButtons = view.getAllByRole("button", { name: t("nodes.select") });
+    const enabled = selectButtons.filter((btn) => !(btn as HTMLButtonElement).disabled);
+    fireEvent.click(enabled[0]);
+    await waitFor(() => {
+      expect(setSelectedNode).toHaveBeenCalledWith("node-b");
+    });
+    rerender(<Nodes active={false} />);
+    resolveSelect();
+    await waitFor(() => {
+      expect(readNodesSnapshot()?.selectedTag).toBe("node-b");
+    });
+  });
+
+  it("publishes a group exit switch even when the pane is hidden", async () => {
+    let resolveGroup: () => void = () => {};
+    setGroupSelection.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveGroup = resolve;
+        }),
+    );
+    const { container, rerender } = render(<Nodes active />);
+    const view = within(container);
+    await expandGroup(view, "选择组");
+    fireEvent.click(
+      view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })),
+    );
+    await waitFor(() => {
+      expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
+    });
+    rerender(<Nodes active={false} />);
+    resolveGroup();
+    await waitFor(() => {
+      const group = readNodesSnapshot()?.nodes.find((n) => n.tag === "选择组");
+      expect(group?.group_now).toBe("node-b");
+    });
   });
 
   it("renders a long node list without dropping later rows", async () => {

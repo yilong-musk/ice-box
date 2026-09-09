@@ -31,6 +31,8 @@ import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import {
+  applyGroupNowToNodes,
+  applySelectedTagToNodes,
   delayTestTagsForGroup,
   delayTestTagsForList,
   delayResultTone,
@@ -429,6 +431,10 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const delayRunRef = useRef(0);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
+  const selectedTagRef = useRef(selectedTag);
+  selectedTagRef.current = selectedTag;
+  const runningRef = useRef(running);
+  runningRef.current = running;
   const expandedRef = useRef(expandedGroups);
   expandedRef.current = expandedGroups;
   const onSelectRef = useRef<(tag: string) => void>(() => {});
@@ -652,7 +658,16 @@ export function Nodes({ onNavigate, active = true }: Props) {
     setError(null);
     try {
       await api.setSelectedNode(tag);
-      if (mountedRef.current) setSelectedTag(tag);
+      const nextNodes = applySelectedTagToNodes(nodesRef.current, tag);
+      const snap = readNodesSnapshot();
+      writeNodesSnapshot({
+        nodes: nextNodes,
+        selectedTag: tag,
+        running: snap?.running ?? runningRef.current,
+      });
+      if (!mountedRef.current) return;
+      setSelectedTag(tag);
+      setNodes((prev) => (nodesEqual(prev, nextNodes) ? prev : nextNodes));
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {
@@ -666,7 +681,17 @@ export function Nodes({ onNavigate, active = true }: Props) {
     setError(null);
     try {
       await api.setGroupSelection(group, member);
-      if (mountedRef.current) await refresh();
+      const nextNodes = applyGroupNowToNodes(nodesRef.current, group, member);
+      const snap = readNodesSnapshot();
+      writeNodesSnapshot({
+        nodes: nextNodes,
+        selectedTag: snap?.selectedTag ?? selectedTagRef.current,
+        running: snap?.running ?? runningRef.current,
+      });
+      if (mountedRef.current) {
+        setNodes((prev) => (nodesEqual(prev, nextNodes) ? prev : nextNodes));
+      }
+      if (mountedRef.current && activeRef.current) await refresh();
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {

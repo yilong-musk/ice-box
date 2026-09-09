@@ -17,7 +17,14 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
-import { resolveSelectedTag, writeNodesSnapshot } from "../lib/nodes";
+import {
+  nodesEqual,
+  nodesSnapshotRevision,
+  readNodesSnapshot,
+  resolveSelectedTag,
+  subscribeNodesSnapshot,
+  writeNodesSnapshot,
+} from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 import { Button } from "@/components/ui/button";
 import {
@@ -120,6 +127,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       opts?: { settings?: boolean; status?: boolean },
     ) => {
       const gen = pollGen ?? pollGenRef.current;
+      const startedRevision = nodesSnapshotRevision();
       const wantSettings = opts?.settings === true || settingsRef.current === null;
       const wantStatus = opts?.status !== false;
       try {
@@ -146,6 +154,23 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         if (gen !== pollGenRef.current || !activeRef.current) return;
         const settings = nextSettings ?? settingsRef.current;
         if (!settings) return;
+
+        // A node switch may land while this fetch is in flight. Keep the
+        // snapshot selection instead of regressing to stale settings.
+        const snap = readNodesSnapshot();
+        if (nodesSnapshotRevision() !== startedRevision && snap) {
+          if (nextSettings) {
+            settingsRef.current = {
+              ...nextSettings,
+              selected_tag: snap.selectedTag,
+            };
+            setSettings(settingsRef.current);
+            setProxyMode(nextSettings.proxy_mode);
+          }
+          setTunOverride(null);
+          setError(null);
+          return;
+        }
 
         const selected = resolveSelectedTag(settings.selected_tag, n);
         setNodes(n);
@@ -179,6 +204,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     },
     [],
   );
+
+  useEffect(() => {
+    return subscribeNodesSnapshot((snap) => {
+      if (!snap) return;
+      setSelectedTag((prev) => (prev === snap.selectedTag ? prev : snap.selectedTag));
+      setNodes((prev) => (nodesEqual(prev, snap.nodes) ? prev : snap.nodes));
+      const current = settingsRef.current;
+      if (current && current.selected_tag !== snap.selectedTag) {
+        settingsRef.current = { ...current, selected_tag: snap.selectedTag };
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!runtime?.status) return;

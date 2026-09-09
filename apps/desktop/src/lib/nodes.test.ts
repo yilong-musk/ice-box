@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { t } from "./i18n";
 import {
+  applyGroupNowToNodes,
+  applySelectedTagToNodes,
   clearNodesSnapshot,
   delayTestTagsForGroup,
   delayTestTagsForList,
@@ -10,8 +12,10 @@ import {
   formatDelay,
   isGroupType,
   nodesEqual,
+  nodesSnapshotRevision,
   readNodesSnapshot,
   resolveSelectedTag,
+  subscribeNodesSnapshot,
   writeNodesSnapshot,
 } from "./nodes";
 
@@ -151,6 +155,34 @@ describe("nodes snapshot cache", () => {
     expect(readNodesSnapshot()).toBeUndefined();
   });
 
+  it("notifies subscribers on write and clear", () => {
+    clearNodesSnapshot();
+    const seen: Array<string | undefined> = [];
+    const unsubscribe = subscribeNodesSnapshot((snap) => {
+      seen.push(snap?.selectedTag);
+    });
+    writeNodesSnapshot({
+      nodes: [{ tag: "a", outbound_type: "socks", group_now: null, group_all: null }],
+      selectedTag: "a",
+      running: false,
+    });
+    const revision = nodesSnapshotRevision();
+    writeNodesSnapshot({
+      nodes: [{ tag: "a", outbound_type: "socks", group_now: null, group_all: null }],
+      selectedTag: "a",
+      running: false,
+    });
+    expect(nodesSnapshotRevision()).toBe(revision);
+    clearNodesSnapshot();
+    unsubscribe();
+    writeNodesSnapshot({
+      nodes: [{ tag: "b", outbound_type: "vmess", group_now: null, group_all: null }],
+      selectedTag: "b",
+      running: false,
+    });
+    expect(seen).toEqual(["a", undefined]);
+  });
+
   it("compares node lists by tag, type, and group members", () => {
     const a = [
       { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
@@ -169,5 +201,40 @@ describe("nodes snapshot cache", () => {
         { ...a[1], group_now: "b" },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("applySelectedTagToNodes", () => {
+  const nodes = [
+    { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+    {
+      tag: "组",
+      outbound_type: "selector",
+      group_now: "a",
+      group_all: ["a", "b"],
+    },
+  ];
+
+  it("updates group_now when the picked leaf is a member", () => {
+    expect(applySelectedTagToNodes(nodes, "b")[1]?.group_now).toBe("b");
+  });
+
+  it("returns the same array when the exit is already selected", () => {
+    expect(applySelectedTagToNodes(nodes, "a")).toBe(nodes);
+  });
+});
+
+describe("applyGroupNowToNodes", () => {
+  const nodes = [
+    {
+      tag: "组",
+      outbound_type: "selector",
+      group_now: "a",
+      group_all: ["a", "b"],
+    },
+  ];
+
+  it("updates the named group's live exit", () => {
+    expect(applyGroupNowToNodes(nodes, "组", "b")[0]?.group_now).toBe("b");
   });
 });

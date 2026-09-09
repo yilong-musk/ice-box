@@ -3,7 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
-import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
+import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
 const getStatus = vi.fn();
@@ -226,6 +226,113 @@ describe("Home", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("updates outbound when the shared node snapshot changes", async () => {
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+    ]);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: "node-a",
+      auto_set_system_proxy: true,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+      ).toBeInTheDocument();
+    });
+
+    writeNodesSnapshot({
+      nodes: [
+        { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+        { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      ],
+      selectedTag: "node-b",
+      running: false,
+    });
+
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("keeps a node switch that lands while Home is refetching settings", async () => {
+    const nodeList = [
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+    ];
+    const settingsFor = (tag: string) => ({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: tag,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    listNodes.mockResolvedValue(nodeList);
+    getSettings.mockResolvedValue(settingsFor("node-a"));
+
+    const { container, rerender } = render(<Home active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+      ).toBeInTheDocument();
+    });
+
+    let resolveSettings: (value: unknown) => void = () => {};
+    getSettings.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
+    rerender(<Home active={false} />);
+    rerender(<Home active />);
+    await waitFor(() => {
+      expect(getSettings.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    writeNodesSnapshot({
+      nodes: nodeList,
+      selectedTag: "node-b",
+      running: false,
+    });
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+      ).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveSettings(settingsFor("node-a"));
+      await Promise.resolve();
+    });
+
+    expect(
+      view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+    ).toBeInTheDocument();
+    expect(
+      view.queryByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+    ).toBeNull();
   });
 
   it("switches proxy mode and reverts when it fails", async () => {
