@@ -167,7 +167,9 @@ pub(crate) fn recover_launch_leftovers(state: &AppState) {
             Ok(core) => core,
             Err(_) => return,
         };
-        if let Err(err) = core.reclaim_orphan_pid(&state.paths.pid()) {
+        let cores = orphan_reclaim_cores();
+        let core_refs: Vec<&std::path::Path> = cores.iter().map(std::path::Path::new).collect();
+        if let Err(err) = core.reclaim_orphan_pid(&state.paths.pid(), &core_refs) {
             tracing::warn!(error = %err, "failed to reclaim orphan sing-box pid");
         }
     }

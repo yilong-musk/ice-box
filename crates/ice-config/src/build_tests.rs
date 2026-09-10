@@ -1450,6 +1450,7 @@ fn guard_ctx() -> ice_config_guard::GuardContext {
         resources_dir: std::env::temp_dir(),
         log_output: None,
         cache_file_path: None,
+        rule_set_staging_dir: None,
     }
 }
 

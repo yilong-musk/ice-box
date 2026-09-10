@@ -122,7 +122,7 @@ impl CoreHandle for TrackCore {
         Ok(())
     }
 
-    fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+    fn reclaim_orphan_pid(&mut self, _: &Path, _: &[&Path]) -> Result<(), CoreError> {
         self.status.set(CoreStatus::Stopped);
         Ok(())
     }

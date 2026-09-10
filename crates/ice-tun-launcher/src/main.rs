@@ -683,6 +683,7 @@ fn sanitize_user_config(
         resources_dir,
         log_output: Some(core_log.to_path_buf()),
         cache_file_path: Some(run_dir.join("cache.db")),
+        rule_set_staging_dir: Some(run_dir.join("rule-sets")),
     };
     ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx).map_err(|err| err.to_string())?;
     let bytes = serde_json::to_vec(&cfg).map_err(|err| format!("encode config: {err}"))?;
@@ -700,6 +701,7 @@ fn verify_pinned_core(core: &std::path::Path) -> Result<(), String> {
         "TUN scheduled task is missing the binary pin; refusing to start".to_string()
     })?;
     let exe = std::env::current_exe().map_err(|err| format!("current exe: {err}"))?;
+    ice_tun_pin::verify_task_command(&xml, &exe)?;
     if !ice_tun_pin::pin_matches_files(&pin, &exe, core)? {
         return Err(format!(
             "launcher or {} does not match the scheduled-task sha256 pin; refusing to start",

@@ -19,6 +19,8 @@ use serde_json::{json, Map, Value};
 
 /// Upper bound on a sanitised config after parse (8 MiB).
 pub const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
+/// Upper bound on a single local `rule_set` file copied into staging.
+pub const MAX_RULE_SET_BYTES: usize = 8 * 1024 * 1024;
 /// Upper bound on `outbounds` array length.
 pub const MAX_OUTBOUNDS: usize = 640;
 /// Upper bound on `route.rules` array length.
@@ -39,6 +41,10 @@ pub struct GuardContext {
     /// generator keeps cache_file off so a cached Clash mode cannot override
     /// `default_mode`).
     pub cache_file_path: Option<PathBuf>,
+    /// Root/admin-owned directory. Local `rule_set` files are copied here so
+    /// sing-box never opens a user-writable path after sanitise. Required
+    /// when the config contains local rule-sets.
+    pub rule_set_staging_dir: Option<PathBuf>,
 }
 
 /// Rejection with a JSON pointer locating the first offending field.
@@ -227,11 +233,28 @@ pub fn read_config_file(path: &Path) -> Result<Vec<u8>, GuardError> {
     }
 }
 
+/// Hosts allowed as `urltest` / `fallback` health-check targets. A hostname
+/// denylist is not enough: sing-box resolves again (DNS rebinding) and
+/// abbreviated/decimal IPs bypass `IpAddr` parsing. Pin to well-known
+/// connectivity-check names that ice-box itself uses (`DELAY_TEST_URL`).
+const HEALTH_CHECK_HOSTS: &[&str] = &[
+    "www.gstatic.com",
+    "gstatic.com",
+    "connectivitycheck.gstatic.com",
+    "www.google.com",
+    "cp.cloudflare.com",
+];
+
 /// Probe URL used by `urltest` (and Clash `url-test` / `fallback`) groups.
-/// HTTP(S) to a non-restricted host only — no loopback, RFC1918, or
-/// link-local metadata endpoints.
+/// HTTP(S) to an allowlisted public connectivity-check host only.
 pub fn health_check_url_is_allowed(raw: &str) -> bool {
-    parse_http_url_host(raw).is_some_and(|host| !is_restricted_fetch_host(&host))
+    let Some((host, path)) = parse_http_url_parts(raw) else {
+        return false;
+    };
+    if is_restricted_fetch_host(&host) {
+        return false;
+    }
+    HEALTH_CHECK_HOSTS.contains(&host.as_str()) && matches!(path.as_str(), "/" | "/generate_204")
 }
 
 /// Check a single outbound object (subscription normalisation). Does not
@@ -621,13 +644,19 @@ fn validate_rule_set_paths(cfg: &mut Value, ctx: &GuardContext) -> Result<(), Gu
         } else {
             vec![ctx.resources_dir.join(p), ctx.data_dir.join(p)]
         };
+        let staging = ctx.rule_set_staging_dir.as_ref().ok_or_else(|| {
+            GuardError::new(
+                &base,
+                "rule_set staging dir is required to copy local rule-sets out of user-writable paths",
+            )
+        })?;
         let mut last_err = None;
         let mut opened = None;
         for candidate in candidates {
             match open_local_rule_set(&candidate) {
-                Ok(canon) => {
+                Ok((canon, bytes)) => {
                     if roots.iter().any(|root| canon.starts_with(root)) {
-                        opened = Some(canon);
+                        opened = Some(bytes);
                         break;
                     }
                     last_err = Some(GuardError::new(
@@ -648,27 +677,31 @@ fn validate_rule_set_paths(cfg: &mut Value, ctx: &GuardContext) -> Result<(), Gu
                 }
             }
         }
-        let Some(canon) = opened else {
+        let Some(bytes) = opened else {
             return Err(last_err.unwrap_or_else(|| {
                 GuardError::new(&pointer, format!("rule_set path {raw} is not allowed"))
             }));
         };
-        // Pin the path sing-box will open to the inode we just checked so a
-        // swapped symlink at the original location cannot redirect the core.
+        // Copy the bytes we opened (Unix: same O_NOFOLLOW fd) into a
+        // helper-owned staging file. Rewriting the JSON path to a
+        // user-writable canonical location is not an inode pin: the user
+        // could replace that path with a symlink before sing-box starts.
+        let staged = write_staged_rule_set(staging, idx, &bytes)?;
         obj.insert(
             "path".to_string(),
-            Value::String(canon.to_string_lossy().into_owned()),
+            Value::String(staged.to_string_lossy().into_owned()),
         );
     }
     Ok(())
 }
 
 /// Open a local rule-set without following a final-component symlink and
-/// return the canonical path of the opened file.
-fn open_local_rule_set(candidate: &Path) -> Result<PathBuf, String> {
+/// return the canonical path plus the bytes read from that open file.
+fn open_local_rule_set(candidate: &Path) -> Result<(PathBuf, Vec<u8>), String> {
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
+        use std::io::Read;
         use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
         let file = OpenOptions::new()
@@ -680,7 +713,19 @@ fn open_local_rule_set(candidate: &Path) -> Result<PathBuf, String> {
         if !meta.file_type().is_file() || meta.file_type().is_fifo() {
             return Err("not a regular file".into());
         }
-        path_of_open_file(&file)
+        if meta.len() > MAX_RULE_SET_BYTES as u64 {
+            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        }
+        let mut raw = Vec::new();
+        (&file)
+            .take(MAX_RULE_SET_BYTES as u64 + 1)
+            .read_to_end(&mut raw)
+            .map_err(|err| err.to_string())?;
+        if raw.len() > MAX_RULE_SET_BYTES {
+            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        }
+        let canon = path_of_open_file(&file)?;
+        Ok((canon, raw))
     }
     #[cfg(not(unix))]
     {
@@ -688,8 +733,56 @@ fn open_local_rule_set(candidate: &Path) -> Result<PathBuf, String> {
         if meta.file_type().is_symlink() || !meta.is_file() {
             return Err("not a regular file".into());
         }
-        candidate.canonicalize().map_err(|err| err.to_string())
+        if meta.len() > MAX_RULE_SET_BYTES as u64 {
+            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        }
+        let raw = fs::read(candidate).map_err(|err| err.to_string())?;
+        if raw.len() > MAX_RULE_SET_BYTES {
+            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        }
+        let canon = candidate.canonicalize().map_err(|err| err.to_string())?;
+        Ok((canon, raw))
     }
+}
+
+fn write_staged_rule_set(staging: &Path, idx: usize, bytes: &[u8]) -> Result<PathBuf, GuardError> {
+    fs::create_dir_all(staging).map_err(|err| {
+        GuardError::new(
+            "/route/rule_set",
+            format!("create rule_set staging dir {}: {err}", staging.display()),
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(staging, fs::Permissions::from_mode(0o700));
+    }
+    let dest = staging.join(format!("{idx}.srs"));
+    if dest.exists() {
+        fs::remove_file(&dest).map_err(|err| {
+            GuardError::new(
+                "/route/rule_set",
+                format!("replace staged rule_set {}: {err}", dest.display()),
+            )
+        })?;
+    }
+    fs::write(&dest, bytes).map_err(|err| {
+        GuardError::new(
+            "/route/rule_set",
+            format!("write staged rule_set {}: {err}", dest.display()),
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o600));
+    }
+    dest.canonicalize().map_err(|err| {
+        GuardError::new(
+            "/route/rule_set",
+            format!("canonicalise staged rule_set {}: {err}", dest.display()),
+        )
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -930,7 +1023,8 @@ fn controller_host(controller: &str) -> Option<&str> {
     Some(host)
 }
 
-fn parse_http_url_host(raw: &str) -> Option<String> {
+/// Host (lowercased, trailing dots stripped) and URL path (no query/fragment).
+fn parse_http_url_parts(raw: &str) -> Option<(String, String)> {
     let raw = raw.trim();
     if raw.is_empty() || raw.contains(|c: char| c.is_ascii_whitespace() || c == '\\') {
         return None;
@@ -942,7 +1036,12 @@ fn parse_http_url_host(raw: &str) -> Option<String> {
     } else {
         return None;
     };
-    let authority = rest.split(['/', '?', '#']).next()?.trim();
+    let (authority, path_and_more) = match rest.find(['/', '?', '#']) {
+        Some(i) if rest.as_bytes()[i] == b'/' => (&rest[..i], &rest[i..]),
+        Some(i) => (&rest[..i], "/"),
+        None => (rest, "/"),
+    };
+    let authority = authority.trim();
     if authority.is_empty() {
         return None;
     }
@@ -967,7 +1066,10 @@ fn parse_http_url_host(raw: &str) -> Option<String> {
     if host.is_empty() {
         return None;
     }
-    Some(host)
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let path = path_and_more.split(['?', '#']).next().unwrap_or("/");
+    let path = if path.is_empty() { "/" } else { path };
+    Some((host, path.to_string()))
 }
 
 #[cfg(test)]
@@ -994,6 +1096,7 @@ mod tests {
             resources_dir: resources.to_path_buf(),
             log_output: None,
             cache_file_path: None,
+            rule_set_staging_dir: Some(resources.join("elevated-rule-sets")),
         }
     }
 
@@ -1084,6 +1187,31 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn local_rule_set_requires_staging_dir() {
+        let dir = temp_dir("rs-no-staging");
+        let srs = dir.join("geoip").join("geoip-cn.srs");
+        fs::create_dir_all(srs.parent().unwrap()).unwrap();
+        fs::write(&srs, b"x").unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "geoip-cn",
+            "format": "binary",
+            "path": srs.to_string_lossy(),
+        }]);
+        let ctx = GuardContext {
+            data_dir: dir.clone(),
+            resources_dir: dir.clone(),
+            log_output: None,
+            cache_file_path: None,
+            rule_set_staging_dir: None,
+        };
+        let err = sanitize(cfg, &ctx).expect_err("staging required");
+        assert!(err.message.contains("staging"), "{}", err.message);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn rule_set_symlink_is_rejected_and_path_is_pinned() {
@@ -1119,9 +1247,20 @@ mod tests {
         }]);
         let after = sanitize(cfg, &ctx(&dir)).expect("pin");
         let pinned = after["route"]["rule_set"][0]["path"].as_str().unwrap();
+        let staging = dir
+            .join("elevated-rule-sets")
+            .canonicalize()
+            .expect("staging dir");
+        assert!(
+            Path::new(pinned).starts_with(&staging),
+            "rule_set path must be copied into staging, got {pinned}"
+        );
+        assert_eq!(fs::read(pinned).unwrap(), b"x");
+        fs::write(&srs, b"swapped").unwrap();
         assert_eq!(
-            Path::new(pinned).canonicalize().unwrap(),
-            srs.canonicalize().unwrap()
+            fs::read(pinned).unwrap(),
+            b"x",
+            "swapping the user-writable original must not change the staged copy"
         );
         let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&dir);
@@ -1228,6 +1367,7 @@ mod tests {
             resources_dir: dir.clone(),
             log_output: Some(log.clone()),
             cache_file_path: Some(cache.clone()),
+            rule_set_staging_dir: Some(dir.join("elevated-rule-sets")),
         };
         let after = sanitize(cfg, &ctx).expect("ovr");
         assert_eq!(after["log"]["output"], log.to_string_lossy().as_ref());
@@ -1415,6 +1555,7 @@ mod tests {
             resources_dir: resources,
             log_output: None,
             cache_file_path: None,
+            rule_set_staging_dir: Some(base.join("elevated-rule-sets")),
         };
         sanitize(cfg, &ctx).expect("geoip under data_dir");
         let _ = fs::remove_dir_all(&base);
@@ -1535,6 +1676,22 @@ mod tests {
             { "type": "direct", "tag": "direct" }
         ]);
         sanitize(ok, &ctx(&dir)).expect("gstatic");
+
+        for raw in [
+            "http://evil.example/generate_204",
+            "http://127.1/",
+            "http://2130706433/",
+            "http://169.254.169.254./latest/meta-data",
+            "http://0x7f000001/",
+        ] {
+            assert!(
+                !health_check_url_is_allowed(raw),
+                "{raw} must not pass the health-check allowlist"
+            );
+        }
+        assert!(health_check_url_is_allowed(
+            "http://www.gstatic.com./generate_204"
+        ));
 
         let mut fallback = minimal_allowed_config();
         fallback["outbounds"] = json!([

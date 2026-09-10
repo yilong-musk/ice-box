@@ -161,6 +161,7 @@ fn write_sanitized_elevated_config(
         resources_dir: data_dir,
         log_output: Some(log_path.to_path_buf()),
         cache_file_path: Some(dest.with_file_name("elevated-cache.db")),
+        rule_set_staging_dir: dest.parent().map(|p| p.join("rule-sets")),
     };
     ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
         .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;

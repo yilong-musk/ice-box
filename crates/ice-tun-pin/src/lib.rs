@@ -378,32 +378,6 @@ fn windows_path_sibling(path: &Path, name: &str) -> Option<PathBuf> {
     Some(PathBuf::from(format!("{parent}\\{name}")))
 }
 
-fn task_args_contain_path(args: &str, path: &Path) -> bool {
-    let needle = path.display().to_string().replace('/', "\\");
-    if needle.is_empty() {
-        return false;
-    }
-    let haystack = args.replace('/', "\\");
-    let hay_lc = haystack.to_ascii_lowercase();
-    let needle_lc = needle.to_ascii_lowercase();
-    let mut search_from = 0;
-    while let Some(rel) = hay_lc[search_from..].find(&needle_lc) {
-        let start = search_from + rel;
-        let end = start + needle_lc.len();
-        let before = haystack[..start].chars().next_back();
-        let after = haystack[end..].chars().next();
-        let delim_ok = |c: Option<char>| match c {
-            None => true,
-            Some(ch) => ch.is_whitespace() || ch == '"' || ch == '\'',
-        };
-        if delim_ok(before) && delim_ok(after) {
-            return true;
-        }
-        search_from = end;
-    }
-    false
-}
-
 fn require_task_data_dir(args: &str) -> Result<(), String> {
     if parse_data_dir_from_task_args(args).is_none() {
         Err("scheduled-task Arguments are missing --data; re-run elevation setup".into())
@@ -462,8 +436,8 @@ pub fn path_is_protected_launcher(exe: &Path, program_files: &Path) -> bool {
 }
 
 /// `Command` must be the protected launcher, or a Microsoft-signed host
-/// whose Arguments still pin that launcher (Windows 11 Task Scheduler
-/// rejects some unsigned Exec images with `0x80004005`).
+/// whose Arguments are exactly the installer template (Windows 11 Task
+/// Scheduler rejects some unsigned Exec images with `0x80004005`).
 pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), String> {
     let command = extract_tun_task_command_from_xml(xml)
         .ok_or_else(|| "scheduled-task XML is missing Exec/Command".to_string())?;
@@ -474,29 +448,98 @@ pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), St
     if command_matches_launcher(&command, &wscript_exe()) {
         let script = windows_path_sibling(expected_launcher, TUN_RUN_SCRIPT_NAME)
             .ok_or_else(|| "protected launcher path has no parent".to_string())?;
-        if !task_args_contain_path(&args, &script) {
-            return Err(
-                "scheduled-task wscript Arguments do not reference the protected run script; re-run elevation setup"
-                    .into(),
-            );
-        }
+        verify_wscript_arguments(&args, &script)?;
         return require_task_data_dir(&args);
     }
-    if command_matches_launcher(&command, &powershell_exe())
-        || command_matches_launcher(&command, &cmd_exe())
-    {
-        if !task_args_contain_path(&args, expected_launcher) {
-            return Err(
-                "scheduled-task Arguments do not reference the protected launcher; re-run elevation setup"
-                    .into(),
-            );
-        }
+    if command_matches_launcher(&command, &powershell_exe()) {
+        verify_hosted_arguments_match_template(
+            &args,
+            expected_launcher,
+            powershell_task_arguments,
+            "powershell",
+        )?;
+        return require_task_data_dir(&args);
+    }
+    if command_matches_launcher(&command, &cmd_exe()) {
+        verify_hosted_arguments_match_template(
+            &args,
+            expected_launcher,
+            cmd_task_arguments,
+            "cmd",
+        )?;
         return require_task_data_dir(&args);
     }
     Err(
         "scheduled-task Command does not match the protected launcher; re-run elevation setup"
             .into(),
     )
+}
+
+/// `wscript //B <run-script> --data <dir>` and nothing else. A bait copy of
+/// the protected script path after an attacker script must not pass.
+fn verify_wscript_arguments(args: &str, expected_script: &Path) -> Result<(), String> {
+    let parts = split_windows_cmd_args(args);
+    let mut i = 0;
+    while i < parts.len() {
+        let p = parts[i].as_str();
+        if p.eq_ignore_ascii_case("//B") || p.eq_ignore_ascii_case("//Nologo") {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    let rest = &parts[i..];
+    if rest.len() != 3 {
+        return Err(
+            "scheduled-task wscript Arguments must be //B <protected run script> --data <dir>; re-run elevation setup"
+                .into(),
+        );
+    }
+    if !command_matches_launcher(&rest[0], expected_script) {
+        return Err(
+            "scheduled-task wscript Arguments do not reference the protected run script; re-run elevation setup"
+                .into(),
+        );
+    }
+    if rest[1] != "--data" && rest[1] != "--data-dir" {
+        return Err(
+            "scheduled-task wscript Arguments must pass --data after the run script; re-run elevation setup"
+                .into(),
+        );
+    }
+    if rest[2].is_empty() {
+        return Err("scheduled-task Arguments are missing --data; re-run elevation setup".into());
+    }
+    Ok(())
+}
+
+fn verify_hosted_arguments_match_template(
+    args: &str,
+    expected_launcher: &Path,
+    render: fn(&Path, &Path) -> String,
+    host: &str,
+) -> Result<(), String> {
+    let data_dir = parse_data_dir_from_task_args(args).ok_or_else(|| {
+        "scheduled-task Arguments are missing --data; re-run elevation setup".to_string()
+    })?;
+    let expected = render(expected_launcher, &data_dir);
+    if !task_argument_tokens_match(args, &expected) {
+        return Err(format!(
+            "scheduled-task {host} Arguments do not match the protected launcher template; re-run elevation setup"
+        ));
+    }
+    Ok(())
+}
+
+fn task_argument_tokens_match(actual: &str, expected: &str) -> bool {
+    let left = split_windows_cmd_args(actual);
+    let right = split_windows_cmd_args(expected);
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right.iter())
+        .all(|(a, b)| command_matches_launcher(a, Path::new(b)) || a.eq_ignore_ascii_case(b))
 }
 
 /// `UserId` must be the interactive user's SID (the unelevated app, not an
@@ -1056,6 +1099,21 @@ mod tests {
         );
         let err = verify_task_command(&wrong_script, launcher).expect_err("wrong vbs");
         assert!(err.contains("run script"), "{err}");
+
+        // A decoy script whose Arguments merely *contain* the protected vbs
+        // path must not pass (the old delimiter-token check accepted this).
+        let decoy = render_tun_task_xml_exec(
+            &wscript_exe(),
+            &format!(
+                "//B \"C:\\Temp\\evil.vbs\" \"{}\" --data \"{}\"",
+                script.display(),
+                data_dir.display()
+            ),
+            pin,
+            USER_SID,
+        );
+        let err = verify_task_command(&decoy, launcher).expect_err("decoy path token");
+        assert!(err.contains("wscript Arguments"), "{err}");
 
         let ps_xml = render_tun_task_xml_exec(
             &powershell_exe(),

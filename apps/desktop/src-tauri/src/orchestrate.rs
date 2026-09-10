@@ -111,7 +111,7 @@ pub fn build_core_paths(
 }
 
 /// Protected sing-box copies started by the macOS helper / Windows launcher.
-fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
+pub(crate) fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
         vec![std::path::PathBuf::from(
@@ -124,6 +124,17 @@ fn elevated_core_binaries() -> Vec<std::path::PathBuf> {
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     Vec::new()
+}
+
+/// Bundled sing-box plus protected copies that a leftover elevated session
+/// may still be running. Used when reclaiming a pid file.
+pub(crate) fn orphan_reclaim_cores() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(bin) = resolve_binary(None) {
+        out.push(bin);
+    }
+    out.extend(elevated_core_binaries());
+    out
 }
 
 pub fn endpoints_from_settings(settings: &AppSettings) -> ProxyEndpoints {

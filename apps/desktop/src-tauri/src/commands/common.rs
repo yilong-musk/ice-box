@@ -6,7 +6,7 @@ pub(crate) use crate::capture::{
 pub(crate) use crate::orchestrate::{
     current_settings, endpoints_from_settings, generate_config_with_cache,
     orchestrate_apply_with_cache, orchestrate_set_proxy_mode_with_apply,
-    orchestrate_start_with_cache, patch_selected_tag_default, resolve_binary,
+    orchestrate_start_with_cache, orphan_reclaim_cores, patch_selected_tag_default, resolve_binary,
 };
 pub(crate) use crate::shutdown::graceful_stop;
 pub(crate) use crate::tray::{self, TrayLanguage};

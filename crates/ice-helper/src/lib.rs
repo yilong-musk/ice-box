@@ -479,14 +479,6 @@ mod imp {
                 format!("config is not JSON: {err}"),
             )
         })?;
-        let ctx = ice_config_guard::GuardContext {
-            data_dir: config.data_dir.clone(),
-            resources_dir: config.resources_dir.clone(),
-            log_output: Some(config.core_log.clone()),
-            cache_file_path: Some(config.protected_run_dir.join("cache.db")),
-        };
-        ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
-            .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
         std::fs::create_dir_all(&config.protected_run_dir).map_err(|err| {
             TunError::new(
                 ErrorCode::TunApplyFailed,
@@ -496,6 +488,16 @@ mod imp {
                 ),
             )
         })?;
+        let rule_set_staging = config.protected_run_dir.join("rule-sets");
+        let ctx = ice_config_guard::GuardContext {
+            data_dir: config.data_dir.clone(),
+            resources_dir: config.resources_dir.clone(),
+            log_output: Some(config.core_log.clone()),
+            cache_file_path: Some(config.protected_run_dir.join("cache.db")),
+            rule_set_staging_dir: Some(rule_set_staging),
+        };
+        ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
+            .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
         let dest = config.protected_run_dir.join("config.json");
         let bytes = serde_json::to_vec(&cfg).map_err(|err| {
             TunError::new(

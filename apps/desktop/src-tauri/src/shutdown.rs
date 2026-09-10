@@ -295,7 +295,7 @@ mod tests {
             Err(CoreError::invalid_state("mock adopt unsupported"))
         }
 
-        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+        fn reclaim_orphan_pid(&mut self, _: &Path, _: &[&Path]) -> Result<(), CoreError> {
             Ok(())
         }
     }

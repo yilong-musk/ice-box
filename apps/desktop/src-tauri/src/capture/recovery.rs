@@ -123,7 +123,9 @@ impl CaptureController {
             backend.stop_elevated_core().map_err(map_tun)?;
         }
         // Converge the app-side state and clear any stale pid file.
-        core.reclaim_orphan_pid(&self.paths.pid())
+        let cores = crate::orchestrate::orphan_reclaim_cores();
+        let core_refs: Vec<&Path> = cores.iter().map(Path::new).collect();
+        core.reclaim_orphan_pid(&self.paths.pid(), &core_refs)
             .map_err(AppError::from)
     }
 

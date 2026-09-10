@@ -135,8 +135,8 @@ impl CoreHandle for PublishingCore {
         result
     }
 
-    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
-        let result = self.inner.reclaim_orphan_pid(pid_file);
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path, cores: &[&Path]) -> Result<(), CoreError> {
+        let result = self.inner.reclaim_orphan_pid(pid_file, cores);
         self.publish();
         result
     }

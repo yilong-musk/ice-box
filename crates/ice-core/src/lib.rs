@@ -108,7 +108,7 @@ pub struct CorePaths {
 
 impl CorePaths {
     /// Bundled binary plus protected copies that an elevated start may run.
-    fn adopt_binaries(&self) -> Vec<&Path> {
+    pub fn adopt_binaries(&self) -> Vec<&Path> {
         let mut out = Vec::with_capacity(self.extra_binaries.len() + 1);
         out.push(self.binary.as_path());
         out.extend(self.extra_binaries.iter().map(PathBuf::as_path));
@@ -637,12 +637,17 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         )
     }
 
-    /// On app start: if pid file points at a live sing-box process, kill it and enter Stopped.
-    /// A live pid that cannot be signalled (root-owned elevated core) keeps the
-    /// pid file and returns an error: the failure must stay visible so the TUN
-    /// recovery path (or a later privileged stop) converges it instead of
-    /// silently clearing the record of the still-running process.
-    pub fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
+    /// On app start: if pid file points at a live process whose image is one
+    /// of `cores` (bundled or protected sing-box), kill it and enter Stopped.
+    /// Basename-only matching is not enough: pid reuse can point at a
+    /// foreign `sing-box`. A live matching pid that cannot be signalled
+    /// (root-owned elevated core) keeps the pid file and returns an error
+    /// so TUN recovery (or a later privileged stop) can converge it.
+    pub fn reclaim_orphan_pid(
+        &mut self,
+        pid_file: &Path,
+        cores: &[&Path],
+    ) -> Result<(), CoreError> {
         let Some(pid) =
             read_pid(pid_file).map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
         else {
@@ -650,7 +655,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         };
 
         if pid_is_alive(pid) {
-            if looks_like_singbox_process(pid) {
+            if process_image_matches_any(pid, cores) {
                 tracing::warn!(pid, "reclaiming orphan sing-box pid");
                 if !force_kill_pid(pid) {
                     return Err(CoreError::SpawnFailed(format!(
@@ -734,8 +739,9 @@ pub trait CoreHandle: Send {
     /// Adopt an externally started sing-box (TUN slice; see `CoreController::adopt_external`).
     fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError>;
     /// Reclaim an orphan sing-box left by a previous session (startup; see
-    /// `CoreController::reclaim_orphan_pid`).
-    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError>;
+    /// `CoreController::reclaim_orphan_pid`). `cores` are the bundled and
+    /// protected images that may still be running.
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path, cores: &[&Path]) -> Result<(), CoreError>;
 }
 
 impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreController<S, H> {
@@ -771,8 +777,8 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
         CoreController::adopt_external(self, pid, paths)
     }
 
-    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
-        CoreController::reclaim_orphan_pid(self, pid_file)
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path, cores: &[&Path]) -> Result<(), CoreError> {
+        CoreController::reclaim_orphan_pid(self, pid_file, cores)
     }
 }
 
@@ -1457,6 +1463,63 @@ mod tests {
         let _ = core.stop(&paths.pid_file);
         let _ = child.wait();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_orphan_pid_requires_process_image_match() {
+        let dir = temp_root("reclaim-image");
+        let other = temp_root("reclaim-other");
+        let ours = dir.join("sing-box");
+        let foreign = other.join("sing-box");
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .expect("sleep binary");
+        // Copy (do not symlink): canonicalize must distinguish the two images.
+        for dest in [&ours, &foreign] {
+            fs::copy(sleep, dest).expect("copy sleep as sing-box");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perm = fs::metadata(dest).unwrap().permissions();
+                perm.set_mode(0o755);
+                fs::set_permissions(dest, perm).unwrap();
+            }
+        }
+
+        let mut foreign_child = std::process::Command::new(&foreign)
+            .arg("8")
+            .spawn()
+            .expect("spawn foreign sing-box");
+        let foreign_pid = foreign_child.id();
+        let pid_file = dir.join("sing-box.pid");
+        write_pid(&pid_file, foreign_pid).unwrap();
+        let mut core = CoreController::new();
+        core.reclaim_orphan_pid(&pid_file, &[ours.as_path()])
+            .expect("unrelated sing-box must not be killed");
+        assert!(
+            pid_is_alive(foreign_pid),
+            "foreign process named sing-box must survive a basename-only pid file"
+        );
+        let _ = foreign_child.kill();
+        let _ = foreign_child.wait();
+
+        let mut ours_child = std::process::Command::new(&ours)
+            .arg("8")
+            .spawn()
+            .expect("spawn our sing-box");
+        let ours_pid = ours_child.id();
+        write_pid(&pid_file, ours_pid).unwrap();
+        core.reclaim_orphan_pid(&pid_file, &[ours.as_path()])
+            .expect("matching image must be reclaimed");
+        let _ = ours_child.wait();
+        assert!(
+            !pid_is_alive(ours_pid),
+            "our process must be terminated after image-matched reclaim"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&other);
     }
 
     // --- G2.1 ---
