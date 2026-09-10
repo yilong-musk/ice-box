@@ -37,6 +37,12 @@ impl AppPaths {
         self.root.join("config.json")
     }
 
+    /// Per-install Clash API Bearer token (0600 on Unix). Not part of
+    /// `settings.json` so the webview never sees it.
+    pub fn clash_api_secret(&self) -> PathBuf {
+        self.root.join("clash-api.secret")
+    }
+
     pub fn config_bak(&self) -> PathBuf {
         self.root.join("config.json.bak")
     }
@@ -126,6 +132,10 @@ mod tests {
             PathBuf::from("/tmp/ice-box-data/update-check.json")
         );
         assert_eq!(p.config(), PathBuf::from("/tmp/ice-box-data/config.json"));
+        assert_eq!(
+            p.clash_api_secret(),
+            PathBuf::from("/tmp/ice-box-data/clash-api.secret")
+        );
         assert_eq!(
             p.config_bak(),
             PathBuf::from("/tmp/ice-box-data/config.json.bak")

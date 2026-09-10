@@ -29,13 +29,24 @@ fn tmp_path_for(target: &Path) -> PathBuf {
 
 /// Write `bytes` to `path` via temp file + rename. Leaves no `.tmp` on success.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
-    write_bytes_atomic_inner(path, bytes, false)
+    write_bytes_atomic_inner(path, bytes, false, None)
+}
+
+/// Like [`write_bytes_atomic`], with Unix mode bits applied when the temp
+/// file is created so the destination is never briefly world-readable.
+pub(crate) fn write_bytes_atomic_mode(
+    path: &Path,
+    bytes: &[u8],
+    unix_mode: u32,
+) -> Result<(), ConfigError> {
+    write_bytes_atomic_inner(path, bytes, false, Some(unix_mode))
 }
 
 fn write_bytes_atomic_inner(
     path: &Path,
     bytes: &[u8],
     fail_before_rename: bool,
+    unix_mode: Option<u32>,
 ) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -45,7 +56,7 @@ fn write_bytes_atomic_inner(
 
     let tmp = tmp_path_for(path);
     let write_result = (|| -> io::Result<()> {
-        let mut file = File::create(&tmp)?;
+        let mut file = open_atomic_tmp(&tmp, unix_mode)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(())
@@ -69,6 +80,27 @@ fn write_bytes_atomic_inner(
     })?;
 
     Ok(())
+}
+
+fn open_atomic_tmp(tmp: &Path, unix_mode: Option<u32>) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        if let Some(mode) = unix_mode {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+            return OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(tmp);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = unix_mode;
+    }
+    File::create(tmp)
 }
 
 /// Serialize `value` as pretty JSON and atomically replace `path`.
@@ -119,7 +151,8 @@ mod tests {
         let path = dir.join("settings.json");
         fs::write(&path, b"old-content").expect("seed");
 
-        let err = write_bytes_atomic_inner(&path, b"new-content", true).expect_err("injected");
+        let err =
+            write_bytes_atomic_inner(&path, b"new-content", true, None).expect_err("injected");
         assert!(matches!(err, ConfigError::Io(_)));
 
         let contents = fs::read_to_string(&path).expect("read");

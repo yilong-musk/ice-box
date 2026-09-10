@@ -40,7 +40,7 @@ mod imp {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -938,24 +938,151 @@ mod imp {
         !String::from_utf8_lossy(&output.stdout).trim().contains('Z')
     }
 
-    /// Whether `pid`'s command image is this installation's bundled core.
-    fn pid_matches_core(pid: u32, core_bin: &std::path::Path) -> bool {
-        let output = match Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return false,
+    /// Whether `pid`'s executable image is this installation's bundled core.
+    /// Uses `proc_pidpath` / `/proc/pid/exe`, not `ps -o command=` (argv0 is
+    /// forgeable via `exec -a`). A shebang leftover (`sh /path/to/core`) is
+    /// accepted only when the image is a Unix interpreter and argv1 is the
+    /// core path — the helper test fixture is a `#!/bin/sh` script.
+    fn pid_matches_core(pid: u32, core_bin: &Path) -> bool {
+        let Some(image) = pid_image_path(pid) else {
+            return false;
         };
-        if !output.status.success() {
+        if path_is_core_bin(&image.to_string_lossy(), core_bin) {
+            return true;
+        }
+        if !argv0_is_unix_interpreter(&image.to_string_lossy()) {
             return false;
         }
-        command_matches_core_bin(String::from_utf8_lossy(&output.stdout).as_ref(), core_bin)
+        pid_argv(pid)
+            .as_ref()
+            .and_then(|argv| argv.get(1))
+            .is_some_and(|script| !script.starts_with('-') && path_is_core_bin(script, core_bin))
+    }
+
+    fn pid_image_path(pid: u32) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            macos_proc_pidpath(pid)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_proc_pidpath(pid: u32) -> Option<PathBuf> {
+        let mut buf = [0u8; 4096];
+        let n = unsafe {
+            libc::proc_pidpath(
+                pid as libc::c_int,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        if n <= 0 {
+            return None;
+        }
+        let path = std::str::from_utf8(&buf[..n as usize]).ok()?;
+        Some(PathBuf::from(path))
+    }
+
+    fn pid_argv(pid: u32) -> Option<Vec<String>> {
+        #[cfg(target_os = "macos")]
+        {
+            macos_pid_argv(pid)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+            let argv: Vec<String> = raw
+                .split(|b| *b == 0)
+                .filter(|s| !s.is_empty())
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+                .collect();
+            if argv.is_empty() {
+                None
+            } else {
+                Some(argv)
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_pid_argv(pid: u32) -> Option<Vec<String>> {
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
+        let mut size = 0usize;
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 || size < 4 {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        buf.truncate(size);
+        let argc = i32::from_ne_bytes(buf.get(0..4)?.try_into().ok()?);
+        if !(1..=4096).contains(&argc) {
+            return None;
+        }
+        let rest = buf.get(4..)?;
+        let exec_end = rest.iter().position(|&b| b == 0)?;
+        let mut pos = exec_end + 1;
+        while pos < rest.len() && rest[pos] == 0 {
+            pos += 1;
+        }
+        let mut args = Vec::with_capacity(argc as usize);
+        for _ in 0..argc {
+            if pos >= rest.len() {
+                break;
+            }
+            let rel = rest[pos..].iter().position(|&b| b == 0)?;
+            let end = pos + rel;
+            args.push(std::str::from_utf8(&rest[pos..end]).ok()?.to_string());
+            pos = end + 1;
+        }
+        if args.is_empty() {
+            None
+        } else {
+            Some(args)
+        }
     }
 
     /// argv0 of a `ps` command line must be this core — not a substring of a
     /// longer path (`sing-box-wrapper`) or a shell `-c` string. A shebang
     /// leftover (`sh /path/to/core …`) matches argv1 against the core.
+    /// Production reclaim uses image path + argv; this stays as the unit-test
+    /// oracle for that argv0/shebang parsing.
+    #[cfg(test)]
     fn command_matches_core_bin(command: &str, core_bin: &std::path::Path) -> bool {
         let (argv0, rest) = split_command_argv0(command);
         if path_is_core_bin(argv0, core_bin) {
@@ -967,6 +1094,7 @@ mod imp {
         shebang_script_arg(rest).is_some_and(|script| path_is_core_bin(script, core_bin))
     }
 
+    #[cfg(test)]
     fn split_command_argv0(command: &str) -> (&str, &str) {
         let trimmed = command.trim();
         if let Some(rest) = trimmed.strip_prefix('"') {
@@ -980,6 +1108,7 @@ mod imp {
         }
     }
 
+    #[cfg(test)]
     fn shebang_script_arg(rest: &str) -> Option<&str> {
         let rest = rest.trim_start();
         if rest.is_empty() {
@@ -1677,7 +1806,10 @@ mod imp {
                     .as_nanos()
             ));
             std::fs::create_dir_all(&dir).unwrap();
-            let config = fixture_config("tok", &dir);
+            let mut config = fixture_config("tok", &dir);
+            // Must not be `/bin/sleep`: real image-path matching would then
+            // treat the spawned `sleep` as this install's core.
+            config.core_bin = dir.join("not-this-installs-core");
 
             // A live process that is NOT this install's core binary.
             let mut child = std::process::Command::new("sleep")

@@ -67,7 +67,7 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
                 // nothing. Re-target the traffic stream (endpoints may have
                 // changed) — the mutation paths are the only re-attach points
                 // since the 1s snapshot poll no longer reads settings.
-                attach_traffic(&state, &settings);
+                attach_traffic(&state, &settings)?;
                 Ok(())
             } else {
                 // TUN was disabled: the disable path restarted the app-managed
@@ -236,7 +236,7 @@ pub(crate) fn apply_after_change(
     drop(proxy);
     drop(core);
     if running {
-        attach_traffic(state, settings);
+        attach_traffic(state, settings)?;
     } else {
         detach_traffic(state);
     }

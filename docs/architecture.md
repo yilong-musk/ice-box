@@ -103,7 +103,8 @@ restrictions, TLS validation, and size limits; parsing and configuration
 generation constrain what reaches the core. Subscription fetches use direct
 connections so refreshing a broken profile does not depend on that profile.
 
-The Clash control API stays on loopback. Privileged runners authenticate callers
+The Clash control API stays on loopback and requires a per-install `secret`
+(`Authorization: Bearer`). Privileged runners authenticate callers
 and validate executable/configuration inputs before execution; the shared
 [config guard](../crates/ice-config-guard/src/lib.rs) restricts elevated configs
 (including DNS server types: filesystem `hosts.path` is not a DoH URL path;

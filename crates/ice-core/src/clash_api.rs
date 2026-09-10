@@ -45,6 +45,21 @@ fn base_url(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     Ok(format!("http://{}:{}", host, endpoints.port))
 }
 
+fn clash_authorization(endpoints: &HealthEndpoints) -> Option<String> {
+    if endpoints.secret.is_empty() {
+        None
+    } else {
+        Some(format!("Bearer {}", endpoints.secret))
+    }
+}
+
+fn apply_clash_auth(req: ureq::Request, endpoints: &HealthEndpoints) -> ureq::Request {
+    match clash_authorization(endpoints) {
+        Some(value) => req.set("Authorization", &value),
+        None => req,
+    }
+}
+
 /// One process-wide agent. Connection pooling is disabled on purpose: a
 /// pooled idle connection to a core that died stays half-closed (CLOSE_WAIT)
 /// on macOS, and its 4-tuple keeps the clash port occupied — a fresh
@@ -68,7 +83,9 @@ fn shared_agent() -> ureq::Agent {
 fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent.get(&url).call().map_err(|e| clash_api_err(path, e))?;
+    let response = apply_clash_auth(agent.get(&url), endpoints)
+        .call()
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     let mut body = String::new();
     response
@@ -99,8 +116,7 @@ pub(crate) fn probe_version_timed(
         .timeout(timeout)
         .max_idle_connections(0)
         .build();
-    let response = agent
-        .get(&url)
+    let response = apply_clash_auth(agent.get(&url), endpoints)
         .call()
         .map_err(|e| clash_api_err("/version", e))?;
     let status = response.status();
@@ -119,8 +135,7 @@ pub(crate) fn probe_version_timed(
 fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .put(&url)
+    let response = apply_clash_auth(agent.put(&url), endpoints)
         .set("Content-Type", "application/json")
         .send_string(json)
         .map_err(|e| clash_api_err(path, e))?;
@@ -136,8 +151,7 @@ fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result
 fn clash_patch_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .patch(&url)
+    let response = apply_clash_auth(agent.patch(&url), endpoints)
         .set("Content-Type", "application/json")
         .send_string(json)
         .map_err(|e| clash_api_err(path, e))?;
@@ -320,8 +334,7 @@ pub(crate) fn traffic_foreach(
         .timeout_read(read_timeout)
         .max_idle_connections(0)
         .build();
-    let response = agent
-        .get(&url)
+    let response = apply_clash_auth(agent.get(&url), endpoints)
         .call()
         .map_err(|e| clash_api_err("/traffic", e))?;
     let status = response.status();
@@ -384,6 +397,7 @@ pub struct RecordedRequest {
     pub method: String,
     pub path: String,
     pub body: String,
+    pub authorization: Option<String>,
 }
 
 /// Test-only stateful mock of the sing-box Clash API, shared with the desktop crate's
@@ -460,10 +474,13 @@ impl MockClashApi {
                             })
                             .unwrap_or_default();
                         let mut content_length = 0usize;
+                        let mut authorization = None;
                         for line in head.lines().skip(1) {
                             if let Some((k, v)) = line.split_once(':') {
                                 if k.trim().eq_ignore_ascii_case("content-length") {
                                     content_length = v.trim().parse().unwrap_or(0);
+                                } else if k.trim().eq_ignore_ascii_case("authorization") {
+                                    authorization = Some(v.trim().to_string());
                                 }
                             }
                         }
@@ -499,6 +516,7 @@ impl MockClashApi {
                                     method,
                                     path,
                                     body: body_data,
+                                    authorization,
                                 });
                                 let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
                                 if stream.write_all(header.as_bytes()).is_err() {
@@ -559,6 +577,7 @@ impl MockClashApi {
                             method,
                             path,
                             body: body_data,
+                            authorization,
                         });
                         let _ = stream.write_all(resp.as_bytes());
                     });
@@ -582,10 +601,7 @@ impl MockClashApi {
     }
 
     pub fn endpoints(&self) -> HealthEndpoints {
-        HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: self.addr.port(),
-        }
+        HealthEndpoints::new("127.0.0.1", self.addr.port())
     }
 
     /// Mode currently served by `GET /configs`.
@@ -676,10 +692,7 @@ mod tests {
 
     #[test]
     fn non_loopback_endpoints_rejected() {
-        let endpoints = HealthEndpoints {
-            host: "0.0.0.0".into(),
-            port: 19090,
-        };
+        let endpoints = HealthEndpoints::new("0.0.0.0", 19090);
         let err = proxy_delay(&endpoints, "n1", 1000, DELAY_TEST_URL).expect_err("reject");
         assert!(err.to_string().contains("loopback"));
     }
@@ -702,6 +715,23 @@ mod tests {
         assert_eq!(reqs[0].path, "/configs");
         let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
         assert_eq!(body["mode"], "Global");
+        assert!(reqs[0].authorization.is_none());
+    }
+
+    #[test]
+    fn set_mode_with_secret_sends_bearer() {
+        let server = MockClashApi::start(204, "Rule");
+        let endpoints = server
+            .endpoints()
+            .with_secret("iceboxtestclashapisecret000001");
+        set_mode(&endpoints, "Global").expect("set mode");
+        std::thread::sleep(Duration::from_millis(100));
+        let reqs = server.requests.lock().unwrap();
+        assert_eq!(reqs.len(), 1, "expected exactly one PATCH");
+        assert_eq!(
+            reqs[0].authorization.as_deref(),
+            Some("Bearer iceboxtestclashapisecret000001")
+        );
     }
 
     #[test]
@@ -719,10 +749,7 @@ mod tests {
 
     #[test]
     fn non_loopback_endpoints_rejected_for_mode() {
-        let endpoints = HealthEndpoints {
-            host: "0.0.0.0".into(),
-            port: 19090,
-        };
+        let endpoints = HealthEndpoints::new("0.0.0.0", 19090);
         let err = set_mode(&endpoints, "Global").expect_err("reject");
         assert!(err.to_string().contains("loopback"));
     }

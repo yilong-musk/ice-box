@@ -102,6 +102,8 @@ pub struct CorePaths {
     /// Clash API listen used for healthcheck (TCP connect).
     pub clash_api_host: String,
     pub clash_api_port: u16,
+    /// Bearer token matching `experimental.clash_api.secret`.
+    pub clash_api_secret: String,
     /// When true, mixed inbound binds `0.0.0.0` (LAN share); port probe must check wildcard.
     pub allow_lan: bool,
 }
@@ -116,10 +118,8 @@ impl CorePaths {
     }
 
     pub fn health_endpoints(&self) -> HealthEndpoints {
-        HealthEndpoints {
-            host: self.clash_api_host.clone(),
-            port: self.clash_api_port,
-        }
+        HealthEndpoints::new(self.clash_api_host.clone(), self.clash_api_port)
+            .with_secret(self.clash_api_secret.clone())
     }
 }
 
@@ -1105,8 +1105,9 @@ fn looks_like_singbox_process(pid: u32) -> bool {
 
 /// True when the command image's file name is `sing-box` / `sing-box.exe`.
 /// Substring matches (`not-sing-box`, `sing-box-wrapper`) are refused.
-/// A Unix shebang leftover shows as `sh /path/sing-box …` in `ps`; that
-/// script path is accepted. `sh -c '… sing-box …'` is not (argv1 is `-c`).
+/// A Unix shebang leftover may be represented as `sh /path/sing-box …`
+/// in synthetic test strings; that script path is accepted. `sh -c '…
+/// sing-box …'` is not (argv1 is `-c`).
 fn image_basename_is_singbox(image: &str) -> bool {
     let exe = adopt_image_exe_path(image);
     if path_last_segment_is_singbox(exe) {
@@ -1160,24 +1161,20 @@ fn shebang_script_path(image: &str) -> Option<&str> {
     }
 }
 
-/// Command / image path of `pid`, used for adopt identity checks.
+/// Executable image path of `pid`, used for adopt identity checks.
+/// Unix uses `proc_pidpath` (macOS) or `/proc/{pid}/exe` (Linux), not
+/// `ps -o command=` (argv0 is forgeable via `exec -a`). Windows uses
+/// `QueryFullProcessImageNameW`.
 fn process_image_path(pid: u32) -> Option<String> {
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let cmd = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if cmd.is_empty() {
-            None
-        } else {
-            Some(cmd)
-        }
+        macos_proc_pidpath(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
     }
     #[cfg(windows)]
     {
@@ -1201,11 +1198,31 @@ fn process_image_path(pid: u32) -> Option<String> {
             Some(String::from_utf16_lossy(&buf[..size as usize]))
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = pid;
         None
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_proc_pidpath(pid: u32) -> Option<String> {
+    // proc_pidpath writes a NUL-terminated POSIX path. 4 * MAXPATHLEN is
+    // PROC_PIDPATHINFO_MAXSIZE.
+    let mut buf = [0u8; 4096];
+    let n = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+        )
+    };
+    if n <= 0 {
+        return None;
+    }
+    let n = n as usize;
+    let end = n.min(buf.len());
+    std::str::from_utf8(&buf[..end]).ok().map(str::to_string)
 }
 
 fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
@@ -1222,7 +1239,9 @@ fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
 }
 
 /// Windows `QueryFullProcessImageNameW` is the exe path and may contain
-/// spaces (`C:\Program Files\...`). Unix `ps -o command=` is `exe args...`.
+/// spaces (`C:\Program Files\...`). Unix `proc_pidpath` / `/proc/pid/exe`
+/// is also a path (no argv). Synthetic unit-test strings may still be
+/// `exe args...`.
 fn adopt_image_exe_path(image: &str) -> &Path {
     let trimmed = image.trim();
     if let Some(rest) = trimmed.strip_prefix('"') {
@@ -1360,6 +1379,7 @@ mod tests {
             inbound_port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port,
+            clash_api_secret: String::new(),
             allow_lan: false,
         }
     }
@@ -1439,8 +1459,16 @@ mod tests {
             .into_iter()
             .find(|p| Path::new(p).is_file())
             .expect("sleep binary");
-        if std::os::unix::fs::symlink(sleep, &bin).is_err() {
-            fs::copy(sleep, &bin).expect("copy sleep as sing-box");
+        // Copy, do not symlink: `proc_pidpath` / `/proc/pid/exe` report the
+        // real image. A symlink to `sleep` would look like `sleep`, not
+        // `sing-box`.
+        fs::copy(sleep, &bin).expect("copy sleep as sing-box");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
         }
         let mut child = std::process::Command::new(&bin)
             .arg("8")
@@ -1998,6 +2026,7 @@ mod tests {
             inbound_port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port,
+            clash_api_secret: ice_types::EXAMPLE_CLASH_API_SECRET.to_string(),
             allow_lan: false,
         };
 
@@ -2204,6 +2233,7 @@ mod tests {
             inbound_port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port,
+            clash_api_secret: ice_types::EXAMPLE_CLASH_API_SECRET.to_string(),
             allow_lan: false,
         };
 
@@ -2230,9 +2260,10 @@ mod tests {
         // drop in-flight connections while sing-box rebuilds it, so retry until the
         // controller actually serves (TCP connect alone is not enough).
         let url = format!("http://127.0.0.1:{}/configs", paths.clash_api_port);
+        let auth = format!("Bearer {}", paths.clash_api_secret);
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let body = loop {
-            match ureq::get(&url).call() {
+            match ureq::get(&url).set("Authorization", &auth).call() {
                 Ok(resp) => match resp.into_string() {
                     Ok(body) => break body,
                     Err(e) => {
@@ -2305,6 +2336,7 @@ mod tests {
             inbound_port: port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port: clash_port,
+            clash_api_secret: String::new(),
             allow_lan: false,
         };
         ensure_listen_ports_free(&paths).expect("loopback-only probe must succeed");

@@ -14,7 +14,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ice_types::{is_loopback_host, is_restricted_fetch_host};
+use ice_types::{
+    is_loopback_host, is_plausible_clash_api_secret, is_restricted_fetch_host,
+    EXAMPLE_CLASH_API_SECRET,
+};
 use serde_json::{json, Map, Value};
 
 /// Upper bound on a sanitised config after parse (8 MiB).
@@ -292,7 +295,10 @@ pub fn minimal_allowed_config() -> Value {
         "outbounds": [{ "type": "direct", "tag": "direct" }],
         "route": { "final": "direct" },
         "experimental": {
-            "clash_api": { "external_controller": "127.0.0.1:19090" }
+            "clash_api": {
+                "external_controller": "127.0.0.1:19090",
+                "secret": EXAMPLE_CLASH_API_SECRET
+            }
         }
     })
 }
@@ -526,6 +532,21 @@ fn validate_clash_controller(cfg: &Value) -> Result<(), GuardError> {
         return Err(GuardError::new(
             pointer,
             format!("external_controller host {host:?} must be loopback"),
+        ));
+    }
+    let secret_pointer = "/experimental/clash_api/secret";
+    let secret = cfg
+        .get("experimental")
+        .and_then(|v| v.get("clash_api"))
+        .and_then(|v| v.get("secret"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            GuardError::new(secret_pointer, "experimental.clash_api.secret is required")
+        })?;
+    if !is_plausible_clash_api_secret(secret) {
+        return Err(GuardError::new(
+            secret_pointer,
+            "experimental.clash_api.secret is invalid",
         ));
     }
     Ok(())
@@ -1204,6 +1225,24 @@ mod tests {
         cfg["experimental"]["clash_api"]["external_controller"] = json!("0.0.0.0:9090");
         let err = sanitize(cfg, &ctx(&dir)).expect_err("lan");
         assert_eq!(err.pointer, "/experimental/clash_api/external_controller");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_or_invalid_clash_api_secret_is_rejected() {
+        let dir = temp_dir("secret");
+        let mut cfg = minimal_allowed_config();
+        cfg["experimental"]["clash_api"]
+            .as_object_mut()
+            .unwrap()
+            .remove("secret");
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("missing secret");
+        assert_eq!(err.pointer, "/experimental/clash_api/secret");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["experimental"]["clash_api"]["secret"] = json!("short");
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("short secret");
+        assert_eq!(err.pointer, "/experimental/clash_api/secret");
         let _ = fs::remove_dir_all(&dir);
     }
 

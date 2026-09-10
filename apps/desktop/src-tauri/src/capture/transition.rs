@@ -268,7 +268,7 @@ impl CaptureController {
                 // effort) so the previous service state is restored.
                 if core.state().status == CoreStatus::Stopped {
                     let _ = self.rewrite_config(settings, CaptureIntent::Diagnostic);
-                    let core_paths = build_core_paths(&self.paths, settings, binary);
+                    let core_paths = build_core_paths_best_effort(&self.paths, settings, binary);
                     let _ = core.start(&core_paths);
                 }
                 // A journal that still claims (or may claim) owned OS resources: state is
@@ -375,7 +375,7 @@ impl CaptureController {
 
         // Adopt the elevated core (native path) or restart the app-managed
         // core on the Tun config (mock/fallback backends).
-        let core_paths = build_core_paths(&self.paths, &tun_settings, binary.clone());
+        let core_paths = build_core_paths(&self.paths, &tun_settings, binary.clone())?;
         if let Some(pid) = applied.core_pid {
             if let Err(err) = core
                 .adopt_external(pid, &core_paths)
@@ -460,7 +460,7 @@ impl CaptureController {
             Ok(()) => {
                 let _ = self.journal_clean("adopt failed; elevated core released and verified");
                 let _ = self.rewrite_config(settings, CaptureIntent::Diagnostic);
-                let core_paths = build_core_paths(&self.paths, settings, binary);
+                let core_paths = build_core_paths_best_effort(&self.paths, settings, binary);
                 let _ = core.start(&core_paths);
                 Err(err.clone())
             }
@@ -627,7 +627,7 @@ impl CaptureController {
         if restart_diagnostic {
             tracing::info!("disable_tun: regenerating diagnostic config and restarting core");
             self.rewrite_config(settings, CaptureIntent::Diagnostic)?;
-            let core_paths = build_core_paths(&self.paths, settings, binary);
+            let core_paths = build_core_paths(&self.paths, settings, binary)?;
             // The app's own clash API `/traffic` stream can still hold the
             // clash port in CLOSE_WAIT right after the elevated core's
             // shutdown; wait for the ports to be bindable again before the

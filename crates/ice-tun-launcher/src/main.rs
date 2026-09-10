@@ -28,8 +28,8 @@
 //!   with `schtasks /Create /XML` fallback from an admin-owned UTF-16 file).
 //!   If Task Scheduler rejects the unsigned launcher as `Exec/Command`
 //!   (`0x80004005`), register a Microsoft-signed GUI host (`wscript.exe`)
-//!   that waits on an admin-owned `ice-tun-run.vbs`; PowerShell and `cmd.exe`
-//!   are last-resort hosts.
+//!   that waits on an admin-owned `ice-tun-run.vbs`. PowerShell and
+//!   `cmd.exe` are not used as task hosts.
 //! - `ice-tun-launcher --delete-task` — remove the scheduled task and
 //!   protected copies
 //!
@@ -338,7 +338,7 @@ fn install_protected_inner(data_dir: &Path, user_sid: &str) -> Result<(), String
 /// Windows 11 Task Scheduler has been observed to reject an unsigned
 /// `ice-tun-launcher.exe` as `Exec/Command` (`0x80004005`) while still
 /// accepting Microsoft-signed hosts. Try the launcher first, then GUI
-/// `wscript.exe`, then hidden PowerShell, then `cmd.exe`.
+/// `wscript.exe`. Do not fall back to PowerShell or `cmd.exe`.
 #[cfg(target_os = "windows")]
 fn register_ice_box_tun_task_with_host_fallback(
     dest_launcher: &Path,
@@ -368,33 +368,10 @@ fn register_ice_box_tun_task_with_host_fallback(
         user_sid,
     );
     match register_ice_box_tun_task(&wscript, run_dir) {
-        Ok(()) => return Ok(()),
-        Err(err) => errors.push(format!("wscript wrapper: {err}")),
-    }
-
-    remove_leftover_task();
-    let powershell = ice_tun_pin::render_tun_task_xml_exec(
-        &ice_tun_pin::powershell_exe(),
-        &ice_tun_pin::powershell_task_arguments(dest_launcher, data_dir),
-        pin,
-        user_sid,
-    );
-    match register_ice_box_tun_task(&powershell, run_dir) {
-        Ok(()) => return Ok(()),
-        Err(err) => errors.push(format!("powershell wrapper: {err}")),
-    }
-
-    remove_leftover_task();
-    let cmd = ice_tun_pin::render_tun_task_xml_exec(
-        &ice_tun_pin::cmd_exe(),
-        &ice_tun_pin::cmd_task_arguments(dest_launcher, data_dir),
-        pin,
-        user_sid,
-    );
-    match register_ice_box_tun_task(&cmd, run_dir) {
         Ok(()) => Ok(()),
         Err(err) => {
-            errors.push(format!("cmd wrapper: {err}"));
+            errors.push(format!("wscript wrapper: {err}"));
+            remove_leftover_task();
             Err(errors.join("; "))
         }
     }

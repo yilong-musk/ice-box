@@ -267,6 +267,17 @@ fn g5_9_port_validation() {
     ))
     .expect_err("non-loopback clash api");
     assert!(matches!(err, ConfigError::Invalid(_)));
+
+    let err = build_runtime_config(&build_input_from_nodes(
+        LocalTemplate {
+            clash_api_secret: String::new(),
+            ..LocalTemplate::default()
+        },
+        vec![socks("a")],
+        None,
+    ))
+    .expect_err("empty clash api secret");
+    assert!(matches!(err, ConfigError::Invalid(_)));
 }
 
 #[test]
@@ -914,6 +925,7 @@ fn clash_api_block_carries_default_mode_in_all_modes() {
         .unwrap();
         let api = &cfg["experimental"]["clash_api"];
         assert_eq!(api["default_mode"], clash_mode_name(mode));
+        assert_eq!(api["secret"], ice_types::EXAMPLE_CLASH_API_SECRET);
         assert!(
             api.get("mode_list").is_none(),
             "mode_list must not be emitted (rejected by pinned sing-box 1.13.19)"

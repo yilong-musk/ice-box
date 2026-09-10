@@ -40,8 +40,8 @@ use uuid::Uuid;
 
 use crate::lock_poisoned;
 use crate::orchestrate::{
-    build_core_paths, generate_config_with_cache, orchestrate_disable_system_proxy,
-    orchestrate_enable_system_proxy,
+    build_core_paths, build_core_paths_best_effort, generate_config_with_cache,
+    orchestrate_disable_system_proxy, orchestrate_enable_system_proxy,
 };
 
 fn map_tun(err: TunError) -> AppError {

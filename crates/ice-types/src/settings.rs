@@ -55,6 +55,18 @@ pub fn clash_mode_name(mode: ProxyMode) -> &'static str {
     }
 }
 
+/// Clash API secret baked into example configs and [`crate::settings`] test
+/// templates. Production writes a per-install random secret.
+pub const EXAMPLE_CLASH_API_SECRET: &str = "iceboxtestclashapisecret000001";
+
+/// Whether `secret` is a safe `experimental.clash_api.secret` value.
+/// Restricts to ASCII alphanumeric so it can sit in JSON and in an
+/// `Authorization` header without quoting issues.
+pub fn is_plausible_clash_api_secret(secret: &str) -> bool {
+    let n = secret.len();
+    (16..=128).contains(&n) && secret.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// Legacy default for `auto_set_system_proxy` in `settings.json`.
 ///
 /// Product: the core follows the app; system proxy is toggled from the home page.
@@ -563,4 +575,20 @@ fn validate_listen_addr(field: &str, addr: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plausible_clash_api_secret_rejects_short_and_punctuation() {
+        assert!(is_plausible_clash_api_secret(EXAMPLE_CLASH_API_SECRET));
+        assert!(!is_plausible_clash_api_secret("tooshort"));
+        assert!(!is_plausible_clash_api_secret("has space andmoretext"));
+        assert!(!is_plausible_clash_api_secret(
+            "Bearer token-with-dashes-xxx"
+        ));
+        assert!(!is_plausible_clash_api_secret(""));
+    }
 }

@@ -40,6 +40,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Generated Clash API configs include a per-install `secret`. Clients send
+  `Authorization: Bearer …`; elevated sanitiser rejects a missing or weak
+  secret so loopback `PUT /proxies` cannot steer traffic without it.
+- Helper reclaim identifies the leftover core with `proc_pidpath` (macOS)
+  or `/proc/pid/exe` (Linux), not `ps -o command=` (argv0 is forgeable).
+- Windows TUN task install no longer falls back to PowerShell or `cmd.exe`.
+  After an unsigned launcher is rejected (`0x80004005`), only
+  `wscript.exe` plus an admin-owned `ice-tun-run.vbs` is registered.
 - Helper Start / SetDns wait up to 15 s (same budget as Stop) so a relaunch
   while the previous core is still in TERM→KILL no longer fails with macOS
   `EAGAIN` (os error 35) on the helper socket.
@@ -114,8 +122,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   files, registers via COM, and falls back to `schtasks /Create /XML` from
   an admin-owned UTF-16 file. When Task Scheduler rejects the unsigned
   launcher as `Exec/Command` (`0x80004005`), install registers
-  Microsoft-signed `wscript.exe` plus an admin-owned `ice-tun-run.vbs`
-  (PowerShell / `cmd.exe` last). Install failures are written to
+  Microsoft-signed `wscript.exe` plus an admin-owned `ice-tun-run.vbs`.
+  Install failures are written to
   `last-install-error.txt` and shown in the UI instead of a bare
   `tun.helper_install_failed` code.
 - Windows TUN adopt no longer rejects the elevated `Program Files` sing-box

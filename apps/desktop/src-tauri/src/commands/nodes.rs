@@ -24,7 +24,7 @@ pub async fn list_nodes(app: AppHandle) -> Result<Vec<NodeInfo>, AppError> {
         let selections = load_group_selections(&state.paths.group_selections());
         let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
         let live = if core_running {
-            let endpoints = clash_endpoints(&settings);
+            let endpoints = clash_endpoints(&state.paths, &settings)?;
             proxy_groups(&endpoints).ok()
         } else {
             None
@@ -693,7 +693,7 @@ pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), Ap
             core.state().status == CoreStatus::Running
         };
         if should_select {
-            let endpoints = clash_endpoints(&settings);
+            let endpoints = clash_endpoints(&state.paths, &settings)?;
             let result = match &selection_group {
                 Some(group) => select_group(&endpoints, group, &req.tag),
                 None => select_outbound(&endpoints, &req.tag),
@@ -798,7 +798,7 @@ pub async fn set_group_selection(
             core.state().status == CoreStatus::Running
         };
         if should_apply_live {
-            let endpoints = clash_endpoints(&settings);
+            let endpoints = clash_endpoints(&state.paths, &settings)?;
             select_group(&endpoints, &req.group, &req.member).map_err(AppError::from)?;
         } else if !patch_selected_tag_default(&state.paths, &req.group, &req.member)? {
             generate_config_with_cache(
@@ -862,7 +862,7 @@ pub async fn test_node_delay(
         require_known_node_tag(&state, &req.tag)?;
         let settings = current_settings(&state.paths)?;
         require_running_core(&state)?;
-        let endpoints = clash_endpoints(&settings);
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
         let delay_ms =
             proxy_delay(&endpoints, &req.tag, 5000, DELAY_TEST_URL).map_err(AppError::from)?;
         Ok(DelayTestResponse {

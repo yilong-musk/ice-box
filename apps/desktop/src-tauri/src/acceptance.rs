@@ -721,10 +721,9 @@ mod live {
         .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
 
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: CLASH_PORT,
-        };
+        let secret =
+            ice_config::ensure_clash_api_secret(&paths.clash_api_secret()).expect("secret");
+        let endpoints = HealthEndpoints::new("127.0.0.1", CLASH_PORT).with_secret(secret);
         let groups: Vec<GroupState> = proxy_groups(&endpoints).expect("list groups");
         assert!(
             groups.iter().any(|g| !g.all.is_empty()),
@@ -833,10 +832,9 @@ mod live {
         )
         .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: CLASH_PORT,
-        };
+        let secret =
+            ice_config::ensure_clash_api_secret(&paths.clash_api_secret()).expect("secret");
+        let endpoints = HealthEndpoints::new("127.0.0.1", CLASH_PORT).with_secret(secret);
 
         let rule = ice_config::clash_mode_name(ice_config::ProxyMode::Rule);
         assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
@@ -1170,7 +1168,8 @@ mod live {
         let warning = capture_b.recover(&mut core_b).expect("session B: recover");
         restore_settings().expect("restore original settings");
         assert!(warning.is_empty(), "recovery warning: {warning:?}");
-        let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone());
+        let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone())
+            .expect("core paths");
         core_b.start(&core_paths).expect("session B: auto-start");
         assert_eq!(core_b.state().status, CoreStatus::Running);
 

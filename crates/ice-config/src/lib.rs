@@ -8,6 +8,7 @@
 
 mod atomic;
 mod build;
+mod clash_secret;
 mod error;
 mod profile;
 mod redact;
@@ -23,10 +24,12 @@ pub use build::{
     tun_dns_hijack_rule, tun_reserved_rules, validate_config, validate_config_for_intent,
     validate_template, write_runtime_config_bytes, write_runtime_config_file, ConfigError,
 };
+pub use clash_secret::ensure_clash_api_secret;
 pub use error::{AppError, ErrorCode};
 pub use ice_types::{
-    is_fake_ip, is_loopback_host, is_restricted_fetch_host, is_restricted_ip, AppPaths,
-    HostPlatform, UiMessage, ENGINE_COMPAT_CORE_VERSION,
+    is_fake_ip, is_loopback_host, is_plausible_clash_api_secret, is_restricted_fetch_host,
+    is_restricted_ip, AppPaths, HostPlatform, UiMessage, ENGINE_COMPAT_CORE_VERSION,
+    EXAMPLE_CLASH_API_SECRET,
 };
 pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
 pub use redact::{redact_config_json, redact_config_str};
@@ -123,6 +126,11 @@ pub struct LocalTemplate {
     pub mixed_port: u16,
     pub clash_api_listen: String,
     pub clash_api_port: u16,
+    /// Bearer token written to `experimental.clash_api.secret`. Production
+    /// fills this from [`crate::ensure_clash_api_secret`]; [`Default`] uses
+    /// [`EXAMPLE_CLASH_API_SECRET`] so unit tests stay deterministic.
+    #[serde(default = "default_clash_api_secret")]
+    pub clash_api_secret: String,
     /// When true the mixed inbound binds `0.0.0.0` (LAN sharing).
     pub allow_lan: bool,
     /// Routing mode applied at build time (rule / global / direct).
@@ -135,6 +143,10 @@ pub struct LocalTemplate {
     pub tun: TunSettings,
 }
 
+fn default_clash_api_secret() -> String {
+    EXAMPLE_CLASH_API_SECRET.to_string()
+}
+
 impl Default for LocalTemplate {
     fn default() -> Self {
         Self {
@@ -142,6 +154,7 @@ impl Default for LocalTemplate {
             mixed_port: 17890,
             clash_api_listen: "127.0.0.1".into(),
             clash_api_port: 19090,
+            clash_api_secret: default_clash_api_secret(),
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
             tun: TunSettings::default(),
@@ -156,6 +169,7 @@ impl From<&AppSettings> for LocalTemplate {
             mixed_port: settings.mixed_port,
             clash_api_listen: settings.clash_api_listen.clone(),
             clash_api_port: settings.clash_api_port,
+            clash_api_secret: String::new(),
             allow_lan: settings.allow_lan,
             proxy_mode: settings.proxy_mode,
             tun: settings.tun.clone(),

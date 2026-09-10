@@ -3,10 +3,10 @@
 //! Start / Stop / Apply orchestration. Does not touch system proxy from crates.
 
 use ice_config::{
-    clash_mode_name, config_to_pretty_json, load_group_selections, load_rule_overrides,
-    load_settings, restore_runtime_config_from_bak, save_settings_for, write_runtime_config_bytes,
-    AppError, AppPaths, AppSettings, BuildInput, CaptureIntent, ErrorCode, LocalTemplate,
-    NormalizedProfile, UiMessage,
+    clash_mode_name, config_to_pretty_json, ensure_clash_api_secret, load_group_selections,
+    load_rule_overrides, load_settings, restore_runtime_config_from_bak, save_settings_for,
+    write_runtime_config_bytes, AppError, AppPaths, AppSettings, BuildInput, CaptureIntent,
+    ErrorCode, LocalTemplate, NormalizedProfile, UiMessage,
 };
 use ice_core::{
     get_mode, resolve_singbox_binary, set_mode, CoreHandle, CorePaths, CoreStatus, HealthEndpoints,
@@ -88,6 +88,38 @@ pub fn build_core_paths(
     app_paths: &AppPaths,
     settings: &AppSettings,
     binary: PathBuf,
+) -> Result<CorePaths, AppError> {
+    Ok(core_paths(
+        app_paths,
+        settings,
+        binary,
+        ensure_clash_api_secret(&app_paths.clash_api_secret())?,
+    ))
+}
+
+/// Always builds paths so TUN fail-closed restore can restart the diagnostic
+/// core even when the secret file cannot be read or created.
+pub(crate) fn build_core_paths_best_effort(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    binary: PathBuf,
+) -> CorePaths {
+    let clash_api_secret =
+        ensure_clash_api_secret(&app_paths.clash_api_secret()).unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "could not load clash api secret while restoring diagnostic core"
+            );
+            String::new()
+        });
+    core_paths(app_paths, settings, binary, clash_api_secret)
+}
+
+fn core_paths(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+    binary: PathBuf,
+    clash_api_secret: String,
 ) -> CorePaths {
     // With allow_lan the mixed inbound binds 0.0.0.0; probe/UI keep loopback so the
     // health check and displayed endpoint always work.
@@ -106,8 +138,18 @@ pub fn build_core_paths(
         inbound_port: settings.mixed_port,
         clash_api_host: settings.clash_api_listen.clone(),
         clash_api_port: settings.clash_api_port,
+        clash_api_secret,
         allow_lan: settings.allow_lan,
     }
+}
+
+fn runtime_template(
+    app_paths: &AppPaths,
+    settings: &AppSettings,
+) -> Result<LocalTemplate, AppError> {
+    let mut template = LocalTemplate::from(settings);
+    template.clash_api_secret = ensure_clash_api_secret(&app_paths.clash_api_secret())?;
+    Ok(template)
 }
 
 /// Protected sing-box copies started by the macOS helper / Windows launcher.
@@ -299,8 +341,11 @@ pub fn generate_config_with_cache(
             // First-run / all subscriptions removed: fall back to a direct-only
             // config so Start keeps working (system proxy + inbound, all traffic
             // direct) until a subscription is imported.
-            let config =
-                build_direct_only_config(&LocalTemplate::from(settings), capture_intent, platform)?;
+            let config = build_direct_only_config(
+                &runtime_template(app_paths, settings)?,
+                capture_intent,
+                platform,
+            )?;
             return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
         }
         Err(err) => return Err(AppError::from(err)),
@@ -309,8 +354,11 @@ pub fn generate_config_with_cache(
         // Active subscription exists but yields no leaf outbounds (e.g. groups-only, or a
         // hand-edited profile): nothing usable to route through — direct-only fallback so
         // Start/Apply keep working (build_runtime_config errors on empty nodes).
-        let config =
-            build_direct_only_config(&LocalTemplate::from(settings), capture_intent, platform)?;
+        let config = build_direct_only_config(
+            &runtime_template(app_paths, settings)?,
+            capture_intent,
+            platform,
+        )?;
         return write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config);
     }
     let settings = reconcile_selected_tag_in_settings(app_paths, settings, &profile)?;
@@ -319,7 +367,7 @@ pub fn generate_config_with_cache(
     let group_selections = load_group_selections(&app_paths.group_selections());
     let rule_overrides = load_rule_overrides(&app_paths.rule_overrides());
     let config = build_config(&BuildInput {
-        template: LocalTemplate::from(&settings),
+        template: runtime_template(app_paths, &settings)?,
         profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
@@ -376,7 +424,7 @@ pub fn orchestrate_start_with_cache(
 ) -> Result<Option<String>, AppError> {
     generate_config_with_cache(app_paths, settings, resource_dir, capture_intent, cache)?;
 
-    let core_paths = build_core_paths(app_paths, settings, binary);
+    let core_paths = build_core_paths(app_paths, settings, binary)?;
     core.start(&core_paths).map_err(AppError::from)?;
     Ok(None)
 }
@@ -527,7 +575,7 @@ pub fn orchestrate_apply_with_cache(
         return Ok(());
     }
 
-    let core_paths = build_core_paths(app_paths, settings, binary);
+    let core_paths = build_core_paths(app_paths, settings, binary)?;
     let previous_endpoints = endpoints_from_settings(previous_settings);
     let new_endpoints = endpoints_from_settings(settings);
     let inbound_changed = previous_endpoints.http_port != new_endpoints.http_port
@@ -719,10 +767,9 @@ pub fn orchestrate_set_proxy_mode_with_apply(
         return Ok(());
     }
     if *live_mode_ok && running_config_supports_clash_mode(app_paths) {
-        let endpoints = HealthEndpoints {
-            host: settings.clash_api_listen.clone(),
-            port: settings.clash_api_port,
-        };
+        let endpoints =
+            HealthEndpoints::new(settings.clash_api_listen.clone(), settings.clash_api_port)
+                .with_secret(ensure_clash_api_secret(&app_paths.clash_api_secret())?);
         let mode_name = clash_mode_name(settings.proxy_mode);
         match set_mode(&endpoints, mode_name) {
             Ok(()) if get_mode(&endpoints).ok().as_deref() == Some(mode_name) => {

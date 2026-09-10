@@ -24,7 +24,7 @@ pub(crate) fn start_core_inner(app: &AppHandle, state: &AppState) -> Result<(), 
             clear_transient_recovery_warnings(state);
         }
     }
-    attach_traffic(state, &settings);
+    attach_traffic(state, &settings)?;
     Ok(())
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
                 let running = core.state().status == CoreStatus::Running;
                 drop(core);
                 if running {
-                    attach_traffic(state, &settings);
+                    attach_traffic(state, &settings)?;
                 }
                 return Err(err);
             }
@@ -132,7 +132,7 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
     }
     // Persist after capture is on so a crash/quit still restores next launch.
     set_proxy_service_enabled_for(&state.paths.settings(), true, host_platform())?;
-    attach_traffic(state, &settings);
+    attach_traffic(state, &settings)?;
     Ok(())
 }
 
@@ -364,7 +364,7 @@ pub(crate) fn disable_active_backend_inner(
     drop(proxy);
     drop(core);
     if running {
-        attach_traffic(state, &settings);
+        attach_traffic(state, &settings)?;
     }
     Ok(())
 }

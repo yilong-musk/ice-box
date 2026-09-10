@@ -15,9 +15,9 @@ pub(crate) use ice_config::NormalizedOutbound;
 pub(crate) use ice_config::{
     load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint,
     rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
-    save_settings_for as persist_settings, set_proxy_service_enabled_for, AppError, AppSettings,
-    CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
-    UiMessage,
+    save_settings_for as persist_settings, set_proxy_service_enabled_for, AppError, AppPaths,
+    AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
+    SettingsPatch, UiMessage,
 };
 pub(crate) use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
@@ -95,15 +95,22 @@ pub(crate) fn require_running_core(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-pub(crate) fn clash_endpoints(settings: &AppSettings) -> HealthEndpoints {
-    HealthEndpoints {
-        host: settings.clash_api_listen.clone(),
-        port: settings.clash_api_port,
-    }
+pub(crate) fn clash_endpoints(
+    paths: &AppPaths,
+    settings: &AppSettings,
+) -> Result<HealthEndpoints, AppError> {
+    let secret = ice_config::ensure_clash_api_secret(&paths.clash_api_secret())?;
+    Ok(
+        HealthEndpoints::new(settings.clash_api_listen.clone(), settings.clash_api_port)
+            .with_secret(secret),
+    )
 }
 
-pub(crate) fn attach_traffic(state: &AppState, settings: &AppSettings) {
-    state.traffic.set_endpoints(Some(clash_endpoints(settings)));
+pub(crate) fn attach_traffic(state: &AppState, settings: &AppSettings) -> Result<(), AppError> {
+    state
+        .traffic
+        .set_endpoints(Some(clash_endpoints(&state.paths, settings)?));
+    Ok(())
 }
 
 pub(crate) fn detach_traffic(state: &AppState) {

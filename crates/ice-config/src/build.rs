@@ -15,10 +15,24 @@ use crate::runtime_config::{tagged_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
 use crate::settings::{clash_mode_name, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
+use ice_types::is_plausible_clash_api_secret;
 
 /// Connection routes are INFO. The Logs page filters to those plus
 /// important events unless debug mode is on; the 20 MiB cap bounds disk.
 const GENERATED_LOG_LEVEL: &str = "info";
+
+/// Clash API listen + Bearer secret. `mode_list` must not be emitted — the
+/// pinned sing-box 1.13.19 rejects it ("unknown field").
+fn clash_api_block(template: &LocalTemplate) -> Value {
+    json!({
+        "external_controller": format!(
+            "{}:{}",
+            template.clash_api_listen, template.clash_api_port
+        ),
+        "secret": template.clash_api_secret,
+        "default_mode": clash_mode_name(template.proxy_mode),
+    })
+}
 
 pub fn build_direct_only_config(
     template: &LocalTemplate,
@@ -73,17 +87,7 @@ pub fn build_direct_only_config(
         "outbounds": outbounds,
         "route": route,
         "experimental": {
-            "clash_api": {
-                "external_controller": format!(
-                    "{}:{}",
-                    template.clash_api_listen, template.clash_api_port
-                ),
-                // NOTE: `mode_list` must NOT be emitted — the pinned sing-box 1.13.19
-                // rejects it ("unknown field"). The runtime mode-list is `[<default_mode>]`
-                // only, so a PATCH to another mode is silently ignored and mode switching
-                // always takes the rebuild + reload path (see `orchestrate_set_proxy_mode`).
-                "default_mode": clash_mode_name(template.proxy_mode),
-            }
+            "clash_api": clash_api_block(template),
         }
     });
 
@@ -111,6 +115,11 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
     if !is_loopback_host(&template.clash_api_listen) {
         return Err(ConfigError::invalid(
             "clash_api_listen must be a loopback address",
+        ));
+    }
+    if !is_plausible_clash_api_secret(&template.clash_api_secret) {
+        return Err(ConfigError::invalid(
+            "clash_api_secret must be 16..=128 ASCII alphanumeric characters",
         ));
     }
     Ok(())
@@ -452,21 +461,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     }
 
     let experimental = json!({
-        "clash_api": {
-            "external_controller": format!(
-                "{}:{}",
-                input.template.clash_api_listen, input.template.clash_api_port
-            ),
-            // Slice 4c: runtime mode switch surface. `default_mode` is baked from
-            // settings.proxy_mode and restored on every apply/restart because the
-            // config is rebuilt on apply. `experimental.cache_file` must stay OFF so
-            // the cached mode cannot override `default_mode` on restart.
-            // NOTE: `mode_list` must NOT be emitted — the pinned sing-box 1.13.19
-            // rejects it ("unknown field"). The runtime mode-list is `[<default_mode>]`
-            // only, so a PATCH to another mode is silently ignored and mode switching
-            // always takes the rebuild + reload path (see `orchestrate_set_proxy_mode`).
-            "default_mode": clash_mode_name(input.template.proxy_mode),
-        }
+        "clash_api": clash_api_block(&input.template),
     });
 
     let config = RuntimeConfig {

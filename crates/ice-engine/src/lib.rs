@@ -349,6 +349,10 @@ proxies:
         assert_eq!(first["clash_mode"], "global");
         assert_eq!(first["outbound"], "proxy");
         assert_eq!(value["experimental"]["clash_api"]["default_mode"], "Global");
+        assert_eq!(
+            value["experimental"]["clash_api"]["secret"],
+            ice_types::EXAMPLE_CLASH_API_SECRET
+        );
         assert!(
             value["experimental"]["clash_api"]
                 .get("mode_list")

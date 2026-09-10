@@ -361,10 +361,9 @@ mod tests {
     #[test]
     fn graceful_stop_leaves_core_stopped() {
         let state = temp_state("stopped", Box::new(OkProxy));
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
         graceful_stop(&state, PathBuf::from("/bin/true")).expect("stop");
         let core = state.core.lock().unwrap();
         assert_eq!(core.state().status, CoreStatus::Stopped);
@@ -382,10 +381,9 @@ mod tests {
                 status: CoreStatus::Error,
             }),
         );
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
         assert!(state.traffic.has_target());
 
         let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
@@ -404,10 +402,9 @@ mod tests {
                 status: CoreStatus::Running,
             }),
         );
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
 
         let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
         assert_eq!(err.code, "core.invalid_state");

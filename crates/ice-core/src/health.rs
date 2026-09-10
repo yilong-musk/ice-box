@@ -29,9 +29,25 @@ pub const HEALTH_HTTP_TIMEOUT: Duration = Duration::from_millis(500);
 pub struct HealthEndpoints {
     pub host: String,
     pub port: u16,
+    /// Bearer token matching `experimental.clash_api.secret`. Empty skips
+    /// the `Authorization` header (tests against unauthenticated mocks).
+    pub secret: String,
 }
 
 impl HealthEndpoints {
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            secret: String::new(),
+        }
+    }
+
+    pub fn with_secret(mut self, secret: impl Into<String>) -> Self {
+        self.secret = secret.into();
+        self
+    }
+
     pub fn socket_addr_hint(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -372,11 +388,8 @@ mod tests {
 
     #[test]
     fn wait_tcp_ready_until_aborts_when_cancel_set() {
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            // Unlikely to be listening; cancel should win before full timeout.
-            port: 1,
-        };
+        // Unlikely to be listening; cancel should win before full timeout.
+        let endpoints = HealthEndpoints::new("127.0.0.1", 1);
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_bg = cancel.clone();
         let handle = thread::spawn(move || {
@@ -446,10 +459,7 @@ mod tests {
             }
         });
 
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port,
-        };
+        let endpoints = HealthEndpoints::new("127.0.0.1", port);
         TcpHealthProbe
             .wait_healthy(&endpoints, Duration::from_secs(3))
             .expect("retries past two failed GET /version");
@@ -461,10 +471,7 @@ mod tests {
     fn wait_healthy_times_out_when_http_never_arrives() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port,
-        };
+        let endpoints = HealthEndpoints::new("127.0.0.1", port);
         let err = TcpHealthProbe
             .wait_healthy(&endpoints, Duration::from_millis(400))
             .expect_err("http never served");

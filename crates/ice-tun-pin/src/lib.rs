@@ -17,9 +17,9 @@
 //! Some Windows 11 builds reject an unsigned `ice-tun-launcher.exe` as the
 //! task `Exec/Command` (`0x80004005`). The installer then registers a
 //! Microsoft-signed GUI host (`wscript.exe`) that waits on an admin-owned
-//! `.vbs` next to the launcher; PowerShell and `cmd.exe` are last-resort
-//! hosts. App-side verify accepts those wrappers only when Arguments still
-//! pin the protected launcher (or its sibling run script) and `--data`.
+//! `.vbs` next to the launcher. App-side verify accepts that wrapper only
+//! when Arguments still pin the protected run script and `--data`. PowerShell
+//! and `cmd.exe` are not registered as task hosts.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -294,10 +294,12 @@ pub fn wscript_exe() -> PathBuf {
     windows_system32_dir().join("wscript.exe")
 }
 
+/// Not a permitted task host; kept so tests can build XML that verify rejects.
 pub fn cmd_exe() -> PathBuf {
     windows_system32_dir().join("cmd.exe")
 }
 
+/// Not a permitted task host; kept so tests can build XML that verify rejects.
 pub fn powershell_exe() -> PathBuf {
     windows_system32_dir()
         .join("WindowsPowerShell")
@@ -344,8 +346,8 @@ pub fn wscript_task_arguments(script: &Path, data_dir: &Path) -> String {
     )
 }
 
-/// Hidden PowerShell that waits on the protected launcher. Trailing `--data`
-/// is for [`parse_data_dir_from_task_args`]; `Start-Process` also gets it.
+/// Arguments for a PowerShell task host. Not registered; tests build XML
+/// that [`verify_task_command`] must reject.
 pub fn powershell_task_arguments(launcher: &Path, data_dir: &Path) -> String {
     let launch = launcher.display().to_string().replace('\'', "''");
     let data = data_dir.display().to_string().replace('\'', "''");
@@ -355,8 +357,8 @@ pub fn powershell_task_arguments(launcher: &Path, data_dir: &Path) -> String {
     )
 }
 
-/// Last-resort console host (may flash). `start /b /wait` keeps the task
-/// process alive for the TUN core lifetime.
+/// Arguments for a `cmd.exe` task host. Not registered; tests build XML
+/// that [`verify_task_command`] must reject.
 pub fn cmd_task_arguments(launcher: &Path, data_dir: &Path) -> String {
     format!(
         "/c start /b /wait \"\" \"{}\" --data \"{}\"",
@@ -451,24 +453,6 @@ pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), St
         verify_wscript_arguments(&args, &script)?;
         return require_task_data_dir(&args);
     }
-    if command_matches_launcher(&command, &powershell_exe()) {
-        verify_hosted_arguments_match_template(
-            &args,
-            expected_launcher,
-            powershell_task_arguments,
-            "powershell",
-        )?;
-        return require_task_data_dir(&args);
-    }
-    if command_matches_launcher(&command, &cmd_exe()) {
-        verify_hosted_arguments_match_template(
-            &args,
-            expected_launcher,
-            cmd_task_arguments,
-            "cmd",
-        )?;
-        return require_task_data_dir(&args);
-    }
     Err(
         "scheduled-task Command does not match the protected launcher; re-run elevation setup"
             .into(),
@@ -511,35 +495,6 @@ fn verify_wscript_arguments(args: &str, expected_script: &Path) -> Result<(), St
         return Err("scheduled-task Arguments are missing --data; re-run elevation setup".into());
     }
     Ok(())
-}
-
-fn verify_hosted_arguments_match_template(
-    args: &str,
-    expected_launcher: &Path,
-    render: fn(&Path, &Path) -> String,
-    host: &str,
-) -> Result<(), String> {
-    let data_dir = parse_data_dir_from_task_args(args).ok_or_else(|| {
-        "scheduled-task Arguments are missing --data; re-run elevation setup".to_string()
-    })?;
-    let expected = render(expected_launcher, &data_dir);
-    if !task_argument_tokens_match(args, &expected) {
-        return Err(format!(
-            "scheduled-task {host} Arguments do not match the protected launcher template; re-run elevation setup"
-        ));
-    }
-    Ok(())
-}
-
-fn task_argument_tokens_match(actual: &str, expected: &str) -> bool {
-    let left = split_windows_cmd_args(actual);
-    let right = split_windows_cmd_args(expected);
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right.iter())
-        .all(|(a, b)| command_matches_launcher(a, Path::new(b)) || a.eq_ignore_ascii_case(b))
 }
 
 /// `UserId` must be the interactive user's SID (the unelevated app, not an
@@ -1121,8 +1076,8 @@ mod tests {
             pin,
             USER_SID,
         );
-        verify_task_command(&ps_xml, launcher).expect("powershell wrapper");
-        task_config_path_matches(&ps_xml, &data_dir.join("config.json")).expect("powershell data");
+        let err = verify_task_command(&ps_xml, launcher).expect_err("powershell rejected");
+        assert!(err.contains("Command"), "{err}");
 
         let cmd_xml = render_tun_task_xml_exec(
             &cmd_exe(),
@@ -1130,7 +1085,8 @@ mod tests {
             pin,
             USER_SID,
         );
-        verify_task_command(&cmd_xml, launcher).expect("cmd wrapper");
+        let err = verify_task_command(&cmd_xml, launcher).expect_err("cmd rejected");
+        assert!(err.contains("Command"), "{err}");
 
         let notepad = render_tun_task_xml_exec(
             Path::new(r"C:\Windows\System32\notepad.exe"),

@@ -100,7 +100,9 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
 - The per-user `ice-box-tun` scheduled task runs protected launcher/core copies
   under `%ProgramFiles%\ice-box`. Its identity and binary hashes are pinned.
   Config is sanitized into an admin-owned run directory; standard-user
-  over-the-shoulder UAC is refused.
+  over-the-shoulder UAC is refused. If Task Scheduler rejects the unsigned
+  launcher (`0x80004005`), the task runs Microsoft-signed `wscript.exe` with
+  an admin-owned `ice-tun-run.vbs`. PowerShell and `cmd.exe` are not used.
 - Start/stop after setup needs no new UAC prompt. Stop must be graceful: stranded
   `strict_route` WFP filters can block host TCP. Forced termination is a last
   resort. WinTUN is embedded in the bundled core.

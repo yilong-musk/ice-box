@@ -484,14 +484,8 @@ mod tests {
 
     #[test]
     fn retargeting_endpoints_clears_history() {
-        let a = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 1,
-        };
-        let b = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 2,
-        };
+        let a = HealthEndpoints::new("127.0.0.1", 1);
+        let b = HealthEndpoints::new("127.0.0.1", 2);
         let monitor = TrafficMonitor::new();
         monitor.set_endpoints(Some(a.clone()));
         monitor.seed_history_for_test(TrafficSample { up: 9, down: 8 });
