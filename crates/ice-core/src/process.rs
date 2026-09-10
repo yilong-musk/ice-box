@@ -719,13 +719,28 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::*;
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    fn spawn_sleeper() -> std::process::Child {
+        #[cfg(unix)]
+        {
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn sleep")
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+                .spawn()
+                .expect("spawn powershell")
+        }
+    }
+
+    #[cfg(any(unix, windows))]
     #[test]
     fn pid_process_without_start_key_does_not_signal_or_look_alive() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
+        let mut child = spawn_sleeper();
         let mut pid_proc = PidProcess::new_with_start_key(child.id(), None);
         assert_eq!(
             pid_proc.try_wait().expect("try_wait"),
