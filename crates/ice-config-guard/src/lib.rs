@@ -675,24 +675,48 @@ fn open_unfollowed_regular(path: &Path, max_bytes: usize) -> Result<(PathBuf, Ve
     }
     #[cfg(windows)]
     {
-        use std::fs::OpenOptions;
+        use std::fs::{File, OpenOptions};
         use std::io::Read;
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+        use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
         use windows_sys::Win32::Storage::FileSystem::{
-            GetFileType, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_TYPE_DISK,
+            GetFileType, ReOpenFile, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_FLAG_OVERLAPPED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FILE_TYPE_DISK,
         };
 
-        let file = OpenOptions::new()
+        if path_is_windows_ipc_device(path) {
+            return Err("not a regular file".into());
+        }
+
+        // FILE_FLAG_OVERLAPPED so CreateFile does not wait on a planted
+        // named pipe. ReOpenFile then yields a synchronous handle to the
+        // same kernel object (no second path walk).
+        let overlapped = OpenOptions::new()
             .read(true)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_OVERLAPPED)
             .open(path)
             .map_err(|err| err.to_string())?;
-        let handle = file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let handle = overlapped.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
         let file_type = unsafe { GetFileType(handle) };
         if file_type != FILE_TYPE_DISK {
             return Err("not a regular file".into());
         }
+        let sync = unsafe {
+            ReOpenFile(
+                handle,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                0,
+            )
+        };
+        drop(overlapped);
+        if sync == INVALID_HANDLE_VALUE || sync.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let file = unsafe { File::from_raw_handle(sync as RawHandle) };
         let meta = file.metadata().map_err(|err| err.to_string())?;
         if meta.file_type().is_symlink()
             || !meta.is_file()
@@ -719,6 +743,25 @@ fn open_unfollowed_regular(path: &Path, max_bytes: usize) -> Result<(PathBuf, Ve
         let _ = (path, max_bytes);
         Err("opening an unfollowed regular file is unsupported on this platform".into())
     }
+}
+
+/// Named pipes and mailslots live in device namespaces, not as NTFS files.
+/// Opening them with `CreateFile` can wait for a server; refuse those paths
+/// before the create call.
+#[cfg(any(windows, test))]
+fn path_is_windows_ipc_device(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    let normalized = raw.replace('/', "\\").to_ascii_lowercase();
+    let rest = normalized
+        .strip_prefix(r"\\?\")
+        .or_else(|| normalized.strip_prefix(r"\??\"))
+        .unwrap_or(normalized.as_str());
+    rest.starts_with(r"\\.\pipe\")
+        || rest.starts_with(r"\\.\mailslot\")
+        || rest.starts_with(r"pipe\")
+        || rest.starts_with(r"mailslot\")
+        || rest.starts_with(r"\device\namedpipe\")
+        || rest.starts_with(r"\device\mailslot\")
 }
 
 fn write_staged_rule_set(staging: &Path, idx: usize, bytes: &[u8]) -> Result<PathBuf, GuardError> {
@@ -1795,5 +1838,21 @@ mod tests {
         let err = read_config_file(&huge).expect_err("huge");
         assert!(err.message.contains("exceeds"), "{}", err.message);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_ipc_device_paths_are_rejected() {
+        assert!(path_is_windows_ipc_device(Path::new(r"\\.\pipe\evil")));
+        assert!(path_is_windows_ipc_device(Path::new(r"\\?\pipe\evil")));
+        assert!(path_is_windows_ipc_device(Path::new(r"\\.\mailslot\evil")));
+        assert!(path_is_windows_ipc_device(Path::new(
+            r"\Device\NamedPipe\evil"
+        )));
+        assert!(!path_is_windows_ipc_device(Path::new(
+            r"C:\Users\me\AppData\Roaming\com.yilong-musk.icebox\config.json"
+        )));
+        assert!(!path_is_windows_ipc_device(Path::new(
+            r"\\?\C:\Users\me\config.json"
+        )));
     }
 }

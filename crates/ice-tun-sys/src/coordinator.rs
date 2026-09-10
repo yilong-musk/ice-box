@@ -233,7 +233,6 @@ fn restrict_sanitised_config_permissions(dest: &Path) -> Result<(), TunError> {
 
 #[cfg(windows)]
 fn restrict_users_none_acl(path: &Path, directory: bool) -> Result<(), TunError> {
-    use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let inherit = if directory { "(OI)(CI)" } else { "" };
     let mut reset = Command::new("icacls.exe");
@@ -266,6 +265,7 @@ fn restrict_users_none_acl(path: &Path, directory: bool) -> Result<(), TunError>
 
 #[cfg(windows)]
 fn run_hidden_ok(cmd: &mut Command, creation_flags: u32) -> Result<(), ()> {
+    use std::os::windows::process::CommandExt;
     match cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())

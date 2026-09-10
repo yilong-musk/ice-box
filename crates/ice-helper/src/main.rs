@@ -35,7 +35,9 @@ mod unix_main {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use ice_helper::{ProcessCoreRunner, ServerConfig, SocketPeerAuth};
+    use ice_helper::{
+        try_acquire_connection_slot, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    };
     use ice_types::TunError;
 
     use crate::install::{
@@ -44,9 +46,9 @@ mod unix_main {
     };
 
     /// Upper bound on concurrently served connections. The socket is
-    /// world-connectable, so any local process can open one; a cap keeps an
-    /// idle-connection flood from exhausting threads (each connection holds a
-    /// thread only for its read bound).
+    /// owner-only (`0600` plus a peer-uid check), so other local users cannot
+    /// connect; a cap still keeps the authorized user from exhausting daemon
+    /// threads (each connection holds a thread only for its read bound).
     const MAX_CONNECTIONS: usize = 16;
 
     fn env_required(key: &str) -> Result<String, String> {
@@ -163,13 +165,12 @@ mod unix_main {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    if !try_acquire_connection_slot(&active, MAX_CONNECTIONS) {
                         // Fail-closed: excess connections are dropped without
                         // a frame; the app reconnects per command.
                         tracing::debug!("connection limit reached; dropping excess connection");
                         continue;
                     }
-                    active.fetch_add(1, Ordering::SeqCst);
                     let config = config.clone();
                     let runner = Arc::clone(&runner);
                     let active = Arc::clone(&active);

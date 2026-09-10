@@ -42,6 +42,7 @@ mod imp {
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
@@ -530,6 +531,23 @@ mod imp {
                 })?;
         }
         Ok(dest)
+    }
+
+    /// Atomically reserve one connection slot. Returns false when `max`
+    /// connections are already in flight, without overflowing the cap.
+    pub fn try_acquire_connection_slot(active: &AtomicUsize, max: usize) -> bool {
+        loop {
+            let n = active.load(Ordering::SeqCst);
+            if n >= max {
+                return false;
+            }
+            if active
+                .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     /// Own the listen socket by the authorized uid and mode `0600` so only
@@ -1445,6 +1463,34 @@ mod imp {
         }
 
         #[test]
+        fn try_acquire_connection_slot_never_exceeds_max() {
+            let active = AtomicUsize::new(15);
+            assert!(try_acquire_connection_slot(&active, 16));
+            assert_eq!(active.load(Ordering::SeqCst), 16);
+            assert!(!try_acquire_connection_slot(&active, 16));
+            assert_eq!(active.load(Ordering::SeqCst), 16);
+        }
+
+        #[test]
+        fn try_acquire_connection_slot_is_atomic_under_contention() {
+            use std::sync::Arc;
+            let active = Arc::new(AtomicUsize::new(0));
+            let joins: Vec<_> = (0..32)
+                .map(|_| {
+                    let active = Arc::clone(&active);
+                    std::thread::spawn(move || try_acquire_connection_slot(&active, 16))
+                })
+                .collect();
+            let acquired = joins
+                .into_iter()
+                .map(|j| j.join().expect("join"))
+                .filter(|ok| *ok)
+                .count();
+            assert_eq!(acquired, 16);
+            assert_eq!(active.load(Ordering::SeqCst), 16);
+        }
+
+        #[test]
         fn oversized_request_frame_is_rejected_without_a_response() {
             let dir = std::env::temp_dir().join(format!(
                 "ice-helper-oversize-{}",
@@ -1703,6 +1749,6 @@ mod imp {
 pub use imp::FixedPeerAuth;
 #[cfg(unix)]
 pub use imp::{
-    restrict_helper_socket, serve_connection, serve_peer, PeerAuth, ProcessCoreRunner,
-    ServerConfig, SocketPeerAuth,
+    restrict_helper_socket, serve_connection, serve_peer, try_acquire_connection_slot, PeerAuth,
+    ProcessCoreRunner, ServerConfig, SocketPeerAuth,
 };
