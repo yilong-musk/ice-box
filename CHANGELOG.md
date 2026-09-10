@@ -40,6 +40,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Helper Start / SetDns wait up to 15 s (same budget as Stop) so a relaunch
+  while the previous core is still in TERM→KILL no longer fails with macOS
+  `EAGAIN` (os error 35) on the helper socket.
+- macOS TUN launch restore waits for a physical default route and pins it as
+  `route.default_interface` before starting the elevated core, so leftover TUN
+  teardown cannot leave capture "enabled" with no internet. The Diagnostic
+  `/traffic` stream is closed before that hand-off so the elevated core can
+  bind Clash API / mixed ports.
 - Privileged helper authenticates the peer and request frame before taking
   the core-runner mutex, so a stalled unauthenticated connection cannot
   block Start / Stop / SetDns.

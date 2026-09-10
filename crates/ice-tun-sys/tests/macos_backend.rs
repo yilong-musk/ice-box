@@ -96,9 +96,25 @@ struct HostState {
 }
 
 /// Fake `MacOsHost` sharing one `HostState` with the fake coordinator.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FakeHost {
     state: Arc<Mutex<HostState>>,
+}
+
+impl Default for FakeHost {
+    fn default() -> Self {
+        let host = Self {
+            state: Arc::new(Mutex::new(HostState::default())),
+        };
+        // Physical default route so apply can pin `route.default_interface`
+        // the same way a real host does after leftover TUN teardown.
+        host.state
+            .lock()
+            .unwrap()
+            .routes
+            .insert("0.0.0.0/0".into(), "en0".into());
+        host
+    }
 }
 
 impl FakeHost {
@@ -166,6 +182,14 @@ impl FakeHost {
     /// its routes with the fd close (T0 spike, live-confirmed on macOS).
     fn simulate_kill9(&self) {
         self.remove_utun("utun420");
+    }
+
+    fn set_default_route(&self, iface: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .routes
+            .insert("0.0.0.0/0".into(), iface.to_string());
     }
 
     fn has_utun(&self, name: &str) -> bool {
@@ -555,6 +579,44 @@ fn apply_journals_granular_steps_and_returns_observed_ownership() {
         "applied capture must be healthy: {health:?}"
     );
     assert!(!health.nothing_owned);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_pins_physical_default_interface_before_start() {
+    let dir = temp_dir("pin-default");
+    let host = FakeHost::default();
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host.clone(), coordinator);
+    let prepared = bk.prepare(&mac_config()).expect("prepare");
+    bk.apply(&prepared).expect("apply");
+
+    let cfg: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_path(&dir)).unwrap()).unwrap();
+    assert_eq!(cfg["route"]["default_interface"], "en0");
+    assert_eq!(cfg["route"]["auto_detect_interface"], false);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_refuses_leftover_utun_default_route() {
+    let dir = temp_dir("leftover-default");
+    let host = FakeHost::default();
+    host.set_default_route("utun8");
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let prepared = bk.prepare(&mac_config()).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("leftover utun default");
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
+    assert!(
+        err.message.contains("physical default route"),
+        "unexpected error: {}",
+        err.message
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

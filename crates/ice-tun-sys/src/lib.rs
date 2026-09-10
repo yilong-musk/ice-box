@@ -52,7 +52,10 @@ pub use ice_tun_pin::{
     read_last_tun_install_error, sha256_of_file, TUN_STOP_EVENT_NAME,
 };
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
-pub use macos::{utun_index, MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost};
+pub use macos::{
+    is_tunnel_interface, outbound_interface_is_safe, pin_outbound_interface, utun_index,
+    MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost,
+};
 pub use recovery::RecoveryDriver;
 pub use unsupported::UnsupportedTunBackend;
 pub use windows::{

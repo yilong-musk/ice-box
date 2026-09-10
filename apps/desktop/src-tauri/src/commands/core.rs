@@ -57,11 +57,25 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
         // backend starts the elevated one (adopted afterwards).
         ensure_tun_elevation_inner(app, state)?;
         state.capture.refresh_backend()?;
+        // Close the /traffic stream before stopping Diagnostic so macOS
+        // loopback is not left in CLOSE_WAIT for the elevated core's bind.
+        detach_traffic(state);
         let binary = binary_for(app)?;
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-        let resolved = state
+        let resolved = match state
             .capture
-            .enable_tun(&settings, &mut **core, binary.clone())?;
+            .enable_tun(&settings, &mut **core, binary.clone())
+        {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                let running = core.state().status == CoreStatus::Running;
+                drop(core);
+                if running {
+                    attach_traffic(state, &settings);
+                }
+                return Err(err);
+            }
+        };
         // Persist the resolved interface name only after the transition is
         // healthy (`docs/tun.md` commit-after-health).
         if resolved
@@ -333,6 +347,7 @@ pub(crate) fn disable_active_backend_inner(
     let _orch = lock_orchestrate(state)?;
     let settings = current_settings(&state.paths)?;
     let binary = binary_for(app)?;
+    detach_traffic(state);
     let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     state
@@ -344,6 +359,12 @@ pub(crate) fn disable_active_backend_inner(
     }
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
+    }
+    let running = core.state().status == CoreStatus::Running;
+    drop(proxy);
+    drop(core);
+    if running {
+        attach_traffic(state, &settings);
     }
     Ok(())
 }

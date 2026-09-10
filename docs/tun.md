@@ -74,6 +74,10 @@ bypass policy. Rule ordering is significant; see the
   queries enter TUN instead of staying on a LAN resolver. Journal the previous
   DNS and compare before restoring it. Core process bypass precedes DNS hijack
   to prevent the core's own DNS requests from looping.
+- Before starting the elevated core, wait until `0.0.0.0` resolves to a
+  physical NIC (not a leftover `utun`) and pin that name as
+  `route.default_interface` with `auto_detect_interface: false`. Launch restore
+  otherwise can look healthy while Direct / proxy dials follow a dying tunnel.
 
 ### macOS elevation
 
