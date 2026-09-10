@@ -20,10 +20,12 @@ import { t } from "../../lib/i18n";
 import type { CheckAppUpdateResponse } from "../../api/tauri";
 
 function formatUpdateError(raw: string): string {
-  if (raw.includes("update.feed_unavailable")) {
+  const sep = raw.indexOf(":");
+  const code = (sep === -1 ? raw : raw.slice(0, sep)).trim();
+  if (code === "update.feed_unavailable") {
     return t("settings.updateFeedUnavailable");
   }
-  if (raw.includes("update.check_failed")) {
+  if (code === "update.check_failed") {
     return t("settings.updateCheckFailed");
   }
   return raw;

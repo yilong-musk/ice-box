@@ -1062,8 +1062,12 @@ fn g5_16_uri_list_import_and_manager() {
     assert_eq!(detect_format(&raw), SubscriptionFormat::UriList);
     let (format, profile) = normalize_raw_body(&raw, HostPlatform::MacOs).unwrap();
     assert_eq!(format, SubscriptionFormat::UriList);
-    assert_eq!(profile.nodes.len(), 14, "15 lines, only ssr:// skipped");
-    assert_eq!(profile.parse_stats.skipped_proxies, 1);
+    assert_eq!(
+        profile.nodes.len(),
+        14,
+        "16 lines; ssr:// and ss plugin skipped"
+    );
+    assert_eq!(profile.parse_stats.skipped_proxies, 2);
     assert!(
         profile
             .parse_stats
@@ -1071,6 +1075,14 @@ fn g5_16_uri_list_import_and_manager() {
             .iter()
             .any(|w| w.to_string().contains("ssr://")),
         "ssr skip must surface as a warning"
+    );
+    assert!(
+        profile
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.to_string().contains("plugin")),
+        "ss plugin skip must surface as a warning"
     );
 
     let types: Vec<&str> = profile

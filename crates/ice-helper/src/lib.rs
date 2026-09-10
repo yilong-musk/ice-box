@@ -12,9 +12,9 @@
 //! Security model:
 //!
 //! - One request frame per connection; the client reconnects per command.
-//! - Peer identity: the socket's `getpeereid` uid must equal the authorized
-//!   user (the uid the installer recorded). Everything else is rejected
-//!   before the frame is read.
+//! - Peer identity: the socket is owned by the authorized user (`0600`);
+//!   the peer uid from `getpeereid` must match that user. Everything else
+//!   is rejected before dispatch.
 //! - The request must carry the per-installation token (constant-time
 //!   compare) and protocol version 2.
 //! - `Start` accepts a config path only when it canonicalizes inside the
@@ -513,6 +513,39 @@ mod imp {
         Ok(dest)
     }
 
+    /// Own the listen socket by the authorized uid and mode `0600` so only
+    /// that user can connect. Peer-uid + token still authorize the frame.
+    pub fn restrict_helper_socket(
+        path: &std::path::Path,
+        allowed_uid: Option<u32>,
+    ) -> Result<(), TunError> {
+        if let Some(uid) = allowed_uid {
+            let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    "helper socket path is not C-safe",
+                )
+            })?;
+            let rc = unsafe { libc::chown(c_path.as_ptr(), uid, !0u32) };
+            if rc != 0 {
+                return Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!(
+                        "chown helper socket {}: {}",
+                        path.display(),
+                        std::io::Error::last_os_error()
+                    ),
+                ));
+            }
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod helper socket {}: {err}", path.display()),
+            )
+        })
+    }
+
     /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
     /// empty `servers` list clears the override ("Empty" = DHCP fallback).
     /// Callers must run [`validate_set_dns`] first; the command uses an argv
@@ -868,8 +901,7 @@ mod imp {
         !String::from_utf8_lossy(&output.stdout).trim().contains('Z')
     }
 
-    /// Whether `pid`'s command line carries `core_bin`'s path — i.e. it is
-    /// this installation's bundled core (the installer pins the location).
+    /// Whether `pid`'s command image is this installation's bundled core.
     fn pid_matches_core(pid: u32, core_bin: &std::path::Path) -> bool {
         let output = match Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "command="])
@@ -881,7 +913,67 @@ mod imp {
         if !output.status.success() {
             return false;
         }
-        String::from_utf8_lossy(&output.stdout).contains(core_bin.to_string_lossy().as_ref())
+        command_matches_core_bin(String::from_utf8_lossy(&output.stdout).as_ref(), core_bin)
+    }
+
+    /// argv0 of a `ps` command line must be this core — not a substring of a
+    /// longer path (`sing-box-wrapper`) or a shell `-c` string. A shebang
+    /// leftover (`sh /path/to/core …`) matches argv1 against the core.
+    fn command_matches_core_bin(command: &str, core_bin: &std::path::Path) -> bool {
+        let (argv0, rest) = split_command_argv0(command);
+        if path_is_core_bin(argv0, core_bin) {
+            return true;
+        }
+        if !argv0_is_unix_interpreter(argv0) {
+            return false;
+        }
+        shebang_script_arg(rest).is_some_and(|script| path_is_core_bin(script, core_bin))
+    }
+
+    fn split_command_argv0(command: &str) -> (&str, &str) {
+        let trimmed = command.trim();
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                return (&rest[..end], rest.get(end + 1..).unwrap_or(""));
+            }
+        }
+        match trimmed.split_once(char::is_whitespace) {
+            Some((head, tail)) => (head, tail),
+            None => (trimmed, ""),
+        }
+    }
+
+    fn shebang_script_arg(rest: &str) -> Option<&str> {
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+        let tok = if let Some(inner) = rest.strip_prefix('"') {
+            let end = inner.find('"')?;
+            &inner[..end]
+        } else {
+            rest.split_whitespace().next()?
+        };
+        if tok.starts_with('-') {
+            None
+        } else {
+            Some(tok)
+        }
+    }
+
+    fn argv0_is_unix_interpreter(path: &str) -> bool {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        matches!(name, "sh" | "bash" | "dash" | "zsh" | "busybox" | "env")
+    }
+
+    fn path_is_core_bin(image: &str, core_bin: &std::path::Path) -> bool {
+        let image_path = std::path::Path::new(image);
+        if let (Ok(left), Ok(right)) = (image_path.canonicalize(), core_bin.canonicalize()) {
+            return left == right;
+        }
+        let left = image_path.to_string_lossy().replace('/', "\\");
+        let right = core_bin.to_string_lossy().replace('/', "\\");
+        left.eq_ignore_ascii_case(&right)
     }
 
     /// TERM→KILL a pid with bounded grace, probing liveness via `kill(pid, 0)`.
@@ -1537,6 +1629,50 @@ mod imp {
             let _ = child.wait();
             std::fs::remove_dir_all(&dir).unwrap();
         }
+
+        #[test]
+        fn command_matches_core_bin_requires_argv0_identity() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-core-id-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let bin = dir.join("sing-box");
+            std::fs::write(&bin, b"x").unwrap();
+            let cmd = format!("{} run -c /tmp/c.json", bin.display());
+            assert!(command_matches_core_bin(&cmd, &bin));
+            let wrapper = format!("{}-wrapper run -c /tmp/c.json", bin.display());
+            assert!(!command_matches_core_bin(&wrapper, &bin));
+            let via_shell = format!("/bin/sh -c {} run -c /tmp/c.json", bin.display());
+            assert!(!command_matches_core_bin(&via_shell, &bin));
+            let shebang = format!("/bin/sh {} run -c /tmp/c.json", bin.display());
+            assert!(command_matches_core_bin(&shebang, &bin));
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn restrict_helper_socket_is_owner_only() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-sock-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let sock = dir.join("helper.sock");
+            let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+            let uid = unsafe { libc::getuid() };
+            restrict_helper_socket(&sock, Some(uid)).expect("restrict");
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&sock).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "socket must be 0600, got {mode:#o}");
+            drop(listener);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 } // mod imp
 
@@ -1544,5 +1680,6 @@ mod imp {
 pub use imp::FixedPeerAuth;
 #[cfg(unix)]
 pub use imp::{
-    serve_connection, serve_peer, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    restrict_helper_socket, serve_connection, serve_peer, PeerAuth, ProcessCoreRunner,
+    ServerConfig, SocketPeerAuth,
 };

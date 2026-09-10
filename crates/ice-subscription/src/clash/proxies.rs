@@ -110,25 +110,21 @@ fn map_ss(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, Skip
         .and_then(|v| v.as_str())
         .ok_or(SkipReason::Incomplete)?;
 
-    let mut out = json!({
+    if obj.get("plugin").is_some()
+        || obj.get("plugin-opts").is_some()
+        || obj.get("plugin_opts").is_some()
+    {
+        return Err(SkipReason::Unsupported);
+    }
+
+    Ok(json!({
         "type": "shadowsocks",
         "tag": tag,
         "server": server,
         "server_port": port,
         "method": method,
         "password": password,
-    });
-
-    if let Some(plugin) = obj.get("plugin").and_then(|v| v.as_str()) {
-        if let Some(obj_mut) = out.as_object_mut() {
-            obj_mut.insert("plugin".into(), json!(plugin));
-            if let Some(opts) = obj.get("plugin-opts") {
-                obj_mut.insert("plugin_opts".into(), opts.clone());
-            }
-        }
-    }
-
-    Ok(out)
+    }))
 }
 
 fn map_vmess(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, SkipReason> {
@@ -313,4 +309,22 @@ fn map_http(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, Sk
             .insert("tls".into(), json!({ "enabled": true }));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn map_ss_skips_external_plugin() {
+        let obj = json!({
+            "server": "1.1.1.1",
+            "port": 443,
+            "cipher": "aes-128-gcm",
+            "password": "x",
+            "plugin": "obfs-local"
+        });
+        assert!(map_ss(obj.as_object().unwrap(), "n").is_err());
+    }
 }

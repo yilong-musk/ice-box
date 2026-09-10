@@ -26,7 +26,7 @@ pub fn parse_ss(rest: &str) -> Result<serde_json::Value, SkipReason> {
         (method, password, host, port)
     };
 
-    let mut out = json!({
+    let out = json!({
         "type": "shadowsocks",
         "server": host,
         "server_port": port,
@@ -35,18 +35,8 @@ pub fn parse_ss(rest: &str) -> Result<serde_json::Value, SkipReason> {
     });
 
     let params = parse_query(query_part(rest));
-    if let Some(plugin) = query_get(&params, "plugin") {
-        let (plugin_name, opts) = plugin
-            .split_once(';')
-            .map_or((plugin, None), |(n, o)| (n, Some(o)));
-        out.as_object_mut()
-            .unwrap()
-            .insert("plugin".into(), json!(plugin_name));
-        if let Some(opts) = opts {
-            out.as_object_mut()
-                .unwrap()
-                .insert("plugin_opts".into(), json!(opts));
-        }
+    if query_get(&params, "plugin").is_some() {
+        return Err(SkipReason::Unsupported("ss plugin is not allowed".into()));
     }
 
     Ok(out)
@@ -139,11 +129,8 @@ mod tests {
         let link = format!(
             "{userinfo}@example.com:443?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dx.com"
         );
-        let out = parse_ss(&link).unwrap();
-        assert_eq!(out["method"], "aes-256-gcm");
-        assert_eq!(out["password"], "pass@word");
-        assert_eq!(out["plugin"], "obfs-local");
-        assert_eq!(out["plugin_opts"], "obfs=http;obfs-host=x.com");
+        let out = parse_ss(&link);
+        assert!(out.is_err(), "ss plugin must be skipped");
     }
 
     #[test]

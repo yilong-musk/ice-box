@@ -11,7 +11,6 @@
 //! Callers write the sanitised object to a root/admin-owned path and start
 //! sing-box from that copy.
 
-#[cfg(not(unix))]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -481,7 +480,7 @@ fn reject_wireguard_system(obj: &Map<String, Value>, pointer: &str) -> Result<()
     if ty != "wireguard" {
         return Ok(());
     }
-    if obj.get("system").and_then(|v| v.as_bool()) == Some(true) {
+    if json_is_trueish(obj.get("system")) {
         return Err(GuardError::new(
             format!("{pointer}/system"),
             "wireguard system networking is not allowed",
@@ -570,19 +569,19 @@ fn validate_clash_controller(cfg: &Value) -> Result<(), GuardError> {
     Ok(())
 }
 
-fn validate_rule_set_paths(cfg: &Value, ctx: &GuardContext) -> Result<(), GuardError> {
+fn validate_rule_set_paths(cfg: &mut Value, ctx: &GuardContext) -> Result<(), GuardError> {
     let Some(sets) = cfg
-        .get("route")
-        .and_then(|r| r.get("rule_set"))
-        .and_then(|v| v.as_array())
+        .get_mut("route")
+        .and_then(|r| r.get_mut("rule_set"))
+        .and_then(|v| v.as_array_mut())
     else {
         return Ok(());
     };
     let roots = allowed_rule_set_roots(ctx)?;
-    for (idx, set) in sets.iter().enumerate() {
+    for (idx, set) in sets.iter_mut().enumerate() {
         let base = format!("/route/rule_set/{idx}");
         let obj = set
-            .as_object()
+            .as_object_mut()
             .ok_or_else(|| GuardError::new(&base, "rule_set must be a JSON object"))?;
         for url_key in ["url", "download_url"] {
             if obj.contains_key(url_key) {
@@ -610,25 +609,25 @@ fn validate_rule_set_paths(cfg: &Value, ctx: &GuardContext) -> Result<(), GuardE
             }
         }
         let pointer = format!("{base}/path");
-        let Some(raw) = obj.get("path").and_then(|v| v.as_str()) else {
+        let Some(raw) = obj.get("path").and_then(|v| v.as_str()).map(str::to_string) else {
             return Err(GuardError::new(
                 &pointer,
                 "rule_set path is required for type \"local\"",
             ));
         };
-        let p = Path::new(raw);
+        let p = Path::new(&raw);
         let candidates: Vec<PathBuf> = if p.is_absolute() {
             vec![p.to_path_buf()]
         } else {
             vec![ctx.resources_dir.join(p), ctx.data_dir.join(p)]
         };
         let mut last_err = None;
-        let mut accepted = false;
+        let mut opened = None;
         for candidate in candidates {
-            match candidate.canonicalize() {
+            match open_local_rule_set(&candidate) {
                 Ok(canon) => {
                     if roots.iter().any(|root| canon.starts_with(root)) {
-                        accepted = true;
+                        opened = Some(canon);
                         break;
                     }
                     last_err = Some(GuardError::new(
@@ -644,18 +643,83 @@ fn validate_rule_set_paths(cfg: &Value, ctx: &GuardContext) -> Result<(), GuardE
                 Err(err) => {
                     last_err = Some(GuardError::new(
                         pointer.clone(),
-                        format!("rule_set path {} cannot be canonicalised: {err}", raw),
+                        format!("rule_set path {} cannot be opened: {err}", raw),
                     ));
                 }
             }
         }
-        if !accepted {
+        let Some(canon) = opened else {
             return Err(last_err.unwrap_or_else(|| {
                 GuardError::new(&pointer, format!("rule_set path {raw} is not allowed"))
             }));
-        }
+        };
+        // Pin the path sing-box will open to the inode we just checked so a
+        // swapped symlink at the original location cannot redirect the core.
+        obj.insert(
+            "path".to_string(),
+            Value::String(canon.to_string_lossy().into_owned()),
+        );
     }
     Ok(())
+}
+
+/// Open a local rule-set without following a final-component symlink and
+/// return the canonical path of the opened file.
+fn open_local_rule_set(candidate: &Path) -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(candidate)
+            .map_err(|err| err.to_string())?;
+        let meta = file.metadata().map_err(|err| err.to_string())?;
+        if !meta.file_type().is_file() || meta.file_type().is_fifo() {
+            return Err("not a regular file".into());
+        }
+        path_of_open_file(&file)
+    }
+    #[cfg(not(unix))]
+    {
+        let meta = fs::symlink_metadata(candidate).map_err(|err| err.to_string())?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err("not a regular file".into());
+        }
+        candidate.canonicalize().map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn path_of_open_file(file: &fs::File) -> Result<PathBuf, String> {
+    use std::os::unix::io::AsRawFd;
+    fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(|err| err.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn path_of_open_file(file: &fs::File) -> Result<PathBuf, String> {
+    use std::os::unix::io::AsRawFd;
+    let mut buf = [0u8; 1024];
+    let rc = unsafe {
+        libc::fcntl(
+            file.as_raw_fd(),
+            libc::F_GETPATH,
+            buf.as_mut_ptr() as *mut libc::c_char,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let s = std::str::from_utf8(&buf[..len]).map_err(|err| err.to_string())?;
+    Ok(PathBuf::from(s))
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn path_of_open_file(_file: &fs::File) -> Result<PathBuf, String> {
+    Err("opening a rule-set fd path is unsupported on this unix".into())
 }
 
 fn allowed_rule_set_roots(ctx: &GuardContext) -> Result<Vec<PathBuf>, GuardError> {
@@ -834,7 +898,19 @@ fn is_forbidden_key(key: &str) -> bool {
             | "external_ui_download_url"
             | "url"
             | "download_url"
+            | "plugin"
+            | "plugin_opts"
     ) || key.ends_with("_path")
+}
+
+/// JSON `true`, `"true"` / `"1"` (any ASCII case), or numeric `1`.
+fn json_is_trueish(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(true)) => true,
+        Some(Value::String(s)) => s.eq_ignore_ascii_case("true") || s == "1",
+        Some(Value::Number(n)) => n.as_u64() == Some(1) || n.as_i64() == Some(1),
+        _ => false,
+    }
 }
 
 fn json_pointer_escape(key: &str) -> String {
@@ -1008,6 +1084,49 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rule_set_symlink_is_rejected_and_path_is_pinned() {
+        let dir = temp_dir("rs-follow");
+        let srs = dir.join("geoip").join("geoip-cn.srs");
+        fs::create_dir_all(srs.parent().unwrap()).unwrap();
+        fs::write(&srs, b"x").unwrap();
+        let outside = std::env::temp_dir().join(format!(
+            "ice-guard-outside-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&outside, b"evil").unwrap();
+        let link = dir.join("geoip").join("link.srs");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "evil",
+            "format": "binary",
+            "path": link.to_string_lossy(),
+        }]);
+        sanitize(cfg, &ctx(&dir)).expect_err("symlink");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "geoip-cn",
+            "format": "binary",
+            "path": srs.to_string_lossy(),
+        }]);
+        let after = sanitize(cfg, &ctx(&dir)).expect("pin");
+        let pinned = after["route"]["rule_set"][0]["path"].as_str().unwrap();
+        assert_eq!(
+            Path::new(pinned).canonicalize().unwrap(),
+            srs.canonicalize().unwrap()
+        );
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn remote_rule_set_url_is_rejected() {
         let dir = temp_dir("rs-remote");
@@ -1130,6 +1249,34 @@ mod tests {
         }]);
         let err = sanitize(cfg, &ctx(&dir)).expect_err("wg");
         assert!(err.pointer.contains("system"), "{}", err.pointer);
+
+        let mut cfg = minimal_allowed_config();
+        cfg["outbounds"] = json!([{
+            "type": "wireguard",
+            "tag": "wg",
+            "system": "true"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("wg string");
+        assert!(err.pointer.contains("system"), "{}", err.pointer);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadowsocks_plugin_is_rejected() {
+        let dir = temp_dir("ss-plugin");
+        let mut cfg = minimal_allowed_config();
+        cfg["outbounds"] = json!([{
+            "type": "shadowsocks",
+            "tag": "n",
+            "server": "1.1.1.1",
+            "server_port": 443,
+            "method": "aes-128-gcm",
+            "password": "x",
+            "plugin": "obfs-local",
+            "plugin_opts": "obfs=http"
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("plugin");
+        assert!(err.pointer.contains("plugin"), "{}", err.pointer);
         let _ = fs::remove_dir_all(&dir);
     }
 

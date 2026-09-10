@@ -43,6 +43,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Privileged helper authenticates the peer and request frame before taking
   the core-runner mutex, so a stalled unauthenticated connection cannot
   block Start / Stop / SetDns.
+- Adopted cores without a process start-key are not signalled; helper
+  reclaim matches the core image path (not a command-line substring); the
+  helper socket is `0600` owned by the authorized user.
+- Local `rule_set` paths are opened without following a final-component
+  symlink and rewritten to the opened path. WireGuard `system: "true"`
+  and Shadowsocks `plugin` / `plugin_opts` are rejected. Windows TUN task
+  Arguments must contain the launcher (or run-script) path as a
+  delimiter-bounded token, not a suffix such as `launcher.exe.evil`.
+- `ErrorCode::from_tun_wire` keeps `tun.helper_*` / `tun.elevation_*`
+  codes. The Settings update card matches those codes at the start of the
+  message. Weekly `npm audit` covers `apps/website` as well as desktop.
 - Core adopt / orphan reclaim matches only a `sing-box` / `sing-box.exe`
   image basename, requires a real on-disk candidate, and no longer treats
   a basename-only path as identity.

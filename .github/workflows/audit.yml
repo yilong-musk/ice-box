@@ -24,18 +24,21 @@ jobs:
           command: check advisories bans licenses sources
 
   npm-audit:
-    name: npm audit (desktop)
+    name: npm audit (${{ matrix.app }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [desktop, website]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: apps/${{ matrix.app }}/package-lock.json
       - name: Install frontend deps
         run: npm ci
-        working-directory: apps/desktop
+        working-directory: apps/${{ matrix.app }}
       - name: Audit high and critical advisories
         run: npm audit --audit-level=high
-        working-directory: apps/desktop
+        working-directory: apps/${{ matrix.app }}

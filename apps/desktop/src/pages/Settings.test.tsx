@@ -1225,6 +1225,22 @@ describe("Settings", () => {
     expect(container.textContent).not.toContain(t("settings.updateCheckFailed"));
   });
 
+  it("does not treat a mention of an update code as the error code", async () => {
+    checkAppUpdate.mockRejectedValue(
+      "network error (docs mention update.feed_unavailable)",
+    );
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
+    await waitFor(() => {
+      expect(container.textContent).toContain("network error");
+    });
+    expect(container.textContent).not.toContain(t("settings.updateFeedUnavailable"));
+  });
+
   it("keeps the proxy hint for a real update check network failure", async () => {
     checkAppUpdate.mockRejectedValue(
       "update.check_failed: error sending request for url",

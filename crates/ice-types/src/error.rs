@@ -291,14 +291,11 @@ impl ErrorCode {
     /// Parse a `tun.*` wire code; unknown values map to apply-failed.
     pub fn from_tun_wire(code: Option<&str>) -> Self {
         match code {
-            Some("tun.not_supported") => Self::TunNotSupported,
-            Some("tun.permission_required") => Self::TunPermissionRequired,
-            Some("tun.apply_failed") => Self::TunApplyFailed,
-            Some("tun.restore_failed") => Self::TunRestoreFailed,
-            Some("tun.healthcheck_failed") => Self::TunHealthcheckFailed,
-            Some("tun.recovery_required") => Self::TunRecoveryRequired,
-            Some("tun.invalid_argument") => Self::TunInvalidArgument,
-            Some("tun.config_rejected") => Self::TunConfigRejected,
+            Some(raw) if raw.starts_with("tun.") => Self::ALL
+                .iter()
+                .copied()
+                .find(|c| c.as_str() == raw)
+                .unwrap_or(Self::TunApplyFailed),
             _ => Self::TunApplyFailed,
         }
     }
@@ -351,6 +348,34 @@ mod tests {
             assert_eq!(decoded, code);
             assert_eq!(decoded.as_str(), expected);
         }
+    }
+
+    #[test]
+    fn from_tun_wire_keeps_helper_and_elevation_codes() {
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("tun.helper_install_failed")),
+            ErrorCode::TunHelperInstallFailed
+        );
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("tun.helper_install_cancelled")),
+            ErrorCode::TunHelperInstallCancelled
+        );
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("tun.elevation_cancelled")),
+            ErrorCode::TunElevationCancelled
+        );
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("tun.elevation_requires_admin")),
+            ErrorCode::TunElevationRequiresAdmin
+        );
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("tun.helper_stale")),
+            ErrorCode::TunHelperStale
+        );
+        assert_eq!(
+            ErrorCode::from_tun_wire(Some("not-a-tun-code")),
+            ErrorCode::TunApplyFailed
+        );
     }
 
     #[test]

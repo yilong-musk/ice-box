@@ -365,15 +365,43 @@ pub fn cmd_task_arguments(launcher: &Path, data_dir: &Path) -> String {
     )
 }
 
+/// Sibling of a Windows-style path. `Path::parent` treats `\` as an ordinary
+/// character on Unix, so unit tests (and Linux CI) would otherwise look for
+/// a bare `ice-tun-run.vbs` token instead of the full Program Files path.
+fn windows_path_sibling(path: &Path, name: &str) -> Option<PathBuf> {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    let raw = raw.trim_end_matches('\\');
+    let (parent, _) = raw.rsplit_once('\\')?;
+    if parent.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(format!("{parent}\\{name}")))
+}
+
 fn task_args_contain_path(args: &str, path: &Path) -> bool {
     let needle = path.display().to_string().replace('/', "\\");
     if needle.is_empty() {
         return false;
     }
     let haystack = args.replace('/', "\\");
-    haystack
-        .to_ascii_lowercase()
-        .contains(&needle.to_ascii_lowercase())
+    let hay_lc = haystack.to_ascii_lowercase();
+    let needle_lc = needle.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(rel) = hay_lc[search_from..].find(&needle_lc) {
+        let start = search_from + rel;
+        let end = start + needle_lc.len();
+        let before = haystack[..start].chars().next_back();
+        let after = haystack[end..].chars().next();
+        let delim_ok = |c: Option<char>| match c {
+            None => true,
+            Some(ch) => ch.is_whitespace() || ch == '"' || ch == '\'',
+        };
+        if delim_ok(before) && delim_ok(after) {
+            return true;
+        }
+        search_from = end;
+    }
+    false
 }
 
 fn require_task_data_dir(args: &str) -> Result<(), String> {
@@ -444,10 +472,8 @@ pub fn verify_task_command(xml: &str, expected_launcher: &Path) -> Result<(), St
     }
     let args = extract_tun_task_args_from_xml(xml).unwrap_or_default();
     if command_matches_launcher(&command, &wscript_exe()) {
-        let script = expected_launcher
-            .parent()
-            .ok_or_else(|| "protected launcher path has no parent".to_string())?
-            .join(TUN_RUN_SCRIPT_NAME);
+        let script = windows_path_sibling(expected_launcher, TUN_RUN_SCRIPT_NAME)
+            .ok_or_else(|| "protected launcher path has no parent".to_string())?;
         if !task_args_contain_path(&args, &script) {
             return Err(
                 "scheduled-task wscript Arguments do not reference the protected run script; re-run elevation setup"
@@ -1065,6 +1091,19 @@ mod tests {
         );
         let err =
             verify_task_command(&cmd_without_launcher, launcher).expect_err("cmd missing launcher");
+        assert!(err.contains("protected launcher"), "{err}");
+
+        let suffix = render_tun_task_xml_exec(
+            &cmd_exe(),
+            &format!(
+                "/c start /b /wait \"\" \"{}.evil\" --data \"{}\"",
+                launcher.display(),
+                data_dir.display()
+            ),
+            pin,
+            USER_SID,
+        );
+        let err = verify_task_command(&suffix, launcher).expect_err("suffix path");
         assert!(err.contains("protected launcher"), "{err}");
     }
 

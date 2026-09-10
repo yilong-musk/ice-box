@@ -352,11 +352,18 @@ impl PidProcess {
                 "pid {} was reused; refusing to signal the new process",
                 self.pid
             ))),
-            // Process is gone (or the start key is unavailable): treat as
+            // Process is gone (or the start key is unavailable now): treat as
             // already exited rather than signalling a stranger.
             (Some(_), None) => Ok(false),
-            (None, _) => Ok(true),
+            // No start-key at adopt: we cannot prove this pid is still the
+            // process we attached to, so refuse to signal it.
+            (None, _) => Ok(false),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_start_key(pid: u32, start_key: Option<String>) -> Self {
+        Self { pid, start_key }
     }
 }
 
@@ -491,9 +498,14 @@ impl ManagedProcess for PidProcess {
     }
 
     fn try_wait(&mut self) -> io::Result<Option<i32>> {
-        match query_pid_liveness(self.pid)? {
-            PidLiveness::Alive => Ok(None),
-            PidLiveness::Exited(code) => Ok(Some(code)),
+        match self.identity_still_holds() {
+            Ok(true) => match query_pid_liveness(self.pid)? {
+                PidLiveness::Alive => Ok(None),
+                PidLiveness::Exited(code) => Ok(Some(code)),
+            },
+            // Missing start-key, process gone, or pid reused: report exited
+            // so the controller does not keep a stranger as "our" core.
+            Ok(false) | Err(_) => Ok(Some(-1)),
         }
     }
 }
@@ -706,6 +718,30 @@ mod tests {
     // signals), so the parent-import is needed on both unix and windows.
     #[cfg(any(unix, windows))]
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_process_without_start_key_does_not_signal_or_look_alive() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let mut pid_proc = PidProcess::new_with_start_key(child.id(), None);
+        assert_eq!(
+            pid_proc.try_wait().expect("try_wait"),
+            Some(-1),
+            "a pid adopted without a start-key must not look live"
+        );
+        pid_proc
+            .request_terminate()
+            .expect("refuse to signal without a start-key");
+        assert!(
+            child.try_wait().expect("child still running").is_none(),
+            "the live process must not be signalled"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     #[cfg(unix)]
     #[test]

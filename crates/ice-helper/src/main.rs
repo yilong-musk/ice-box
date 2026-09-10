@@ -137,13 +137,12 @@ mod unix_main {
                 exit(1);
             }
         };
-        // World-connectable socket: the desktop app runs as the normal user
-        // while the daemon runs as root, so a root-only 0600 socket would
-        // reject it before authentication. Authorization happens *on top* of
-        // the connection: peer uid (socket credential) + per-installation
-        // token, so an unauthenticated peer gets nothing.
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
+        // Connectable only by the authorized user: chown the socket to that
+        // uid and mode 0600. Peer uid + token still authorize the frame.
+        if let Err(err) = ice_helper::restrict_helper_socket(&socket_path, config.allowed_uid) {
+            eprintln!("ice-helper: restrict {}: {err}", socket_path.display());
+            exit(1);
+        }
         tracing::info!(
             socket = %socket_path.display(),
             "ice-helper serving (pid {})",
