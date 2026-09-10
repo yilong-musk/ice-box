@@ -1699,6 +1699,7 @@ dependencies = [
  "ice-types",
  "libc",
  "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

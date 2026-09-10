@@ -494,7 +494,7 @@ mod imp {
             resources_dir: config.resources_dir.clone(),
             log_output: Some(config.core_log.clone()),
             cache_file_path: Some(config.protected_run_dir.join("cache.db")),
-            rule_set_staging_dir: Some(rule_set_staging),
+            rule_set_staging_dir: Some(rule_set_staging.clone()),
         };
         ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
             .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
@@ -511,7 +511,24 @@ mod imp {
                 format!("write sanitised config {}: {err}", dest.display()),
             )
         })?;
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod sanitised config {}: {err}", dest.display()),
+            )
+        })?;
+        if rule_set_staging.is_dir() {
+            std::fs::set_permissions(&rule_set_staging, std::fs::Permissions::from_mode(0o700))
+                .map_err(|err| {
+                    TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        format!(
+                            "chmod rule_set staging {}: {err}",
+                            rule_set_staging.display()
+                        ),
+                    )
+                })?;
+        }
         Ok(dest)
     }
 
@@ -1013,6 +1030,7 @@ mod imp {
     mod tests {
         use super::*;
         use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixStream;
         use std::sync::Arc;
 
@@ -1357,6 +1375,9 @@ mod imp {
             };
             let response = roundtrip(&config, &PEER42, runner.clone(), &req).unwrap();
             assert!(response.ok, "start failed: {:?}", response.message);
+            let dest = dir.join("protected-run").join("config.json");
+            let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "sanitised config must be 0600");
             let pid = response.pid.expect("pid");
 
             let stop_req = ice_tun_helper_proto::HelperRequest {

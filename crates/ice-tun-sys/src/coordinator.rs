@@ -107,9 +107,10 @@ const TASK_PIDFILE_WAIT: Duration = Duration::from_secs(20);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
-/// Sibling of the user `config.json` used by the dev sudo / already-admin
-/// runners. Production helper/launcher write into a root/admin-owned run
-/// dir; these fallbacks still sanitise, but the dest is same-user.
+/// Sibling of the user `config.json` used by Linux unit tests. Production
+/// helper/launcher and the macOS/Windows elevated runners write into a
+/// root/admin-owned run dir instead.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn sibling_elevated_config(user_path: &Path) -> PathBuf {
     user_path
         .parent()
@@ -120,14 +121,18 @@ fn sibling_elevated_config(user_path: &Path) -> PathBuf {
 fn elevated_config_dest(user_path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
-        if let Ok(program_data) = std::env::var("ProgramData") {
-            let run = ice_tun_pin::protected_run_dir(std::path::Path::new(&program_data));
-            if run.is_dir() {
-                return run.join("config.json");
-            }
-        }
+        let _ = user_path;
+        ice_tun_pin::protected_run_dir(&ice_tun_pin::program_data_dir()).join("config.json")
     }
-    sibling_elevated_config(user_path)
+    #[cfg(target_os = "macos")]
+    {
+        let _ = user_path;
+        PathBuf::from(ice_tun_helper_proto::install_paths::CORE_RUN_DIR).join("config.json")
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        sibling_elevated_config(user_path)
+    }
 }
 
 fn write_sanitized_elevated_config(
@@ -156,6 +161,10 @@ fn write_sanitized_elevated_config(
             format!("config is not JSON: {err}"),
         )
     })?;
+    #[cfg(target_os = "macos")]
+    if dest.starts_with(ice_tun_helper_proto::install_paths::CORE_RUN_DIR) {
+        return persist_sanitised_config_via_sudo(dest, log_path, data_dir, &mut cfg);
+    }
     let ctx = ice_config_guard::GuardContext {
         data_dir: data_dir.clone(),
         resources_dir: data_dir,
@@ -185,7 +194,314 @@ fn write_sanitized_elevated_config(
             format!("write sanitised config {}: {err}", dest.display()),
         )
     })?;
+    restrict_sanitised_config_permissions(dest)
+}
+
+fn restrict_sanitised_config_permissions(dest: &Path) -> Result<(), TunError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod sanitised config {}: {err}", dest.display()),
+            )
+        })?;
+        if let Some(staging) = dest.parent().map(|p| p.join("rule-sets")) {
+            if staging.is_dir() {
+                std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|err| {
+                        TunError::new(
+                            ErrorCode::TunApplyFailed,
+                            format!("chmod rule_set staging {}: {err}", staging.display()),
+                        )
+                    })?;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        restrict_users_none_acl(dest, false)?;
+        if let Some(staging) = dest.parent().map(|p| p.join("rule-sets")) {
+            if staging.is_dir() {
+                restrict_users_none_acl(&staging, true)?;
+            }
+        }
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_users_none_acl(path: &Path, directory: bool) -> Result<(), TunError> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let inherit = if directory { "(OI)(CI)" } else { "" };
+    let mut reset = Command::new("icacls.exe");
+    reset.arg(path).arg("/inheritance:r");
+    if directory {
+        reset.args(["/T", "/C"]);
+    }
+    run_hidden_ok(&mut reset, CREATE_NO_WINDOW).map_err(|_| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("reset ACL on {}: failed", path.display()),
+        )
+    })?;
+    let mut grant = Command::new("icacls.exe");
+    grant.arg(path).args([
+        "/grant:r",
+        &format!("*S-1-5-18:{inherit}F"),
+        &format!("*S-1-5-32-544:{inherit}F"),
+    ]);
+    if directory {
+        grant.args(["/T", "/C"]);
+    }
+    run_hidden_ok(&mut grant, CREATE_NO_WINDOW).map_err(|_| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("restrict ACL on {}: failed", path.display()),
+        )
+    })
+}
+
+#[cfg(windows)]
+fn run_hidden_ok(cmd: &mut Command, creation_flags: u32) -> Result<(), ()> {
+    match cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(creation_flags)
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        _ => Err(()),
+    }
+}
+
+/// Rewrite staged `rule_set` paths from a user-writable temp tree onto the
+/// root-owned run dir so the elevated core never opens the temp copies.
+#[cfg(any(target_os = "macos", test))]
+fn remap_staged_rule_set_paths(
+    cfg: &mut serde_json::Value,
+    from_staging: &Path,
+    to_staging: &Path,
+) -> Result<(), TunError> {
+    let Some(sets) = cfg
+        .pointer_mut("/route/rule_set")
+        .and_then(|v| v.as_array_mut())
+    else {
+        return Ok(());
+    };
+    if sets.is_empty() {
+        return Ok(());
+    }
+    let from_canon = from_staging.canonicalize().map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!(
+                "canonicalise temp rule_set staging {}: {err}",
+                from_staging.display()
+            ),
+        )
+    })?;
+    for obj in sets {
+        let Some(map) = obj.as_object_mut() else {
+            continue;
+        };
+        let Some(path_str) = map.get("path").and_then(|v| v.as_str()).map(str::to_string) else {
+            continue;
+        };
+        let rel = Path::new(&path_str)
+            .strip_prefix(&from_canon)
+            .map_err(|_| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("staged rule_set path {path_str} is outside temp staging"),
+                )
+            })?;
+        map.insert(
+            "path".to_string(),
+            serde_json::Value::String(to_staging.join(rel).to_string_lossy().into_owned()),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn persist_sanitised_config_via_sudo(
+    dest: &Path,
+    log_path: &Path,
+    data_dir: PathBuf,
+    cfg: &mut serde_json::Value,
+) -> Result<(), TunError> {
+    let tmp = make_user_staging_dir()?;
+    let result = persist_sanitised_config_via_sudo_inner(dest, log_path, data_dir, cfg, &tmp);
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn make_user_staging_dir() -> Result<PathBuf, TunError> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-elevated-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("create temp sanitised config dir {}: {err}", dir.display()),
+        )
+    })?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("chmod temp sanitised config dir {}: {err}", dir.display()),
+        )
+    })?;
+    Ok(dir)
+}
+
+#[cfg(target_os = "macos")]
+fn persist_sanitised_config_via_sudo_inner(
+    dest: &Path,
+    log_path: &Path,
+    data_dir: PathBuf,
+    cfg: &mut serde_json::Value,
+    tmp: &Path,
+) -> Result<(), TunError> {
+    use std::os::unix::fs::PermissionsExt;
+    let work_dest = tmp.join("config.json");
+    let from_staging = tmp.join("rule-sets");
+    let ctx = ice_config_guard::GuardContext {
+        data_dir: data_dir.clone(),
+        resources_dir: data_dir,
+        log_output: Some(log_path.to_path_buf()),
+        cache_file_path: Some(dest.with_file_name("elevated-cache.db")),
+        rule_set_staging_dir: Some(from_staging.clone()),
+    };
+    ice_config_guard::sanitize_for_elevated_core(cfg, &ctx)
+        .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
+    let dest_staging =
+        PathBuf::from(ice_tun_helper_proto::install_paths::CORE_RUN_DIR).join("rule-sets");
+    if from_staging.is_dir() {
+        remap_staged_rule_set_paths(cfg, &from_staging, &dest_staging)?;
+    }
+    let bytes = serde_json::to_vec(cfg).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("encode sanitised config: {err}"),
+        )
+    })?;
+    std::fs::write(&work_dest, bytes).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("write temp sanitised config {}: {err}", work_dest.display()),
+        )
+    })?;
+    std::fs::set_permissions(&work_dest, std::fs::Permissions::from_mode(0o600)).map_err(
+        |err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod temp sanitised config {}: {err}", work_dest.display()),
+            )
+        },
+    )?;
+    let run_dir = dest.parent().ok_or_else(|| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("sanitised config {} has no parent", dest.display()),
+        )
+    })?;
+    let run_dir_s = run_dir.to_string_lossy().into_owned();
+    let dest_s = dest.to_string_lossy().into_owned();
+    let dest_staging_s = dest_staging.to_string_lossy().into_owned();
+    let work_dest_s = work_dest.to_string_lossy().into_owned();
+    sudo_n(
+        &["mkdir", "-p", &run_dir_s, &dest_staging_s],
+        "create root-owned run dir",
+    )?;
+    sudo_n(
+        &["cp", &work_dest_s, &dest_s],
+        "copy sanitised config into the root-owned run dir",
+    )?;
+    sudo_n(&["chmod", "600", &dest_s], "chmod sanitised config")?;
+    sudo_n(&["chmod", "700", &run_dir_s], "chmod root-owned run dir")?;
+    if from_staging.is_dir() {
+        for entry in std::fs::read_dir(&from_staging).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "read temp rule_set staging {}: {err}",
+                    from_staging.display()
+                ),
+            )
+        })? {
+            let entry = entry.map_err(|err| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!(
+                        "read temp rule_set staging {}: {err}",
+                        from_staging.display()
+                    ),
+                )
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !is_staged_rule_set_name(name) {
+                continue;
+            }
+            let from_s = entry.path().to_string_lossy().into_owned();
+            let to = dest_staging.join(name);
+            let to_s = to.to_string_lossy().into_owned();
+            sudo_n(
+                &["cp", &from_s, &to_s],
+                "copy staged rule_set into the root-owned run dir",
+            )?;
+            sudo_n(&["chmod", "600", &to_s], "chmod staged rule_set")?;
+        }
+        sudo_n(
+            &["chmod", "700", &dest_staging_s],
+            "chmod rule_set staging dir",
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn is_staged_rule_set_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".srs") else {
+        return false;
+    };
+    !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[cfg(target_os = "macos")]
+fn sudo_n(args: &[&str], context: &str) -> Result<(), TunError> {
+    let status = Command::new("sudo")
+        .arg("-n")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("{context} (sudo -n exit {status:?})"),
+        )),
+        Err(err) => Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("{context}: {err}"),
+        )),
+    }
 }
 
 /// Shared verify path for Child-based coordinators: callers implement
@@ -1620,6 +1936,88 @@ mod tests {
         );
         assert!(coordinator.stop().is_ok());
         assert_eq!(coordinator.pid, None);
+    }
+
+    #[test]
+    fn elevated_config_dest_uses_the_protected_run_dir_on_elevated_hosts() {
+        let user = Path::new("/tmp/user-config.json");
+        let dest = elevated_config_dest(user);
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                dest,
+                ice_tun_pin::protected_run_dir(&ice_tun_pin::program_data_dir())
+                    .join("config.json")
+            );
+            assert!(
+                !dest.ends_with(".elevated-config.json"),
+                "Windows must not fall back to a user-dir sibling"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                dest,
+                PathBuf::from(ice_tun_helper_proto::install_paths::CORE_RUN_DIR)
+                    .join("config.json")
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            assert_eq!(dest, sibling_elevated_config(user));
+        }
+    }
+
+    #[test]
+    fn remap_staged_rule_set_paths_rewrites_into_the_protected_tree() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-remap-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let from = dir.join("tmp-rule-sets");
+        std::fs::create_dir_all(&from).unwrap();
+        let staged = from.join("0.srs");
+        std::fs::write(&staged, b"x").unwrap();
+        let canon = staged.canonicalize().unwrap();
+        let mut cfg = serde_json::json!({
+            "route": { "rule_set": [{ "type": "local", "path": canon.to_string_lossy() }] }
+        });
+        let to =
+            PathBuf::from("/Library/PrivilegedHelperTools/com.yilong-musk.icebox/run/rule-sets");
+        remap_staged_rule_set_paths(&mut cfg, &from, &to).expect("remap");
+        assert_eq!(
+            cfg["route"]["rule_set"][0]["path"].as_str().unwrap(),
+            to.join("0.srs").to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn write_sanitized_elevated_config_sets_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-sanitize-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("config.json");
+        std::fs::write(
+            &user,
+            serde_json::to_vec(&ice_config_guard::minimal_allowed_config()).unwrap(),
+        )
+        .unwrap();
+        let dest = sibling_elevated_config(&user);
+        write_sanitized_elevated_config(&user, &dest, &dir.join("core.log")).expect("write");
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "sanitised config must be 0600");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

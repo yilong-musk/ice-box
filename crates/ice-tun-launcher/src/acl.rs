@@ -55,9 +55,18 @@ pub fn apply_acl(path: &Path, directory: bool, users: UsersAccess) -> Result<(),
         UsersAccess::Read => grants.push(format!("*S-1-5-32-545:{inherit}R")),
         UsersAccess::ReadExecute => grants.push(format!("*S-1-5-32-545:{inherit}RX")),
     }
-    icacls(path, &["/inheritance:r".to_string()])?;
+    let mut inherit_reset = vec!["/inheritance:r".to_string()];
+    if directory {
+        inherit_reset.push("/T".to_string());
+        inherit_reset.push("/C".to_string());
+    }
+    icacls(path, &inherit_reset)?;
     let mut extra = vec!["/grant:r".to_string()];
     extra.extend(grants);
+    if directory {
+        extra.push("/T".to_string());
+        extra.push("/C".to_string());
+    }
     icacls(path, &extra)
 }
 

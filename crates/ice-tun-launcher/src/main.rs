@@ -688,7 +688,13 @@ fn sanitize_user_config(
     ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx).map_err(|err| err.to_string())?;
     let bytes = serde_json::to_vec(&cfg).map_err(|err| format!("encode config: {err}"))?;
     std::fs::write(&dest, bytes).map_err(|err| format!("write {}: {err}", dest.display()))?;
-    let _ = acl::apply_acl(&dest, false, acl::UsersAccess::None);
+    acl::apply_acl(&dest, false, acl::UsersAccess::None)
+        .map_err(|()| format!("restrict ACL on {}: failed", dest.display()))?;
+    let staging = run_dir.join("rule-sets");
+    if staging.is_dir() {
+        acl::apply_acl(&staging, true, acl::UsersAccess::None)
+            .map_err(|()| format!("restrict ACL on {}: failed", staging.display()))?;
+    }
     Ok(dest)
 }
 

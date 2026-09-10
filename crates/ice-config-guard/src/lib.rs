@@ -164,73 +164,12 @@ fn rule_set_is_local_only(set: &Value) -> bool {
 }
 
 /// Read a user-supplied config without following a final-component symlink
-/// or buffering more than [`MAX_CONFIG_BYTES`]. FIFOs are opened non-blocking
-/// so a planted pipe cannot stall a privileged reader.
+/// or buffering more than [`MAX_CONFIG_BYTES`]. FIFOs / pipes are opened
+/// non-blocking so a planted pipe cannot stall a privileged reader.
 pub fn read_config_file(path: &Path) -> Result<Vec<u8>, GuardError> {
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Read;
-        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
-
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|err| GuardError::new("", format!("open config {}: {err}", path.display())))?;
-        let meta = file
-            .metadata()
-            .map_err(|err| GuardError::new("", format!("stat config {}: {err}", path.display())))?;
-        if !meta.file_type().is_file() || meta.file_type().is_fifo() {
-            return Err(GuardError::new(
-                "",
-                format!("config path is not a regular file: {}", path.display()),
-            ));
-        }
-        if meta.len() > MAX_CONFIG_BYTES as u64 {
-            return Err(GuardError::new(
-                "",
-                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            ));
-        }
-        let mut raw = Vec::new();
-        file.take(MAX_CONFIG_BYTES as u64 + 1)
-            .read_to_end(&mut raw)
-            .map_err(|err| GuardError::new("", format!("read config {}: {err}", path.display())))?;
-        if raw.len() > MAX_CONFIG_BYTES {
-            return Err(GuardError::new(
-                "",
-                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            ));
-        }
-        Ok(raw)
-    }
-    #[cfg(not(unix))]
-    {
-        let meta = fs::symlink_metadata(path)
-            .map_err(|err| GuardError::new("", format!("stat config {}: {err}", path.display())))?;
-        if meta.file_type().is_symlink() || !meta.is_file() {
-            return Err(GuardError::new(
-                "",
-                format!("config path is not a regular file: {}", path.display()),
-            ));
-        }
-        if meta.len() > MAX_CONFIG_BYTES as u64 {
-            return Err(GuardError::new(
-                "",
-                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            ));
-        }
-        let raw = fs::read(path)
-            .map_err(|err| GuardError::new("", format!("read config {}: {err}", path.display())))?;
-        if raw.len() > MAX_CONFIG_BYTES {
-            return Err(GuardError::new(
-                "",
-                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            ));
-        }
-        Ok(raw)
-    }
+    let (_canon, raw) = open_unfollowed_regular(path, MAX_CONFIG_BYTES)
+        .map_err(|err| GuardError::new("", format!("open config {}: {err}", path.display())))?;
+    Ok(raw)
 }
 
 /// Hosts allowed as `urltest` / `fallback` health-check targets. A hostname
@@ -698,6 +637,13 @@ fn validate_rule_set_paths(cfg: &mut Value, ctx: &GuardContext) -> Result<(), Gu
 /// Open a local rule-set without following a final-component symlink and
 /// return the canonical path plus the bytes read from that open file.
 fn open_local_rule_set(candidate: &Path) -> Result<(PathBuf, Vec<u8>), String> {
+    open_unfollowed_regular(candidate, MAX_RULE_SET_BYTES)
+}
+
+/// Open `path` without following a final-component symlink / reparse point
+/// and read at most `max_bytes`. Named pipes / FIFOs are refused without
+/// blocking on a writer.
+fn open_unfollowed_regular(path: &Path, max_bytes: usize) -> Result<(PathBuf, Vec<u8>), String> {
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
@@ -707,41 +653,71 @@ fn open_local_rule_set(candidate: &Path) -> Result<(PathBuf, Vec<u8>), String> {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(candidate)
+            .open(path)
             .map_err(|err| err.to_string())?;
         let meta = file.metadata().map_err(|err| err.to_string())?;
         if !meta.file_type().is_file() || meta.file_type().is_fifo() {
             return Err("not a regular file".into());
         }
-        if meta.len() > MAX_RULE_SET_BYTES as u64 {
-            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        if meta.len() > max_bytes as u64 {
+            return Err(format!("exceeds {max_bytes} bytes"));
         }
         let mut raw = Vec::new();
         (&file)
-            .take(MAX_RULE_SET_BYTES as u64 + 1)
+            .take(max_bytes as u64 + 1)
             .read_to_end(&mut raw)
             .map_err(|err| err.to_string())?;
-        if raw.len() > MAX_RULE_SET_BYTES {
-            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        if raw.len() > max_bytes {
+            return Err(format!("exceeds {max_bytes} bytes"));
         }
         let canon = path_of_open_file(&file)?;
         Ok((canon, raw))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let meta = fs::symlink_metadata(candidate).map_err(|err| err.to_string())?;
-        if meta.file_type().is_symlink() || !meta.is_file() {
+        use std::fs::OpenOptions;
+        use std::io::Read;
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileType, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_TYPE_DISK,
+        };
+
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|err| err.to_string())?;
+        let handle = file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let file_type = unsafe { GetFileType(handle) };
+        if file_type != FILE_TYPE_DISK {
             return Err("not a regular file".into());
         }
-        if meta.len() > MAX_RULE_SET_BYTES as u64 {
-            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        let meta = file.metadata().map_err(|err| err.to_string())?;
+        if meta.file_type().is_symlink()
+            || !meta.is_file()
+            || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err("not a regular file".into());
         }
-        let raw = fs::read(candidate).map_err(|err| err.to_string())?;
-        if raw.len() > MAX_RULE_SET_BYTES {
-            return Err(format!("rule_set exceeds {MAX_RULE_SET_BYTES} bytes"));
+        if meta.len() > max_bytes as u64 {
+            return Err(format!("exceeds {max_bytes} bytes"));
         }
-        let canon = candidate.canonicalize().map_err(|err| err.to_string())?;
+        let mut raw = Vec::new();
+        (&file)
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut raw)
+            .map_err(|err| err.to_string())?;
+        if raw.len() > max_bytes {
+            return Err(format!("exceeds {max_bytes} bytes"));
+        }
+        let canon = path_of_open_file(&file)?;
         Ok((canon, raw))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, max_bytes);
+        Err("opening an unfollowed regular file is unsupported on this platform".into())
     }
 }
 
@@ -755,7 +731,12 @@ fn write_staged_rule_set(staging: &Path, idx: usize, bytes: &[u8]) -> Result<Pat
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(staging, fs::Permissions::from_mode(0o700));
+        fs::set_permissions(staging, fs::Permissions::from_mode(0o700)).map_err(|err| {
+            GuardError::new(
+                "/route/rule_set",
+                format!("chmod rule_set staging dir {}: {err}", staging.display()),
+            )
+        })?;
     }
     let dest = staging.join(format!("{idx}.srs"));
     if dest.exists() {
@@ -775,7 +756,12 @@ fn write_staged_rule_set(staging: &Path, idx: usize, bytes: &[u8]) -> Result<Pat
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o600));
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o600)).map_err(|err| {
+            GuardError::new(
+                "/route/rule_set",
+                format!("chmod staged rule_set {}: {err}", dest.display()),
+            )
+        })?;
     }
     dest.canonicalize().map_err(|err| {
         GuardError::new(
@@ -813,6 +799,30 @@ fn path_of_open_file(file: &fs::File) -> Result<PathBuf, String> {
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn path_of_open_file(_file: &fs::File) -> Result<PathBuf, String> {
     Err("opening a rule-set fd path is unsupported on this unix".into())
+}
+
+#[cfg(windows)]
+fn path_of_open_file(file: &fs::File) -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, VOLUME_NAME_DOS};
+
+    let handle = file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    let mut cap = 1024u32;
+    let mut buf = vec![0u16; cap as usize];
+    loop {
+        let n =
+            unsafe { GetFinalPathNameByHandleW(handle, buf.as_mut_ptr(), cap, VOLUME_NAME_DOS) };
+        if n == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if n < cap {
+            buf.truncate(n as usize);
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buf)));
+        }
+        cap = n;
+        buf.resize(cap as usize, 0);
+    }
 }
 
 fn allowed_rule_set_roots(ctx: &GuardContext) -> Result<Vec<PathBuf>, GuardError> {
