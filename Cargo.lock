@@ -1696,6 +1696,8 @@ dependencies = [
 name = "ice-config-guard"
 version = "0.1.6"
 dependencies = [
+ "ice-types",
+ "libc",
  "serde_json",
 ]
 

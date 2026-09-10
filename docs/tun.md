@@ -80,7 +80,10 @@ bypass policy. Rule ordering is significant; see the
 The app installs/removes `ice-helper` through system authorization. The launchd
 helper runs the bundled core as root, authenticates the peer UID and installation
 token, pins the core binary, and sanitizes config into a root-owned copy before
-execution. Elevated DNS operations validate arguments before touching the OS.
+execution. User config is opened without following a final-component symlink
+and is bounded to 8 MiB. The token file is recreated (unlink, exclusive create, `fchown` on
+the fd) so a pre-planted symlink in the user data dir cannot redirect the
+privileged write. Elevated DNS operations validate arguments before touching the OS.
 Missing or stale helpers require setup; they never trigger silent elevation.
 
 The helper is intentionally unsigned. Manual install/uninstall scripts are

@@ -933,6 +933,46 @@ fn singbox_truncates_too_many_nodes() {
 }
 
 #[test]
+fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
+        ],
+        "route": {
+            "final": "n",
+            "rules": [
+                {"rule_set":["evil"],"outbound":"n"},
+                {"domain_suffix":["keep.com"],"outbound":"n"}
+            ],
+            "rule_set": [
+                {"type":"remote","tag":"evil","url":"https://evil.example/x.srs"},
+                {"type":"local","tag":"ok","path":"geoip/ok.srs"}
+            ]
+        },
+        "dns": {
+            "servers": [
+                {"type":"hosts","tag":"hosts","path":"/etc/passwd"},
+                {"type":"local","tag":"local"}
+            ],
+            "final": "local"
+        }
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert!(profile.route.rule_sets.iter().all(|s| s["tag"] != "evil"));
+    assert!(profile.route.rule_sets.iter().any(|s| s["tag"] == "ok"));
+    assert!(profile
+        .route
+        .rules
+        .iter()
+        .all(|r| r.get("rule_set") != Some(&serde_json::json!(["evil"]))));
+    assert!(profile.dns.as_ref().unwrap()["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["type"] != "hosts"));
+}
+
+#[test]
 fn g6_9_detect_proxies_as_clash() {
     let raw = fs::read_to_string(fixtures_dir().join("subscription-clash-mixed.yaml")).unwrap();
     assert_eq!(detect_format(&raw), SubscriptionFormat::Clash);

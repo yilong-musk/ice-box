@@ -109,6 +109,14 @@ fn map_group(
                 .get("url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("http://www.gstatic.com/generate_204");
+            if !ice_config_guard::health_check_url_is_allowed(url) {
+                warnings.push(
+                    UiMessage::new("parse.groupRestrictedUrl")
+                        .with("name", name)
+                        .with("url", url),
+                );
+                return None;
+            }
             let interval = obj.get("interval").and_then(|v| v.as_u64()).unwrap_or(300);
             json!({
                 "type": "urltest",
@@ -124,6 +132,14 @@ fn map_group(
                 .get("url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("http://www.gstatic.com/generate_204");
+            if !ice_config_guard::health_check_url_is_allowed(url) {
+                warnings.push(
+                    UiMessage::new("parse.groupRestrictedUrl")
+                        .with("name", name)
+                        .with("url", url),
+                );
+                return None;
+            }
             let interval = obj.get("interval").and_then(|v| v.as_u64()).unwrap_or(300);
             json!({
                 "type": "fallback",
@@ -156,4 +172,46 @@ fn map_group(
     };
 
     Some(NormalizedOutbound::new(name, outbound))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn urltest_and_fallback_drop_restricted_health_urls() {
+        let mut known = HashSet::new();
+        known.insert("n".into());
+        let doc = json!({
+            "proxy-groups": [
+                {
+                    "name": "auto",
+                    "type": "url-test",
+                    "proxies": ["n"],
+                    "url": "http://169.254.169.254/latest/meta-data"
+                },
+                {
+                    "name": "ok",
+                    "type": "url-test",
+                    "proxies": ["n"],
+                    "url": "http://www.gstatic.com/generate_204"
+                },
+                {
+                    "name": "fb",
+                    "type": "fallback",
+                    "proxies": ["n"],
+                    "url": "http://127.0.0.1/"
+                }
+            ]
+        });
+        let result = parse_groups(&doc, &known);
+        let tags: Vec<&str> = result.groups.iter().map(|g| g.tag.as_str()).collect();
+        assert_eq!(tags, ["ok"]);
+        assert_eq!(result.skipped, 2);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.key == "parse.groupRestrictedUrl"));
+    }
 }

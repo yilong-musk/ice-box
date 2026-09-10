@@ -6,14 +6,17 @@
 //!
 //! The unprivileged app (and a remote subscription) can write `config.json`.
 //! This crate is the privileged-side content filter: unknown inbound keys,
-//! disallowed outbound types, remote `route.rule_set` URLs, and
+//! disallowed outbound / DNS server types, remote `route.rule_set` URLs, and
 //! filesystem-referencing keys are rejected with a JSON pointer in the error.
 //! Callers write the sanitised object to a root/admin-owned path and start
 //! sing-box from that copy.
 
-use std::net::IpAddr;
+#[cfg(not(unix))]
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use ice_types::{is_loopback_host, is_restricted_fetch_host};
 use serde_json::{json, Map, Value};
 
 /// Upper bound on a sanitised config after parse (8 MiB).
@@ -88,6 +91,12 @@ const ALLOWED_OUTBOUND_TYPES: &[&str] = &[
     "shadowtls",
 ];
 
+/// DNS servers the generator and Clash parser actually emit. `hosts` is
+/// excluded: its `path` is a filesystem hosts file, not a DoH URL path.
+const ALLOWED_DNS_SERVER_TYPES: &[&str] = &[
+    "local", "tls", "https", "h3", "tcp", "udp", "quic", "fakeip", "rcode",
+];
+
 const MIXED_INBOUND_KEYS: &[&str] = &["type", "tag", "listen", "listen_port"];
 const TUN_INBOUND_KEYS: &[&str] = &[
     "type",
@@ -107,6 +116,123 @@ pub fn outbound_type_is_allowed(ty: &str) -> bool {
     ALLOWED_OUTBOUND_TYPES.contains(&ty)
 }
 
+/// Whether `ty` is allowed as a DNS server in generated / elevated configs.
+pub fn dns_server_type_is_allowed(ty: &str) -> bool {
+    ALLOWED_DNS_SERVER_TYPES.contains(&ty)
+}
+
+/// Keep only `type: local` rule-sets that have a path and no remote URL.
+/// Used by the config builder so the user-mode core never fetches `remote`
+/// rule-sets; the elevated sanitizer still fail-closes if any slip through.
+pub fn retain_local_rule_sets(sets: &mut Vec<Value>) {
+    sets.retain(rule_set_is_local_only);
+}
+
+/// Drop DNS servers whose type is not on the elevated allowlist (notably
+/// `hosts`, whose `path` is a filesystem file).
+pub fn retain_allowed_dns_servers(dns: &mut Value) {
+    let Some(servers) = dns.get_mut("servers").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    servers.retain(|server| {
+        server
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(dns_server_type_is_allowed)
+    });
+}
+
+fn rule_set_is_local_only(set: &Value) -> bool {
+    let Some(obj) = set.as_object() else {
+        return false;
+    };
+    if obj.get("type").and_then(Value::as_str) != Some("local") {
+        return false;
+    }
+    if obj.contains_key("url") || obj.contains_key("download_url") {
+        return false;
+    }
+    obj.get("path")
+        .and_then(Value::as_str)
+        .is_some_and(|path| !path.is_empty())
+}
+
+/// Read a user-supplied config without following a final-component symlink
+/// or buffering more than [`MAX_CONFIG_BYTES`]. FIFOs are opened non-blocking
+/// so a planted pipe cannot stall a privileged reader.
+pub fn read_config_file(path: &Path) -> Result<Vec<u8>, GuardError> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|err| GuardError::new("", format!("open config {}: {err}", path.display())))?;
+        let meta = file
+            .metadata()
+            .map_err(|err| GuardError::new("", format!("stat config {}: {err}", path.display())))?;
+        if !meta.file_type().is_file() || meta.file_type().is_fifo() {
+            return Err(GuardError::new(
+                "",
+                format!("config path is not a regular file: {}", path.display()),
+            ));
+        }
+        if meta.len() > MAX_CONFIG_BYTES as u64 {
+            return Err(GuardError::new(
+                "",
+                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
+            ));
+        }
+        let mut raw = Vec::new();
+        file.take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut raw)
+            .map_err(|err| GuardError::new("", format!("read config {}: {err}", path.display())))?;
+        if raw.len() > MAX_CONFIG_BYTES {
+            return Err(GuardError::new(
+                "",
+                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
+            ));
+        }
+        Ok(raw)
+    }
+    #[cfg(not(unix))]
+    {
+        let meta = fs::symlink_metadata(path)
+            .map_err(|err| GuardError::new("", format!("stat config {}: {err}", path.display())))?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(GuardError::new(
+                "",
+                format!("config path is not a regular file: {}", path.display()),
+            ));
+        }
+        if meta.len() > MAX_CONFIG_BYTES as u64 {
+            return Err(GuardError::new(
+                "",
+                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
+            ));
+        }
+        let raw = fs::read(path)
+            .map_err(|err| GuardError::new("", format!("read config {}: {err}", path.display())))?;
+        if raw.len() > MAX_CONFIG_BYTES {
+            return Err(GuardError::new(
+                "",
+                format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
+            ));
+        }
+        Ok(raw)
+    }
+}
+
+/// Probe URL used by `urltest` (and Clash `url-test` / `fallback`) groups.
+/// HTTP(S) to a non-restricted host only — no loopback, RFC1918, or
+/// link-local metadata endpoints.
+pub fn health_check_url_is_allowed(raw: &str) -> bool {
+    parse_http_url_host(raw).is_some_and(|host| !is_restricted_fetch_host(&host))
+}
+
 /// Check a single outbound object (subscription normalisation). Does not
 /// require a [`GuardContext`].
 pub fn check_outbound(value: &Value) -> Result<(), GuardError> {
@@ -124,6 +250,9 @@ pub fn check_outbound(value: &Value) -> Result<(), GuardError> {
         ));
     }
     reject_wireguard_system(obj, "")?;
+    if ty == "urltest" {
+        validate_urltest_url(obj, "")?;
+    }
     walk_forbidden(value, "", None)?;
     Ok(())
 }
@@ -177,8 +306,9 @@ pub fn sanitize_for_elevated_core(cfg: &mut Value, ctx: &GuardContext) -> Result
         }
     }
 
-    validate_inbounds(cfg)?;
     validate_outbounds(cfg)?;
+    validate_dns_servers(cfg)?;
+    validate_experimental(cfg)?;
     validate_clash_controller(cfg)?;
     walk_forbidden(cfg, "", Some(ctx))?;
     validate_rule_set_paths(cfg, ctx)?;
@@ -251,8 +381,51 @@ fn validate_inbounds(cfg: &Value) -> Result<(), GuardError> {
                 ));
             }
         }
+        if ty == "mixed" {
+            validate_mixed_listen(obj, &pointer)?;
+        }
     }
     Ok(())
+}
+
+/// Mixed inbound may bind loopback (default) or unspecified (`0.0.0.0` /
+/// `::`) when the user enables LAN. Privileged ports and arbitrary unicast
+/// addresses are refused so a swapped config cannot steal 22/443 or an
+/// unexpected interface as root/Administrator.
+fn validate_mixed_listen(obj: &Map<String, Value>, pointer: &str) -> Result<(), GuardError> {
+    let listen = obj.get("listen").and_then(Value::as_str).ok_or_else(|| {
+        GuardError::new(
+            format!("{pointer}/listen"),
+            "mixed inbound is missing listen",
+        )
+    })?;
+    if !mixed_listen_is_allowed(listen) {
+        return Err(GuardError::new(
+            format!("{pointer}/listen"),
+            format!("mixed inbound listen {listen:?} must be loopback or unspecified"),
+        ));
+    }
+    let port = obj
+        .get("listen_port")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            GuardError::new(
+                format!("{pointer}/listen_port"),
+                "mixed inbound is missing listen_port",
+            )
+        })?;
+    if !(1024..=65535).contains(&port) {
+        return Err(GuardError::new(
+            format!("{pointer}/listen_port"),
+            format!("mixed inbound listen_port {port} must be in 1024..=65535"),
+        ));
+    }
+    Ok(())
+}
+
+fn mixed_listen_is_allowed(host: &str) -> bool {
+    let host = host.trim();
+    is_loopback_host(host) || matches!(host, "0.0.0.0" | "::" | "[::]")
 }
 
 fn validate_outbounds(cfg: &Value) -> Result<(), GuardError> {
@@ -275,6 +448,28 @@ fn validate_outbounds(cfg: &Value) -> Result<(), GuardError> {
             ));
         }
         reject_wireguard_system(obj, &pointer)?;
+        if ty == "urltest" {
+            validate_urltest_url(obj, &pointer)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_urltest_url(obj: &Map<String, Value>, pointer: &str) -> Result<(), GuardError> {
+    let Some(url) = obj.get("url") else {
+        return Ok(());
+    };
+    let Some(raw) = url.as_str() else {
+        return Err(GuardError::new(
+            format!("{pointer}/url"),
+            "urltest url must be a string",
+        ));
+    };
+    if !health_check_url_is_allowed(raw) {
+        return Err(GuardError::new(
+            format!("{pointer}/url"),
+            format!("urltest url {raw:?} is not allowed"),
+        ));
     }
     Ok(())
 }
@@ -299,6 +494,52 @@ fn reject_wireguard_system(obj: &Map<String, Value>, pointer: &str) -> Result<()
     Ok(())
 }
 
+fn validate_dns_servers(cfg: &Value) -> Result<(), GuardError> {
+    let Some(dns) = cfg.get("dns") else {
+        return Ok(());
+    };
+    let Some(servers) = dns.get("servers") else {
+        return Ok(());
+    };
+    let servers = servers
+        .as_array()
+        .ok_or_else(|| GuardError::new("/dns/servers", "dns.servers must be an array"))?;
+    for (idx, server) in servers.iter().enumerate() {
+        let pointer = format!("/dns/servers/{idx}");
+        let obj = server
+            .as_object()
+            .ok_or_else(|| GuardError::new(&pointer, "dns server must be a JSON object"))?;
+        let ty = obj.get("type").and_then(Value::as_str).ok_or_else(|| {
+            GuardError::new(format!("{pointer}/type"), "dns server is missing type")
+        })?;
+        if !ALLOWED_DNS_SERVER_TYPES.contains(&ty) {
+            return Err(GuardError::new(
+                format!("{pointer}/type"),
+                format!("dns server type {ty:?} is not allowed"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_experimental(cfg: &Value) -> Result<(), GuardError> {
+    let Some(exp) = cfg.get("experimental") else {
+        return Ok(());
+    };
+    let obj = exp
+        .as_object()
+        .ok_or_else(|| GuardError::new("/experimental", "experimental must be a JSON object"))?;
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "clash_api" | "cache_file") {
+            return Err(GuardError::new(
+                format!("/experimental/{}", json_pointer_escape(key)),
+                format!("experimental key {key:?} is not allowed"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_clash_controller(cfg: &Value) -> Result<(), GuardError> {
     let pointer = "/experimental/clash_api/external_controller";
     let controller = cfg
@@ -318,7 +559,7 @@ fn validate_clash_controller(cfg: &Value) -> Result<(), GuardError> {
             format!("invalid external_controller {controller:?}"),
         )
     })?;
-    if !host_is_loopback(host) {
+    if !is_loopback_host(host) {
         return Err(GuardError::new(
             pointer,
             format!("external_controller host {host:?} must be loopback"),
@@ -480,7 +721,7 @@ fn walk_forbidden(
         Value::Object(map) => {
             for (key, child) in map {
                 let child_pointer = format!("{pointer}/{}", json_pointer_escape(key));
-                if skip_forbidden_at(key, &child_pointer, ctx) {
+                if skip_forbidden_at(key, &child_pointer, map, ctx) {
                     if child.is_object() || child.is_array() {
                         walk_forbidden(child, &child_pointer, ctx)?;
                     }
@@ -506,8 +747,13 @@ fn walk_forbidden(
     }
 }
 
-fn skip_forbidden_at(key: &str, pointer: &str, ctx: Option<&GuardContext>) -> bool {
-    if key == "path" && is_url_style_path_pointer(pointer) {
+fn skip_forbidden_at(
+    key: &str,
+    pointer: &str,
+    parent: &Map<String, Value>,
+    ctx: Option<&GuardContext>,
+) -> bool {
+    if key == "path" && is_url_style_path(pointer, parent) {
         return true;
     }
     if key == "path" && is_rule_set_path_pointer(pointer) {
@@ -522,23 +768,36 @@ fn skip_forbidden_at(key: &str, pointer: &str, ctx: Option<&GuardContext>) -> bo
     {
         return true;
     }
+    if key == "url" && parent.get("type").and_then(Value::as_str) == Some("urltest") {
+        return true;
+    }
     false
 }
 
-fn is_url_style_path_pointer(pointer: &str) -> bool {
+fn is_url_style_path(pointer: &str, parent: &Map<String, Value>) -> bool {
     // WS / HTTP / HTTPUpgrade transport URL path, not a filesystem path.
     // `check_outbound` walks a single outbound from `""`, so the pointer is
     // `/transport/path`; the full-config walk uses `/outbounds/{i}/transport/path`.
     if pointer == "/transport/path" || pointer.ends_with("/transport/path") {
         return true;
     }
-    // DNS-over-HTTPS `path` (typically `/dns-query`).
-    if let Some(rest) = pointer.strip_prefix("/dns/servers/") {
-        if let Some((idx, key)) = rest.split_once('/') {
-            return key == "path" && !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit());
-        }
-    }
-    false
+    // DoH / DoH3 URL path (typically `/dns-query`). Other DNS server types
+    // that use `path` (notably `hosts`) are filesystem references.
+    is_dns_server_path_pointer(pointer)
+        && matches!(
+            parent.get("type").and_then(Value::as_str),
+            Some("https" | "h3")
+        )
+}
+
+fn is_dns_server_path_pointer(pointer: &str) -> bool {
+    let Some(rest) = pointer.strip_prefix("/dns/servers/") else {
+        return false;
+    };
+    let Some((idx, key)) = rest.split_once('/') else {
+        return false;
+    };
+    key == "path" && !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit())
 }
 
 fn is_rule_set_path_pointer(pointer: &str) -> bool {
@@ -563,6 +822,8 @@ fn is_forbidden_key(key: &str) -> bool {
             | "output"
             | "external_ui"
             | "external_ui_download_url"
+            | "url"
+            | "download_url"
     ) || key.ends_with("_path")
 }
 
@@ -583,14 +844,44 @@ fn controller_host(controller: &str) -> Option<&str> {
     Some(host)
 }
 
-fn host_is_loopback(host: &str) -> bool {
-    let host = host.trim().trim_matches(['[', ']']);
-    if matches!(host, "127.0.0.1" | "localhost" | "::1") {
-        return true;
+fn parse_http_url_host(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.contains(|c: char| c.is_ascii_whitespace() || c == '\\') {
+        return None;
     }
-    host.parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+    let rest = if raw.len() >= 8 && raw[..8].eq_ignore_ascii_case("https://") {
+        &raw[8..]
+    } else if raw.len() >= 7 && raw[..7].eq_ignore_ascii_case("http://") {
+        &raw[7..]
+    } else {
+        return None;
+    };
+    let authority = rest.split(['/', '?', '#']).next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    let hostport = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    if hostport.is_empty() {
+        return None;
+    }
+    let host = if let Some(inner) = hostport.strip_prefix('[') {
+        let end = inner.find(']')?;
+        inner[..end].to_string()
+    } else if let Some((h, port)) = hostport.rsplit_once(':') {
+        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        h.to_string()
+    } else {
+        hostport.to_string()
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(host)
 }
 
 #[cfg(test)]
@@ -899,6 +1190,54 @@ mod tests {
     }
 
     #[test]
+    fn dns_hosts_path_is_rejected() {
+        let dir = temp_dir("hosts");
+        let mut cfg = minimal_allowed_config();
+        cfg["dns"] = json!({
+            "servers": [
+                { "type": "hosts", "tag": "evil", "path": "/etc/passwd" },
+                { "type": "local", "tag": "local" }
+            ],
+            "final": "local"
+        });
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("hosts");
+        assert!(err.pointer.contains("/dns/servers/0"), "{}", err.pointer);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dns_hosts_type_is_rejected_without_path() {
+        let dir = temp_dir("hosts-type");
+        let mut cfg = minimal_allowed_config();
+        cfg["dns"] = json!({
+            "servers": [
+                { "type": "hosts", "tag": "evil", "predefined": { "example.com": ["127.0.0.1"] } },
+                { "type": "local", "tag": "local" }
+            ],
+            "final": "local"
+        });
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("hosts type");
+        assert_eq!(err.pointer, "/dns/servers/0/type");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doh3_dns_server_path_is_allowed() {
+        let dir = temp_dir("h3");
+        let mut cfg = minimal_allowed_config();
+        cfg["dns"] = json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "h3", "tag": "remote-dns", "server": "1.1.1.1", "server_port": 443,
+                  "path": "/dns-query", "detour": "direct" }
+            ],
+            "final": "remote-dns"
+        });
+        sanitize(cfg, &ctx(&dir)).expect("h3 path");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn geoip_rule_set_in_data_dir_is_accepted() {
         let base = temp_dir("geoip-split");
         let data = base.join("data");
@@ -955,5 +1294,147 @@ mod tests {
             "version": 3
         }))
         .expect("shadowtls");
+    }
+
+    #[test]
+    fn mixed_inbound_requires_loopback_or_unspecified_listen() {
+        let dir = temp_dir("mixed-listen");
+        let mut missing = minimal_allowed_config();
+        missing["inbounds"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("listen");
+        let err = sanitize(missing, &ctx(&dir)).expect_err("missing listen");
+        assert_eq!(err.pointer, "/inbounds/0/listen");
+
+        let mut unicast = minimal_allowed_config();
+        unicast["inbounds"][0]["listen"] = json!("1.2.3.4");
+        let err = sanitize(unicast, &ctx(&dir)).expect_err("unicast");
+        assert_eq!(err.pointer, "/inbounds/0/listen");
+
+        let mut lan = minimal_allowed_config();
+        lan["inbounds"][0]["listen"] = json!("0.0.0.0");
+        sanitize(lan, &ctx(&dir)).expect("allow_lan unspecified");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mixed_inbound_privileged_port_is_rejected() {
+        let dir = temp_dir("mixed-port");
+        let mut cfg = minimal_allowed_config();
+        cfg["inbounds"][0]["listen_port"] = json!(443);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("privileged");
+        assert_eq!(err.pointer, "/inbounds/0/listen_port");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn experimental_v2ray_api_and_debug_are_rejected() {
+        let dir = temp_dir("exp");
+        let mut cfg = minimal_allowed_config();
+        cfg["experimental"]["v2ray_api"] = json!({ "listen": "0.0.0.0:8080" });
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("v2ray");
+        assert_eq!(err.pointer, "/experimental/v2ray_api");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["experimental"]["debug"] = json!({ "listen": "127.0.0.1:1" });
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("debug");
+        assert_eq!(err.pointer, "/experimental/debug");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn urltest_metadata_url_is_rejected_and_gstatic_http_is_allowed() {
+        let dir = temp_dir("urltest");
+        let mut cfg = minimal_allowed_config();
+        cfg["outbounds"] = json!([
+            {
+                "type": "urltest",
+                "tag": "auto",
+                "outbounds": ["direct"],
+                "url": "http://169.254.169.254/latest/meta-data"
+            },
+            { "type": "direct", "tag": "direct" }
+        ]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("metadata");
+        assert_eq!(err.pointer, "/outbounds/0/url");
+
+        check_outbound(&json!({
+            "type": "urltest",
+            "tag": "auto",
+            "outbounds": ["n"],
+            "url": "http://127.0.0.1/"
+        }))
+        .expect_err("loopback");
+
+        let mut ok = minimal_allowed_config();
+        ok["outbounds"] = json!([
+            {
+                "type": "urltest",
+                "tag": "auto",
+                "outbounds": ["direct"],
+                "url": "http://www.gstatic.com/generate_204"
+            },
+            { "type": "direct", "tag": "direct" }
+        ]);
+        sanitize(ok, &ctx(&dir)).expect("gstatic");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retain_helpers_drop_hosts_dns_and_remote_rule_sets() {
+        let mut dns = json!({
+            "servers": [
+                { "type": "local", "tag": "local" },
+                { "type": "hosts", "tag": "evil", "path": "/etc/passwd" }
+            ]
+        });
+        retain_allowed_dns_servers(&mut dns);
+        assert_eq!(dns["servers"].as_array().unwrap().len(), 1);
+
+        let mut sets = vec![
+            json!({ "type": "remote", "tag": "r", "url": "https://evil.example/x" }),
+            json!({ "type": "local", "tag": "ok", "path": "geoip/cn.srs" }),
+            json!({ "type": "local", "tag": "empty" }),
+        ];
+        retain_local_rule_sets(&mut sets);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0]["tag"], "ok");
+    }
+
+    #[test]
+    fn read_config_file_rejects_symlink_and_oversize() {
+        let dir = temp_dir("read");
+        let real = dir.join("real.json");
+        fs::write(&real, b"{\"ok\":true}").unwrap();
+        assert_eq!(read_config_file(&real).expect("regular"), b"{\"ok\":true}");
+
+        #[cfg(unix)]
+        {
+            let link = dir.join("link.json");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let err = read_config_file(&link).expect_err("symlink");
+            assert!(
+                err.message.contains("open config") || err.message.contains("regular file"),
+                "{}",
+                err.message
+            );
+
+            let fifo = dir.join("fifo.json");
+            let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+            let err = read_config_file(&fifo).expect_err("fifo");
+            assert!(
+                err.message.contains("regular file") || err.message.contains("open config"),
+                "{}",
+                err.message
+            );
+        }
+
+        let huge = dir.join("huge.json");
+        fs::write(&huge, vec![b'x'; MAX_CONFIG_BYTES + 1]).unwrap();
+        let err = read_config_file(&huge).expect_err("huge");
+        assert!(err.message.contains("exceeds"), "{}", err.message);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

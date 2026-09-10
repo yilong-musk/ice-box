@@ -16,6 +16,7 @@ ice-types = { workspace = true }
 ice-tun-pin = { workspace = true }
 ice-tun-helper-proto = { workspace = true }
 ice-tun-journal = { workspace = true }
+ice-config-guard = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -35,4 +36,3 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 ice-helper = { path = "../ice-helper", features = ["test-hooks"] }
-ice-config-guard = { workspace = true }

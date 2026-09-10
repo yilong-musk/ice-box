@@ -105,7 +105,12 @@ connections so refreshing a broken profile does not depend on that profile.
 
 The Clash control API stays on loopback. Privileged runners authenticate callers
 and validate executable/configuration inputs before execution; the shared
-[config guard](../crates/ice-config-guard/src/lib.rs) restricts elevated configs.
+[config guard](../crates/ice-config-guard/src/lib.rs) restricts elevated configs
+(including DNS server types: filesystem `hosts.path` is not a DoH URL path;
+mixed inbound listen/port; `urltest` health-check URLs; `experimental` keys
+other than `clash_api` / `cache_file`). User-mode generation drops remote
+`rule_set` URLs and disallowed DNS types so the unelevated core has the same
+fetch/file surface.
 Platform privilege and ownership rules live in [tun.md](tun.md).
 
 App updates run in Rust and verify signed artifacts before installation.

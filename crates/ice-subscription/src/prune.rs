@@ -96,6 +96,34 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
         );
         profile.route.final_outbound = "direct".into();
     }
+    let known_sets: HashSet<String> = profile
+        .route
+        .rule_sets
+        .iter()
+        .filter_map(|s| s.get("tag").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+    let mut dropped_rule_sets = Vec::new();
+    profile.route.rules.retain(|rule| {
+        let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) else {
+            return true;
+        };
+        let ok = refs
+            .iter()
+            .all(|r| r.as_str().is_some_and(|t| known_sets.contains(t)));
+        if !ok {
+            dropped_rule_sets.push(
+                UiMessage::new("parse.routeRuleSetMissing").with(
+                    "rule_set",
+                    refs.iter()
+                        .filter_map(|r| r.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+            );
+        }
+        ok
+    });
+    profile.parse_stats.warnings.extend(dropped_rule_sets);
     if let Some(tag) = &profile.default_outbound {
         if !known.contains(tag) {
             profile.default_outbound = profile

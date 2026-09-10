@@ -40,6 +40,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Elevated config sanitiser only treats `dns.servers[].path` as a URL path
+  when the server type is DoH (`https` / `h3`), and allowlists DNS server
+  types. `type: hosts` with a filesystem `path` was previously accepted and
+  let root/Administrator sing-box read arbitrary files.
+- Elevated sanitiser requires mixed inbound `listen` (loopback or
+  unspecified `0.0.0.0`/`::` for LAN) and `listen_port` in `1024..=65535`,
+  allowlists `experimental` to `clash_api` / `cache_file`, and rejects
+  `urltest` health-check URLs aimed at loopback, private, or link-local
+  targets (Clash `url-test` / `fallback` groups use the same check).
+- Helper and Windows launcher read user `config.json` with a size cap and
+  without following a final-component symlink (Unix: `O_NOFOLLOW|O_NONBLOCK`
+  so a planted FIFO cannot stall a privileged reader). The dev sudo /
+  already-admin runners sanitise into `.elevated-config.json` before
+  spawning sing-box.
+- Helper install refuses symlink sources, requires the core and helper
+  binaries to be owned by root or the installing uid, and copies with
+  `O_NOFOLLOW`.
+- User-mode config build / sing-box subscription parse drop remote
+  `route.rule_set` entries and disallowed DNS server types (`hosts`) so
+  the unelevated core cannot fetch attacker URLs or read a hosts file.
+- Helper install unlinks `helper-token` before creating it exclusive
+  (`O_CREAT|O_EXCL|O_NOFOLLOW`) and `fchown`s the open fd, so a pre-planted
+  symlink cannot redirect the privileged write or chown.
 - CI and Release packaging jobs run `scripts/fetch-geoip.sh` before
   `tauri build`. After CI-6 stopped committing GeoIP `.srs` files, those
   jobs only fetched sing-box, so `prepare-singbox-resource` failed on a

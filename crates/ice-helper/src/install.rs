@@ -12,21 +12,27 @@
 //! Security model (unchanged from the script, `docs/tun.md`):
 //!
 //! - The install must be started as root ([`require_root`]).
-//! - The source core binary must be a regular file a non-root user cannot
-//!   replace (group/world-write refused); only a root-owned copy is ever
-//!   executed elevated.
+//! - The source core and helper binaries must be regular files (not
+//!   symlinks), owned by root or the installing uid, without group/world
+//!   write. Only a root-owned copy is ever executed elevated.
 //! - The installed core's SHA-256 is pinned in the launchd plist; the daemon
 //!   refuses to start when the on-disk binary does not match.
 //! - The per-installation token is generated here (inside the elevated
 //!   process, from `/dev/urandom`) and written `0600` owned by the
-//!   installing uid. The daemon runs as root and can still read it; other
-//!   users cannot. The peer uid check is the primary control; the token is
-//!   secondary.
+//!   installing uid. The name is unlinked first, then created exclusive
+//!   (`O_CREAT|O_EXCL|O_NOFOLLOW`); ownership is applied on the open fd
+//!   (`fchown` / `fchmod`) so a pre-planted symlink in the user data dir
+//!   cannot redirect the privileged write or chown. The daemon runs as
+//!   root and can still read it; other users cannot. The peer uid check is
+//!   the primary control; the token is secondary.
 //! - Logs are recreated as root-owned fixed files so a stale symlink can
 //!   never become the target of a privileged append.
 
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -70,10 +76,16 @@ pub fn sha256_of_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// Refuse a source binary that any non-root user could replace: it must be a
-/// regular file without group/world write bits.
-fn reject_writable_source(path: &Path, what: &str) -> Result<(), String> {
-    let meta = fs::metadata(path).map_err(|e| format!("stat {what} {}: {e}", path.display()))?;
+/// Refuse a source binary that any other user could replace. It must be a
+/// regular file (not a symlink), without group/world write bits, owned by
+/// root or the installing uid. Bundled app binaries are user-owned; they
+/// are copied to a root-owned destination before the helper executes them.
+fn reject_untrusted_source(path: &Path, what: &str, allowed_uid: u32) -> Result<(), String> {
+    let meta =
+        fs::symlink_metadata(path).map_err(|e| format!("lstat {what} {}: {e}", path.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("{what} must not be a symlink: {}", path.display()));
+    }
     if !meta.is_file() {
         return Err(format!("{what} is not a regular file: {}", path.display()));
     }
@@ -81,6 +93,13 @@ fn reject_writable_source(path: &Path, what: &str) -> Result<(), String> {
     if mode & 0o022 != 0 {
         return Err(format!(
             "{what} is group/world-writable ({mode:o}): {} — a root-executed binary must not be replaceable by non-root users",
+            path.display()
+        ));
+    }
+    let owner = meta.uid();
+    if owner != 0 && owner != allowed_uid {
+        return Err(format!(
+            "{what} owner uid {owner} is neither root nor the installing user {allowed_uid}: {}",
             path.display()
         ));
     }
@@ -120,12 +139,75 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
         .map_err(|e| format!("chmod {mode:o} {}: {e}", path.display()))
 }
 
+/// Write `contents` at `path` as a new regular file owned by `uid` mode 0600.
+///
+/// The data dir is user-writable, so `path` may already be a symlink to an
+/// arbitrary file. `remove_file` drops a pre-planted name (a symlink is
+/// unlinked without touching its target). `create_new` + `O_NOFOLLOW` then
+/// refuses a name that reappeared. `fchown`/`fchmod` the open fd so a
+/// replace-after-create race cannot redirect ownership.
+fn write_user_owned_secret(path: &Path, contents: &str, uid: u32) -> Result<(), String> {
+    let _ = fs::remove_file(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| format!("create token {}: {e}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| format!("write token {}: {e}", path.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("sync token {}: {e}", path.display()))?;
+    let fd = file.as_raw_fd();
+    // `chown(2)`: -1 leaves an id unchanged. Production install is root, so
+    // pin gid 0; a non-root test must not attempt `fchown(..., 0)`.
+    let gid = if unsafe { libc::geteuid() } == 0 {
+        0
+    } else {
+        u32::MAX
+    };
+    let rc = unsafe { libc::fchown(fd, uid, gid) };
+    if rc != 0 {
+        return Err(format!(
+            "fchown uid {uid} {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    let rc = unsafe { libc::fchmod(fd, 0o600) };
+    if rc != 0 {
+        return Err(format!(
+            "fchmod 0600 {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 fn copy_root_owned(source: &Path, dest: &Path, mode: u32) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::copy(source, dest)
+    let mut src = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(source)
+        .map_err(|e| format!("open source {}: {e}", source.display()))?;
+    let mut dst = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dest)
+        .map_err(|e| format!("open dest {}: {e}", dest.display()))?;
+    io::copy(&mut src, &mut dst)
         .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
+    dst.sync_all()
+        .map_err(|e| format!("sync {}: {e}", dest.display()))?;
+    drop(dst);
     chown_root(dest)?;
     set_mode(dest, mode)
 }
@@ -255,20 +337,15 @@ pub fn install(data_dir: &Path, core_src: &Path, allowed_uid: u32) -> Result<(),
     if !data_dir.is_dir() {
         return Err(format!("data dir not found: {}", data_dir.display()));
     }
-    reject_writable_source(core_src, "core binary")?;
+    reject_untrusted_source(core_src, "core binary", allowed_uid)?;
 
     let helper_src = std::env::current_exe().map_err(|e| format!("resolve own executable: {e}"))?;
-    if !helper_src.is_file() {
-        return Err(format!("helper binary not found: {}", helper_src.display()));
-    }
+    reject_untrusted_source(&helper_src, "helper binary", allowed_uid)?;
 
     // 1. Per-installation token (installing-uid owned 0600 in the app data dir).
     let token = generate_token()?;
     let token_file = data_dir.join(TOKEN_FILE_NAME);
-    fs::write(&token_file, format!("{token}\n"))
-        .map_err(|e| format!("write token {}: {e}", token_file.display()))?;
-    chown_uid(&token_file, allowed_uid)?;
-    set_mode(&token_file, 0o600)?;
+    write_user_owned_secret(&token_file, &format!("{token}\n"), allowed_uid)?;
 
     // 2. Helper binary, root-owned 0755.
     copy_root_owned(&helper_src, Path::new(HELPER_BIN_DEST), 0o755)?;
@@ -455,13 +532,26 @@ mod tests {
         let world_writable = dir.join("core");
         fs::write(&world_writable, b"x").expect("write");
         fs::set_permissions(&world_writable, fs::Permissions::from_mode(0o666)).expect("mode");
-        let err = reject_writable_source(&world_writable, "core binary").expect_err("writable");
+        let err = reject_untrusted_source(&world_writable, "core binary", 0).expect_err("writable");
         assert!(err.contains("world-writable"));
 
         let non_regular = dir.join("sock");
         std::os::unix::net::UnixListener::bind(&non_regular).expect("bind");
-        let err = reject_writable_source(&non_regular, "core binary").expect_err("socket");
+        let err = reject_untrusted_source(&non_regular, "core binary", 0).expect_err("socket");
         assert!(err.contains("not a regular file"));
+
+        let uid = unsafe { libc::getuid() };
+        let owned = dir.join("owned");
+        fs::write(&owned, b"x").expect("write");
+        fs::set_permissions(&owned, fs::Permissions::from_mode(0o755)).expect("mode");
+        reject_untrusted_source(&owned, "core binary", uid).expect("self-owned");
+
+        let target = dir.join("target");
+        fs::write(&target, b"x").expect("target");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let err = reject_untrusted_source(&link, "core binary", uid).expect_err("symlink");
+        assert!(err.contains("symlink"));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -483,6 +573,24 @@ mod tests {
         let token = generate_token().expect("token");
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn token_write_replaces_symlink_without_touching_target() {
+        let dir = temp_dir("token-symlink");
+        let target = dir.join("secret");
+        fs::write(&target, b"keep-me").expect("target");
+        let token_path = dir.join(TOKEN_FILE_NAME);
+        std::os::unix::fs::symlink(&target, &token_path).expect("symlink");
+        let uid = unsafe { libc::getuid() };
+        write_user_owned_secret(&token_path, "tok\n", uid).expect("write");
+        assert_eq!(fs::read(&target).expect("target intact"), b"keep-me");
+        let meta = fs::symlink_metadata(&token_path).expect("meta");
+        assert!(meta.file_type().is_file());
+        assert!(!meta.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&token_path).expect("token"), "tok\n");
+        assert_eq!(meta.mode() & 0o777, 0o600);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

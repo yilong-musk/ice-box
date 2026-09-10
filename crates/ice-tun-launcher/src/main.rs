@@ -660,14 +660,7 @@ fn sanitize_user_config(
     if !user_config.is_file() {
         return Err(format!("config not found at {}", user_config.display()));
     }
-    let raw = std::fs::read(user_config)
-        .map_err(|err| format!("read {}: {err}", user_config.display()))?;
-    if raw.len() > ice_config_guard::MAX_CONFIG_BYTES {
-        return Err(format!(
-            "config exceeds {} bytes",
-            ice_config_guard::MAX_CONFIG_BYTES
-        ));
-    }
+    let raw = ice_config_guard::read_config_file(user_config).map_err(|err| err.to_string())?;
     let mut cfg: serde_json::Value =
         serde_json::from_slice(&raw).map_err(|err| format!("config is not JSON: {err}"))?;
     let data_dir = user_config

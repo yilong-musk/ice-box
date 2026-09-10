@@ -427,21 +427,17 @@ mod imp {
         config: &ServerConfig,
         user_path: &std::path::Path,
     ) -> Result<PathBuf, TunError> {
-        let raw = std::fs::read(user_path).map_err(|err| {
-            TunError::new(
-                ErrorCode::TunApplyFailed,
-                format!("read config {}: {err}", user_path.display()),
-            )
+        let raw = ice_config_guard::read_config_file(user_path).map_err(|err| {
+            let code = if err.message.contains("open config")
+                || err.message.contains("read config")
+                || err.message.contains("stat config")
+            {
+                ErrorCode::TunApplyFailed
+            } else {
+                ErrorCode::TunConfigRejected
+            };
+            TunError::new(code, err.to_string())
         })?;
-        if raw.len() > ice_config_guard::MAX_CONFIG_BYTES {
-            return Err(TunError::new(
-                ErrorCode::TunConfigRejected,
-                format!(
-                    "config exceeds {} bytes",
-                    ice_config_guard::MAX_CONFIG_BYTES
-                ),
-            ));
-        }
         let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
             TunError::new(
                 ErrorCode::TunConfigRejected,

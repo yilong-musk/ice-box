@@ -164,6 +164,21 @@ fn dns_final_tag(dns: &Value) -> Option<String> {
         .map(|tag| tag.to_string())
 }
 
+fn dns_block_is_usable(dns: &Value) -> bool {
+    let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    if servers.is_empty() {
+        return false;
+    }
+    match dns_final_tag(dns) {
+        Some(final_tag) => servers
+            .iter()
+            .any(|s| s.get("tag").and_then(Value::as_str) == Some(final_tag.as_str())),
+        None => true,
+    }
+}
+
 /// The route `default_domain_resolver` matching [`minimal_dns_block`]: `local`
 /// everywhere, the DoT `final` tag on Windows.
 fn minimal_default_domain_resolver(platform: HostPlatform) -> String {
@@ -319,15 +334,17 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .filter(|r| !input.rule_overrides.is_rule_disabled(r))
             .cloned()
             .collect();
-        let (sub_rules, sub_sets) = expand_geoip_rules(
+        let (mut sub_rules, mut sub_sets) = expand_geoip_rules(
             &enabled_sub_rules,
             &input.profile.route.rule_sets,
             input.geoip_rule_set_dir.as_deref(),
         );
+        ice_config_guard::retain_local_rule_sets(&mut sub_sets);
         let sub_set_tags: std::collections::HashSet<&str> = sub_sets
             .iter()
             .filter_map(|s| s.get("tag").and_then(|v| v.as_str()))
             .collect();
+        sub_rules.retain(|rule| rule_set_refs_are_known(rule, &sub_set_tags));
         // Custom rules persist globally (data-dir `rules.json`) and survive
         // subscription switches, but their `outbound` / `rule_set` references may
         // not exist in the *new* active subscription. Skip those rules instead of
@@ -359,11 +376,12 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         // Custom rules are expanded the same way (they are persisted verbatim, so a
         // rule written before the add-time validation may still carry `geoip`), and
         // `geosite` is dropped in both paths.
-        let (custom_rules, all_sets) = expand_geoip_rules(
+        let (custom_rules, mut all_sets) = expand_geoip_rules(
             &custom_rules,
             &sub_sets,
             input.geoip_rule_set_dir.as_deref(),
         );
+        ice_config_guard::retain_local_rule_sets(&mut all_sets);
         final_rules.extend(custom_rules);
         final_rules.extend(sub_rules);
         (final_rules, all_sets)
@@ -391,6 +409,10 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // internal listen key; strip it defensively so cached profiles keep building.
     if let Some(dns_obj) = dns.as_object_mut() {
         dns_obj.remove("__ice_dns_listen");
+    }
+    ice_config_guard::retain_allowed_dns_servers(&mut dns);
+    if !dns_block_is_usable(&dns) {
+        dns = minimal_dns_block(input.platform);
     }
 
     // sing-box 1.12+: domain addresses must be resolved via a domain resolver.
@@ -858,16 +880,15 @@ fn custom_rule_is_usable(
             return false;
         }
     }
-    if let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) {
-        for r in refs {
-            if let Some(t) = r.as_str() {
-                if !rule_set_tags.contains(t) {
-                    return false;
-                }
-            }
-        }
-    }
-    true
+    rule_set_refs_are_known(rule, rule_set_tags)
+}
+
+fn rule_set_refs_are_known(rule: &Value, rule_set_tags: &std::collections::HashSet<&str>) -> bool {
+    let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) else {
+        return true;
+    };
+    refs.iter()
+        .all(|r| r.as_str().is_some_and(|t| rule_set_tags.contains(t)))
 }
 
 pub fn validate_config(config: &Value) -> Result<(), ConfigError> {

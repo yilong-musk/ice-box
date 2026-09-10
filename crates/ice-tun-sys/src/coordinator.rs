@@ -107,6 +107,86 @@ const TASK_PIDFILE_WAIT: Duration = Duration::from_secs(20);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
+/// Sibling of the user `config.json` used by the dev sudo / already-admin
+/// runners. Production helper/launcher write into a root/admin-owned run
+/// dir; these fallbacks still sanitise, but the dest is same-user.
+fn sibling_elevated_config(user_path: &Path) -> PathBuf {
+    user_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".elevated-config.json")
+}
+
+fn elevated_config_dest(user_path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(program_data) = std::env::var("ProgramData") {
+            let run = ice_tun_pin::protected_run_dir(std::path::Path::new(&program_data));
+            if run.is_dir() {
+                return run.join("config.json");
+            }
+        }
+    }
+    sibling_elevated_config(user_path)
+}
+
+fn write_sanitized_elevated_config(
+    user_path: &Path,
+    dest: &Path,
+    log_path: &Path,
+) -> Result<(), TunError> {
+    let data_dir = user_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let raw = ice_config_guard::read_config_file(user_path).map_err(|err| {
+        let code = if err.message.contains("open config")
+            || err.message.contains("read config")
+            || err.message.contains("stat config")
+        {
+            ErrorCode::TunApplyFailed
+        } else {
+            ErrorCode::TunConfigRejected
+        };
+        TunError::new(code, err.to_string())
+    })?;
+    let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunConfigRejected,
+            format!("config is not JSON: {err}"),
+        )
+    })?;
+    let ctx = ice_config_guard::GuardContext {
+        data_dir: data_dir.clone(),
+        resources_dir: data_dir,
+        log_output: Some(log_path.to_path_buf()),
+        cache_file_path: Some(dest.with_file_name("elevated-cache.db")),
+    };
+    ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
+        .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("create sanitised config dir {}: {err}", parent.display()),
+            )
+        })?;
+    }
+    let bytes = serde_json::to_vec(&cfg).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("encode sanitised config: {err}"),
+        )
+    })?;
+    std::fs::write(dest, bytes).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("write sanitised config {}: {err}", dest.display()),
+        )
+    })?;
+    Ok(())
+}
+
 /// Shared verify path for Child-based coordinators: callers implement
 /// only the spawn seam; this fails if the process exits inside
 /// [`STARTUP_CRASH_WINDOW`].
@@ -274,8 +354,10 @@ impl SudoCoreCoordinator {
 impl CoreCoordinator for SudoCoreCoordinator {
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
         self.check_permission()?;
+        let protected = elevated_config_dest(config_path);
+        write_sanitized_elevated_config(config_path, &protected, &self.log_path)?;
         let child =
-            match verify_then_start_child(|| self.spawn_elevated(config_path), &self.log_path) {
+            match verify_then_start_child(|| self.spawn_elevated(&protected), &self.log_path) {
                 Ok(child) => child,
                 Err(err) => {
                     self.pid = None;
@@ -291,7 +373,7 @@ impl CoreCoordinator for SudoCoreCoordinator {
         // Depending on the host sudo policy, sudo may remain as a monitor
         // process while sing-box runs as its root-owned child. Track the
         // actual sing-box pid so TERM/KILL cannot leave that child behind.
-        let pid = find_singbox_pid(launcher_pid, &self.binary, config_path).unwrap_or(launcher_pid);
+        let pid = find_singbox_pid(launcher_pid, &self.binary, &protected).unwrap_or(launcher_pid);
         self.pid = Some(pid);
         tracing::info!(
             pid,
@@ -600,8 +682,10 @@ impl WindowsElevatedCoreCoordinator {
 impl CoreCoordinator for WindowsElevatedCoreCoordinator {
     fn start_with_config(&mut self, config_path: &Path) -> Result<u32, TunError> {
         self.check_elevation()?;
+        let protected = elevated_config_dest(config_path);
+        write_sanitized_elevated_config(config_path, &protected, &self.log_path)?;
         let child =
-            match verify_then_start_child(|| self.spawn_elevated(config_path), &self.log_path) {
+            match verify_then_start_child(|| self.spawn_elevated(&protected), &self.log_path) {
                 Ok(child) => child,
                 Err(err) => {
                     self.child = None;

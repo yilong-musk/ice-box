@@ -379,11 +379,15 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
                 .and_then(|v| v.as_str())
                 .unwrap_or("direct")
                 .to_string(),
-            rule_sets: r
-                .get("rule_set")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default(),
+            rule_sets: {
+                let mut sets = r
+                    .get("rule_set")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                ice_config_guard::retain_local_rule_sets(&mut sets);
+                sets
+            },
         }
     } else {
         NormalizedRoute {
@@ -400,7 +404,10 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
             nodes,
             groups,
             route,
-            dns: value.get("dns").cloned(),
+            dns: value.get("dns").cloned().map(|mut dns| {
+                ice_config_guard::retain_allowed_dns_servers(&mut dns);
+                dns
+            }),
             default_outbound,
             parse_stats,
         };

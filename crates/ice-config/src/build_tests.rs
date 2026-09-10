@@ -300,6 +300,7 @@ fn allow_lan_binds_0_0_0_0_and_no_dns_inbound() {
     assert_eq!(cfg["inbounds"][0]["listen"], "0.0.0.0");
     assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
     assert_eq!(cfg["route"]["default_domain_resolver"], "local");
+    assert_guard_unchanged(cfg);
 }
 
 #[test]
@@ -614,7 +615,11 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
 #[test]
 fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
-    profile.route.rule_sets = vec![json!({ "tag": "geoip-cn", "type": "remote" })];
+    profile.route.rule_sets = vec![json!({
+        "tag": "geoip-cn",
+        "type": "local",
+        "path": "geoip/geoip-cn.srs"
+    })];
     let mut overrides = RuleOverrides::default();
     overrides.custom.push(json!({
         "rule_set": ["geoip-cn"],
@@ -653,6 +658,80 @@ fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
         ["geoip-cn"],
         "custom rule referencing a missing rule-set is skipped, not fatal"
     );
+}
+
+#[test]
+fn remote_rule_sets_and_hosts_dns_are_dropped_for_user_mode() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![
+        json!({
+            "tag": "evil",
+            "type": "remote",
+            "url": "https://evil.example/geoip.srs"
+        }),
+        json!({
+            "tag": "ok",
+            "type": "local",
+            "path": "geoip/ok.srs"
+        }),
+    ];
+    profile.route.rules = vec![
+        json!({ "rule_set": ["evil"], "outbound": "direct" }),
+        json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
+    ];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "hosts", "tag": "hosts", "path": "/etc/passwd" }
+        ],
+        "final": "hosts"
+    }));
+
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+
+    let sets = cfg["route"]["rule_set"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        sets.iter().all(|s| s["tag"] != "evil"),
+        "remote rule_set must not reach the user-mode core: {sets:?}"
+    );
+    assert!(
+        sets.iter().any(|s| s["tag"] == "ok"),
+        "local rule_set is kept: {sets:?}"
+    );
+    let rules = cfg["route"]["rules"].as_array().unwrap();
+    assert!(
+        rules
+            .iter()
+            .all(|r| r.get("rule_set") != Some(&json!(["evil"]))),
+        "rules that only referenced the remote set must be dropped"
+    );
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.get("domain_suffix") == Some(&json!(["keep.com"]))),
+        "unrelated rules stay"
+    );
+    assert!(
+        cfg["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["type"] != "hosts"),
+        "hosts DNS must not reach the core"
+    );
+    assert_eq!(cfg["dns"]["final"], "local");
 }
 
 #[test]
@@ -723,7 +802,7 @@ fn proxy_mode_global_keeps_rules_with_clash_mode_global_target() {
                 json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
                 json!({ "domain_suffix": ["proxy.com"], "outbound": "a" }),
             ],
-            rule_sets: vec![json!({"type": "local", "tag": "set-a"})],
+            rule_sets: vec![json!({"type": "local", "tag": "set-a", "path": "geoip/set-a.srs"})],
         },
         dns: None,
         default_outbound: Some("Proxies".into()),
