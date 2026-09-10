@@ -25,7 +25,6 @@ const TUN_TRANSITION_KEYS: Record<string, MessageKey> = {
 
 export function TunCard({
   form,
-  setForm,
   status,
   busy,
   loaded,
@@ -37,7 +36,6 @@ export function TunCard({
   onUninstallHelper,
 }: {
   form: AppSettings;
-  setForm: (next: AppSettings) => void;
   status: StatusResponse | null;
   busy: boolean;
   loaded: boolean;
@@ -97,10 +95,14 @@ export function TunCard({
                   })();
                   return;
                 }
-                setForm({
-                  ...form,
-                  tun: { ...form.tun, enabled: checked === true },
-                });
+                void (async () => {
+                  try {
+                    await persistTunEnabled(checked === true);
+                    flashSaved();
+                  } catch (e) {
+                    setError(formatInvokeError(e));
+                  }
+                })();
               }}
             />
             <FieldLabel htmlFor="settings-tun-enabled">

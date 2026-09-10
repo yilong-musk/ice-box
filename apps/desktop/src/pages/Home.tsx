@@ -167,7 +167,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             setSettings(settingsRef.current);
             setProxyMode(nextSettings.proxy_mode);
           }
-          setTunOverride(null);
+          if (!tunSaveRef.current) {
+            setTunOverride(null);
+          }
           setError(null);
           return;
         }
@@ -179,7 +181,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           setSettings(nextSettings);
           setProxyMode(nextSettings.proxy_mode);
         }
-        setTunOverride(null);
+        if (!tunSaveRef.current) {
+          setTunOverride(null);
+        }
         setSelectedTag(selected);
         const coreStatus =
           s?.core.status ?? statusRef.current?.core.status ?? "stopped";
@@ -222,7 +226,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     statusRef.current = runtime.status;
     setStatus(runtime.status);
     onStatus?.(runtime.status);
-    setTunOverride(null);
+    if (!tunSaveRef.current) {
+      setTunOverride(null);
+    }
   }, [runtime?.status, onStatus]);
 
   useEffect(() => {
@@ -305,6 +311,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     } finally {
       tunSaveRef.current = false;
       setTunSaving(false);
+      setTunOverride(null);
     }
   }
 

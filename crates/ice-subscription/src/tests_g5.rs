@@ -166,6 +166,36 @@ fn singbox_parse_skips_disallowed_outbound_types() {
 }
 
 #[test]
+fn singbox_parse_keeps_fallback_and_loadbalance_as_groups() {
+    let raw = r#"{
+            "outbounds": [
+                { "type": "socks", "tag": "ok", "server": "1.1.1.1", "server_port": 1080 },
+                {
+                    "type": "fallback",
+                    "tag": "fb",
+                    "outbounds": ["ok"],
+                    "url": "http://www.gstatic.com/generate_204"
+                },
+                {
+                    "type": "loadbalance",
+                    "tag": "lb",
+                    "outbounds": ["ok"],
+                    "strategy": "round-robin"
+                }
+            ]
+        }"#;
+    let profile = parse_singbox_profile(raw).unwrap();
+    assert_eq!(profile.nodes.len(), 1);
+    assert_eq!(profile.nodes[0].tag, "ok");
+    let tags: Vec<_> = profile.groups.iter().map(|g| g.tag.as_str()).collect();
+    assert!(tags.contains(&"fb"), "fallback must be a group, not a node");
+    assert!(
+        tags.contains(&"lb"),
+        "loadbalance must be a group, not a node"
+    );
+}
+
+#[test]
 fn g5_4_body_over_8mib() {
     let paths = temp_subs("big");
     let fetcher = MockFetcher {

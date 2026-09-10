@@ -17,6 +17,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94.1"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -101,6 +102,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94.1"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2

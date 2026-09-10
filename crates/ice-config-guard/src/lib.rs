@@ -76,6 +76,8 @@ const ALLOWED_OUTBOUND_TYPES: &[&str] = &[
     "dns",
     "selector",
     "urltest",
+    "fallback",
+    "loadbalance",
     "shadowsocks",
     "vmess",
     "vless",
@@ -250,8 +252,8 @@ pub fn check_outbound(value: &Value) -> Result<(), GuardError> {
         ));
     }
     reject_wireguard_system(obj, "")?;
-    if ty == "urltest" {
-        validate_urltest_url(obj, "")?;
+    if ty == "urltest" || ty == "fallback" {
+        validate_health_check_url(obj, "")?;
     }
     walk_forbidden(value, "", None)?;
     Ok(())
@@ -448,27 +450,27 @@ fn validate_outbounds(cfg: &Value) -> Result<(), GuardError> {
             ));
         }
         reject_wireguard_system(obj, &pointer)?;
-        if ty == "urltest" {
-            validate_urltest_url(obj, &pointer)?;
+        if ty == "urltest" || ty == "fallback" {
+            validate_health_check_url(obj, &pointer)?;
         }
     }
     Ok(())
 }
 
-fn validate_urltest_url(obj: &Map<String, Value>, pointer: &str) -> Result<(), GuardError> {
+fn validate_health_check_url(obj: &Map<String, Value>, pointer: &str) -> Result<(), GuardError> {
     let Some(url) = obj.get("url") else {
         return Ok(());
     };
     let Some(raw) = url.as_str() else {
         return Err(GuardError::new(
             format!("{pointer}/url"),
-            "urltest url must be a string",
+            "health-check url must be a string",
         ));
     };
     if !health_check_url_is_allowed(raw) {
         return Err(GuardError::new(
             format!("{pointer}/url"),
-            format!("urltest url {raw:?} is not allowed"),
+            format!("health-check url {raw:?} is not allowed"),
         ));
     }
     Ok(())
@@ -768,7 +770,15 @@ fn skip_forbidden_at(
     {
         return true;
     }
-    if key == "url" && parent.get("type").and_then(Value::as_str) == Some("urltest") {
+    if key == "url"
+        && matches!(
+            parent.get("type").and_then(Value::as_str),
+            Some("urltest" | "fallback")
+        )
+    {
+        return true;
+    }
+    if matches!(key, "process_path" | "process_path_regex") {
         return true;
     }
     false
@@ -1378,6 +1388,41 @@ mod tests {
             { "type": "direct", "tag": "direct" }
         ]);
         sanitize(ok, &ctx(&dir)).expect("gstatic");
+
+        let mut fallback = minimal_allowed_config();
+        fallback["outbounds"] = json!([
+            {
+                "type": "fallback",
+                "tag": "fb",
+                "outbounds": ["direct"],
+                "url": "http://www.gstatic.com/generate_204"
+            },
+            { "type": "direct", "tag": "direct" }
+        ]);
+        sanitize(fallback, &ctx(&dir)).expect("fallback");
+
+        let mut loadbalance = minimal_allowed_config();
+        loadbalance["outbounds"] = json!([
+            {
+                "type": "loadbalance",
+                "tag": "lb",
+                "outbounds": ["direct"],
+                "strategy": "round-robin"
+            },
+            { "type": "direct", "tag": "direct" }
+        ]);
+        sanitize(loadbalance, &ctx(&dir)).expect("loadbalance");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn route_process_path_is_allowed() {
+        let dir = temp_dir("process-path");
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rules"] = json!([
+            { "process_path": ["/Applications/Foo.app/Contents/MacOS/Foo"], "outbound": "direct" }
+        ]);
+        sanitize(cfg, &ctx(&dir)).expect("process_path");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -42,6 +42,7 @@ mod imp {
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use ice_tun_helper_proto::{
@@ -315,17 +316,7 @@ mod imp {
         Ok(())
     }
 
-    /// One request per connection: read a frame, authenticate, dispatch, reply.
-    /// The caller owns the core lifecycle (`CoreRunner`); `serve_connection`
-    /// keeps it across frames is not needed because the client reconnects per
-    /// command, so the runner is passed in and out.
-    pub fn serve_connection(
-        stream: UnixStream,
-        config: &ServerConfig,
-        peer_auth: &dyn PeerAuth,
-        runner: &mut dyn CoreRunner,
-    ) -> Result<(), TunError> {
-        let peer_uid = peer_auth.peer_uid(&stream)?;
+    fn read_helper_request(stream: &UnixStream) -> Result<HelperRequest, TunError> {
         // Bounded read: a peer that connects but never finishes its frame
         // must not hold a daemon thread for long.
         stream.set_read_timeout(Some(READ_TIMEOUT)).map_err(|e| {
@@ -353,17 +344,14 @@ mod imp {
                 format!("request frame exceeds {MAX_FRAME_BYTES} bytes"),
             ));
         }
-        let request: HelperRequest = serde_json::from_str(line.trim_end()).map_err(|e| {
-            TunError::new(ErrorCode::TunApplyFailed, format!("decode request: {e}"))
-        })?;
-        let response = if let Err(err) = authenticate(config, peer_uid, &request) {
-            HelperResponse::err(&err)
-        } else {
-            match dispatch(config, &request.command, runner) {
-                Ok(pid) => HelperResponse::ok(pid),
-                Err(err) => HelperResponse::err(&err),
-            }
-        };
+        serde_json::from_str(line.trim_end())
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("decode request: {e}")))
+    }
+
+    fn write_helper_response(
+        stream: &UnixStream,
+        response: HelperResponse,
+    ) -> Result<(), TunError> {
         let mut frame = serde_json::to_vec(&response).map_err(|e| {
             TunError::new(ErrorCode::TunApplyFailed, format!("encode response: {e}"))
         })?;
@@ -382,6 +370,53 @@ mod imp {
         })?;
         writer.flush().ok();
         Ok(())
+    }
+
+    /// One request per connection: read a frame, authenticate, dispatch, reply.
+    /// The caller already holds the runner (tests). Production uses
+    /// [`serve_peer`], which authenticates before taking the mutex.
+    pub fn serve_connection(
+        stream: UnixStream,
+        config: &ServerConfig,
+        peer_auth: &dyn PeerAuth,
+        runner: &mut dyn CoreRunner,
+    ) -> Result<(), TunError> {
+        let peer_uid = peer_auth.peer_uid(&stream)?;
+        let request = read_helper_request(&stream)?;
+        let response = if let Err(err) = authenticate(config, peer_uid, &request) {
+            HelperResponse::err(&err)
+        } else {
+            match dispatch(config, &request.command, runner) {
+                Ok(pid) => HelperResponse::ok(pid),
+                Err(err) => HelperResponse::err(&err),
+            }
+        };
+        write_helper_response(&stream, response)
+    }
+
+    /// Production accept-loop entry: authenticate the peer and frame, then
+    /// take the runner mutex only for dispatch. An unauthenticated connection
+    /// cannot stall Start/Stop/SetDns.
+    pub fn serve_peer<R: CoreRunner>(
+        stream: UnixStream,
+        config: &ServerConfig,
+        peer_auth: &dyn PeerAuth,
+        runner: &Mutex<R>,
+    ) -> Result<(), TunError> {
+        let peer_uid = peer_auth.peer_uid(&stream)?;
+        let request = read_helper_request(&stream)?;
+        let response = if let Err(err) = authenticate(config, peer_uid, &request) {
+            HelperResponse::err(&err)
+        } else {
+            let mut runner = runner
+                .lock()
+                .map_err(|_| TunError::new(ErrorCode::TunApplyFailed, "runner lock poisoned"))?;
+            match dispatch(config, &request.command, &mut *runner) {
+                Ok(pid) => HelperResponse::ok(pid),
+                Err(err) => HelperResponse::err(&err),
+            }
+        };
+        write_helper_response(&stream, response)
     }
 
     /// Dispatch one validated command onto the runner.
@@ -941,7 +976,7 @@ mod imp {
             bin
         }
 
-        /// In-process roundtrip: `serve_connection` on one end of a socketpair,
+        /// In-process roundtrip: `serve_peer` on one end of a socketpair,
         /// the test drives the other end. The runner is shared across
         /// connections like the daemon's accept loop does.
         fn roundtrip<R: CoreRunner + Send + 'static>(
@@ -953,8 +988,7 @@ mod imp {
             let (client, server) = UnixStream::pair().expect("socketpair");
             let config = config.clone();
             std::thread::spawn(move || {
-                let mut runner = runner.lock().expect("runner lock");
-                let _ = serve_connection(server, &config, auth, &mut *runner);
+                let _ = serve_peer(server, &config, auth, &runner);
             });
             let mut line = ice_tun_helper_proto::encode_request(request)?;
             line.push(b'\n');
@@ -981,6 +1015,23 @@ mod imp {
             let config = fixture_config("tok", &dir);
             let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let response = roundtrip(&config, &PEER7, runner, &status_request("tok")).unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.permission_required"));
+        }
+
+        #[test]
+        fn unauthenticated_request_does_not_wait_for_runner_lock() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+            let _held = runner.lock().expect("hold runner");
+            let started = Instant::now();
+            let response = roundtrip(&config, &PEER7, Arc::clone(&runner), &status_request("tok"))
+                .expect("auth should complete without the runner mutex");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "unauthenticated peers must not wait on the runner lock"
+            );
             assert!(!response.ok);
             assert_eq!(response.code.as_deref(), Some("tun.permission_required"));
         }
@@ -1295,8 +1346,7 @@ mod imp {
             let config = config.clone();
             let runner = runner.clone();
             let handle = std::thread::spawn(move || {
-                let mut runner = runner.lock().expect("runner lock");
-                let _ = serve_connection(server, &config, &PEER42, &mut *runner);
+                let _ = serve_peer(server, &config, &PEER42, &runner);
             });
 
             // A well-formed request whose config field pushes the line over
@@ -1493,4 +1543,6 @@ mod imp {
 #[cfg(all(unix, any(test, feature = "test-hooks")))]
 pub use imp::FixedPeerAuth;
 #[cfg(unix)]
-pub use imp::{serve_connection, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth};
+pub use imp::{
+    serve_connection, serve_peer, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+};

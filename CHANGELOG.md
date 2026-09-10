@@ -40,6 +40,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Privileged helper authenticates the peer and request frame before taking
+  the core-runner mutex, so a stalled unauthenticated connection cannot
+  block Start / Stop / SetDns.
+- Core adopt / orphan reclaim matches only a `sing-box` / `sing-box.exe`
+  image basename, requires a real on-disk candidate, and no longer treats
+  a basename-only path as identity.
+- Elevated sanitiser allows Clash `fallback` / `loadbalance` outbounds
+  (health-check URLs for `urltest` and `fallback` stay allowlisted) and
+  route matchers `process_path` / `process_path_regex`.
+- Settings auto-save omits `tun.enabled` so a debounced mixed-port write
+  cannot overwrite Home's TUN switch; Home keeps the optimistic TUN
+  override while that save is in flight.
+- CI and Release jobs install Rust `1.94.1` (`rust-toolchain.toml`) instead
+  of the latest stable from `dtolnay/rust-toolchain@stable`.
 - Elevated config sanitiser only treats `dns.servers[].path` as a URL path
   when the server type is DoH (`https` / `h3`), and allowlists DNS server
   types. `type: hosts` with a filesystem `path` was previously accepted and

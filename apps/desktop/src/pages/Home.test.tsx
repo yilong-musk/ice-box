@@ -1060,6 +1060,10 @@ describe("Home", () => {
     expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
     expect(container.textContent).not.toContain(t("home.power.busy"));
     expect(view.getByRole("button", { name: t("home.tunMode") })).toBeDisabled();
+    expect(view.getByRole("button", { name: t("home.tunMode") })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     releaseSave?.();
     await waitFor(() => {

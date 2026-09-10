@@ -36,7 +36,7 @@ mod unix_main {
     use std::sync::{Arc, Mutex};
 
     use ice_helper::{ProcessCoreRunner, ServerConfig, SocketPeerAuth};
-    use ice_types::{ErrorCode, TunError};
+    use ice_types::TunError;
 
     use crate::install::{
         ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR,
@@ -104,15 +104,14 @@ mod unix_main {
         })
     }
 
-    /// Serve one connection: read a single request frame, dispatch, respond.
-    /// The runner is shared across connections (one core at a time).
-    fn serve_connection(
+    /// Serve one connection: authenticate, then dispatch under the runner mutex.
+    fn serve_peer(
         stream: UnixStream,
         config: &ServerConfig,
         auth: &SocketPeerAuth,
-        runner: &mut ProcessCoreRunner,
+        runner: &std::sync::Mutex<ProcessCoreRunner>,
     ) -> Result<(), TunError> {
-        ice_helper::serve_connection(stream, config, auth, runner)
+        ice_helper::serve_peer(stream, config, auth, runner)
     }
 
     pub(crate) fn run_daemon() {
@@ -176,16 +175,8 @@ mod unix_main {
                     let runner = Arc::clone(&runner);
                     let active = Arc::clone(&active);
                     std::thread::spawn(move || {
-                        let result = match runner.lock() {
-                            Ok(mut runner) => {
-                                let auth = SocketPeerAuth;
-                                serve_connection(stream, &config, &auth, &mut runner)
-                            }
-                            Err(_) => Err(TunError::new(
-                                ErrorCode::TunApplyFailed,
-                                "runner lock poisoned",
-                            )),
-                        };
+                        let auth = SocketPeerAuth;
+                        let result = serve_peer(stream, &config, &auth, &runner);
                         active.fetch_sub(1, Ordering::SeqCst);
                         if let Err(err) = result {
                             tracing::debug!(error = %err, "connection failed");

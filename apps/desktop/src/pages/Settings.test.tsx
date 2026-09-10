@@ -156,6 +156,10 @@ describe("Settings", () => {
         expect(saveSettings).toHaveBeenCalledWith(
           expect.objectContaining({ mixed_port: 18080 }),
         );
+        const patch = saveSettings.mock.calls[0][0] as {
+          tun?: { enabled?: boolean };
+        };
+        expect(patch.tun?.enabled).toBeUndefined();
       },
       { timeout: 2000 },
     );

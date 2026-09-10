@@ -869,8 +869,7 @@ fn config_is_own_argument(command: &str, config: &str) -> bool {
 
 /// `sing-box run -c <config>` (Unix `ps` or a Windows process command line).
 fn is_reclaimable_core_command(command: &str, config: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    lower.contains("sing-box")
+    image_basename_is_singbox(command)
         && command.split_whitespace().any(|a| a == "run")
         && command.split_whitespace().any(|a| a == "-c")
         && config_is_own_argument(command, config)
@@ -1095,9 +1094,64 @@ fn strip_ansi_light(s: &str) -> String {
 }
 
 fn looks_like_singbox_process(pid: u32) -> bool {
-    process_image_path(pid)
-        .map(|path| path.to_ascii_lowercase().contains("sing-box"))
-        .unwrap_or(false)
+    process_image_path(pid).is_some_and(|path| image_basename_is_singbox(&path))
+}
+
+/// True when the command image's file name is `sing-box` / `sing-box.exe`.
+/// Substring matches (`not-sing-box`, `sing-box-wrapper`) are refused.
+/// A Unix shebang leftover shows as `sh /path/sing-box …` in `ps`; that
+/// script path is accepted. `sh -c '… sing-box …'` is not (argv1 is `-c`).
+fn image_basename_is_singbox(image: &str) -> bool {
+    let exe = adopt_image_exe_path(image);
+    if path_last_segment_is_singbox(exe) {
+        return true;
+    }
+    argv0_is_unix_interpreter(exe)
+        && shebang_script_path(image)
+            .is_some_and(|script| path_last_segment_is_singbox(Path::new(script)))
+}
+
+fn path_last_segment_is_singbox(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    // Unix `Path` does not split on `\`, so Windows images still need a
+    // last-segment check here (unit tests and mixed host strings).
+    let name = raw.rsplit(['\\', '/']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("sing-box") || name.eq_ignore_ascii_case("sing-box.exe")
+}
+
+fn argv0_is_unix_interpreter(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    let name = raw.rsplit(['\\', '/']).next().unwrap_or("");
+    matches!(name, "sh" | "bash" | "dash" | "zsh" | "busybox" | "env")
+}
+
+/// argv1 when it is a script path, not a flag (`-c`, `--norc`, …).
+fn shebang_script_path(image: &str) -> Option<&str> {
+    let trimmed = image.trim();
+    let after_argv0 = if let Some(rest) = trimmed.strip_prefix('"') {
+        let end = rest.find('"')?;
+        rest.get(end + 1..)?
+    } else if looks_like_windows_image_path(trimmed) {
+        return None;
+    } else {
+        let tok_len = trimmed.split_whitespace().next()?.len();
+        trimmed.get(tok_len..)?
+    };
+    let rest = after_argv0.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let script = if let Some(inner) = rest.strip_prefix('"') {
+        let end = inner.find('"')?;
+        &inner[..end]
+    } else {
+        rest.split_whitespace().next()?
+    };
+    if script.starts_with('-') {
+        None
+    } else {
+        Some(script)
+    }
 }
 
 /// Command / image path of `pid`, used for adopt identity checks.
@@ -1151,9 +1205,7 @@ fn process_image_path(pid: u32) -> Option<String> {
 fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
     let existing: Vec<&Path> = cores.iter().copied().filter(|p| p.is_file()).collect();
     if existing.is_empty() {
-        // No on-disk candidate (tests use a dummy path): identity is the
-        // `looks_like_singbox_process` check above.
-        return true;
+        return false;
     }
     let Some(image) = process_image_path(pid) else {
         return false;
@@ -1166,7 +1218,12 @@ fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
 /// Windows `QueryFullProcessImageNameW` is the exe path and may contain
 /// spaces (`C:\Program Files\...`). Unix `ps -o command=` is `exe args...`.
 fn adopt_image_exe_path(image: &str) -> &Path {
-    let trimmed = image.trim().trim_matches('"');
+    let trimmed = image.trim();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return Path::new(&rest[..end]);
+        }
+    }
     if looks_like_windows_image_path(trimmed) {
         Path::new(trimmed)
     } else {
@@ -1188,15 +1245,7 @@ fn process_image_string_matches_core(image: &str, core: &Path) -> bool {
     }
     let left = image_path.to_string_lossy().replace('/', "\\");
     let right = core.to_string_lossy().replace('/', "\\");
-    if left.eq_ignore_ascii_case(&right) {
-        return true;
-    }
-    let image_name = image_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let core_name = core.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    !core_name.is_empty() && image_name.eq_ignore_ascii_case(core_name)
+    left.eq_ignore_ascii_case(&right)
 }
 
 /// Best-effort kill of a pid; returns whether the TERM signal was delivered.
@@ -1752,6 +1801,51 @@ mod tests {
             quoted,
             r"C:\Users\me\AppData\Roaming\ice-box\config.json"
         ));
+        assert!(
+            !is_reclaimable_core_command(
+                "/tmp/not-sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "basename must be exactly sing-box"
+        );
+        assert!(
+            !is_reclaimable_core_command(
+                "/bin/sh -c sleep /tmp/sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "a shell whose argv mentions sing-box is not the core"
+        );
+        assert!(
+            is_reclaimable_core_command(
+                "/bin/sh /tmp/ice-box/sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "a shebang wrapper named sing-box is the leftover core"
+        );
+    }
+
+    #[test]
+    fn image_basename_is_singbox_requires_exact_file_name() {
+        assert!(image_basename_is_singbox(
+            "/opt/ice-box/sing-box run -c /tmp/c.json"
+        ));
+        assert!(image_basename_is_singbox(
+            r#""C:\Program Files\ice-box\sing-box.exe" run -c x"#
+        ));
+        assert!(!image_basename_is_singbox("/opt/ice-box/not-sing-box"));
+        assert!(!image_basename_is_singbox("/opt/ice-box/sing-box-wrapper"));
+    }
+
+    #[test]
+    fn adopt_rejects_empty_candidates_and_basename_only_matches() {
+        assert!(!process_image_matches_any(
+            std::process::id(),
+            &[Path::new("/nope/sing-box")]
+        ));
+        assert!(!process_image_string_matches_core(
+            "/tmp/evil/sing-box",
+            Path::new("/Library/PrivilegedHelperTools/com.yilong-musk.icebox/sing-box")
+        ));
     }
 
     #[cfg(unix)]
@@ -1760,21 +1854,22 @@ mod tests {
         let dir = temp_root("scan-reclaim");
         let config = dir.join("config.json");
         fs::write(&config, b"{}").unwrap();
-        // A fake "sing-box" process whose command line carries the config path
-        // exactly like a real leftover core, but no pid file records it:
-        // `sh -c 'sleep 60 & wait' <name> run -c <config>` keeps the shell's
-        // original argv (including the name and args) in the command line
-        // while staying alive.
-        let name = dir.join("sing-box");
-        let mut child = std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "sleep 60 & wait",
-                &name.to_string_lossy(),
-                "run",
-                "-c",
-                &config.to_string_lossy(),
-            ])
+        // A leftover core whose *image* is named sing-box and whose argv is
+        // `run -c <config>` — not a shell whose command line merely mentions
+        // those tokens. Linux `ps` shows the shebang interpreter plus the
+        // script path; `image_basename_is_singbox` accepts that shape.
+        let bin = dir.join("sing-box");
+        fs::write(&bin, b"#!/bin/sh\nwhile :; do sleep 1; done\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        let mut child = std::process::Command::new(&bin)
+            .args(["run", "-c", &config.to_string_lossy()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()

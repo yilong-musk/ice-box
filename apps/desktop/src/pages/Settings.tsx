@@ -60,8 +60,11 @@ const defaults: AppSettings = {
 /// and radios feel instant).
 const SAVE_DEBOUNCE_MS = 500;
 
-/** Fields this page owns. Omitting Home-owned keys avoids last-writer races (ORCH-3). */
+/** Fields this page owns. Omitting Home-owned keys avoids last-writer races (ORCH-3).
+ * `tun.enabled` is persisted only by the TUN switch (`persistTunEnabled`), never
+ * by the debounced auto-save of other fields. */
 function settingsOwnedPatch(form: AppSettings): SettingsPatch {
+  const { enabled: _enabled, ...tunRest } = form.tun;
   return {
     mixed_listen: form.mixed_listen,
     mixed_port: form.mixed_port,
@@ -69,7 +72,7 @@ function settingsOwnedPatch(form: AppSettings): SettingsPatch {
     clash_api_port: form.clash_api_port,
     auto_set_system_proxy: form.auto_set_system_proxy,
     allow_lan: form.allow_lan,
-    tun: form.tun,
+    tun: tunRest,
     auto_default_rules: form.auto_default_rules,
     language: form.language,
     check_app_updates: form.check_app_updates,
@@ -334,8 +337,8 @@ export function Settings({
     if (Object.keys(errs).length > 0) {
       throw new Error(t("settings.tunNotSaved"));
     }
+    setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled } }));
     await api.saveSettings({ tun: { enabled } });
-    setForm(candidate);
   }
 
   /** Enabling TUN without an authorized helper: install first, then persist
@@ -511,7 +514,6 @@ export function Settings({
           {tunUiHidden ? null : (
             <TunCard
               form={form}
-              setForm={setForm}
               status={status}
               busy={busy}
               loaded={loaded}

@@ -87,8 +87,7 @@ fn spawn_server(config: Arc<ServerConfig>, socket_path: &std::path::Path) -> Ser
                     let auth = auth.clone();
                     let runner = runner.clone();
                     std::thread::spawn(move || {
-                        let mut runner = runner.lock().unwrap();
-                        let _ = ice_helper::serve_connection(stream, &config, &*auth, &mut *runner);
+                        let _ = ice_helper::serve_peer(stream, &config, &*auth, &runner);
                     });
                 }
                 Err(_) => break,

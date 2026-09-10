@@ -328,7 +328,7 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
                 outbound: std::sync::Arc::new(item.clone()),
             };
             match ty {
-                "selector" | "urltest" => {
+                "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance" => {
                     groups.push(entry);
                 }
                 "direct" | "block" | "dns" => {}
