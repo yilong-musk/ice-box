@@ -27,7 +27,7 @@ import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
 import { TunCard } from "./settings/Tun";
-import { UpdateCard } from "./settings/Update";
+import { formatUpdateError, UpdateCard } from "./settings/Update";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -195,7 +195,7 @@ export function Settings({
       setUpdateInfo(result);
       publishSidebarUpdate(result, form.check_app_updates);
     } catch (e) {
-      setUpdateError(formatInvokeError(e));
+      setUpdateError(formatUpdateError(e));
       setUpdateInfo(null);
     } finally {
       setUpdateBusy(false);
@@ -209,7 +209,7 @@ export function Settings({
     try {
       await api.installAppUpdate();
     } catch (e) {
-      setUpdateError(formatInvokeError(e));
+      setUpdateError(formatUpdateError(e));
       setUpdateBusy(false);
       setUpdateProgress(null);
     }
@@ -329,8 +329,11 @@ export function Settings({
    * the same validation the save pipeline applies. An invalid form rejects
    * with a visible error instead of silently keeping the change unsaved —
    * e.g. a guided install must never flash「已保存」while the TUN-on setting
-   * was dropped by validation. */
+   * was dropped by validation. Autosave omits this field, so a successful
+   * save must refresh shared status (Home reads `configured_tun` from it)
+   * and a failed save must roll the switch back. */
   async function persistTunEnabled(enabled: boolean) {
+    const previous = form.tun.enabled;
     const candidate = { ...form, tun: { ...form.tun, enabled } };
     const errs = validateForm(candidate);
     setFieldErrors(errs);
@@ -338,7 +341,13 @@ export function Settings({
       throw new Error(t("settings.tunNotSaved"));
     }
     setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled } }));
-    await api.saveSettings({ tun: { enabled } });
+    try {
+      await api.saveSettings({ tun: { enabled } });
+    } catch (err) {
+      setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled: previous } }));
+      throw err;
+    }
+    void runtime?.refreshStatus();
   }
 
   /** Enabling TUN without an authorized helper: install first, then persist

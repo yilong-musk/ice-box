@@ -17,18 +17,41 @@ import { Switch } from "@/components/ui/switch";
 import { formatProgress } from "../../components/UpdateAvailableDialog";
 import { APP_VERSION } from "../../lib/appVersion";
 import { t } from "../../lib/i18n";
-import type { CheckAppUpdateResponse } from "../../api/tauri";
+import { isErrorCode } from "../../api/errorCodes";
+import { formatInvokeError, type CheckAppUpdateResponse } from "../../api/tauri";
 
-function formatUpdateError(raw: string): string {
-  const sep = raw.indexOf(":");
-  const code = (sep === -1 ? raw : raw.slice(0, sep)).trim();
+function invokeErrorCode(err: unknown): string | null {
+  if (err && typeof err === "object") {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) {
+      return code;
+    }
+  }
+  if (typeof err === "string") {
+    const sep = err.indexOf(":");
+    const code = (sep === -1 ? err : err.slice(0, sep)).trim();
+    // Only treat the prefix as a code when it is a known IPC code so a
+    // mention of `update.feed_unavailable` in a free-form message cannot
+    // steal the catalog copy.
+    if (isErrorCode(code)) {
+      return code;
+    }
+  }
+  return null;
+}
+
+/** Map updater IPC failures to the Settings-specific copy. Looks at the
+ * `{ code, message }` payload first; splitting a pre-formatted
+ * `formatInvokeError` string on `:` would miss that path. */
+export function formatUpdateError(err: unknown): string {
+  const code = invokeErrorCode(err);
   if (code === "update.feed_unavailable") {
     return t("settings.updateFeedUnavailable");
   }
   if (code === "update.check_failed") {
     return t("settings.updateCheckFailed");
   }
-  return raw;
+  return formatInvokeError(err);
 }
 
 export function UpdateCard({
@@ -101,9 +124,7 @@ export function UpdateCard({
               )}
             </p>
           ) : null}
-          {updateError ? (
-            <FieldError>{formatUpdateError(updateError)}</FieldError>
-          ) : null}
+          {updateError ? <FieldError>{updateError}</FieldError> : null}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"

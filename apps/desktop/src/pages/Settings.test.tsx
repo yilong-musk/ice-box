@@ -543,6 +543,59 @@ describe("Settings", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it("rolls the TUN switch back when saving the setting fails", async () => {
+    saveSettings.mockRejectedValue("disk full");
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_installed: true,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
+        "data-state",
+        "unchecked",
+      );
+    });
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalled();
+      expect(container.textContent).toContain("disk full");
+    });
+    expect(view.getByLabelText(t("settings.tunEnable"))).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
+  });
+
+  it("refreshes shared status after persisting TUN so Home sees the new desire", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      helper_installed: true,
+    });
+    const { container } = render(
+      <RuntimeStoreProvider>
+        <Settings />
+      </RuntimeStoreProvider>,
+    );
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.tunEnable"))).toBeInTheDocument();
+    });
+    const statusCallsAfterLoad = getStatus.mock.calls.length;
+    fireEvent.click(view.getByLabelText(t("settings.tunEnable")));
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(getStatus.mock.calls.length).toBeGreaterThan(statusCallsAfterLoad);
+    });
+  });
+
   it("turning TUN off while capture is live only persists the next-start desire", async () => {
     getStatus.mockResolvedValue({
       ...defaultStatus,
@@ -1207,6 +1260,24 @@ describe("Settings", () => {
     });
     expect(container.textContent).toContain(t("settings.updateAvailable", { version: "0.1.6" }));
     expect(view.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+  });
+
+  it("explains a missing GitHub update catalog from a structured IPC payload", async () => {
+    checkAppUpdate.mockRejectedValue({
+      code: "update.feed_unavailable",
+      message: "Could not fetch a valid release JSON from the remote",
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateCheck") }));
+    await waitFor(() => {
+      expect(container.textContent).toContain(t("settings.updateFeedUnavailable"));
+    });
+    expect(container.textContent).not.toContain(t("settings.updateCheckFailed"));
+    expect(container.textContent).not.toContain("[object Object]");
   });
 
   it("explains a missing GitHub update catalog instead of blaming the proxy", async () => {
