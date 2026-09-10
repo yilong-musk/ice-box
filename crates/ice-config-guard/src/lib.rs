@@ -13,7 +13,6 @@
 
 #[cfg(not(unix))]
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ice_types::{is_loopback_host, is_restricted_fetch_host};
@@ -164,6 +163,7 @@ pub fn read_config_file(path: &Path) -> Result<Vec<u8>, GuardError> {
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
+        use std::io::Read;
         use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
         let file = OpenOptions::new()
