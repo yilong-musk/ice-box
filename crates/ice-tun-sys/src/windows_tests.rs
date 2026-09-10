@@ -366,3 +366,19 @@ fn adapter_name_validation() {
     assert!(!valid_adapter_name("bad*name"));
     assert!(!valid_adapter_name("bad\nname"));
 }
+
+#[test]
+fn windows_outbound_pin_allows_nics_and_rejects_tunnels() {
+    assert!(windows_outbound_interface_is_safe("Ethernet"));
+    assert!(windows_outbound_interface_is_safe("Wi-Fi"));
+    assert!(windows_outbound_interface_is_safe("以太网"));
+    assert!(!windows_outbound_interface_is_safe("Wintun"));
+    assert!(!windows_outbound_interface_is_safe("Wintun 2"));
+    assert!(!windows_outbound_interface_is_safe(
+        "Loopback Pseudo-Interface 1"
+    ));
+    assert!(!windows_outbound_interface_is_safe(
+        "TAP-Windows Adapter V9"
+    ));
+    assert!(!windows_outbound_interface_is_safe("en0/../tmp"));
+}

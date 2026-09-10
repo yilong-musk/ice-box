@@ -76,12 +76,32 @@ const DEFAULT_ROUTE_TRIES: u32 = 10;
 const DEFAULT_ROUTE_DELAY_MS: u64 = 150;
 
 /// Interface names that must not be used as sing-box `route.default_interface`.
+/// Covers macOS utun/ipsec/ppp and Windows Wintun/TAP/Teredo/loopback leftovers.
 pub fn is_tunnel_interface(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("utun")
         || lower.starts_with("tun")
         || lower.starts_with("ipsec")
         || lower.starts_with("ppp")
+        || lower.starts_with("wintun")
+        || lower.starts_with("tap")
+        || lower.starts_with("isatap")
+        || lower.starts_with("teredo")
+        || lower.starts_with("6to4")
+        || lower.starts_with("loopback")
+}
+
+/// Whether `name` is a plausible sing-box `route.default_interface` value.
+/// Allows Windows NIC names (`Ethernet`, `Wi-Fi`, localized strings) while
+/// rejecting path separators and control characters.
+pub fn plausible_pin_interface_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 256 || name.contains("..") {
+        return false;
+    }
+    !name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '/' | '\\' | '\0'))
 }
 
 /// BSD-style names (`en0`, `bridge0`). Rejects tunnels and path-like strings.
@@ -94,10 +114,10 @@ pub fn outbound_interface_is_safe(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Pin Direct / proxy dials to the pre-TUN default NIC so a leftover utun
+/// Pin Direct / proxy dials to the pre-TUN default NIC so a leftover tunnel
 /// cannot become the detected outbound interface.
 pub fn pin_outbound_interface(config_path: &Path, iface: &str) -> Result<(), TunError> {
-    if !outbound_interface_is_safe(iface) {
+    if !plausible_pin_interface_name(iface) || is_tunnel_interface(iface) {
         return Err(TunError::new(
             ErrorCode::TunApplyFailed,
             format!("refusing to pin outbound interface {iface:?}"),
@@ -137,13 +157,38 @@ pub fn pin_outbound_interface(config_path: &Path, iface: &str) -> Result<(), Tun
             format!("encode pinned default interface: {err}"),
         )
     })?;
-    fs::write(config_path, encoded).map_err(|err| {
+    write_pinned_config_atomic(config_path, &encoded)
+}
+
+fn write_pinned_config_atomic(path: &Path, bytes: &[u8]) -> Result<(), TunError> {
+    let tmp_name = format!(
+        ".{}.pin.{}.tmp",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("config"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&tmp_name),
+        _ => PathBuf::from(&tmp_name),
+    };
+    if let Err(err) = fs::write(&tmp, bytes) {
+        let _ = fs::remove_file(&tmp);
+        return Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("write pinned default interface {}: {err}", tmp.display()),
+        ));
+    }
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
         TunError::new(
             ErrorCode::TunApplyFailed,
-            format!("write pinned default interface: {err}"),
+            format!("replace pinned default interface {}: {err}", path.display()),
         )
-    })?;
-    Ok(())
+    })
 }
 
 /// Host state of one interface as reported by `ifconfig`.
@@ -1265,13 +1310,22 @@ mod parsing_tests {
         assert!(is_tunnel_interface("tun0"));
         assert!(is_tunnel_interface("ipsec0"));
         assert!(is_tunnel_interface("ppp0"));
+        assert!(is_tunnel_interface("Wintun"));
+        assert!(is_tunnel_interface("Wintun 2"));
+        assert!(is_tunnel_interface("TAP-Windows Adapter V9"));
+        assert!(is_tunnel_interface("Loopback Pseudo-Interface 1"));
         assert!(!is_tunnel_interface("en0"));
         assert!(!is_tunnel_interface("bridge0"));
+        assert!(!is_tunnel_interface("Ethernet"));
+        assert!(!is_tunnel_interface("Wi-Fi"));
         assert!(outbound_interface_is_safe("en0"));
         assert!(outbound_interface_is_safe("bridge0"));
         assert!(!outbound_interface_is_safe("utun8"));
         assert!(!outbound_interface_is_safe("en0/../tmp"));
         assert!(!outbound_interface_is_safe("Wi-Fi"));
+        assert!(plausible_pin_interface_name("Wi-Fi"));
+        assert!(plausible_pin_interface_name("以太网"));
+        assert!(!plausible_pin_interface_name("en0/../tmp"));
     }
 
     #[test]
@@ -1292,7 +1346,9 @@ mod parsing_tests {
         assert_eq!(cfg["route"]["default_interface"], "en0");
         assert_eq!(cfg["route"]["auto_detect_interface"], false);
         assert_eq!(cfg["route"]["final"], "direct");
+        pin_outbound_interface(&path, "Wi-Fi").expect("windows nic");
         pin_outbound_interface(&path, "utun8").expect_err("tunnel");
+        pin_outbound_interface(&path, "Wintun").expect_err("wintun");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

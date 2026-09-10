@@ -53,8 +53,9 @@ pub use ice_tun_pin::{
 };
 pub use journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 pub use macos::{
-    is_tunnel_interface, outbound_interface_is_safe, pin_outbound_interface, utun_index,
-    MacInterfaceState, MacOsHost, MacosTunBackend, ProcessMacOsHost,
+    is_tunnel_interface, outbound_interface_is_safe, pin_outbound_interface,
+    plausible_pin_interface_name, utun_index, MacInterfaceState, MacOsHost, MacosTunBackend,
+    ProcessMacOsHost,
 };
 pub use recovery::RecoveryDriver;
 pub use unsupported::UnsupportedTunBackend;

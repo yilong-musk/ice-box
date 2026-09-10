@@ -48,6 +48,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   teardown cannot leave capture "enabled" with no internet. The Diagnostic
   `/traffic` stream is closed before that hand-off so the elevated core can
   bind Clash API / mixed ports.
+- Windows TUN launch restore does the same: wait until a physical NIC owns
+  `0.0.0.0`, then pin that adapter as `route.default_interface` (the pin is
+  written with a temp-file rename). Leftover Wintun as the default route
+  fails closed instead of starting a core with no path off the host.
 - Privileged helper authenticates the peer and request frame before taking
   the core-runner mutex, so a stalled unauthenticated connection cannot
   block Start / Stop / SetDns.

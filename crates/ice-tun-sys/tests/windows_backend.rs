@@ -11,6 +11,7 @@
 //! full-route lock, control path, DNS ownership); fail-closed restore;
 //! kill residue recovery; and the factory wiring.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,10 @@ use ice_types::{ErrorCode, TunError};
 const OWNER: &str = "ice-box:test-install-1";
 /// Fake adapter interface index (the Windows identity token).
 const FAKE_INDEX: u32 = 17;
+/// Physical NIC the fake host uses as the pre-TUN default route.
+const PHYSICAL_NIC: &str = "Ethernet";
+const PHYSICAL_NIC_INDEX: u32 = 12;
+const PHYSICAL_NIC_IP: &str = "192.168.1.10";
 
 fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -111,9 +116,33 @@ struct HostState {
 }
 
 /// Fake `WindowsHost` sharing one `HostState` with the fake coordinator.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FakeHost {
     state: Arc<Mutex<HostState>>,
+}
+
+impl Default for FakeHost {
+    fn default() -> Self {
+        let host = Self {
+            state: Arc::new(Mutex::new(HostState::default())),
+        };
+        // Physical default route so apply can pin `route.default_interface`
+        // the same way a real host does after leftover TUN teardown.
+        let mut state = host.state.lock().unwrap();
+        state.interfaces.push((
+            PHYSICAL_NIC.to_string(),
+            WindowsInterfaceState {
+                up: true,
+                addresses: vec![format!("{PHYSICAL_NIC_IP}/24")],
+                index: Some(PHYSICAL_NIC_INDEX),
+            },
+        ));
+        state
+            .routes
+            .push(("0.0.0.0/0".to_string(), PHYSICAL_NIC_IP.to_string()));
+        drop(state);
+        host
+    }
 }
 
 impl FakeHost {
@@ -195,8 +224,37 @@ impl FakeHost {
 
     fn remove_wintun(&self, name: &str) {
         let mut state = self.state.lock().unwrap();
+        let mut identities: HashSet<String> = state
+            .interfaces
+            .iter()
+            .filter(|(existing, _)| existing == name)
+            .flat_map(|(_, iface)| {
+                iface
+                    .addresses
+                    .iter()
+                    .map(|addr| routes::address_key(addr).to_string())
+                    .chain(iface.index.map(|index| index.to_string()))
+            })
+            .collect();
         state.interfaces.retain(|(existing, _)| existing != name);
-        state.routes.retain(|(_, identity)| identity == "127.0.0.1");
+        if identities.is_empty() {
+            // Adapter already gone (orphaned-route recover): still drop
+            // leftover tun identities, never the physical default or loopback.
+            identities.extend(
+                state
+                    .routes
+                    .iter()
+                    .map(|(_, identity)| identity.clone())
+                    .filter(|identity| {
+                        identity.as_str() != PHYSICAL_NIC_IP && identity.as_str() != "127.0.0.1"
+                    }),
+            );
+        }
+        if !identities.is_empty() {
+            state
+                .routes
+                .retain(|(_, identity)| !identities.contains(identity));
+        }
         state.dns.retain(|entry| entry.name != name);
     }
 
@@ -204,10 +262,7 @@ impl FakeHost {
     /// its routes with it (the macOS kill-9 behavior; the Windows spike must
     /// confirm whether Windows leaves residue).
     fn simulate_kill_clean(&self, name: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.interfaces.retain(|(existing, _)| existing != name);
-        state.routes.retain(|(_, identity)| identity == "127.0.0.1");
-        state.dns.retain(|entry| entry.name != name);
+        self.remove_wintun(name);
     }
 
     /// Residue model: the adapter is gone but owned routes survive (what the
@@ -215,6 +270,16 @@ impl FakeHost {
     fn simulate_adapter_gone_routes_remain(&self, name: &str) {
         let mut state = self.state.lock().unwrap();
         state.interfaces.retain(|(existing, _)| existing != name);
+    }
+
+    fn set_default_route_identity(&self, identity: &str) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .routes
+            .retain(|(dest, _)| dest != "0.0.0.0/0" && dest != "0.0.0.0");
+        state
+            .routes
+            .push(("0.0.0.0/0".to_string(), identity.to_string()));
     }
 
     fn has_wintun(&self, name: &str) -> bool {
@@ -613,6 +678,75 @@ fn apply_journals_granular_steps_and_returns_observed_ownership() {
 }
 
 #[test]
+fn apply_pins_physical_default_interface_before_start() {
+    let dir = temp_dir("pin-default");
+    let host = FakeHost::default();
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let prepared = bk.prepare(&win_config()).expect("prepare");
+    bk.apply(&prepared).expect("apply");
+
+    let cfg: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_path(&dir)).unwrap()).unwrap();
+    assert_eq!(cfg["route"]["default_interface"], PHYSICAL_NIC);
+    assert_eq!(cfg["route"]["auto_detect_interface"], false);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_refuses_leftover_wintun_default_route() {
+    let dir = temp_dir("leftover-default");
+    let host = FakeHost::default();
+    host.set_default_route_identity("10.0.0.1");
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let prepared = bk.prepare(&win_config()).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("leftover wintun default");
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
+    assert!(
+        err.message.contains("physical default route"),
+        "unexpected error: {}",
+        err.message
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_refuses_live_wintun_as_default_route() {
+    let dir = temp_dir("live-wintun-default");
+    let host = FakeHost::default();
+    host.add_wintun(
+        DEFAULT_WINTUN_NAME,
+        &["10.0.0.1/30".into(), "fdfe:dcba:9876::1/126".into()],
+    );
+    host.set_default_route_identity("10.0.0.1");
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let mut config = win_config();
+    config.interface_name = Some("Wintun 2".into());
+    let prepared = bk.prepare(&config).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("wintun still default");
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
+    assert!(
+        err.message.contains("physical default route"),
+        "unexpected error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Wintun"),
+        "error should name the leftover adapter: {}",
+        err.message
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn verify_reports_dns_inconsistent_when_adapter_dns_is_lost() {
     let dir = temp_dir("verify-dns-lost");
     let host = FakeHost::default();
@@ -828,10 +962,12 @@ fn verify_rejects_missing_required_address_family() {
     // The interface silently lost its IPv6 address: the exact-address lock
     // must reject the capture.
     let mut state = host.state.lock().unwrap();
-    state.interfaces[0]
-        .1
-        .addresses
-        .retain(|addr| !addr.contains(':'));
+    let tun = state
+        .interfaces
+        .iter_mut()
+        .find(|(n, _)| n == DEFAULT_WINTUN_NAME)
+        .expect("wintun");
+    tun.1.addresses.retain(|addr| !addr.contains(':'));
     drop(state);
     let health = bk.verify(&applied).expect("verify after v6 loss");
     assert!(!health.addresses_present);

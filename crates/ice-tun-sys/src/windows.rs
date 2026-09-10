@@ -61,6 +61,12 @@ const APPLY_CONVERGE_DELAY_MS: u64 = 200;
 /// Bounded wait for the adapter to disappear after the core stops.
 const INTERFACE_TEARDOWN_TRIES: u32 = 10;
 const INTERFACE_TEARDOWN_DELAY_MS: u64 = 200;
+/// After leftover TUN teardown the route table may still list Wintun as the
+/// default. Wait until a physical NIC owns `0.0.0.0` before starting the
+/// elevated core, otherwise `auto_detect_interface` binds Direct / proxy
+/// dials to the dying tunnel and capture looks healthy with no internet.
+const DEFAULT_ROUTE_TRIES: u32 = 10;
+const DEFAULT_ROUTE_DELAY_MS: u64 = 150;
 
 /// Host state of one interface as reported by the `netsh` probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -729,6 +735,12 @@ fn valid_adapter_name(name: &str) -> bool {
         })
 }
 
+/// Windows NIC names (`Ethernet`, `Wi-Fi`, localized strings) are valid pin
+/// targets; leftover Wintun / TAP / loopback adapters are not.
+fn windows_outbound_interface_is_safe(name: &str) -> bool {
+    crate::plausible_pin_interface_name(name) && !crate::is_tunnel_interface(name)
+}
+
 /// The Windows TUN backend (native sing-box ownership, planned T0 lock).
 pub struct WindowsTunBackend {
     owner_token: String,
@@ -807,6 +819,71 @@ impl WindowsTunBackend {
                 format!("serialize DNS snapshot: {err}"),
             )
         })
+    }
+
+    /// Wait until `0.0.0.0` resolves to a physical NIC. Leftover TUN teardown
+    /// can leave Wintun as the default route for a short window; starting the
+    /// elevated core in that window makes capture look healthy with no path
+    /// off the host.
+    fn wait_physical_default_interface(&self) -> Result<String, TunError> {
+        let mut last = String::from("no default route");
+        for _ in 0..DEFAULT_ROUTE_TRIES {
+            match self.observe_physical_default_interface()? {
+                Some(name) => return Ok(name),
+                None => last = self.default_route_wait_detail()?,
+            }
+            std::thread::sleep(Duration::from_millis(DEFAULT_ROUTE_DELAY_MS));
+        }
+        Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("no physical default route before TUN start ({last})"),
+        ))
+    }
+
+    fn observe_physical_default_interface(&self) -> Result<Option<String>, TunError> {
+        let Some(identity) = self.host.route_interface("0.0.0.0")? else {
+            return Ok(None);
+        };
+        let names = self.host.list_interface_names()?;
+        for name in names {
+            let Some(state) = self.host.interface_state(&name)? else {
+                continue;
+            };
+            let owns = state
+                .addresses
+                .iter()
+                .any(|addr| routes::address_key(addr) == identity);
+            if !owns {
+                continue;
+            }
+            if windows_outbound_interface_is_safe(&name) {
+                return Ok(Some(name));
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    fn default_route_wait_detail(&self) -> Result<String, TunError> {
+        let Some(identity) = self.host.route_interface("0.0.0.0")? else {
+            return Ok("no default route".into());
+        };
+        let names = self.host.list_interface_names()?;
+        for name in names {
+            let Some(state) = self.host.interface_state(&name)? else {
+                continue;
+            };
+            let owns = state
+                .addresses
+                .iter()
+                .any(|addr| routes::address_key(addr) == identity);
+            if owns {
+                return Ok(format!("default route still on {name}"));
+            }
+        }
+        Ok(format!(
+            "default route identity {identity} is not on a live interface"
+        ))
     }
 
     /// Resolve the adapter name: the requested name when free, else a
@@ -1065,6 +1142,13 @@ impl TunBackend for WindowsTunBackend {
         let dns_before = Some(DnsSnapshot {
             platform_snapshot: self.dns_snapshot_string()?,
         });
+
+        // Snapshot the physical default NIC *before* auto_route. Launch restore
+        // often follows leftover TUN teardown: the route table may still list
+        // Wintun as default, and `auto_detect_interface` would then bind
+        // Direct / proxy dials to that dying tunnel.
+        let default_iface = self.wait_physical_default_interface()?;
+        crate::pin_outbound_interface(&self.config_path, &default_iface)?;
 
         // Mutation boundary: the elevated core starts and sing-box creates
         // the adapter, assigns addresses, and installs routes in one go.

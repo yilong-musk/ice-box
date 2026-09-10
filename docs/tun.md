@@ -104,6 +104,11 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
 - Start/stop after setup needs no new UAC prompt. Stop must be graceful: stranded
   `strict_route` WFP filters can block host TCP. Forced termination is a last
   resort. WinTUN is embedded in the bundled core.
+- Before starting the elevated core, wait until `0.0.0.0` resolves to a
+  physical NIC (not leftover Wintun / TAP / loopback) and pin that adapter
+  name as `route.default_interface` with `auto_detect_interface: false`.
+  Launch restore otherwise can look healthy while Direct / proxy dials follow
+  a dying tunnel.
 - IPv4 port-53 hijack must come first, followed by process bypass, sniffing,
   and TUN-peer rejection. Do not add post-sniff `protocol: dns` hijack; it can
   misclassify unrelated UDP traffic.
