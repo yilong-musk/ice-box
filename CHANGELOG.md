@@ -42,6 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Traffic supervisor panic-injection is per-monitor, so a parallel
+  `ice-core` unit test no longer times out on Windows CI.
 - Website typecheck no longer fails when formatting traffic-chart tooltip
   timestamps: Recharts `labelFormatter` values are `ReactNode`, so the chart
   narrows them before constructing a `Date`.
