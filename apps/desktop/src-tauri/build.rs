@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Copy platform sing-box into `resources/` for Tauri bundling (architecture §4.3).
+//! Copy platform sing-box into `resources/` for Tauri bundling.
 
 use std::env;
 use std::fs;
@@ -25,6 +25,29 @@ fn binary_name() -> &'static str {
     }
 }
 
+/// Copy `src` to `dest` only when the destination is missing, a different
+/// size, or older than the source. Unconditional `fs::copy` refreshes mtime
+/// and makes `tauri dev` rebuild in a loop because it watches `resources/`.
+fn copy_if_stale(src: &Path, dest: &Path) -> std::io::Result<bool> {
+    if let Ok(dest_meta) = fs::metadata(dest) {
+        if let Ok(src_meta) = fs::metadata(src) {
+            let same_len = src_meta.len() == dest_meta.len();
+            let dest_fresh = match (src_meta.modified(), dest_meta.modified()) {
+                (Ok(src_mtime), Ok(dest_mtime)) => dest_mtime >= src_mtime,
+                _ => false,
+            };
+            if same_len && dest_fresh {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(src, dest)?;
+    Ok(true)
+}
+
 fn copy_singbox_resource(manifest_dir: &Path) {
     let repo_root = manifest_dir
         .join("../../..")
@@ -42,17 +65,12 @@ fn copy_singbox_resource(manifest_dir: &Path) {
         return;
     }
 
+    println!("cargo:rerun-if-changed={}", src.display());
     if src.is_file() {
-        if let Err(err) = fs::copy(&src, &dest) {
+        if let Err(err) = copy_if_stale(&src, &dest) {
             println!(
                 "cargo:warning=copy sing-box resource {} → {}: {err}",
                 src.display(),
-                dest.display()
-            );
-        } else {
-            println!("cargo:rerun-if-changed={}", src.display());
-            println!(
-                "cargo:warning=bundled sing-box resource → {}",
                 dest.display()
             );
         }
@@ -81,6 +99,7 @@ fn copy_geoip_resources(manifest_dir: &Path) {
     let src = repo_root.join("third_party/sing-geoip/rule-set");
     let dest_dir = manifest_dir.join("resources").join("geoip");
 
+    println!("cargo:rerun-if-changed={}", src.display());
     if !src.is_dir() {
         println!(
             "cargo:warning=geoip rule-sets missing at {}; run scripts/fetch-geoip.sh before release build",
@@ -92,7 +111,6 @@ fn copy_geoip_resources(manifest_dir: &Path) {
         println!("cargo:warning=create geoip resources dir: {err}");
         return;
     }
-    let mut copied = 0usize;
     if let Ok(entries) = fs::read_dir(&src) {
         for entry in entries.flatten() {
             let name = entry.file_name();
@@ -100,18 +118,18 @@ fn copy_geoip_resources(manifest_dir: &Path) {
                 continue;
             }
             let dest = dest_dir.join(&name);
-            if fs::copy(entry.path(), &dest).is_ok() {
-                copied += 1;
+            if let Err(err) = copy_if_stale(&entry.path(), &dest) {
+                println!(
+                    "cargo:warning=copy geoip {} → {}: {err}",
+                    entry.path().display(),
+                    dest.display()
+                );
             }
         }
     }
-    println!(
-        "cargo:warning=bundled {copied} geoip rule-sets → {}",
-        dest_dir.display()
-    );
 }
 
-/// Ensure `resources/ice-helper` exists for the Tauri bundle (plan §5 T5).
+/// Ensure `resources/ice-helper` exists for the Tauri bundle.
 /// The production path builds the real daemon (`prepare-singbox-resource.sh`
 /// does it in beforeBuildCommand); plain `cargo check` / test / clippy on a
 /// fresh checkout gets a marker so the workspace gate stays green without a
@@ -154,11 +172,75 @@ fn copy_tun_launcher_resource(manifest_dir: &Path) {
     }
 }
 
+/// Ensure `resources/libcronet.dll` exists on Windows so `tauri_build` accepts
+/// the bundle resource during cargo check / clippy / test. Copy from the
+/// fetched sing-box archive when present; otherwise touch a marker. The real
+/// DLL is copied by `prepare-singbox-resource.ps1` (beforeBuildCommand).
+fn copy_libcronet_resource(manifest_dir: &Path) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let repo_root = manifest_dir
+        .join("../../..")
+        .canonicalize()
+        .unwrap_or_else(|_| manifest_dir.join("../../.."));
+    let src = repo_root
+        .join("third_party/sing-box")
+        .join(target_dir_name())
+        .join("libcronet.dll");
+    let dest = manifest_dir.join("resources").join("libcronet.dll");
+    println!("cargo:rerun-if-changed={}", src.display());
+    if src.is_file() {
+        if let Err(err) = copy_if_stale(&src, &dest) {
+            println!(
+                "cargo:warning=copy libcronet {} → {}: {err}",
+                src.display(),
+                dest.display()
+            );
+        }
+        return;
+    }
+    if dest.is_file() {
+        return;
+    }
+    if let Err(err) = fs::create_dir_all(dest.parent().expect("parent")) {
+        println!("cargo:warning=create resources dir: {err}");
+        return;
+    }
+    if let Err(err) = fs::write(&dest, b"") {
+        println!("cargo:warning=create libcronet resource marker: {err}");
+    }
+}
+
+/// Embed Common Controls v6 so Windows *test* binaries can load.
+///
+/// `tauri_build` writes the v6 manifest only onto the app bin (`rustc-link-arg-bins`
+/// via winres). The lib unit-test harness is not a bin, so it binds System32
+/// ComCtl32 5.82, which lacks `TaskDialogIndirect` and dies at process load with
+/// `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139). `rustc-link-arg-tests` only covers
+/// `[[test]]` targets, so this uses `rustc-link-arg` (duplicate on the app bin is
+/// merged with Tauri's manifest).
+fn embed_comctl32_v6_for_windows_tests() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        return;
+    }
+    println!(
+        "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' \
+         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    );
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     copy_singbox_resource(&manifest_dir);
     copy_geoip_resources(&manifest_dir);
     copy_helper_resource(&manifest_dir);
     copy_tun_launcher_resource(&manifest_dir);
+    copy_libcronet_resource(&manifest_dir);
+    embed_comctl32_v6_for_windows_tests();
     tauri_build::build()
 }

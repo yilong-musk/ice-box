@@ -18,12 +18,15 @@ mod v2ray;
 
 use std::collections::HashMap;
 
-use ice_config::{NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats};
+use ice_config::{
+    NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats, UiMessage,
+};
 use percent_encoding::percent_decode_str;
 
 use crate::error::SubscriptionError;
+use crate::limits::Limits;
 
-/// Upper bound on URI lines (mirrors `MAX_CLASH_PROXIES`).
+/// Upper bound on URI lines (mirrors [`Limits::default`].max_nodes).
 pub const MAX_URI_LINES: usize = 500;
 
 /// Schemes recognized as proxy share links.
@@ -77,8 +80,9 @@ fn is_info_line(line: &str) -> bool {
 /// Parse a proxy URI list into a normalized profile (no groups, direct route).
 pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionError> {
     let mut nodes: Vec<NormalizedOutbound> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<UiMessage> = Vec::new();
     let mut skipped = 0usize;
+    let mut truncated = 0usize;
     let mut line_count = 0usize;
 
     for (idx, line) in raw.lines().enumerate() {
@@ -87,20 +91,27 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
             continue;
         }
         line_count += 1;
-        if line_count > MAX_URI_LINES {
-            return Err(SubscriptionError::ParseFailed(format!(
-                "uri list exceeds line limit {MAX_URI_LINES}"
-            )));
+        if line_count > Limits::default().max_nodes {
+            truncated += 1;
+            continue;
         }
         match parse_uri_line(line, idx) {
             Ok(node) => nodes.push(node),
             Err(SkipReason::Unsupported(reason)) => {
                 skipped += 1;
-                warnings.push(format!("line {}: {reason}", idx + 1));
+                warnings.push(
+                    UiMessage::new("parse.uriLine")
+                        .with("line", (idx + 1).to_string())
+                        .with("reason", reason),
+                );
             }
             Err(SkipReason::Incomplete(reason)) => {
                 skipped += 1;
-                warnings.push(format!("line {}: {reason}", idx + 1));
+                warnings.push(
+                    UiMessage::new("parse.uriLine")
+                        .with("line", (idx + 1).to_string())
+                        .with("reason", reason),
+                );
             }
         }
     }
@@ -121,6 +132,10 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
         final_outbound: "proxy".into(),
         ..Default::default()
     };
+
+    if truncated > 0 {
+        warnings.push(crate::limits::Limits::warning("nodes", truncated));
+    }
 
     Ok(NormalizedProfile {
         nodes,
@@ -193,10 +208,7 @@ fn parse_uri_line(line: &str, idx: usize) -> Result<NormalizedOutbound, SkipReas
         .as_object_mut()
         .unwrap()
         .insert("tag".into(), serde_json::json!(name));
-    Ok(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Ok(NormalizedOutbound::new(name, outbound))
 }
 
 /// Split `uri#fragment`; returns the fragment (still percent-encoded).
@@ -229,10 +241,11 @@ pub(crate) fn dedupe_tags(nodes: &mut [NormalizedOutbound]) {
         *count += 1;
         if *count > 1 {
             node.tag = format!("{}-{}", node.tag, *count);
-            node.outbound
+            let tag = node.tag.clone();
+            node.outbound_mut()
                 .as_object_mut()
                 .unwrap()
-                .insert("tag".into(), serde_json::json!(node.tag));
+                .insert("tag".into(), serde_json::json!(tag));
         }
     }
 }
@@ -397,15 +410,15 @@ mod tests {
         let mut nodes = vec![
             NormalizedOutbound {
                 tag: "a".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"a"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"a"})),
             },
             NormalizedOutbound {
                 tag: "a".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"a"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"a"})),
             },
             NormalizedOutbound {
                 tag: "b".into(),
-                outbound: serde_json::json!({"type":"socks","tag":"b"}),
+                outbound: std::sync::Arc::new(serde_json::json!({"type":"socks","tag":"b"})),
             },
         ];
         dedupe_tags(&mut nodes);

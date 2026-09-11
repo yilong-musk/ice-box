@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 use crate::health::HealthEndpoints;
-use ice_config::is_loopback_host;
+use ice_types::is_loopback_host;
 
 /// Selector outbound tag in generated config (`ice-config` template).
 pub const SELECTOR_TAG: &str = "proxy";
@@ -22,12 +22,19 @@ pub const CLASH_HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Per-second delta from `GET /traffic` (`{"up": bytes, "down": bytes}`).
 pub const TRAFFIC_SAMPLE_TIMEOUT: Duration = Duration::from_secs(3);
 
+fn clash_api_err(path: &str, detail: impl std::fmt::Display) -> CoreError {
+    CoreError::ClashApi {
+        path: path.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
 fn ensure_loopback(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
     if !is_loopback_host(&endpoints.host) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api host must be loopback, got {}",
-            endpoints.host
-        )));
+        return Err(clash_api_err(
+            "/",
+            format!("clash api host must be loopback, got {}", endpoints.host),
+        ));
     }
     Ok(())
 }
@@ -36,6 +43,21 @@ fn base_url(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     ensure_loopback(endpoints)?;
     let host = endpoints.host.trim_matches(|c| c == '[' || c == ']');
     Ok(format!("http://{}:{}", host, endpoints.port))
+}
+
+fn clash_authorization(endpoints: &HealthEndpoints) -> Option<String> {
+    if endpoints.secret.is_empty() {
+        None
+    } else {
+        Some(format!("Bearer {}", endpoints.secret))
+    }
+}
+
+fn apply_clash_auth(req: ureq::Request, endpoints: &HealthEndpoints) -> ureq::Request {
+    match clash_authorization(endpoints) {
+        Some(value) => req.set("Authorization", &value),
+        None => req,
+    }
 }
 
 /// One process-wide agent. Connection pooling is disabled on purpose: a
@@ -61,40 +83,67 @@ fn shared_agent() -> ureq::Agent {
 fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .get(&url)
+    let response = apply_clash_auth(agent.get(&url), endpoints)
         .call()
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api GET {path}: {e}")))?;
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     let mut body = String::new();
     response
         .into_reader()
         .take(256 * 1024)
         .read_to_string(&mut body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api read: {e}")))?;
+        .map_err(|e| clash_api_err(path, format!("read: {e}")))?;
     if !(200..300).contains(&status) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api GET {path} HTTP {status}: {body}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {body}")));
     }
     Ok(body)
+}
+
+/// `GET /version` — used by the health probe to prove the Clash API is the
+/// sing-box we started, not some other process that merely owns the port.
+pub fn probe_version(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+    probe_version_timed(endpoints, crate::health::HEALTH_HTTP_TIMEOUT)
+}
+
+/// Like [`probe_version`] with an explicit per-request timeout so the health
+/// loop can retry while the Clash listener is rebuilt.
+pub(crate) fn probe_version_timed(
+    endpoints: &HealthEndpoints,
+    timeout: Duration,
+) -> Result<(), CoreError> {
+    let url = format!("{}/version", base_url(endpoints)?);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .max_idle_connections(0)
+        .build();
+    let response = apply_clash_auth(agent.get(&url), endpoints)
+        .call()
+        .map_err(|e| clash_api_err("/version", e))?;
+    let status = response.status();
+    let mut body = String::new();
+    response
+        .into_reader()
+        .take(64 * 1024)
+        .read_to_string(&mut body)
+        .map_err(|e| clash_api_err("/version", format!("read: {e}")))?;
+    if !(200..300).contains(&status) {
+        return Err(clash_api_err("/version", format!("HTTP {status}: {body}")));
+    }
+    Ok(())
 }
 
 fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .put(&url)
+    let response = apply_clash_auth(agent.put(&url), endpoints)
         .set("Content-Type", "application/json")
         .send_string(json)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api PUT {path}: {e}")))?;
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
         let mut text = String::new();
         let _ = response.into_reader().take(512).read_to_string(&mut text);
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api PUT {path} HTTP {status}: {text}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
     }
     Ok(())
 }
@@ -102,18 +151,15 @@ fn clash_put_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result
 fn clash_patch_json(endpoints: &HealthEndpoints, path: &str, json: &str) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
-    let response = agent
-        .patch(&url)
+    let response = apply_clash_auth(agent.patch(&url), endpoints)
         .set("Content-Type", "application/json")
         .send_string(json)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api PATCH {path}: {e}")))?;
+        .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
         let mut text = String::new();
         let _ = response.into_reader().take(512).read_to_string(&mut text);
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api PATCH {path} HTTP {status}: {text}"
-        )));
+        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
     }
     Ok(())
 }
@@ -138,7 +184,7 @@ pub fn proxy_delay(
     );
     let body = clash_get(endpoints, &path)?;
     let parsed: DelayResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash delay parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err(&path, format!("delay parse: {e}; body={body}")))?;
     Ok(parsed.delay)
 }
 
@@ -168,7 +214,7 @@ struct ConfigsResponse {
 pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
     let body = clash_get(endpoints, "/configs")?;
     let parsed: ConfigsResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash configs parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err("/configs", format!("parse: {e}; body={body}")))?;
     Ok(parsed.mode)
 }
 
@@ -178,7 +224,7 @@ pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
 /// `default_mode` prepended onto an empty list). A `PATCH` targeting a different mode is
 /// therefore silently ignored — `GET /configs` keeps returning the old mode — so callers
 /// must verify with [`get_mode`] and fall back to a rebuild + reload. Pass a mode string
-/// from `ice_config::clash_mode_name` so the reported mode stays capitalized.
+/// from `ice_types::clash_mode_name` so the reported mode stays capitalized.
 pub fn set_mode(endpoints: &HealthEndpoints, mode: &str) -> Result<(), CoreError> {
     let body = serde_json::json!({ "mode": mode }).to_string();
     clash_patch_json(endpoints, "/configs", &body)
@@ -214,7 +260,7 @@ struct ProxyInfo {
 pub fn proxy_groups(endpoints: &HealthEndpoints) -> Result<Vec<GroupState>, CoreError> {
     let body = clash_get(endpoints, "/proxies")?;
     let parsed: ProxiesResponse = serde_json::from_str(&body)
-        .map_err(|e| CoreError::SpawnFailed(format!("clash proxies parse: {e}; body={body}")))?;
+        .map_err(|e| clash_api_err("/proxies", format!("parse: {e}; body={body}")))?;
     Ok(proxy_groups_filter(parsed.proxies))
 }
 
@@ -265,7 +311,7 @@ pub fn traffic_sample(endpoints: &HealthEndpoints) -> Result<TrafficSample, Core
         found = Some(sample);
         false
     })?;
-    found.ok_or_else(|| CoreError::SpawnFailed("clash traffic stream ended without sample".into()))
+    found.ok_or_else(|| clash_api_err("/traffic", "stream ended without sample"))
 }
 
 /// Follow Clash `GET /traffic` and invoke `on_sample` for each JSON tick.
@@ -288,15 +334,12 @@ pub(crate) fn traffic_foreach(
         .timeout_read(read_timeout)
         .max_idle_connections(0)
         .build();
-    let response = agent
-        .get(&url)
+    let response = apply_clash_auth(agent.get(&url), endpoints)
         .call()
-        .map_err(|e| CoreError::SpawnFailed(format!("clash api GET /traffic: {e}")))?;
+        .map_err(|e| clash_api_err("/traffic", e))?;
     let status = response.status();
     if !(200..300).contains(&status) {
-        return Err(CoreError::SpawnFailed(format!(
-            "clash api GET /traffic HTTP {status}"
-        )));
+        return Err(clash_api_err("/traffic", format!("HTTP {status}")));
     }
     let reader = BufReader::new(response.into_reader());
     for line in reader.lines() {
@@ -307,7 +350,7 @@ pub(crate) fn traffic_foreach(
             // instead of a clean EOF. The follow legitimately ends there.
             Err(err) if traffic_stream_ended(&err) => break,
             Err(err) => {
-                return Err(CoreError::SpawnFailed(format!("clash traffic read: {err}")));
+                return Err(clash_api_err("/traffic", format!("read: {err}")));
             }
         };
         let trimmed = line.trim();
@@ -347,17 +390,20 @@ fn percent_encode_query(s: &str) -> String {
 }
 
 /// Test-only recorded HTTP request (shared mock Clash API, see [`MockClashApi`]).
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct RecordedRequest {
     pub method: String,
     pub path: String,
     pub body: String,
+    pub authorization: Option<String>,
 }
 
 /// Test-only stateful mock of the sing-box Clash API, shared with the desktop crate's
 /// orchestrate tests. It serves `GET /configs` with the current mode and applies a mode
 /// change on 2xx `PATCH /configs`. Not part of the public API.
+#[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub struct MockClashApi {
     pub addr: std::net::SocketAddr,
@@ -367,6 +413,7 @@ pub struct MockClashApi {
     stop: std::sync::mpsc::Sender<()>,
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl MockClashApi {
     /// Spawn a mock where a 2xx `PATCH /configs` records the request, applies the new mode,
     /// and `GET /configs` returns it; non-2xx `patch_status` makes every request fail with
@@ -427,10 +474,13 @@ impl MockClashApi {
                             })
                             .unwrap_or_default();
                         let mut content_length = 0usize;
+                        let mut authorization = None;
                         for line in head.lines().skip(1) {
                             if let Some((k, v)) = line.split_once(':') {
                                 if k.trim().eq_ignore_ascii_case("content-length") {
                                     content_length = v.trim().parse().unwrap_or(0);
+                                } else if k.trim().eq_ignore_ascii_case("authorization") {
+                                    authorization = Some(v.trim().to_string());
                                 }
                             }
                         }
@@ -466,6 +516,7 @@ impl MockClashApi {
                                     method,
                                     path,
                                     body: body_data,
+                                    authorization,
                                 });
                                 let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
                                 if stream.write_all(header.as_bytes()).is_err() {
@@ -501,6 +552,14 @@ impl MockClashApi {
                                     body
                                 )
                             }
+                            ("GET", "/version") if is_2xx => {
+                                let body = r#"{"version":"1.13.19"}"#;
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                )
+                            }
                             ("PATCH", "/configs") if is_2xx => {
                                 "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                                     .to_string()
@@ -518,6 +577,7 @@ impl MockClashApi {
                             method,
                             path,
                             body: body_data,
+                            authorization,
                         });
                         let _ = stream.write_all(resp.as_bytes());
                     });
@@ -541,10 +601,7 @@ impl MockClashApi {
     }
 
     pub fn endpoints(&self) -> HealthEndpoints {
-        HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: self.addr.port(),
-        }
+        HealthEndpoints::new("127.0.0.1", self.addr.port())
     }
 
     /// Mode currently served by `GET /configs`.
@@ -553,6 +610,7 @@ impl MockClashApi {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl Drop for MockClashApi {
     fn drop(&mut self) {
         let _ = self.stop.send(());
@@ -634,10 +692,7 @@ mod tests {
 
     #[test]
     fn non_loopback_endpoints_rejected() {
-        let endpoints = HealthEndpoints {
-            host: "0.0.0.0".into(),
-            port: 19090,
-        };
+        let endpoints = HealthEndpoints::new("0.0.0.0", 19090);
         let err = proxy_delay(&endpoints, "n1", 1000, DELAY_TEST_URL).expect_err("reject");
         assert!(err.to_string().contains("loopback"));
     }
@@ -660,6 +715,23 @@ mod tests {
         assert_eq!(reqs[0].path, "/configs");
         let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
         assert_eq!(body["mode"], "Global");
+        assert!(reqs[0].authorization.is_none());
+    }
+
+    #[test]
+    fn set_mode_with_secret_sends_bearer() {
+        let server = MockClashApi::start(204, "Rule");
+        let endpoints = server
+            .endpoints()
+            .with_secret("iceboxtestclashapisecret000001");
+        set_mode(&endpoints, "Global").expect("set mode");
+        std::thread::sleep(Duration::from_millis(100));
+        let reqs = server.requests.lock().unwrap();
+        assert_eq!(reqs.len(), 1, "expected exactly one PATCH");
+        assert_eq!(
+            reqs[0].authorization.as_deref(),
+            Some("Bearer iceboxtestclashapisecret000001")
+        );
     }
 
     #[test]
@@ -677,10 +749,7 @@ mod tests {
 
     #[test]
     fn non_loopback_endpoints_rejected_for_mode() {
-        let endpoints = HealthEndpoints {
-            host: "0.0.0.0".into(),
-            port: 19090,
-        };
+        let endpoints = HealthEndpoints::new("0.0.0.0", 19090);
         let err = set_mode(&endpoints, "Global").expect_err("reject");
         assert!(err.to_string().contains("loopback"));
     }

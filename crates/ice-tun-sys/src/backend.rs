@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The platform backend contract for TUN capture (plan §4.5).
+//! The platform backend contract for TUN capture (`docs/tun.md`).
 //!
 //! `ice-tun-sys` backends expose only intent-level operations; they never
 //! leak platform command strings into `ice-config` or the UI. `prepare` is
@@ -13,11 +13,10 @@
 //! coordinates the core; on a helper path the helper performs the explicit
 //! OS mutations. The two are never mixed for the same resource.
 
-use crate::error::{TunError, TunErrorCode};
+use crate::error::TunError;
 use crate::journal::{CidrRecord, DnsSnapshot, RouteRecord, TunJournal};
 
-/// Validated TUN capture parameters (locked by the feasibility spike).
-/// Field placement is provisional until T1 wires the persisted settings.
+/// Validated TUN capture parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunConfig {
     /// Adapter interface name. macOS requires a `utun<N>` numeric suffix.
@@ -158,7 +157,7 @@ pub enum RecoveryOutcome {
     ForeignJournal,
 }
 
-/// The platform backend contract (plan §4.5).
+/// The platform backend contract (`docs/tun.md`).
 ///
 /// Implementations must be idempotent: replaying `apply` / `restore` /
 /// `recover` from any journaled step converges to the same terminal state.
@@ -220,11 +219,5 @@ pub fn unsupported_capability(reason: impl Into<String>) -> TunCapability {
         ipv4: false,
         ipv6: false,
         dns_hijack: false,
-    }
-}
-
-impl From<TunErrorCode> for TunError {
-    fn from(code: TunErrorCode) -> Self {
-        Self::new(code, code.as_str())
     }
 }

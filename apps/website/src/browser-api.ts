@@ -12,8 +12,12 @@ import type {
   StatusResponse,
   SubscriptionAutoUpdateInterval,
   SubscriptionMeta,
+  TrafficDelta,
   TrafficSnapshot,
+  SettingsPatch,
+  UiMessage,
 } from "../../../apps/desktop/src/api/tauri";
+import { isMessageKey, t } from "../../../apps/desktop/src/lib/i18n";
 
 export type {
   AppErrorPayload,
@@ -29,9 +33,12 @@ export type {
   StatusResponse,
   SubscriptionAutoUpdateInterval,
   SubscriptionMeta,
+  TrafficDelta,
   TrafficPoint,
   TrafficSample,
   TrafficSnapshot,
+  SettingsPatch,
+  UiMessage,
 } from "../../../apps/desktop/src/api/tauri";
 
 /** README / CI screenshot mode (`demo.html?capture=1`) freezes traffic and skips mock latency. */
@@ -54,6 +61,7 @@ const settings: AppSettings = {
   auto_default_rules: true,
   language: "en",
   check_app_updates: true,
+  log_debug: false,
   tun: {
     enabled: false,
     interface_name: null,
@@ -116,9 +124,37 @@ const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 export function formatInvokeError(err: unknown): string {
-  if (err && typeof err === "object" && "message" in err) return String(err.message);
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    if (typeof o.code === "string" && typeof o.message === "string") {
+      return `${o.code}: ${o.message}`;
+    }
+    if (typeof o.message === "string") return o.message;
+  }
   return String(err);
 }
+
+export function formatDiagnostic(warning: string): string {
+  return warning;
+}
+
+export function formatUiMessage(
+  msg: UiMessage | string | null | undefined,
+): string {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  const params = msg.params ?? {};
+  if (msg.key === "ui.raw") return params.text ?? "";
+  const label = isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
+  const detail = params.detail;
+  if (detail && !label.includes(detail)) {
+    return `${label}: ${detail}`;
+  }
+  return label;
+}
+
+type DesktopTauriModule = typeof import("../../../apps/desktop/src/api/tauri");
+type DesktopApi = DesktopTauriModule["api"];
 
 export const api = {
   async getStatus(): Promise<StatusResponse> {
@@ -126,7 +162,7 @@ export const api = {
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
       subscription_count: subscriptions.length,
-      proxy_recovery_warning: null,
+      proxy_recovery_warning: [],
       system_proxy_applied: running,
       system_proxy_recorded: running,
       system_proxy_available: true,
@@ -150,7 +186,14 @@ export const api = {
     await delay();
     if (settings.proxy_service_enabled) running = true;
   },
-  async saveSettings(next: AppSettings): Promise<void> { await delay(); Object.assign(settings, structuredClone(next)); },
+  async start(): Promise<void> { await delay(180); running = true; },
+  async saveSettings(patch: SettingsPatch): Promise<void> {
+    await delay();
+    Object.assign(settings, structuredClone(patch));
+    if (patch.tun) {
+      settings.tun = { ...settings.tun, ...structuredClone(patch.tun) };
+    }
+  },
   async checkAppUpdate(): Promise<CheckAppUpdateResponse> {
     await delay();
     return { available: false, version: null, notes: null, skipped: false, should_prompt: false };
@@ -186,15 +229,49 @@ export const api = {
     const down = running ? 1_300_000 + (trafficTick % 7) * 75_000 : 0;
     return { points: Array.from({ length: 24 }, (_, index) => ({ t: Date.now() - (23 - index) * 2500, up: up * (0.55 + (index % 5) / 10), down: down * (0.58 + (index % 6) / 10) })), latest: { up, down }, peak: { up: up * 1.2, down: down * 1.15 } };
   },
-  async start(): Promise<void> { await delay(220); running = true; },
+  async getTrafficSince(cursor?: number | null): Promise<TrafficDelta> {
+    const snap = await this.getTrafficSnapshot();
+    const points = cursor == null ? snap.points : snap.points.filter((p) => p.t > cursor);
+    return {
+      generation: 1,
+      cursor: snap.points[snap.points.length - 1]?.t ?? null,
+      points,
+      latest: snap.latest,
+      peak: snap.peak,
+    };
+  },
+  async listenCoreStatusChanged(): Promise<() => void> {
+    return () => {};
+  },
+  async listenWindowHidden(): Promise<() => void> {
+    return () => {};
+  },
+  async listenWindowShown(): Promise<() => void> {
+    return () => {};
+  },
+  async listenTrafficSample(): Promise<() => void> {
+    return () => {};
+  },
   async stop(): Promise<void> { await delay(180); running = false; },
   async stopSystemProxy(): Promise<void> { await delay(180); running = false; },
-  async recoverTun(): Promise<null> { await delay(); return null; },
+  async recoverTun(): Promise<UiMessage[]> { await delay(); return []; },
   async installHelper(): Promise<void> { await delay(); },
   async uninstallHelper(): Promise<void> { await delay(); },
   async ensureTunElevation(): Promise<void> { await delay(); },
   async removeTunElevation(): Promise<void> { await delay(); },
-  async getLogView(): Promise<string[]> { await delay(); return ["12:04:31 route match api.github.com → Tokyo / edge-01", "12:04:28 health check Tokyo / edge-01 responded in 42 ms", "12:04:16 subscription Profile refreshed · 18 nodes", "12:03:52 dns Using fallback resolver 1.1.1.1"]; },
+  async getLogView(_n: number): Promise<string[]> {
+    await delay();
+    const user = [
+      "INFO 09-08 22:04:31 api.github.com:443 → Tokyo / edge-01",
+      "INFO 09-08 22:04:16 ice_core: subscription Profile refreshed",
+    ];
+    if (!settings.log_debug) return user;
+    return [
+      ...user,
+      "DEBUG 09-08 22:04:30 ice_core: probe loop tick",
+      "INFO 09-08 22:04:29 [TCP] dial api.github.com:443",
+    ];
+  },
   async getRuntimeConfig(): Promise<string> { return "{\n  \"route\": { \"final\": \"Tokyo / edge-01\" }\n}"; },
   async revealDataDir(): Promise<void> {},
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
@@ -210,4 +287,12 @@ export const api = {
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
-};
+} satisfies DesktopApi;
+
+/** Compile-time check that the Live Demo stand-in covers desktop API values (FE-7). */
+export const browserApi = {
+  api,
+  formatInvokeError,
+  formatDiagnostic,
+  formatUiMessage,
+} satisfies typeof import("../../../apps/desktop/src/api/tauri");

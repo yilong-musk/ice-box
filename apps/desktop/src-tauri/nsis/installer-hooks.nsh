@@ -15,5 +15,18 @@
 !macroend
 
 !macro customUnInstall
+  ; Best-effort: delete the task from an unelevated uninstaller.
   nsExec::ExecToLog 'schtasks /Delete /TN ice-box-tun /F'
+  ; Protected Program Files copies and ProgramData run dir are admin-owned.
+  ; Request elevation so the leftover tree is removed (the user can cancel;
+  ; leftovers are inert once the task is gone). Fall back to the pre-ProgramFiles
+  ; launcher path so an upgrade-then-uninstall still wipes %ProgramData%\ice-box.
+  IfFileExists "$PROGRAMFILES\ice-box\ice-tun-launcher.exe" 0 try_legacy_protected_cleanup
+    ExecShellWait "runas" "$PROGRAMFILES\ice-box\ice-tun-launcher.exe" "--delete-task" SW_HIDE
+    Goto skip_protected_cleanup
+  try_legacy_protected_cleanup:
+  ReadEnvStr $0 PROGRAMDATA
+  IfFileExists "$0\ice-box\bin\ice-tun-launcher.exe" 0 skip_protected_cleanup
+    ExecShellWait "runas" "$0\ice-box\bin\ice-tun-launcher.exe" "--delete-task" SW_HIDE
+  skip_protected_cleanup:
 !macroend

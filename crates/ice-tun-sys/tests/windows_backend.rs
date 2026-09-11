@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Windows backend tests (plan §5 T2 shared exit gate; `windows_tun_ready`
-//! green since 2026-09-03 — host-free on every CI platform).
+//! Windows backend tests (`windows_tun_ready` green since 2026-09-03;
+//! host-free on every CI platform).
 //!
 //! The backend logic runs against a fake `WindowsHost` (simulated `netsh` /
 //! `route print` state) and a fake `CoreCoordinator` that starts/stops the
@@ -11,6 +11,7 @@
 //! full-route lock, control path, DNS ownership); fail-closed restore;
 //! kill residue recovery; and the factory wiring.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ice_tun_sys::backend::RecoveryOutcome;
 use ice_tun_sys::coordinator::CoreCoordinator;
-use ice_tun_sys::error::{TunError, TunErrorCode};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::routes;
 use ice_tun_sys::windows::{
@@ -28,10 +28,15 @@ use ice_tun_sys::windows::{
 #[cfg(target_os = "windows")]
 use ice_tun_sys::WindowsHost;
 use ice_tun_sys::{create_backend, AppliedTun, TunBackend, TunConfig, TunStack};
+use ice_types::{ErrorCode, TunError};
 
 const OWNER: &str = "ice-box:test-install-1";
 /// Fake adapter interface index (the Windows identity token).
 const FAKE_INDEX: u32 = 17;
+/// Physical NIC the fake host uses as the pre-TUN default route.
+const PHYSICAL_NIC: &str = "Ethernet";
+const PHYSICAL_NIC_INDEX: u32 = 12;
+const PHYSICAL_NIC_IP: &str = "192.168.1.10";
 
 fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -111,9 +116,33 @@ struct HostState {
 }
 
 /// Fake `WindowsHost` sharing one `HostState` with the fake coordinator.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FakeHost {
     state: Arc<Mutex<HostState>>,
+}
+
+impl Default for FakeHost {
+    fn default() -> Self {
+        let host = Self {
+            state: Arc::new(Mutex::new(HostState::default())),
+        };
+        // Physical default route so apply can pin `route.default_interface`
+        // the same way a real host does after leftover TUN teardown.
+        let mut state = host.state.lock().unwrap();
+        state.interfaces.push((
+            PHYSICAL_NIC.to_string(),
+            WindowsInterfaceState {
+                up: true,
+                addresses: vec![format!("{PHYSICAL_NIC_IP}/24")],
+                index: Some(PHYSICAL_NIC_INDEX),
+            },
+        ));
+        state
+            .routes
+            .push(("0.0.0.0/0".to_string(), PHYSICAL_NIC_IP.to_string()));
+        drop(state);
+        host
+    }
 }
 
 impl FakeHost {
@@ -195,8 +224,37 @@ impl FakeHost {
 
     fn remove_wintun(&self, name: &str) {
         let mut state = self.state.lock().unwrap();
+        let mut identities: HashSet<String> = state
+            .interfaces
+            .iter()
+            .filter(|(existing, _)| existing == name)
+            .flat_map(|(_, iface)| {
+                iface
+                    .addresses
+                    .iter()
+                    .map(|addr| routes::address_key(addr).to_string())
+                    .chain(iface.index.map(|index| index.to_string()))
+            })
+            .collect();
         state.interfaces.retain(|(existing, _)| existing != name);
-        state.routes.retain(|(_, identity)| identity == "127.0.0.1");
+        if identities.is_empty() {
+            // Adapter already gone (orphaned-route recover): still drop
+            // leftover tun identities, never the physical default or loopback.
+            identities.extend(
+                state
+                    .routes
+                    .iter()
+                    .map(|(_, identity)| identity.clone())
+                    .filter(|identity| {
+                        identity.as_str() != PHYSICAL_NIC_IP && identity.as_str() != "127.0.0.1"
+                    }),
+            );
+        }
+        if !identities.is_empty() {
+            state
+                .routes
+                .retain(|(_, identity)| !identities.contains(identity));
+        }
         state.dns.retain(|entry| entry.name != name);
     }
 
@@ -204,10 +262,7 @@ impl FakeHost {
     /// its routes with it (the macOS kill-9 behavior; the Windows spike must
     /// confirm whether Windows leaves residue).
     fn simulate_kill_clean(&self, name: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.interfaces.retain(|(existing, _)| existing != name);
-        state.routes.retain(|(_, identity)| identity == "127.0.0.1");
-        state.dns.retain(|entry| entry.name != name);
+        self.remove_wintun(name);
     }
 
     /// Residue model: the adapter is gone but owned routes survive (what the
@@ -215,6 +270,16 @@ impl FakeHost {
     fn simulate_adapter_gone_routes_remain(&self, name: &str) {
         let mut state = self.state.lock().unwrap();
         state.interfaces.retain(|(existing, _)| existing != name);
+    }
+
+    fn set_default_route_identity(&self, identity: &str) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .routes
+            .retain(|(dest, _)| dest != "0.0.0.0/0" && dest != "0.0.0.0");
+        state
+            .routes
+            .push(("0.0.0.0/0".to_string(), identity.to_string()));
     }
 
     fn has_wintun(&self, name: &str) -> bool {
@@ -288,8 +353,8 @@ impl ice_tun_sys::WindowsHost for FakeHost {
 /// false (a core that refuses to die / a stuck helper).
 struct FakeCoreCoordinator {
     host: FakeHost,
-    start_failure: Option<TunErrorCode>,
-    stop_failure: Option<TunErrorCode>,
+    start_failure: Option<ErrorCode>,
+    stop_failure: Option<ErrorCode>,
     remove_on_stop: bool,
     /// When false, the adapter is created without its routes (a core that
     /// never converged): apply must fail closed.
@@ -311,10 +376,10 @@ impl FakeCoreCoordinator {
 
     fn tun_addresses(config_path: &Path) -> Result<Vec<String>, TunError> {
         let raw = fs::read_to_string(config_path).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("read config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("read config: {err}"))
         })?;
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("parse config: {err}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("parse config: {err}"))
         })?;
         value
             .get("inbounds")
@@ -333,7 +398,7 @@ impl FakeCoreCoordinator {
             })
             .ok_or_else(|| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     "config has no tun inbound with addresses",
                 )
             })
@@ -380,7 +445,7 @@ impl CoreCoordinator for FakeCoreCoordinator {
 
     fn set_dns(&mut self, _service: &str, _servers: &[String]) -> Result<(), TunError> {
         Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             "dns not supported by the windows fake coordinator",
         ))
     }
@@ -484,7 +549,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..win_config()
     };
     let err = bk.prepare(&ipv4_only).expect_err("ipv4-only leaks IPv6");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv6"));
 
     let ipv6_only = TunConfig {
@@ -492,7 +557,7 @@ fn prepare_rejects_ipv4_only_and_missing_ipv4() {
         ..win_config()
     };
     let err = bk.prepare(&ipv6_only).expect_err("ipv4 is mandatory");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert!(err.message.contains("IPv4"));
     let _ = fs::remove_dir_all(&dir);
 }
@@ -509,7 +574,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad).expect_err("bad cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
     for cidr in ["fdfe:dcba:9876::1", "fdfe:dcba:9876::1/129", "10.0.0.1/24"] {
         let bad = TunConfig {
@@ -517,7 +582,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad).expect_err("bad v6 cidr");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {cidr}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {cidr}");
     }
 
     let low_mtu = TunConfig {
@@ -526,7 +591,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
     };
     assert_eq!(
         bk.prepare(&low_mtu).expect_err("low mtu").code,
-        TunErrorCode::ApplyFailed
+        ErrorCode::TunApplyFailed
     );
 
     for name in ["bad/name", "bad:name", "bad*name", "bad\nname"] {
@@ -535,7 +600,7 @@ fn prepare_rejects_bad_addresses_mtu_and_interface_name() {
             ..win_config()
         };
         let err = bk.prepare(&bad_name).expect_err("bad adapter name");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed, "case: {name}");
+        assert_eq!(err.code, ErrorCode::TunApplyFailed, "case: {name}");
     }
     let _ = fs::remove_dir_all(&dir);
 }
@@ -613,6 +678,75 @@ fn apply_journals_granular_steps_and_returns_observed_ownership() {
 }
 
 #[test]
+fn apply_pins_physical_default_interface_before_start() {
+    let dir = temp_dir("pin-default");
+    let host = FakeHost::default();
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let prepared = bk.prepare(&win_config()).expect("prepare");
+    bk.apply(&prepared).expect("apply");
+
+    let cfg: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_path(&dir)).unwrap()).unwrap();
+    assert_eq!(cfg["route"]["default_interface"], PHYSICAL_NIC);
+    assert_eq!(cfg["route"]["auto_detect_interface"], false);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_refuses_leftover_wintun_default_route() {
+    let dir = temp_dir("leftover-default");
+    let host = FakeHost::default();
+    host.set_default_route_identity("10.0.0.1");
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let prepared = bk.prepare(&win_config()).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("leftover wintun default");
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
+    assert!(
+        err.message.contains("physical default route"),
+        "unexpected error: {}",
+        err.message
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn apply_refuses_live_wintun_as_default_route() {
+    let dir = temp_dir("live-wintun-default");
+    let host = FakeHost::default();
+    host.add_wintun(
+        DEFAULT_WINTUN_NAME,
+        &["10.0.0.1/30".into(), "fdfe:dcba:9876::1/126".into()],
+    );
+    host.set_default_route_identity("10.0.0.1");
+    seed_preparing_journal(&dir);
+    write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
+    let coordinator = FakeCoreCoordinator::new(host.clone());
+    let mut bk = backend(&dir, host, coordinator);
+    let mut config = win_config();
+    config.interface_name = Some("Wintun 2".into());
+    let prepared = bk.prepare(&config).expect("prepare");
+    let err = bk.apply(&prepared).expect_err("wintun still default");
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
+    assert!(
+        err.message.contains("physical default route"),
+        "unexpected error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Wintun"),
+        "error should name the leftover adapter: {}",
+        err.message
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn verify_reports_dns_inconsistent_when_adapter_dns_is_lost() {
     let dir = temp_dir("verify-dns-lost");
     let host = FakeHost::default();
@@ -679,11 +813,11 @@ fn apply_propagates_permission_required_without_records() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
 
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.start_failure = Some(TunErrorCode::PermissionRequired);
+    coordinator.start_failure = Some(ErrorCode::TunPermissionRequired);
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("permission required");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     let journal = TunJournal::load(&journal_path(&dir))
         .unwrap()
@@ -717,7 +851,7 @@ fn apply_journal_write_failure_stops_core_and_rolls_back() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("journal write failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
     assert!(
         !host.has_wintun("Wintun"),
@@ -735,7 +869,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
 
     let host = FakeHost::default();
     let mut coordinator = FakeCoreCoordinator::new(host.clone());
-    coordinator.stop_failure = Some(TunErrorCode::RestoreFailed);
+    coordinator.stop_failure = Some(ErrorCode::TunRestoreFailed);
     let mut bk = WindowsTunBackend::new(
         OWNER,
         Box::new(host.clone()),
@@ -746,7 +880,7 @@ fn apply_journal_write_and_stop_failure_is_recovery_required() {
     write_tun_config(&dir, &["10.0.0.1/30", "fdfe:dcba:9876::1/126"]);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("uncertain cleanup");
-    assert_eq!(err.code, TunErrorCode::RecoveryRequired);
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
     assert!(
         host.has_wintun("Wintun"),
         "stuck core leaves ownership uncertain"
@@ -808,7 +942,7 @@ fn apply_fails_closed_when_routes_do_not_converge() {
     let mut bk = backend(&dir, host.clone(), coordinator);
     let prepared = bk.prepare(&win_config()).expect("prepare");
     let err = bk.apply(&prepared).expect_err("routes never converge");
-    assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     assert!(
         !host.has_wintun("Wintun"),
         "the core must be stopped when the capture does not converge"
@@ -828,10 +962,12 @@ fn verify_rejects_missing_required_address_family() {
     // The interface silently lost its IPv6 address: the exact-address lock
     // must reject the capture.
     let mut state = host.state.lock().unwrap();
-    state.interfaces[0]
-        .1
-        .addresses
-        .retain(|addr| !addr.contains(':'));
+    let tun = state
+        .interfaces
+        .iter_mut()
+        .find(|(n, _)| n == DEFAULT_WINTUN_NAME)
+        .expect("wintun");
+    tun.1.addresses.retain(|addr| !addr.contains(':'));
     drop(state);
     let health = bk.verify(&applied).expect("verify after v6 loss");
     assert!(!health.addresses_present);
@@ -898,7 +1034,7 @@ fn restore_fails_closed_when_interface_survives_stop() {
     let err = bk.restore(&applied).expect_err("interface survives stop");
     assert_eq!(
         err.code,
-        TunErrorCode::RecoveryRequired,
+        ErrorCode::TunRecoveryRequired,
         "uncertain cleanup must fail closed, not claim success"
     );
     assert!(

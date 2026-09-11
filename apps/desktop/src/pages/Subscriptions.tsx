@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api,
   formatInvokeError,
+  formatUiMessage,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/tauri";
@@ -134,7 +135,7 @@ export function Subscriptions() {
       t("subs.summaryGroups", { n: s.group_count ?? 0 }),
       t("subs.summaryRules", { n: s.rule_count ?? 0 }),
     ];
-    if (s.has_dns) parts.push("DNS");
+    if (s.has_dns) parts.push(t("subs.hasDns"));
     if (s.last_updated) {
       parts.push(new Date(s.last_updated).toLocaleString());
     }
@@ -142,7 +143,7 @@ export function Subscriptions() {
   }
 
   return (
-    <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3">
+    <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="subs-panel">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
       {updateFailures && (
@@ -328,12 +329,12 @@ export function Subscriptions() {
                           </ItemDescription>
                           {s.last_error ? (
                             <ItemDescription className="text-destructive">
-                              {s.last_error}
+                              {formatUiMessage(s.last_error)}
                             </ItemDescription>
                           ) : null}
                           {warnings.length > 0 ? (
                             <ItemDescription className="text-warn">
-                              {warnings.join("；")}
+                              {warnings.map(formatUiMessage).join("；")}
                             </ItemDescription>
                           ) : null}
                         </ItemContent>

@@ -23,7 +23,9 @@ pub use macos::{
 pub use windows::WindowsSystemProxy;
 
 pub use backup_file::{
-    is_proxy_applied_on_disk, is_proxy_live_applied, recover_if_applied, ProxyBackupFile,
+    disk_proxy_state, is_proxy_applied_on_disk, is_proxy_live_applied,
+    proxy_backup_indicates_ownership, recover_if_applied, recover_if_applied_hinted,
+    DiskProxyState, ProxyBackupFile, RecoverOutcome,
 };
 pub use bypass::{bypass_domains, BYPASS_COMMON, BYPASS_WINDOWS, BYPASS_WINDOWS_EXTRA};
 pub use record::{apply_and_record, restore_and_clear_flag};
@@ -78,6 +80,29 @@ pub trait SystemProxy: Send {
     /// `NoopSystemProxy` returns false so the UI can hide enable/disable controls.
     fn is_available(&self) -> bool {
         true
+    }
+
+    /// Cheap live check used on `proxy-backup.json` `Unknown` (PROXY-2).
+    /// Default walks a full [`SystemProxy::backup`]; macOS probes only the
+    /// first enabled service.
+    fn live_matches_endpoints(&self, endpoints: &ProxyEndpoints) -> Result<bool, ProxySysError> {
+        let current = self.backup()?;
+        Ok(current.enabled
+            && crate::backup_file::proxy_backup_matches_endpoints(&current, endpoints))
+    }
+
+    /// Live check when disk state is `Applied`. Default uses the full backup
+    /// so per-service records stay accurate; macOS still probes only the
+    /// primary service.
+    fn live_matches_applied(
+        &self,
+        record: &ProxyBackupFile,
+        endpoints: &ProxyEndpoints,
+    ) -> Result<bool, ProxySysError> {
+        let current = self.backup()?;
+        Ok(crate::backup_file::proxy_backup_matches(
+            record, &current, endpoints,
+        ))
     }
 }
 

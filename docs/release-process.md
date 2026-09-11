@@ -13,8 +13,8 @@ arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`) and the Windows NSIS `.exe`
 the artifacts and compliance notices.
 
 macOS releases are permanently unsigned at the Apple / Gatekeeper layer
-(documented product decision): the privileged helper for TUN is installed
-through the system authorization dialog at first use (see `docs/tun.md`).
+(documented product decision). TUN elevation is documented in
+[`tun.md`](tun.md#macos-elevation).
 Gatekeeper warnings are expected for published artifacts. In-app updates use a
 separate **minisign** key for integrity; that is not Developer ID signing.
 
@@ -32,7 +32,8 @@ The version lives in exactly three places and **must stay in sync**:
 
 ## Updater signing keys (one-time)
 
-In-app updates (`docs/architecture.md` §25) verify artifacts with minisign.
+In-app updates verify artifacts with minisign; see the
+[architecture overview](architecture.md#trust-boundaries) for the trust boundary.
 Generate the keypair once (not in the repo):
 
 ```bash
@@ -83,7 +84,7 @@ bash scripts/release-notes.sh v0.1.2
 ### 3. Gate and merge to `main`
 
 ```bash
-bash scripts/gate-local.sh   # fmt, clippy, Rust tests, tsc, vitest; recaptures docs/images/home.png when the version changed
+bash scripts/gate-local.sh
 ```
 
 Commit the updated `docs/images/home.png` and `docs/images/home.version` with the release.
@@ -138,6 +139,19 @@ gh release view v0.1.2 --json assets           # dmg, exe, tar.gz, sigs, latest.
 signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
 (also run from `scripts/gate.sh` / `scripts/gate-local.sh`).
 
+## Local vs CI gates
+
+Run `scripts/gate-local.sh` before every commit and require all CI checks to
+pass before merging or tagging, as described above. The maintained reference
+for gate coverage, platform splits, and manual live tests is
+[`testing.md`](testing.md).
+
+The Rust toolchain is pinned in `rust-toolchain.toml` (CI-3). GeoIP rule-set
+fetches (`scripts/fetch-geoip.sh`) pin `third_party/sing-geoip/REF` and
+verify SHA-256 against `third_party/sing-geoip/CHECKSUMS.sha256` (CI-8);
+the committed checksum file is the trust root, as with
+`third_party/sing-box/CHECKSUMS.sha256`.
+
 ## Known issues and workarounds
 
 ### Network instability to github.com
@@ -169,13 +183,10 @@ on GitHub-hosted runners (warning only). Fixed by `@v7`; do not downgrade.
 ## Distribution constraints
 
 The macOS release is intentionally unsigned: Developer ID signing,
-notarization, and stapling are not part of the product. TUN elevation uses
-the system authorization dialog (`AuthorizationServices`, deprecated but
-functional) to install the privileged helper on first use; the manual
-equivalent is `scripts/install-helper-macos.sh`. G9.12 and G9.13 are the
-completed macOS TUN live gates; the clean-machine install/uninstall gate is
-intentionally waived. Published `.app`/`.dmg` artifacts are unsigned and may
-trigger Gatekeeper warnings; users must right-click → Open (or use
+notarization, and stapling are not part of the product. TUN elevation and the
+helper installation gate exception are maintained in
+[`tun.md`](tun.md#macos-elevation). Published `.app`/`.dmg` artifacts
+are unsigned and may trigger Gatekeeper warnings; users must right-click → Open (or use
 `xattr -dr com.apple.quarantine`) on first launch.
 
 In-app updates after 0.1.5 do not change that decision: they only check minisign

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Privileged helper daemon entry (plan §5 T5, macOS production path).
+//! Privileged helper daemon entry (`docs/tun.md`, macOS production path).
 //!
 //! Runs as root under launchd. Binds a Unix socket, authenticates each peer
 //! by socket credential + per-installation token, and serves the narrow
-//! Start / Stop / Status contract. The core binary and data dir come from
+//! Start / Stop / Status / SetDns / TruncateCoreLog contract. The core binary
+//! and data dir come from
 //! the environment the installer records in the launchd plist; the client
 //! can never supply them.
 //!
@@ -14,7 +15,7 @@
 //! logic. See `install.rs`.
 //!
 //! The daemon never enables capture itself, never touches routes, adapters,
-//! or DNS, and never accepts arbitrary commands (plan §7): sing-box owns the
+//! or DNS, and never accepts arbitrary commands (`docs/tun.md`): sing-box owns the
 //! TUN resources; this process only runs and terminates it.
 //!
 //! Non-unix builds are a stub so the workspace gate stays green on Windows
@@ -34,18 +35,20 @@ mod unix_main {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use ice_helper::{ProcessCoreRunner, ServerConfig, SocketPeerAuth};
-    use ice_tun_sys::error::{TunError, TunErrorCode};
+    use ice_helper::{
+        try_acquire_connection_slot, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    };
+    use ice_types::TunError;
 
     use crate::install::{
-        ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR, ENV_SOCKET,
-        ENV_TOKEN,
+        ENV_ALLOWED_UID, ENV_CORE_BIN, ENV_CORE_BIN_SHA256, ENV_CORE_LOG, ENV_DATA_DIR,
+        ENV_RESOURCES_DIR, ENV_SOCKET, ENV_TOKEN,
     };
 
     /// Upper bound on concurrently served connections. The socket is
-    /// world-connectable, so any local process can open one; a cap keeps an
-    /// idle-connection flood from exhausting threads (each connection holds a
-    /// thread only for its read bound).
+    /// owner-only (`0600` plus a peer-uid check), so other local users cannot
+    /// connect; a cap still keeps the authorized user from exhausting daemon
+    /// threads (each connection holds a thread only for its read bound).
     const MAX_CONNECTIONS: usize = 16;
 
     fn env_required(key: &str) -> Result<String, String> {
@@ -82,24 +85,35 @@ mod unix_main {
                 core_bin
             ));
         }
+        let resources_dir = std::env::var(ENV_RESOURCES_DIR)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(&core_bin)
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        PathBuf::from(ice_tun_helper_proto::install_paths::CORE_BIN_DEST_DIR)
+                    })
+            });
         Ok(ServerConfig {
             token,
             data_dir: PathBuf::from(data_dir),
             core_bin: PathBuf::from(core_bin),
             core_log: PathBuf::from(core_log),
             allowed_uid,
+            protected_run_dir: PathBuf::from(ice_tun_helper_proto::install_paths::CORE_RUN_DIR),
+            resources_dir,
         })
     }
 
-    /// Serve one connection: read a single request frame, dispatch, respond.
-    /// The runner is shared across connections (one core at a time).
-    fn serve_connection(
+    /// Serve one connection: authenticate, then dispatch under the runner mutex.
+    fn serve_peer(
         stream: UnixStream,
         config: &ServerConfig,
         auth: &SocketPeerAuth,
-        runner: &mut ProcessCoreRunner,
+        runner: &std::sync::Mutex<ProcessCoreRunner>,
     ) -> Result<(), TunError> {
-        ice_helper::serve_connection(stream, config, auth, runner)
+        ice_helper::serve_peer(stream, config, auth, runner)
     }
 
     pub(crate) fn run_daemon() {
@@ -113,7 +127,7 @@ mod unix_main {
 
         let socket_path = std::env::var(ENV_SOCKET)
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(ice_tun_sys::helper_protocol::DEFAULT_SOCKET_PATH));
+            .unwrap_or_else(|_| PathBuf::from(ice_tun_helper_proto::DEFAULT_SOCKET_PATH));
         if socket_path.exists() {
             // Stale socket from a previous run (daemon crashed without cleanup).
             let _ = std::fs::remove_file(&socket_path);
@@ -125,13 +139,12 @@ mod unix_main {
                 exit(1);
             }
         };
-        // World-connectable socket: the desktop app runs as the normal user
-        // while the daemon runs as root, so a root-only 0600 socket would
-        // reject it before authentication. Authorization happens *on top* of
-        // the connection: peer uid (socket credential) + per-installation
-        // token, so an unauthenticated peer gets nothing.
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
+        // Connectable only by the authorized user: chown the socket to that
+        // uid and mode 0600. Peer uid + token still authorize the frame.
+        if let Err(err) = ice_helper::restrict_helper_socket(&socket_path, config.allowed_uid) {
+            eprintln!("ice-helper: restrict {}: {err}", socket_path.display());
+            exit(1);
+        }
         tracing::info!(
             socket = %socket_path.display(),
             "ice-helper serving (pid {})",
@@ -152,27 +165,18 @@ mod unix_main {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    if !try_acquire_connection_slot(&active, MAX_CONNECTIONS) {
                         // Fail-closed: excess connections are dropped without
                         // a frame; the app reconnects per command.
                         tracing::debug!("connection limit reached; dropping excess connection");
                         continue;
                     }
-                    active.fetch_add(1, Ordering::SeqCst);
                     let config = config.clone();
                     let runner = Arc::clone(&runner);
                     let active = Arc::clone(&active);
                     std::thread::spawn(move || {
-                        let result = match runner.lock() {
-                            Ok(mut runner) => {
-                                let auth = SocketPeerAuth;
-                                serve_connection(stream, &config, &auth, &mut runner)
-                            }
-                            Err(_) => Err(TunError::new(
-                                TunErrorCode::ApplyFailed,
-                                "runner lock poisoned",
-                            )),
-                        };
+                        let auth = SocketPeerAuth;
+                        let result = serve_peer(stream, &config, &auth, &runner);
                         active.fetch_sub(1, Ordering::SeqCst);
                         if let Err(err) = result {
                             tracing::debug!(error = %err, "connection failed");

@@ -5,23 +5,25 @@
 use ice_config::NormalizedOutbound;
 use serde_json::{json, Value};
 
-/// Supported Clash proxy types for v1 (architecture checklist).
+use crate::limits::Limits;
+
+/// Supported Clash proxy types.
 pub const CLASH_SUPPORTED_TYPES: &[&str] = &["ss", "vmess", "trojan", "socks", "socks5", "http"];
 
-/// Upper bound on `proxies` array length to limit memory / config size.
+/// Same cap as [`Limits::default`].max_nodes (kept for tests / re-exports).
 pub const MAX_CLASH_PROXIES: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct ProxyParseResult {
     pub nodes: Vec<NormalizedOutbound>,
     pub skipped: usize,
+    pub truncated: usize,
 }
 
 #[derive(Debug)]
 pub(crate) enum SkipReason {
     Unsupported,
     Incomplete,
-    TooMany,
 }
 
 pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
@@ -30,19 +32,15 @@ pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
         .and_then(|v| v.as_array())
         .ok_or(SkipReason::Incomplete)?;
 
-    if proxies.len() > MAX_CLASH_PROXIES {
-        return Err(SkipReason::TooMany);
-    }
-
+    let max_nodes = Limits::default().max_nodes;
+    let truncated = proxies.len().saturating_sub(max_nodes);
     let mut nodes = Vec::new();
     let mut skipped = 0usize;
 
-    for (idx, proxy) in proxies.iter().enumerate() {
+    for (idx, proxy) in proxies.iter().enumerate().take(max_nodes) {
         match map_proxy(proxy, idx) {
             Ok(node) => nodes.push(node),
-            Err(SkipReason::Unsupported | SkipReason::Incomplete | SkipReason::TooMany) => {
-                skipped += 1
-            }
+            Err(SkipReason::Unsupported | SkipReason::Incomplete) => skipped += 1,
         }
     }
 
@@ -50,7 +48,11 @@ pub fn parse_proxies(doc: &Value) -> Result<ProxyParseResult, SkipReason> {
         return Err(SkipReason::Incomplete);
     }
 
-    Ok(ProxyParseResult { nodes, skipped })
+    Ok(ProxyParseResult {
+        nodes,
+        skipped,
+        truncated,
+    })
 }
 
 pub fn map_proxy(proxy: &Value, idx: usize) -> Result<NormalizedOutbound, SkipReason> {
@@ -75,10 +77,7 @@ pub fn map_proxy(proxy: &Value, idx: usize) -> Result<NormalizedOutbound, SkipRe
         _ => return Err(SkipReason::Unsupported),
     };
 
-    Ok(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Ok(NormalizedOutbound::new(name, outbound))
 }
 
 fn require_server_port(obj: &serde_json::Map<String, Value>) -> Result<(String, u16), SkipReason> {
@@ -111,25 +110,21 @@ fn map_ss(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, Skip
         .and_then(|v| v.as_str())
         .ok_or(SkipReason::Incomplete)?;
 
-    let mut out = json!({
+    if obj.get("plugin").is_some()
+        || obj.get("plugin-opts").is_some()
+        || obj.get("plugin_opts").is_some()
+    {
+        return Err(SkipReason::Unsupported);
+    }
+
+    Ok(json!({
         "type": "shadowsocks",
         "tag": tag,
         "server": server,
         "server_port": port,
         "method": method,
         "password": password,
-    });
-
-    if let Some(plugin) = obj.get("plugin").and_then(|v| v.as_str()) {
-        if let Some(obj_mut) = out.as_object_mut() {
-            obj_mut.insert("plugin".into(), json!(plugin));
-            if let Some(opts) = obj.get("plugin-opts") {
-                obj_mut.insert("plugin_opts".into(), opts.clone());
-            }
-        }
-    }
-
-    Ok(out)
+    }))
 }
 
 fn map_vmess(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, SkipReason> {
@@ -314,4 +309,22 @@ fn map_http(obj: &serde_json::Map<String, Value>, tag: &str) -> Result<Value, Sk
             .insert("tls".into(), json!({ "enabled": true }));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn map_ss_skips_external_plugin() {
+        let obj = json!({
+            "server": "1.1.1.1",
+            "port": 443,
+            "cipher": "aes-128-gcm",
+            "password": "x",
+            "plugin": "obfs-local"
+        });
+        assert!(map_ss(obj.as_object().unwrap(), "n").is_err());
+    }
 }

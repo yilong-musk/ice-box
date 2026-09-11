@@ -6,6 +6,8 @@ mod binary;
 mod clash_api;
 mod error;
 mod health;
+mod log_rotate;
+mod pid;
 mod process;
 mod reload;
 mod traffic;
@@ -15,32 +17,39 @@ pub use binary::{
 };
 pub use clash_api::{
     get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode, traffic_sample,
-    GroupState, MockClashApi, RecordedRequest, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
+    GroupState, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
 };
+#[cfg(any(test, feature = "test-hooks"))]
+pub use clash_api::{MockClashApi, RecordedRequest};
 pub use error::CoreError;
 pub use health::{
     tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,
     FailingHealthProbe, HealthCancel, HealthEndpoints, HealthProbe, ImmediateHealthProbe,
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
 };
+pub use log_rotate::{
+    cap_log_file, log_file_oversized, trim_log_file, truncate_log_file, APP_LOG_KEEP,
+    CORE_LOG_KEEP, CORE_LOG_MAX_BYTES, SIZED_LOG_MAX_BYTES, SIZED_LOG_TRIM_BYTES,
+};
+pub use pid::{clear_pid, parse_pid_contents, purge_invalid_pid_file, read_pid, write_pid};
 pub use process::{
-    stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner, PidProcess,
-    ProcessSpawner, STOP_GRACE_TIMEOUT,
+    pid_is_alive, stop_process, CommandSpawner, ManagedProcess, MockProcess, MockSpawner,
+    PidProcess, ProcessSpawner, STOP_GRACE_TIMEOUT,
 };
 pub use reload::{
     ConfigReloader, MockReloadMode, MockReloader, SignalReloader, WINDOWS_PORT_RELEASE_WAIT,
 };
 pub use traffic::{
-    TimedTrafficSample, TrafficMonitor, TrafficSnapshot, TRAFFIC_HISTORY_MAX, TRAFFIC_WINDOW_MS,
+    TimedTrafficSample, TrafficDelta, TrafficMonitor, TrafficSnapshot, TRAFFIC_HISTORY_MAX,
+    TRAFFIC_WINDOW_MS,
 };
 
 // CoreHandle is defined below with CoreController.
 
-use ice_config::{clear_pid, write_pid};
+use ice_types::UiMessage;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -61,7 +70,7 @@ pub enum CoreStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CoreState {
     pub status: CoreStatus,
-    pub message: Option<String>,
+    pub message: Option<UiMessage>,
     pub inbound_host: Option<String>,
     pub inbound_port: Option<u16>,
 }
@@ -81,6 +90,9 @@ impl Default for CoreState {
 #[derive(Debug, Clone)]
 pub struct CorePaths {
     pub binary: PathBuf,
+    /// Extra images that may be the live process when the elevated helper
+    /// or Windows launcher starts a protected copy of sing-box (SEC-6).
+    pub extra_binaries: Vec<PathBuf>,
     pub config: PathBuf,
     pub log_file: PathBuf,
     pub pid_file: PathBuf,
@@ -90,23 +102,32 @@ pub struct CorePaths {
     /// Clash API listen used for healthcheck (TCP connect).
     pub clash_api_host: String,
     pub clash_api_port: u16,
+    /// Bearer token matching `experimental.clash_api.secret`.
+    pub clash_api_secret: String,
     /// When true, mixed inbound binds `0.0.0.0` (LAN share); port probe must check wildcard.
     pub allow_lan: bool,
 }
 
 impl CorePaths {
+    /// Bundled binary plus protected copies that an elevated start may run.
+    pub fn adopt_binaries(&self) -> Vec<&Path> {
+        let mut out = Vec::with_capacity(self.extra_binaries.len() + 1);
+        out.push(self.binary.as_path());
+        out.extend(self.extra_binaries.iter().map(PathBuf::as_path));
+        out
+    }
+
     pub fn health_endpoints(&self) -> HealthEndpoints {
-        HealthEndpoints {
-            host: self.clash_api_host.clone(),
-            port: self.clash_api_port,
-        }
+        HealthEndpoints::new(self.clash_api_host.clone(), self.clash_api_port)
+            .with_secret(self.clash_api_secret.clone())
     }
 }
 
 /// How reload finished when `Ok`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReloadOutcome {
-    /// Clash API PUT succeeded and post-reload healthcheck passed; process kept.
+    /// SIGHUP (Unix) succeeded, the pid was unchanged, and post-reload health
+    /// (TCP + Clash `GET /version`) passed; process kept.
     HotReloaded,
     /// Hot reload failed; process was restarted from `config.json` and is healthy.
     Restarted,
@@ -120,13 +141,14 @@ pub enum CoreOp {
     Reload,
 }
 
-/// Whether `op` is allowed from `status` (architecture §7.1).
+/// Whether `op` is allowed from `status`.
 pub fn is_op_allowed(status: CoreStatus, op: CoreOp) -> bool {
     match (status, op) {
         (CoreStatus::Stopped | CoreStatus::Error, CoreOp::Start) => true,
         (CoreStatus::Running, CoreOp::Stop) => true,
         (CoreStatus::Starting, CoreOp::Stop) => true,
         (CoreStatus::Error | CoreStatus::Stopped, CoreOp::Stop) => true, // idempotent
+        (CoreStatus::Stopping, CoreOp::Stop) => true,                    // idempotent
         (CoreStatus::Running, CoreOp::Reload) => true,
         (CoreStatus::Starting | CoreStatus::Stopping, _) => false,
         (CoreStatus::Stopped | CoreStatus::Error, CoreOp::Reload) => false,
@@ -228,6 +250,23 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         if !is_op_allowed(self.state.status, CoreOp::Start) {
             return Err(reject_op(self.state.status, CoreOp::Start));
         }
+        if !looks_like_singbox_process(pid) {
+            tracing::error!(
+                pid,
+                image = process_image_path(pid).as_deref(),
+                "adopt rejected: process image is not named sing-box"
+            );
+            return Err(CoreError::AdoptRejected(pid));
+        }
+        if !process_image_matches_any(pid, &paths.adopt_binaries()) {
+            tracing::error!(
+                pid,
+                image = process_image_path(pid).as_deref(),
+                candidates = ?paths.adopt_binaries(),
+                "adopt rejected: process image does not match a bundled or protected sing-box"
+            );
+            return Err(CoreError::AdoptRejected(pid));
+        }
 
         self.state.status = CoreStatus::Starting;
         self.state.message = None;
@@ -237,7 +276,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         let child: Box<dyn ManagedProcess> = Box::new(PidProcess::new(pid));
         if let Err(err) = write_pid(&paths.pid_file, pid) {
-            self.fail(format!("write pid: {err}"));
+            self.fail(UiMessage::new("core.writePid").with("error", err.to_string()));
             return Err(CoreError::SpawnFailed(format!("write pid: {err}")));
         }
         self.child = Some(child);
@@ -248,7 +287,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             // kept when the kill fails so the failure stays visible.
             let _ = self.kill_child_and_clear_pid(&paths.pid_file);
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
                 other => other,
@@ -290,7 +329,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         if let Err(err) = self.spawn_and_probe(paths) {
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
                 CoreError::NotFound(_) => err,
@@ -316,7 +355,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     pub fn stop(&mut self, pid_file: &Path) -> Result<(), CoreError> {
         match self.state.status {
             CoreStatus::Stopping => {
-                return Err(reject_op(self.state.status, CoreOp::Stop));
+                // Spec: stop is best-effort idempotent. An in-flight stop
+                // owns the transition; a second call must not reject.
+                return Ok(());
             }
             CoreStatus::Starting => {
                 self.state.status = CoreStatus::Stopping;
@@ -329,7 +370,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                         Ok(())
                     }
                     Err(err) => {
-                        self.fail(format!("stop failed: {err}"));
+                        self.fail(UiMessage::new("core.stopFailed").with("error", err.to_string()));
                         Err(err)
                     }
                 };
@@ -355,7 +396,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 // The process could not be terminated (e.g. an adopted
                 // root-owned pid that only the privileged coordinator may
                 // signal). Never report Stopped while it may still run.
-                self.fail(format!("stop failed: {err}"));
+                self.fail(UiMessage::new("core.stopFailed").with("error", err.to_string()));
                 Err(err)
             }
         }
@@ -380,11 +421,28 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
 
         match signal_result {
             Ok(()) => {
-                if self.wait_health(&paths.health_endpoints()).is_ok() {
-                    tracing::info!("sing-box hot reload ok");
-                    return Ok(ReloadOutcome::HotReloaded);
+                let pid_before = self.child.as_ref().map(|c| c.id());
+                match self.wait_health(&paths.health_endpoints()) {
+                    Ok(()) => {
+                        let still_same = self.child.as_mut().is_some_and(|child| {
+                            child.id() == pid_before.unwrap_or(child.id())
+                                && matches!(child.try_wait(), Ok(None))
+                        });
+                        if still_same {
+                            tracing::info!("sing-box hot reload ok");
+                            return Ok(ReloadOutcome::HotReloaded);
+                        }
+                        tracing::warn!(
+                            "reload signal ok but pid changed or exited; restarting process"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "reload signal ok but healthcheck failed; restarting process"
+                        );
+                    }
                 }
-                tracing::warn!("reload signal ok but healthcheck failed; restarting process");
             }
             Err(err) => {
                 tracing::warn!(error = %err, "signal reload failed; restarting process");
@@ -402,7 +460,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         // the original still owns the TUN adapter must never happen.
         if let Err(err) = self.kill_child_and_clear_pid(&paths.pid_file) {
             let msg = err.to_string();
-            self.fail(msg.clone());
+            self.fail(err.ui_message());
             self.needs_proxy_restore = true;
             return Err(match err {
                 CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
@@ -427,7 +485,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
             Err(err) => {
                 let msg = err.to_string();
-                self.fail(msg.clone());
+                self.fail(err.ui_message());
                 self.needs_proxy_restore = true;
                 Err(match err {
                     CoreError::HealthcheckFailed(_) => CoreError::HealthcheckFailed(msg),
@@ -479,7 +537,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             let probe = self.health.clone();
             let ep = endpoints.clone();
             let timeout = self.health_timeout;
-            let handle = std::thread::spawn(move || probe.wait_ready(&ep, timeout));
+            let handle = std::thread::spawn(move || probe.wait_healthy(&ep, timeout));
             loop {
                 if let Some(err) = self.early_exit_health_error(paths) {
                     // Leave the probe thread to finish on its own (at most health_timeout).
@@ -519,8 +577,11 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 return Err(err);
             }
 
-            match try_tcp_connect_once(&endpoints) {
-                Ok(()) => return Ok(()),
+            match health::tcp_connect_once(&endpoints) {
+                Ok(()) => match self.health.probe_http(&endpoints) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last_err = e.to_string(),
+                },
                 Err(e) => last_err = e,
             }
             std::thread::sleep(HEALTHCHECK_POLL_INTERVAL);
@@ -569,29 +630,32 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
     }
 
     fn wait_health(&self, endpoints: &crate::HealthEndpoints) -> Result<(), CoreError> {
-        match &self.health_cancel {
-            // Cancel-aware path used by the desktop shell so quit can abort the 5s probe.
-            Some(cancel) => {
-                health::wait_tcp_ready_until(endpoints, self.health_timeout, Some(cancel.as_ref()))
-            }
-            None => self.health.wait_ready(endpoints, self.health_timeout),
-        }
+        self.health.wait_healthy_until(
+            endpoints,
+            self.health_timeout,
+            self.health_cancel.as_deref(),
+        )
     }
 
-    /// On app start: if pid file points at a live sing-box process, kill it and enter Stopped.
-    /// A live pid that cannot be signalled (root-owned elevated core) keeps the
-    /// pid file and returns an error: the failure must stay visible so the TUN
-    /// recovery path (or a later privileged stop) converges it instead of
-    /// silently clearing the record of the still-running process.
-    pub fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
-        let Some(pid) = ice_config::read_pid(pid_file)
-            .map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
+    /// On app start: if pid file points at a live process whose image is one
+    /// of `cores` (bundled or protected sing-box), kill it and enter Stopped.
+    /// Basename-only matching is not enough: pid reuse can point at a
+    /// foreign `sing-box`. A live matching pid that cannot be signalled
+    /// (root-owned elevated core) keeps the pid file and returns an error
+    /// so TUN recovery (or a later privileged stop) can converge it.
+    pub fn reclaim_orphan_pid(
+        &mut self,
+        pid_file: &Path,
+        cores: &[&Path],
+    ) -> Result<(), CoreError> {
+        let Some(pid) =
+            read_pid(pid_file).map_err(|e| CoreError::SpawnFailed(format!("read pid: {e}")))?
         else {
             return Ok(());
         };
 
         if pid_is_alive(pid) {
-            if looks_like_singbox_process(pid) {
+            if process_image_matches_any(pid, cores) {
                 tracing::warn!(pid, "reclaiming orphan sing-box pid");
                 if !force_kill_pid(pid) {
                     return Err(CoreError::SpawnFailed(format!(
@@ -628,9 +692,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
         Ok(())
     }
 
-    fn fail(&mut self, message: String) {
+    fn fail(&mut self, message: impl Into<UiMessage>) {
         self.state.status = CoreStatus::Error;
-        self.state.message = Some(message);
+        self.state.message = Some(message.into());
         self.clear_inbound();
     }
 
@@ -651,8 +715,9 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
                 let _ = clear_pid(pid_file);
                 if self.state.status == CoreStatus::Running {
                     self.state.status = CoreStatus::Error;
-                    self.state.message =
-                        Some(format!("sing-box exited unexpectedly (code {code})"));
+                    self.state.message = Some(
+                        UiMessage::new("core.exitedUnexpectedly").with("code", code.to_string()),
+                    );
                     self.clear_inbound();
                 }
                 true
@@ -674,8 +739,9 @@ pub trait CoreHandle: Send {
     /// Adopt an externally started sing-box (TUN slice; see `CoreController::adopt_external`).
     fn adopt_external(&mut self, pid: u32, paths: &CorePaths) -> Result<(), CoreError>;
     /// Reclaim an orphan sing-box left by a previous session (startup; see
-    /// `CoreController::reclaim_orphan_pid`).
-    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError>;
+    /// `CoreController::reclaim_orphan_pid`). `cores` are the bundled and
+    /// protected images that may still be running.
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path, cores: &[&Path]) -> Result<(), CoreError>;
 }
 
 impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreController<S, H> {
@@ -711,8 +777,8 @@ impl<S: ProcessSpawner + 'static, H: HealthProbe + 'static> CoreHandle for CoreC
         CoreController::adopt_external(self, pid, paths)
     }
 
-    fn reclaim_orphan_pid(&mut self, pid_file: &Path) -> Result<(), CoreError> {
-        CoreController::reclaim_orphan_pid(self, pid_file)
+    fn reclaim_orphan_pid(&mut self, pid_file: &Path, cores: &[&Path]) -> Result<(), CoreError> {
+        CoreController::reclaim_orphan_pid(self, pid_file, cores)
     }
 }
 
@@ -744,20 +810,7 @@ pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
                 continue;
             };
             let command = fields.next().unwrap_or("");
-            // Match the app's spawn shape (`sing-box run -c <config>`), with
-            // the config path as a whitespace-delimited argument. `ps -o
-            // command=` joins argv with single spaces, so the config path may
-            // itself contain spaces (e.g. macOS "Application Support") and
-            // still match; only its boundaries must be argument delimiters. A
-            // process whose command line merely *embeds* the path in a longer
-            // argument (e.g. `<config>.bak` or `--dir <parent dir>`) is not a
-            // leftover core and must not be terminated.
-            let args: Vec<&str> = command.split_whitespace().collect();
-            let is_core = args.iter().any(|a| a.contains("sing-box"))
-                && args.contains(&"run")
-                && args.contains(&"-c")
-                && config_is_own_argument(command, config.as_ref());
-            if !is_core {
+            if !is_reclaimable_core_command(command, config.as_ref()) {
                 continue;
             }
             // Only processes this user may signal (kill(pid, 0) == 0) are
@@ -786,19 +839,21 @@ pub fn reclaim_orphan_cores_with_config(config_path: &Path) -> usize {
         }
         reclaimed
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        reclaim_orphan_cores_windows(config_path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = config_path;
         0
     }
 }
 
-/// Whether `config` appears in `command` as a whitespace-delimited argument,
-/// as `ps -o command=` renders it (argv joined with single spaces). The path
-/// itself may contain spaces; only the boundaries around the match must be
-/// argument delimiters, so an occurrence embedded in a longer argument is
-/// not treated as an own argument.
-#[cfg(unix)]
+/// Whether `config` appears in `command` as a whitespace- or quote-delimited
+/// argument. The path itself may contain spaces; only the boundaries around
+/// the match must be argument delimiters, so an occurrence embedded in a
+/// longer argument is not treated as an own argument.
 fn config_is_own_argument(command: &str, config: &str) -> bool {
     let mut search_from = 0;
     while let Some(rel) = command[search_from..].find(config) {
@@ -806,20 +861,127 @@ fn config_is_own_argument(command: &str, config: &str) -> bool {
         let end = start + config.len();
         let before = command[..start].chars().next_back();
         let after = command[end..].chars().next();
-        let before_ok = match before {
+        let delim_ok = |c: Option<char>| match c {
             None => true,
-            Some(c) => c.is_whitespace(),
+            Some(ch) => ch.is_whitespace() || ch == '"' || ch == '\'',
         };
-        let after_ok = match after {
-            None => true,
-            Some(c) => c.is_whitespace(),
-        };
-        if before_ok && after_ok {
+        if delim_ok(before) && delim_ok(after) {
             return true;
         }
         search_from = end;
     }
     false
+}
+
+/// `sing-box run -c <config>` (Unix `ps` or a Windows process command line).
+fn is_reclaimable_core_command(command: &str, config: &str) -> bool {
+    image_basename_is_singbox(command)
+        && command.split_whitespace().any(|a| a == "run")
+        && command.split_whitespace().any(|a| a == "-c")
+        && config_is_own_argument(command, config)
+}
+
+#[cfg(windows)]
+fn reclaim_orphan_cores_windows(config_path: &Path) -> usize {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let config = config_path.to_string_lossy();
+    let self_pid = std::process::id();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == (-1isize as _) {
+            return 0;
+        }
+        let mut entry = std::mem::zeroed::<PROCESSENTRY32W>();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut reclaimed = 0;
+        let mut ok = Process32FirstW(snap, &mut entry);
+        while ok != 0 {
+            let pid = entry.th32ProcessID;
+            if pid != 0 && pid != self_pid {
+                if let Some(command) = process_command_line(pid) {
+                    if is_reclaimable_core_command(&command, config.as_ref()) && pid_is_alive(pid) {
+                        tracing::warn!(
+                            pid,
+                            "reclaiming orphan sing-box core running this installation's config (no pid file)"
+                        );
+                        if force_kill_pid(pid) {
+                            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                            while std::time::Instant::now() < deadline && pid_is_alive(pid) {
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                            reclaimed += 1;
+                        }
+                    }
+                }
+            }
+            ok = Process32NextW(snap, &mut entry);
+        }
+        CloseHandle(snap);
+        reclaimed
+    }
+}
+
+#[cfg(windows)]
+fn process_command_line(pid: u32) -> Option<String> {
+    use windows_sys::Wdk::System::Threading::NtQueryInformationProcess;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    const PROCESS_COMMAND_LINE_INFORMATION: i32 = 60;
+
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16,
+        maximum_length: u16,
+        buffer: *const u16,
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut needed: u32 = 0;
+        let _ = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            CloseHandle(handle);
+            return None;
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let status = NtQueryInformationProcess(
+            handle,
+            PROCESS_COMMAND_LINE_INFORMATION,
+            buf.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        CloseHandle(handle);
+        if status < 0 {
+            return None;
+        }
+        if buf.len() < std::mem::size_of::<UnicodeString>() {
+            return None;
+        }
+        let us = &*(buf.as_ptr() as *const UnicodeString);
+        if us.buffer.is_null() || us.length == 0 {
+            return None;
+        }
+        let units = (us.length as usize) / 2;
+        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
+            us.buffer, units,
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -876,31 +1038,6 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
         )));
     }
     Ok(())
-}
-
-fn try_tcp_connect_once(endpoints: &HealthEndpoints) -> Result<(), String> {
-    if !ice_config::is_loopback_host(&endpoints.host) {
-        return Err(format!(
-            "healthcheck host must be loopback, got {}",
-            endpoints.host
-        ));
-    }
-    let addr_str = endpoints.socket_addr_hint();
-    let addrs: Vec<_> = addr_str
-        .to_socket_addrs()
-        .map_err(|e| format!("resolve {addr_str}: {e}"))?
-        .collect();
-    if addrs.is_empty() {
-        return Err(format!("no addresses for {addr_str}"));
-    }
-    let mut last = String::from("not attempted");
-    for addr in addrs {
-        match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            Ok(_) => return Ok(()),
-            Err(e) => last = e.to_string(),
-        }
-    }
-    Err(last)
 }
 
 fn singbox_log_failure_excerpt(log_file: &Path) -> String {
@@ -962,53 +1099,82 @@ fn strip_ansi_light(s: &str) -> String {
     out
 }
 
-fn pid_is_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        // `kill(pid, 0)` probes liveness only. EPERM means the process
-        // exists but belongs to another user (e.g. an elevated root core);
-        // it is alive, just not signalable by us.
-        let rc = unsafe { libc::kill(pid as i32, 0) };
-        if rc == 0 {
-            return true;
-        }
-        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+fn looks_like_singbox_process(pid: u32) -> bool {
+    process_image_path(pid).is_some_and(|path| image_basename_is_singbox(&path))
+}
+
+/// True when the command image's file name is `sing-box` / `sing-box.exe`.
+/// Substring matches (`not-sing-box`, `sing-box-wrapper`) are refused.
+/// A Unix shebang leftover may be represented as `sh /path/sing-box …`
+/// in synthetic test strings; that script path is accepted. `sh -c '…
+/// sing-box …'` is not (argv1 is `-c`).
+fn image_basename_is_singbox(image: &str) -> bool {
+    let exe = adopt_image_exe_path(image);
+    if path_last_segment_is_singbox(exe) {
+        return true;
     }
-    #[cfg(windows)]
-    {
-        unsafe {
-            let handle = windows_sys::Win32::System::Threading::OpenProcess(
-                windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                0,
-                pid,
-            );
-            if handle.is_null() {
-                return false;
-            }
-            windows_sys::Win32::Foundation::CloseHandle(handle);
-            true
-        }
+    argv0_is_unix_interpreter(exe)
+        && shebang_script_path(image)
+            .is_some_and(|script| path_last_segment_is_singbox(Path::new(script)))
+}
+
+fn path_last_segment_is_singbox(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    // Unix `Path` does not split on `\`, so Windows images still need a
+    // last-segment check here (unit tests and mixed host strings).
+    let name = raw.rsplit(['\\', '/']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("sing-box") || name.eq_ignore_ascii_case("sing-box.exe")
+}
+
+fn argv0_is_unix_interpreter(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    let name = raw.rsplit(['\\', '/']).next().unwrap_or("");
+    matches!(name, "sh" | "bash" | "dash" | "zsh" | "busybox" | "env")
+}
+
+/// argv1 when it is a script path, not a flag (`-c`, `--norc`, …).
+fn shebang_script_path(image: &str) -> Option<&str> {
+    let trimmed = image.trim();
+    let after_argv0 = if let Some(rest) = trimmed.strip_prefix('"') {
+        let end = rest.find('"')?;
+        rest.get(end + 1..)?
+    } else if looks_like_windows_image_path(trimmed) {
+        return None;
+    } else {
+        let tok_len = trimmed.split_whitespace().next()?.len();
+        trimmed.get(tok_len..)?
+    };
+    let rest = after_argv0.trim_start();
+    if rest.is_empty() {
+        return None;
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        false
+    let script = if let Some(inner) = rest.strip_prefix('"') {
+        let end = inner.find('"')?;
+        &inner[..end]
+    } else {
+        rest.split_whitespace().next()?
+    };
+    if script.starts_with('-') {
+        None
+    } else {
+        Some(script)
     }
 }
 
-fn looks_like_singbox_process(pid: u32) -> bool {
-    #[cfg(unix)]
+/// Executable image path of `pid`, used for adopt identity checks.
+/// Unix uses `proc_pidpath` (macOS) or `/proc/{pid}/exe` (Linux), not
+/// `ps -o command=` (argv0 is forgeable via `exec -a`). Windows uses
+/// `QueryFullProcessImageNameW`.
+fn process_image_path(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-        let output = match Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-        {
-            Ok(o) if o.status.success() => o,
-            _ => return false,
-        };
-        let cmd = String::from_utf8_lossy(&output.stdout);
-        cmd.contains("sing-box")
+        macos_proc_pidpath(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
     }
     #[cfg(windows)]
     {
@@ -1020,24 +1186,91 @@ fn looks_like_singbox_process(pid: u32) -> bool {
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if handle.is_null() {
-                return false;
+                return None;
             }
             let mut buf = [0u16; 512];
             let mut size = buf.len() as u32;
             let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
             CloseHandle(handle);
             if ok == 0 {
-                return false;
+                return None;
             }
-            let path = String::from_utf16_lossy(&buf[..size as usize]);
-            path.to_ascii_lowercase().contains("sing-box")
+            Some(String::from_utf16_lossy(&buf[..size as usize]))
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = pid;
-        false
+        None
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_proc_pidpath(pid: u32) -> Option<String> {
+    // proc_pidpath writes a NUL-terminated POSIX path. 4 * MAXPATHLEN is
+    // PROC_PIDPATHINFO_MAXSIZE.
+    let mut buf = [0u8; 4096];
+    let n = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+        )
+    };
+    if n <= 0 {
+        return None;
+    }
+    let n = n as usize;
+    let end = n.min(buf.len());
+    std::str::from_utf8(&buf[..end]).ok().map(str::to_string)
+}
+
+fn process_image_matches_any(pid: u32, cores: &[&Path]) -> bool {
+    let existing: Vec<&Path> = cores.iter().copied().filter(|p| p.is_file()).collect();
+    if existing.is_empty() {
+        return false;
+    }
+    let Some(image) = process_image_path(pid) else {
+        return false;
+    };
+    existing
+        .iter()
+        .any(|core| process_image_string_matches_core(&image, core))
+}
+
+/// Windows `QueryFullProcessImageNameW` is the exe path and may contain
+/// spaces (`C:\Program Files\...`). Unix `proc_pidpath` / `/proc/pid/exe`
+/// is also a path (no argv). Synthetic unit-test strings may still be
+/// `exe args...`.
+fn adopt_image_exe_path(image: &str) -> &Path {
+    let trimmed = image.trim();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return Path::new(&rest[..end]);
+        }
+    }
+    if looks_like_windows_image_path(trimmed) {
+        Path::new(trimmed)
+    } else {
+        Path::new(trimmed.split_whitespace().next().unwrap_or(trimmed))
+    }
+}
+
+fn looks_like_windows_image_path(image: &str) -> bool {
+    let bytes = image.as_bytes();
+    (bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        || image.starts_with("\\\\")
+        || image.starts_with("//")
+}
+
+fn process_image_string_matches_core(image: &str, core: &Path) -> bool {
+    let image_path = adopt_image_exe_path(image);
+    if let (Ok(left), Ok(right)) = (image_path.canonicalize(), core.canonicalize()) {
+        return left == right;
+    }
+    let left = image_path.to_string_lossy().replace('/', "\\");
+    let right = core.to_string_lossy().replace('/', "\\");
+    left.eq_ignore_ascii_case(&right)
 }
 
 /// Best-effort kill of a pid; returns whether the TERM signal was delivered.
@@ -1076,7 +1309,7 @@ fn force_kill_pid(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ice_config::read_pid;
+    use crate::read_pid;
     use std::fs;
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1138,6 +1371,7 @@ mod tests {
         }
         CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config: dir.join("config.json"),
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
@@ -1145,6 +1379,7 @@ mod tests {
             inbound_port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port,
+            clash_api_secret: String::new(),
             allow_lan: false,
         }
     }
@@ -1163,6 +1398,158 @@ mod tests {
         )
     }
 
+    #[test]
+    fn adopt_external_rejects_this_process_pid() {
+        let dir = temp_root("adopt");
+        let paths = paths_in(&dir, PathBuf::from("/nope"));
+        let mut core = CoreController::new();
+        let err = core
+            .adopt_external(std::process::id(), &paths)
+            .expect_err("test process is not sing-box");
+        assert!(matches!(err, CoreError::AdoptRejected(_)));
+        assert_eq!(err.code(), ice_types::ErrorCode::CoreAdoptRejected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adopt_image_exe_path_keeps_windows_program_files_spaces() {
+        assert_eq!(
+            adopt_image_exe_path(r"C:\Program Files\ice-box\sing-box.exe"),
+            Path::new(r"C:\Program Files\ice-box\sing-box.exe")
+        );
+        assert_eq!(
+            adopt_image_exe_path(r#" "C:\Program Files\ice-box\sing-box.exe" "#),
+            Path::new(r"C:\Program Files\ice-box\sing-box.exe")
+        );
+        assert_eq!(
+            adopt_image_exe_path("/opt/ice-box/sing-box run -c /tmp/config.json"),
+            Path::new("/opt/ice-box/sing-box")
+        );
+    }
+
+    #[test]
+    fn process_image_string_matches_core_accepts_program_files_path() {
+        let protected = Path::new(r"C:\Program Files\ice-box\sing-box.exe");
+        assert!(process_image_string_matches_core(
+            r"C:\Program Files\ice-box\sing-box.exe",
+            protected
+        ));
+        assert!(process_image_string_matches_core(
+            r"c:\program files\ice-box\sing-box.exe",
+            protected
+        ));
+        // First-token split used to turn this into `C:\Program` and reject.
+        assert_ne!(
+            Path::new(
+                r"C:\Program Files\ice-box\sing-box.exe"
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+            ),
+            protected
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopt_external_accepts_live_process_named_sing_box() {
+        let dir = temp_root("adopt-live");
+        let bin = dir.join("sing-box");
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .expect("sleep binary");
+        // Copy, do not symlink: `proc_pidpath` / `/proc/pid/exe` report the
+        // real image. A symlink to `sleep` would look like `sleep`, not
+        // `sing-box`.
+        fs::copy(sleep, &bin).expect("copy sleep as sing-box");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+        }
+        let mut child = std::process::Command::new(&bin)
+            .arg("8")
+            .spawn()
+            .expect("spawn sing-box stub");
+        let pid = child.id();
+        let paths = paths_in(&dir, bin.clone());
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        let adopted = core.adopt_external(pid, &paths);
+        if adopted.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        adopted.expect("adopt live process whose image is named sing-box");
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = core.stop(&paths.pid_file);
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_orphan_pid_requires_process_image_match() {
+        let dir = temp_root("reclaim-image");
+        let other = temp_root("reclaim-other");
+        let ours = dir.join("sing-box");
+        let foreign = other.join("sing-box");
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .expect("sleep binary");
+        // Copy (do not symlink): canonicalize must distinguish the two images.
+        for dest in [&ours, &foreign] {
+            fs::copy(sleep, dest).expect("copy sleep as sing-box");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perm = fs::metadata(dest).unwrap().permissions();
+                perm.set_mode(0o755);
+                fs::set_permissions(dest, perm).unwrap();
+            }
+        }
+
+        let mut foreign_child = std::process::Command::new(&foreign)
+            .arg("8")
+            .spawn()
+            .expect("spawn foreign sing-box");
+        let foreign_pid = foreign_child.id();
+        let pid_file = dir.join("sing-box.pid");
+        write_pid(&pid_file, foreign_pid).unwrap();
+        let mut core = CoreController::new();
+        core.reclaim_orphan_pid(&pid_file, &[ours.as_path()])
+            .expect("unrelated sing-box must not be killed");
+        assert!(
+            pid_is_alive(foreign_pid),
+            "foreign process named sing-box must survive a basename-only pid file"
+        );
+        let _ = foreign_child.kill();
+        let _ = foreign_child.wait();
+
+        let mut ours_child = std::process::Command::new(&ours)
+            .arg("8")
+            .spawn()
+            .expect("spawn our sing-box");
+        let ours_pid = ours_child.id();
+        write_pid(&pid_file, ours_pid).unwrap();
+        core.reclaim_orphan_pid(&pid_file, &[ours.as_path()])
+            .expect("matching image must be reclaimed");
+        let _ = ours_child.wait();
+        assert!(
+            !pid_is_alive(ours_pid),
+            "our process must be terminated after image-matched reclaim"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&other);
+    }
+
     // --- G2.1 ---
 
     #[test]
@@ -1174,7 +1561,6 @@ mod tests {
             (CoreStatus::Starting, CoreOp::Reload),
             (CoreStatus::Stopping, CoreOp::Start),
             (CoreStatus::Stopping, CoreOp::Reload),
-            (CoreStatus::Stopping, CoreOp::Stop),
             (CoreStatus::Running, CoreOp::Start),
         ];
 
@@ -1215,6 +1601,7 @@ mod tests {
         assert!(is_op_allowed(CoreStatus::Starting, CoreOp::Stop));
         assert!(is_op_allowed(CoreStatus::Stopped, CoreOp::Stop));
         assert!(is_op_allowed(CoreStatus::Error, CoreOp::Stop));
+        assert!(is_op_allowed(CoreStatus::Stopping, CoreOp::Stop));
     }
 
     #[test]
@@ -1284,12 +1671,10 @@ mod tests {
         core.inject_exited_child_for_test();
         assert!(core.reap_exited_child(&pid_file));
         assert_eq!(core.state().status, CoreStatus::Error);
-        assert!(core
-            .state()
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("exited unexpectedly"));
+        assert_eq!(
+            core.state().message.as_ref().map(|m| m.key.as_str()),
+            Some("core.exitedUnexpectedly")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1316,6 +1701,23 @@ mod tests {
         core.stop(&paths.pid_file).expect("stop2");
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert!(core.state().inbound_host.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stop_while_stopping_is_ok() {
+        let dir = temp_root("stop-stopping");
+        let paths = paths_in(&dir, PathBuf::from("/unused"));
+        let mut core = mock_ctrl(
+            MockSpawner::default(),
+            ImmediateHealthProbe,
+            MockReloader::default(),
+        );
+        core.state.status = CoreStatus::Stopping;
+        core.stop(&paths.pid_file).expect("stop while stopping");
+        core.stop(&paths.pid_file)
+            .expect("stop while stopping again");
+        assert_eq!(core.state().status, CoreStatus::Stopping);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1348,12 +1750,22 @@ mod tests {
         );
         assert_ne!(core.state().status, CoreStatus::Stopped);
         assert_eq!(
-            core.state().message.as_deref(),
-            Some("stop failed: request_terminate: pid 1 is owned by another user; terminate it via the privileged coordinator"),
+            core.state().message.as_ref().map(|m| m.key.as_str()),
+            Some("core.stopFailed"),
             "the controller must not claim the foreign process was stopped"
         );
+        assert!(
+            core.state()
+                .message
+                .as_ref()
+                .unwrap()
+                .params
+                .get("error")
+                .is_some_and(|e| e.contains("request_terminate")),
+            "stop failure detail must be retained"
+        );
         assert_eq!(
-            ice_config::read_pid(&paths.pid_file).unwrap(),
+            read_pid(&paths.pid_file).unwrap(),
             Some(1),
             "the pid file must be kept while the foreign process may still run"
         );
@@ -1391,7 +1803,7 @@ mod tests {
             "the restart must fail on the un-killable foreign pid: {err}"
         );
         assert_eq!(
-            ice_config::read_pid(&paths.pid_file).unwrap(),
+            read_pid(&paths.pid_file).unwrap(),
             Some(1),
             "no second core may be spawned (a new pid would replace this file) while the original still runs"
         );
@@ -1464,27 +1876,91 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn reclaim_command_match_requires_own_config_argument() {
+        let unix = "/opt/ice-box/sing-box run -c /tmp/ice-box/config.json";
+        assert!(is_reclaimable_core_command(
+            unix,
+            "/tmp/ice-box/config.json"
+        ));
+        assert!(
+            !is_reclaimable_core_command(unix, "/tmp/ice-box/config.json.bak"),
+            "embedded suffix must not match"
+        );
+        let quoted = r#""C:\Program Files\ice-box\sing-box.exe" run -c "C:\Users\me\AppData\Roaming\ice-box\config.json""#;
+        assert!(is_reclaimable_core_command(
+            quoted,
+            r"C:\Users\me\AppData\Roaming\ice-box\config.json"
+        ));
+        assert!(
+            !is_reclaimable_core_command(
+                "/tmp/not-sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "basename must be exactly sing-box"
+        );
+        assert!(
+            !is_reclaimable_core_command(
+                "/bin/sh -c sleep /tmp/sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "a shell whose argv mentions sing-box is not the core"
+        );
+        assert!(
+            is_reclaimable_core_command(
+                "/bin/sh /tmp/ice-box/sing-box run -c /tmp/ice-box/config.json",
+                "/tmp/ice-box/config.json"
+            ),
+            "a shebang wrapper named sing-box is the leftover core"
+        );
+    }
+
+    #[test]
+    fn image_basename_is_singbox_requires_exact_file_name() {
+        assert!(image_basename_is_singbox(
+            "/opt/ice-box/sing-box run -c /tmp/c.json"
+        ));
+        assert!(image_basename_is_singbox(
+            r#""C:\Program Files\ice-box\sing-box.exe" run -c x"#
+        ));
+        assert!(!image_basename_is_singbox("/opt/ice-box/not-sing-box"));
+        assert!(!image_basename_is_singbox("/opt/ice-box/sing-box-wrapper"));
+    }
+
+    #[test]
+    fn adopt_rejects_empty_candidates_and_basename_only_matches() {
+        assert!(!process_image_matches_any(
+            std::process::id(),
+            &[Path::new("/nope/sing-box")]
+        ));
+        assert!(!process_image_string_matches_core(
+            "/tmp/evil/sing-box",
+            Path::new("/Library/PrivilegedHelperTools/com.yilong-musk.icebox/sing-box")
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn reclaim_orphan_cores_with_config_kills_matching_user_owned_process() {
         let dir = temp_root("scan-reclaim");
         let config = dir.join("config.json");
         fs::write(&config, b"{}").unwrap();
-        // A fake "sing-box" process whose command line carries the config path
-        // exactly like a real leftover core, but no pid file records it:
-        // `sh -c 'sleep 60 & wait' <name> run -c <config>` keeps the shell's
-        // original argv (including the name and args) in the command line
-        // while staying alive.
-        let name = dir.join("sing-box");
-        let mut child = std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "sleep 60 & wait",
-                &name.to_string_lossy(),
-                "run",
-                "-c",
-                &config.to_string_lossy(),
-            ])
+        // A leftover core whose *image* is named sing-box and whose argv is
+        // `run -c <config>` — not a shell whose command line merely mentions
+        // those tokens. Linux `ps` shows the shebang interpreter plus the
+        // script path; `image_basename_is_singbox` accepts that shape.
+        let bin = dir.join("sing-box");
+        fs::write(&bin, b"#!/bin/sh\nwhile :; do sleep 1; done\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        let mut child = std::process::Command::new(&bin)
+            .args(["run", "-c", &config.to_string_lossy()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -1542,6 +2018,7 @@ mod tests {
 
         let paths = CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config,
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
@@ -1549,6 +2026,7 @@ mod tests {
             inbound_port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port,
+            clash_api_secret: ice_types::EXAMPLE_CLASH_API_SECRET.to_string(),
             allow_lan: false,
         };
 
@@ -1675,6 +2153,35 @@ mod tests {
     }
 
     #[test]
+    fn reload_tcp_ok_http_fail_takes_restart_path() {
+        let dir = temp_root("g3-http-fail");
+        let bin = marker_binary(&dir);
+        let paths = paths_in(&dir, bin);
+        fs::write(&paths.config, br#"{"ok":true}"#).unwrap();
+
+        let health = SequenceHealthProbe::new(vec![
+            Ok(()), // start TCP
+            Ok(()), // reload TCP
+            Ok(()), // restart TCP
+        ])
+        .with_http(vec![
+            Ok(()), // start HTTP
+            Err(CoreError::HealthcheckFailed("http probe fail".into())),
+            Ok(()), // restart HTTP
+        ]);
+        let spawner = MockSpawner::with_start_pid(700);
+        let killed = spawner.killed_pids.clone();
+        let mut core = mock_ctrl(spawner, health, MockReloader::new(MockReloadMode::Ok));
+        core.start(&paths).expect("start");
+
+        let outcome = core.reload(&paths).expect("restart after http fail");
+        assert_eq!(outcome, ReloadOutcome::Restarted);
+        assert!(killed.lock().unwrap().contains(&700));
+        assert_eq!(core.state().status, CoreStatus::Running);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn g3_5_stopped_reload_invalid_state() {
         let mut core = mock_ctrl(
             MockSpawner::default(),
@@ -1700,27 +2207,33 @@ mod tests {
         };
 
         let dir = temp_root("g3-real");
+        let inbound_port = free_loopback_port();
+        let mut clash_api_port = free_loopback_port();
+        while clash_api_port == inbound_port {
+            clash_api_port = free_loopback_port();
+        }
         let mut cfg: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo.join("configs/examples/minimal-direct.json")).unwrap(),
         )
         .unwrap();
-        // Unique ports to avoid clash with other tests / apps.
-        cfg["inbounds"][0]["listen_port"] = serde_json::json!(27891);
+        cfg["inbounds"][0]["listen_port"] = serde_json::json!(inbound_port);
         cfg["experimental"]["clash_api"]["external_controller"] =
-            serde_json::json!("127.0.0.1:29091");
+            serde_json::json!(format!("127.0.0.1:{clash_api_port}"));
         let config = dir.join("config.json");
         fs::write(&config, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
         fs::create_dir_all(dir.join("logs")).unwrap();
 
         let paths = CorePaths {
             binary,
+            extra_binaries: Vec::new(),
             config: config.clone(),
             log_file: dir.join("logs/sing-box.log"),
             pid_file: dir.join("sing-box.pid"),
             inbound_host: "127.0.0.1".into(),
-            inbound_port: 27891,
+            inbound_port,
             clash_api_host: "127.0.0.1".into(),
-            clash_api_port: 29091,
+            clash_api_port,
+            clash_api_secret: ice_types::EXAMPLE_CLASH_API_SECRET.to_string(),
             allow_lan: false,
         };
 
@@ -1735,7 +2248,7 @@ mod tests {
         let outcome = core.reload(&paths).expect("reload");
         assert_eq!(core.state().status, CoreStatus::Running);
         // SIGHUP keeps the process (Unix); Windows has no in-process reload and the
-        // controller restarts the process from config.json (Slice 4c §9.1 / §9.2).
+        // controller restarts the process from config.json.
         #[cfg(unix)]
         assert_eq!(outcome, ReloadOutcome::HotReloaded);
         #[cfg(unix)]
@@ -1747,9 +2260,10 @@ mod tests {
         // drop in-flight connections while sing-box rebuilds it, so retry until the
         // controller actually serves (TCP connect alone is not enough).
         let url = format!("http://127.0.0.1:{}/configs", paths.clash_api_port);
+        let auth = format!("Bearer {}", paths.clash_api_secret);
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let body = loop {
-            match ureq::get(&url).call() {
+            match ureq::get(&url).set("Authorization", &auth).call() {
                 Ok(resp) => match resp.into_string() {
                     Ok(body) => break body,
                     Err(e) => {
@@ -1814,6 +2328,7 @@ mod tests {
         let dir = temp_root("ports-lan");
         let paths = CorePaths {
             binary: dir.join("x"),
+            extra_binaries: Vec::new(),
             config: dir.join("c.json"),
             log_file: dir.join("l.log"),
             pid_file: dir.join("p.pid"),
@@ -1821,6 +2336,7 @@ mod tests {
             inbound_port: port,
             clash_api_host: "127.0.0.1".into(),
             clash_api_port: clash_port,
+            clash_api_secret: String::new(),
             allow_lan: false,
         };
         ensure_listen_ports_free(&paths).expect("loopback-only probe must succeed");

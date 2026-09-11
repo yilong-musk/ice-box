@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# macOS TUN live acceptance (plan §6 "Live macOS acceptance").
+# macOS TUN live acceptance (`docs/testing.md`).
 #
 # Two runner modes:
 #
-# 1. Dev `sudo` runner (plan §5 T3 exit gate / macOS live gate): the
+# 1. Dev `sudo` runner: the
 #    bundled sing-box runs elevated through `sudo -n`, so this mode
 #    requires a cached root credential (`sudo -v` in a terminal) or a
 #    NOPASSWD rule. No interactive password prompt is issued by the test
 #    itself.
 #
-# 2. Helper path (plan §5 T5): `--helper` installs the helper
+# 2. Helper path: `--helper` installs the helper
 #    daemon (scripts/install-helper-macos.sh), then runs the same enable →
 #    traffic → disable roundtrip through the helper IPC, then uninstalls it.
 #

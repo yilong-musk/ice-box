@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! App-side client for the privileged helper daemon (plan §5 T5).
+//! App-side client for the privileged helper daemon (`docs/tun.md`).
 //!
 //! [`HelperCoreCoordinator`] implements [`CoreCoordinator`] over the helper
 //! wire protocol ([`crate::helper_protocol`]): the macOS production path
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::coordinator::CoreCoordinator;
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::helper_protocol::{
     decode_response, encode_request, validate_config_path, HelperCommand, HelperRequest,
     HelperResponse, DEFAULT_SOCKET_PATH,
@@ -31,7 +31,7 @@ use crate::helper_protocol::{
 pub const ENV_HELPER_SOCKET: &str = "ICE_BOX_TUN_HELPER_SOCKET";
 /// Env override for the per-installation token (dev / acceptance). The
 /// production client reads the token file the installer wrote into the app
-/// data dir (`helper-token`, mode 0644, root-owned).
+/// data dir (`helper-token`, mode 0600, owned by the installing uid).
 pub const ENV_HELPER_TOKEN: &str = "ICE_BOX_TUN_HELPER_TOKEN";
 /// Token file name inside the app data dir, written by the installer.
 pub const HELPER_TOKEN_FILE: &str = "helper-token";
@@ -47,6 +47,11 @@ const IPC_TIMEOUT: Duration = Duration::from_secs(3);
 /// serialized under the orchestration lock, so waiting for the daemon's full
 /// grace is safe and bounded.
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// `Start` (and `SetDns`) must cover the same runner-mutex wait as `Stop`.
+/// The helper authenticates, then blocks on the mutex; a just-killed app's
+/// Stop can still be inside TERM→KILL while this process's first Start is
+/// already waiting. macOS surfaces `SO_RCVTIMEO` as `EAGAIN` (os error 35).
+const START_TIMEOUT: Duration = STOP_TIMEOUT;
 /// Short read bound for UI status probes: a dead-but-present daemon must
 /// never stall a 2 s status poll.
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
@@ -72,7 +77,7 @@ pub fn helper_token(data_dir: &Path) -> Result<String, TunError> {
     let token_file = data_dir.join(HELPER_TOKEN_FILE);
     let raw = std::fs::read_to_string(&token_file).map_err(|e| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "privileged helper not installed or not authorized (no {}): {e}",
                 token_file.display()
@@ -82,7 +87,7 @@ pub fn helper_token(data_dir: &Path) -> Result<String, TunError> {
     let token = raw.trim();
     if token.is_empty() {
         return Err(TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!("helper token file is empty: {}", token_file.display()),
         ));
     }
@@ -104,7 +109,7 @@ pub fn roundtrip_with_timeout(
 ) -> Result<HelperResponse, TunError> {
     let stream = UnixStream::connect(socket).map_err(|e| {
         TunError::new(
-            TunErrorCode::PermissionRequired,
+            ErrorCode::TunPermissionRequired,
             format!(
                 "privileged helper unreachable at {}: {e} (install and authorize the helper, or use the dev sudo path)",
                 socket.display()
@@ -116,29 +121,46 @@ pub fn roundtrip_with_timeout(
 
     let mut writer = stream.try_clone().map_err(|e| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("clone helper socket: {e}"),
         )
     })?;
     let mut line = encode_request(request)?;
     line.push(b'\n');
-    writer.write_all(&line).map_err(|e| {
-        TunError::new(
-            TunErrorCode::ApplyFailed,
-            format!("write helper request: {e}"),
-        )
-    })?;
+    writer
+        .write_all(&line)
+        .map_err(|e| map_helper_io("write helper request", e))?;
     writer.flush().ok();
 
     let mut reader = BufReader::new(stream);
     let mut response = String::new();
-    reader.read_line(&mut response).map_err(|e| {
-        TunError::new(
-            TunErrorCode::ApplyFailed,
-            format!("read helper response: {e}"),
-        )
-    })?;
+    reader
+        .read_line(&mut response)
+        .map_err(|e| map_helper_io("read helper response", e))?;
     decode_response(response.as_bytes())
+}
+
+fn helper_io_timed_out(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) || matches!(
+        err.raw_os_error(),
+        Some(libc::EAGAIN) | Some(libc::ETIMEDOUT)
+    )
+}
+
+fn map_helper_io(what: &str, err: std::io::Error) -> TunError {
+    if helper_io_timed_out(&err) {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!(
+                "{what} timed out waiting for the helper (it may still be stopping the previous core)"
+            ),
+        )
+    } else {
+        TunError::new(ErrorCode::TunApplyFailed, format!("{what}: {err}"))
+    }
 }
 
 /// [`CoreCoordinator`] backed by the privileged helper daemon.
@@ -189,6 +211,16 @@ impl HelperCoreCoordinator {
             timeout,
         )
     }
+
+    /// Truncate the helper's fixed core log in place. The daemon uses its
+    /// installed path; the client never supplies one.
+    pub fn truncate_core_log(&self) -> Result<(), TunError> {
+        let response = self.request(HelperCommand::TruncateCoreLog)?;
+        match response.into_error() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
 }
 
 impl CoreCoordinator for HelperCoreCoordinator {
@@ -196,9 +228,12 @@ impl CoreCoordinator for HelperCoreCoordinator {
         // Local allowlist preflight (the daemon re-validates; this fails fast
         // with a clearer error before any IPC).
         let _canonical = validate_config_path(&self.data_dir, &config_path.to_string_lossy())?;
-        let response = self.request(HelperCommand::Start {
-            config: config_path.to_string_lossy().into_owned(),
-        })?;
+        let response = self.request_with_timeout(
+            HelperCommand::Start {
+                config: config_path.to_string_lossy().into_owned(),
+            },
+            START_TIMEOUT,
+        )?;
         match &response {
             HelperResponse {
                 ok: true,
@@ -210,11 +245,11 @@ impl CoreCoordinator for HelperCoreCoordinator {
                 pid: None,
                 ..
             } => Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "helper started the core but returned no pid",
             )),
             HelperResponse { ok: false, .. } => Err(response.into_error().unwrap_or_else(|| {
-                TunError::new(TunErrorCode::ApplyFailed, "helper rejected the start")
+                TunError::new(ErrorCode::TunApplyFailed, "helper rejected the start")
             })),
         }
     }
@@ -228,10 +263,14 @@ impl CoreCoordinator for HelperCoreCoordinator {
     }
 
     fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
-        let response = self.request(HelperCommand::SetDns {
-            service: service.to_string(),
-            servers: servers.to_vec(),
-        })?;
+        crate::helper_protocol::validate_set_dns(service, servers)?;
+        let response = self.request_with_timeout(
+            HelperCommand::SetDns {
+                service: service.to_string(),
+                servers: servers.to_vec(),
+            },
+            START_TIMEOUT,
+        )?;
         match response.into_error() {
             Some(err) => Err(err),
             None => Ok(()),
@@ -317,7 +356,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let err = helper_token(&dir).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -329,10 +368,29 @@ mod tests {
             command: HelperCommand::Status,
         };
         let err = roundtrip(Path::new("/nonexistent/ice-box-helper.sock"), &request).unwrap_err();
-        assert_eq!(err.code, TunErrorCode::PermissionRequired);
+        assert_eq!(err.code, ErrorCode::TunPermissionRequired);
         assert!(!helper_reachable(
             Path::new("/nonexistent/ice-box-helper.sock"),
             "t"
         ));
+    }
+
+    #[test]
+    fn start_timeout_covers_a_queued_stop() {
+        assert_eq!(START_TIMEOUT, STOP_TIMEOUT);
+        assert!(START_TIMEOUT > IPC_TIMEOUT);
+    }
+
+    #[test]
+    fn helper_io_maps_would_block_as_timeout() {
+        let err = std::io::Error::from_raw_os_error(libc::EAGAIN);
+        assert!(helper_io_timed_out(&err));
+        let mapped = map_helper_io("read helper response", err);
+        assert_eq!(mapped.code, ErrorCode::TunApplyFailed);
+        assert!(
+            mapped.message.contains("timed out waiting for the helper"),
+            "{}",
+            mapped.message
+        );
     }
 }

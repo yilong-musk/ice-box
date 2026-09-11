@@ -12,18 +12,56 @@ export type NodesSnapshot = {
   running: boolean;
 };
 
+type SnapshotListener = (snap: NodesSnapshot | undefined) => void;
+
 let nodesSnapshot: NodesSnapshot | undefined;
+let snapshotRevision = 0;
+const snapshotListeners = new Set<SnapshotListener>();
 
 export function readNodesSnapshot(): NodesSnapshot | undefined {
   return nodesSnapshot;
 }
 
+/** Monotonic counter; bumps on every snapshot write or clear. */
+export function nodesSnapshotRevision(): number {
+  return snapshotRevision;
+}
+
+export function subscribeNodesSnapshot(listener: SnapshotListener): () => void {
+  snapshotListeners.add(listener);
+  return () => {
+    snapshotListeners.delete(listener);
+  };
+}
+
+function notifySnapshot(): void {
+  const snap = nodesSnapshot;
+  for (const listener of snapshotListeners) listener(snap);
+}
+
+function snapshotsEqual(
+  left: NodesSnapshot | undefined,
+  right: NodesSnapshot,
+): boolean {
+  return (
+    left != null &&
+    left.selectedTag === right.selectedTag &&
+    left.running === right.running &&
+    nodesEqual(left.nodes, right.nodes)
+  );
+}
+
 export function writeNodesSnapshot(next: NodesSnapshot): void {
+  if (snapshotsEqual(nodesSnapshot, next)) return;
+  snapshotRevision += 1;
   nodesSnapshot = next;
+  notifySnapshot();
 }
 
 export function clearNodesSnapshot(): void {
+  snapshotRevision += 1;
   nodesSnapshot = undefined;
+  notifySnapshot();
 }
 
 export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
@@ -63,8 +101,38 @@ export function isGroupType(outboundType: string): boolean {
   return (STRATEGY_GROUP_TYPES as readonly string[]).includes(outboundType);
 }
 
+/** Mark matching selector members as the live exit after a leaf pick. */
+export function applySelectedTagToNodes(
+  nodes: NodeInfo[],
+  tag: string,
+): NodeInfo[] {
+  let changed = false;
+  const next = nodes.map((n) => {
+    if (!isGroupType(n.outbound_type)) return n;
+    if (!n.group_all?.includes(tag) || n.group_now === tag) return n;
+    changed = true;
+    return { ...n, group_now: tag };
+  });
+  return changed ? next : nodes;
+}
+
+/** Update one strategy group's live exit after a member pick. */
+export function applyGroupNowToNodes(
+  nodes: NodeInfo[],
+  group: string,
+  member: string,
+): NodeInfo[] {
+  let changed = false;
+  const next = nodes.map((n) => {
+    if (n.tag !== group || n.group_now === member) return n;
+    changed = true;
+    return { ...n, group_now: member };
+  });
+  return changed ? next : nodes;
+}
+
 export function formatDelay(v: DelayCell): string {
-  if (v === null) return "—";
+  if (v === null) return t("common.dash");
   if (v === "testing") return "…";
   if (v === "error") return t("delay.failed");
   return `${v} ms`;

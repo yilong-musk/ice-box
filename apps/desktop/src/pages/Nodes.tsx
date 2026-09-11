@@ -29,7 +29,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
+import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import {
+  applyGroupNowToNodes,
+  applySelectedTagToNodes,
   delayTestTagsForGroup,
   delayTestTagsForList,
   delayResultTone,
@@ -64,6 +67,7 @@ function delayBadge(delay: DelayCell) {
     const tone = delayResultTone(delay);
     return (
       <span
+        data-testid={`delay-${tone}`}
         className={cn(
           "font-mono text-xs tabular-nums",
           tone === "ok" && "text-ok",
@@ -76,10 +80,16 @@ function delayBadge(delay: DelayCell) {
     );
   }
   if (delay === "error") {
-    return <span className="text-xs text-destructive">{formatDelay(delay)}</span>;
+    return (
+      <span data-testid="delay-error" className="text-xs text-destructive">
+        {formatDelay(delay)}
+      </span>
+    );
   }
   return (
-    <span className="text-xs text-muted-foreground">{formatDelay(delay)}</span>
+    <span data-testid="delay-idle" className="text-xs text-muted-foreground">
+      {formatDelay(delay)}
+    </span>
   );
 }
 
@@ -392,6 +402,10 @@ const NodeRow = memo(function NodeRow({
 export function Nodes({ onNavigate, active = true }: Props) {
   const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
+  const runtime = useRuntimeStore();
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
+  const shareStatus = runtime != null;
   const [nodes, setNodes] = useState<NodeInfo[]>(
     () => readNodesSnapshot()?.nodes ?? [],
   );
@@ -417,8 +431,16 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const delayRunRef = useRef(0);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
+  const selectedTagRef = useRef(selectedTag);
+  selectedTagRef.current = selectedTag;
+  const runningRef = useRef(running);
+  runningRef.current = running;
   const expandedRef = useRef(expandedGroups);
   expandedRef.current = expandedGroups;
+  const onSelectRef = useRef<(tag: string) => void>(() => {});
+  const onGroupSelectRef = useRef<(group: string, member: string) => void>(
+    () => {},
+  );
   const [revealCount, setRevealCount] = useState(() => {
     const total = readNodesSnapshot()?.nodes.length ?? 0;
     return firstPaintCount(total);
@@ -437,14 +459,17 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
     try {
+      const statusPromise = shareStatus
+        ? Promise.resolve(runtimeRef.current?.status ?? null)
+        : api.getStatus();
       const [n, settings, status] = await Promise.all([
         api.listNodes(),
         api.getSettings(),
-        api.getStatus(),
+        statusPromise,
       ]);
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
-      const runningNow = status.core.status === "running";
+      const runningNow = status?.core.status === "running";
       setNodes((prev) => (nodesEqual(prev, n) ? prev : n));
       setSelectedTag((prev) => (prev === selected ? prev : selected));
       setRunning((prev) => (prev === runningNow ? prev : runningNow));
@@ -461,7 +486,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
         setListReady(true);
       }
     }
-  }, [isStale, nextGeneration]);
+  }, [isStale, nextGeneration, shareStatus]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -469,9 +494,12 @@ export function Nodes({ onNavigate, active = true }: Props) {
       nextGeneration();
       return;
     }
-    // Keep the snapshot visible while immediately reconciling it with the backend.
     void refresh();
-    const id = window.setInterval(() => void refresh(), 5000);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (runtimeRef.current && !runtimeRef.current.visible) return;
+      void refresh();
+    }, RUNTIME_STATUS_FALLBACK_MS);
     return () => {
       activeRef.current = false;
       nextGeneration();
@@ -599,11 +627,11 @@ export function Nodes({ onNavigate, active = true }: Props) {
   }, []);
 
   const handleSelect = useCallback((tag: string) => {
-    void onSelect(tag);
+    void onSelectRef.current(tag);
   }, []);
 
   const handleGroupSelect = useCallback((group: string, member: string) => {
-    void onGroupSelect(group, member);
+    void onGroupSelectRef.current(group, member);
   }, []);
 
   async function onBatchTest() {
@@ -630,7 +658,16 @@ export function Nodes({ onNavigate, active = true }: Props) {
     setError(null);
     try {
       await api.setSelectedNode(tag);
-      if (mountedRef.current) setSelectedTag(tag);
+      const nextNodes = applySelectedTagToNodes(nodesRef.current, tag);
+      const snap = readNodesSnapshot();
+      writeNodesSnapshot({
+        nodes: nextNodes,
+        selectedTag: tag,
+        running: snap?.running ?? runningRef.current,
+      });
+      if (!mountedRef.current) return;
+      setSelectedTag(tag);
+      setNodes((prev) => (nodesEqual(prev, nextNodes) ? prev : nextNodes));
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {
@@ -644,13 +681,26 @@ export function Nodes({ onNavigate, active = true }: Props) {
     setError(null);
     try {
       await api.setGroupSelection(group, member);
-      if (mountedRef.current) await refresh();
+      const nextNodes = applyGroupNowToNodes(nodesRef.current, group, member);
+      const snap = readNodesSnapshot();
+      writeNodesSnapshot({
+        nodes: nextNodes,
+        selectedTag: snap?.selectedTag ?? selectedTagRef.current,
+        running: snap?.running ?? runningRef.current,
+      });
+      if (mountedRef.current) {
+        setNodes((prev) => (nodesEqual(prev, nextNodes) ? prev : nextNodes));
+      }
+      if (mountedRef.current && activeRef.current) await refresh();
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {
       if (mountedRef.current) setBusy(false);
     }
   }
+
+  onSelectRef.current = onSelect;
+  onGroupSelectRef.current = onGroupSelect;
 
   const visibleCount =
     nodes.length === 0
@@ -661,7 +711,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const visibleNodes = nodes.slice(0, visibleCount);
 
   return (
-    <div className="nodes-panel flex min-h-0 flex-1 flex-col gap-3">
+    <div className="nodes-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="nodes-panel">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       {!running && nodes.length > 0 && (

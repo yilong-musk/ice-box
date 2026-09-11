@@ -52,7 +52,7 @@ if ($Platform -eq "win") {
   Copy-Item $LauncherExe (Join-Path $DestDir "ice-tun-launcher.exe") -Force
   Write-Host "Prepared resource ice-tun-launcher.exe for $Platform (TUN task elevation)"
 
-  # Windows archive companion (Windows TUN packaging, plan §5 T5): the
+  # Windows archive companion (Windows TUN packaging): the
   # NaiveProxy outbound needs libcronet.dll next to sing-box.exe. wintun.dll
   # is embedded in the pinned binary; the T0 spike re-verifies this before
   # the Windows TUN gate flips.

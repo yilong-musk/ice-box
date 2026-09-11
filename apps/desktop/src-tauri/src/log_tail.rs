@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Efficient log file tail (architecture §16: n ≤ 500, avoid full-file read).
+//! Efficient log file tail (n ≤ 500, avoid full-file read).
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -10,7 +10,7 @@ use ice_config::{AppError, ErrorCode};
 
 pub const LOG_TAIL_MAX: usize = 500;
 /// Hard cap for scan reads: the merged view reads deeper before filtering, but must
-/// stay bounded to avoid pulling whole files into memory (architecture §16).
+/// stay bounded to avoid pulling whole files into memory.
 pub const LOG_SCAN_MAX: usize = 10_000;
 
 const INITIAL_WINDOW: u64 = 256 * 1024;

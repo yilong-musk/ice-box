@@ -43,7 +43,7 @@ use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
 use crate::coordinator::CoreCoordinator;
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 
@@ -61,6 +61,12 @@ const APPLY_CONVERGE_DELAY_MS: u64 = 200;
 /// Bounded wait for the adapter to disappear after the core stops.
 const INTERFACE_TEARDOWN_TRIES: u32 = 10;
 const INTERFACE_TEARDOWN_DELAY_MS: u64 = 200;
+/// After leftover TUN teardown the route table may still list Wintun as the
+/// default. Wait until a physical NIC owns `0.0.0.0` before starting the
+/// elevated core, otherwise `auto_detect_interface` binds Direct / proxy
+/// dials to the dying tunnel and capture looks healthy with no internet.
+const DEFAULT_ROUTE_TRIES: u32 = 10;
+const DEFAULT_ROUTE_DELAY_MS: u64 = 150;
 
 /// Host state of one interface as reported by the `netsh` probes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +110,15 @@ pub trait WindowsHost {
     /// through. IPv4 returns the owning interface's IP; IPv6 returns the
     /// owning interface's index as a string. `None` when no route exists.
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError>;
+    /// Resolve many destinations. The default probes one-by-one; the process
+    /// host snapshots `route print` once per address family so apply/verify
+    /// do not spawn a full table dump per CIDR.
+    fn route_interfaces(&self, destinations: &[&str]) -> Result<Vec<Option<String>>, TunError> {
+        destinations
+            .iter()
+            .map(|destination| self.route_interface(destination))
+            .collect()
+    }
     /// Per-interface IPv4 DNS servers (`netsh interface ipv4 show
     /// dnsservers`). The TUN adapter appears here with the TUN peers once
     /// sing-box has claimed DNS.
@@ -127,7 +142,7 @@ fn run_command(program: &str, args: &[&str]) -> Result<CommandOutput, TunError> 
     }
     let output = command.output().map_err(|err| {
         TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!("run {program}: {err}"),
         )
     })?;
@@ -195,61 +210,42 @@ fn probe_error(program: &str, out: &CommandOutput) -> TunError {
         detail
     };
     TunError::new(
-        TunErrorCode::HealthcheckFailed,
+        ErrorCode::TunHealthcheckFailed,
         format!("{program} failed: {detail}"),
     )
 }
 
-impl WindowsHost for ProcessWindowsHost {
-    fn list_interface_names(&self) -> Result<Vec<String>, TunError> {
+impl ProcessWindowsHost {
+    fn ipv4_interface_listing(&self) -> Result<Vec<Ipv4InterfaceRow>, TunError> {
         let out = run_command("netsh", &["interface", "ipv4", "show", "interfaces"])?;
         if out.status != Some(0) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "netsh interface ipv4 show interfaces failed: {}",
                     out.stderr.trim()
                 ),
             ));
         }
-        Ok(parse_netsh_interfaces(&out.stdout)
+        Ok(parse_netsh_interface_rows(&out.stdout))
+    }
+}
+
+impl WindowsHost for ProcessWindowsHost {
+    fn list_interface_names(&self) -> Result<Vec<String>, TunError> {
+        Ok(self
+            .ipv4_interface_listing()?
             .into_iter()
-            .map(|(_, name)| name)
+            .map(|row| row.name)
             .collect())
     }
 
     fn interface_state(&self, name: &str) -> Result<Option<WindowsInterfaceState>, TunError> {
-        let up_out = run_command(
-            "netsh",
-            &["interface", "show", "interface", &format!("name={name}")],
-        )?;
-        if up_out.status != Some(0) {
-            // Only a confirmed missing interface reports `Ok(None)`. Any
-            // other failure is a probe error and must fail closed:
-            // misreading a transient netsh error as "interface gone" would
-            // let restore / recovery journal a verified cleanup that never
-            // happened. The missing check is locale-proof: it cross-checks
-            // the interface listing (zh-CN error text matches no English
-            // marker).
-            let listing = self.list_interface_names().ok();
-            if probe_means_interface_gone(&up_out.stderr, &up_out.stdout, listing, name) {
-                return Ok(None);
-            }
-            return Err(probe_error("netsh interface show interface", &up_out));
-        }
-        let up = parse_netsh_interface_show(&up_out.stdout)
-            .iter()
-            .find(|(existing, _)| existing == name)
-            .map(|(_, up)| *up)
-            .unwrap_or(false);
-        if !up {
-            tracing::warn!(
-                interface = name,
-                raw = %up_out.stdout,
-                parsed = ?parse_netsh_interface_show(&up_out.stdout),
-                "interface state: up probe reported the adapter down or not found"
-            );
-        }
+        let listing = self.ipv4_interface_listing()?;
+        let names: Vec<String> = listing.iter().map(|row| row.name.clone()).collect();
+        let Some(row) = listing.into_iter().find(|row| row.name == name) else {
+            return Ok(None);
+        };
 
         let v4_out = run_command(
             "netsh",
@@ -266,10 +262,9 @@ impl WindowsHost for ProcessWindowsHost {
         } else if probe_means_interface_gone(
             &v4_out.stderr,
             &v4_out.stdout,
-            self.list_interface_names().ok(),
+            Some(names.clone()),
             name,
         ) {
-            // The interface vanished between probes; report it as gone.
             return Ok(None);
         } else {
             return Err(probe_error("netsh interface ipv4 show addresses", &v4_out));
@@ -289,64 +284,70 @@ impl WindowsHost for ProcessWindowsHost {
         )?;
         if v6_out.status == Some(0) {
             addresses.extend(parse_netsh_ipv6_addresses(&v6_out.stdout, name));
-        } else if probe_means_interface_gone(
-            &v6_out.stderr,
-            &v6_out.stdout,
-            self.list_interface_names().ok(),
-            name,
-        ) {
+        } else if probe_means_interface_gone(&v6_out.stderr, &v6_out.stdout, Some(names), name) {
             return Ok(None);
         } else {
             return Err(probe_error("netsh interface ipv6 show addresses", &v6_out));
         }
 
-        // The adapter's interface index (identity lock for verify + the
-        // IPv6 route probe): re-run the listing probe and parse the index
-        // from the raw table — `list_interface_names` discards the indices.
-        let listing = run_command("netsh", &["interface", "ipv4", "show", "interfaces"])?;
-        let index = if listing.status == Some(0) {
-            parse_netsh_interfaces(&listing.stdout)
-                .into_iter()
-                .find(|(_, existing)| existing == name)
-                .map(|(index, _)| index)
-        } else {
-            None
-        };
         Ok(Some(WindowsInterfaceState {
-            up,
+            up: row.up,
             addresses,
-            index,
+            index: Some(row.index),
         }))
     }
 
     fn route_interface(&self, destination: &str) -> Result<Option<String>, TunError> {
-        let probe = routes::route_probe_address(destination);
-        if probe.contains(':') {
-            let out = run_command("route", &["print", "-6"])?;
-            if out.status != Some(0) {
-                return Err(TunError::new(
-                    TunErrorCode::HealthcheckFailed,
-                    format!("route print -6 failed: {}", out.stderr.trim()),
+        let identities = self.route_interfaces(&[destination])?;
+        Ok(identities.into_iter().next().flatten())
+    }
+
+    fn route_interfaces(&self, destinations: &[&str]) -> Result<Vec<Option<String>>, TunError> {
+        let mut v4_rows: Option<Vec<RoutePrintV4Row>> = None;
+        let mut v6_rows: Option<Vec<RoutePrintV6Row>> = None;
+        let mut result = Vec::with_capacity(destinations.len());
+        for destination in destinations {
+            let probe = routes::route_probe_address(destination);
+            if probe.contains(':') {
+                if v6_rows.is_none() {
+                    let out = run_command("route", &["print", "-6"])?;
+                    if out.status != Some(0) {
+                        return Err(TunError::new(
+                            ErrorCode::TunHealthcheckFailed,
+                            format!("route print -6 failed: {}", out.stderr.trim()),
+                        ));
+                    }
+                    v6_rows = Some(route_print_v6_rows(&out.stdout));
+                }
+                result.push(
+                    v6_interface_for_probe(v6_rows.as_deref().unwrap_or(&[]), &probe)
+                        .map(|index| index.to_string()),
+                );
+            } else {
+                if v4_rows.is_none() {
+                    let out = run_command("route", &["print", "-4"])?;
+                    if out.status != Some(0) {
+                        return Err(TunError::new(
+                            ErrorCode::TunHealthcheckFailed,
+                            format!("route print -4 failed: {}", out.stderr.trim()),
+                        ));
+                    }
+                    v4_rows = Some(route_print_v4_rows(&out.stdout));
+                }
+                result.push(v4_interface_for_probe(
+                    v4_rows.as_deref().unwrap_or(&[]),
+                    &probe,
                 ));
             }
-            Ok(parse_route_print_v6(&out.stdout, &probe).map(|index| index.to_string()))
-        } else {
-            let out = run_command("route", &["print", "-4"])?;
-            if out.status != Some(0) {
-                return Err(TunError::new(
-                    TunErrorCode::HealthcheckFailed,
-                    format!("route print -4 failed: {}", out.stderr.trim()),
-                ));
-            }
-            Ok(parse_route_print_v4(&out.stdout, &probe))
         }
+        Ok(result)
     }
 
     fn dns_v4_servers(&self) -> Result<Vec<InterfaceDns>, TunError> {
         let out = run_command("netsh", &["interface", "ipv4", "show", "dnsservers"])?;
         if out.status != Some(0) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "netsh interface ipv4 show dnsservers failed: {}",
                     out.stderr.trim()
@@ -402,33 +403,57 @@ pub fn parse_netsh_dnsservers(output: &str) -> Vec<InterfaceDns> {
     result
 }
 
-/// `netsh interface ipv4 show interfaces` → `(index, name)` pairs.
-pub fn parse_netsh_interfaces(output: &str) -> Vec<(u32, String)> {
-    parse_netsh_interfaces_names(
-        &output
-            .lines()
-            .skip(2)
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    )
+/// One row of `netsh interface ipv4 show interfaces`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ipv4InterfaceRow {
+    pub index: u32,
+    pub up: bool,
+    pub name: String,
 }
 
-fn parse_netsh_interfaces_names(lines: &[String]) -> Vec<(u32, String)> {
+fn listing_state_is_up(state: &str) -> bool {
+    state.eq_ignore_ascii_case("connected") || state == "已连接"
+}
+
+/// `netsh interface ipv4 show interfaces` → index, media state, name.
+pub fn parse_netsh_interface_rows(output: &str) -> Vec<Ipv4InterfaceRow> {
     let mut result = Vec::new();
-    for line in lines {
+    for line in output.lines().skip(2) {
         let mut tokens = line.split_whitespace();
         let Some(index) = tokens.next().and_then(|t| t.parse::<u32>().ok()) else {
             continue;
         };
         let _metric = tokens.next();
         let _mtu = tokens.next();
-        let _state = tokens.next();
+        let Some(state) = tokens.next() else {
+            continue;
+        };
         let name = tokens.collect::<Vec<_>>().join(" ");
         if !name.is_empty() {
-            result.push((index, name));
+            result.push(Ipv4InterfaceRow {
+                index,
+                up: listing_state_is_up(state),
+                name,
+            });
         }
     }
     result
+}
+
+/// `netsh interface ipv4 show interfaces` → `(index, name)` pairs.
+pub fn parse_netsh_interfaces(output: &str) -> Vec<(u32, String)> {
+    parse_netsh_interface_rows(output)
+        .into_iter()
+        .map(|row| (row.index, row.name))
+        .collect()
+}
+
+#[cfg(test)]
+fn parse_netsh_interfaces_names(lines: &[String]) -> Vec<(u32, String)> {
+    parse_netsh_interface_rows(&format!("\n\n{}", lines.join("\n")))
+        .into_iter()
+        .map(|row| (row.index, row.name))
+        .collect()
 }
 
 /// `netsh interface show interface` → `(name, up)` pairs. Handles both the
@@ -548,7 +573,10 @@ pub fn parse_netsh_ipv6_addresses(output: &str, _name: &str) -> Vec<String> {
 /// `route print -4` → for the probe address, the `Interface` column of the
 /// most specific matching route (the owning interface's IP).
 pub fn parse_route_print_v4(output: &str, probe: &str) -> Option<String> {
-    let rows = route_print_v4_rows(output);
+    v4_interface_for_probe(&route_print_v4_rows(output), probe)
+}
+
+fn v4_interface_for_probe(rows: &[RoutePrintV4Row], probe: &str) -> Option<String> {
     let table: Vec<(String, u32)> = rows
         .iter()
         .map(|row| (row.network.clone(), row.netmask_bits))
@@ -560,7 +588,10 @@ pub fn parse_route_print_v4(output: &str, probe: &str) -> Option<String> {
 /// `route print -6` → for the probe address, the `If` column (interface
 /// index) of the most specific matching route.
 pub fn parse_route_print_v6(output: &str, probe: &str) -> Option<u32> {
-    let rows = route_print_v6_rows(output);
+    v6_interface_for_probe(&route_print_v6_rows(output), probe)
+}
+
+fn v6_interface_for_probe(rows: &[RoutePrintV6Row], probe: &str) -> Option<u32> {
     let table: Vec<(String, u32)> = rows
         .iter()
         .map(|row| (row.destination.clone(), row.prefix_bits))
@@ -704,6 +735,12 @@ fn valid_adapter_name(name: &str) -> bool {
         })
 }
 
+/// Windows NIC names (`Ethernet`, `Wi-Fi`, localized strings) are valid pin
+/// targets; leftover Wintun / TAP / loopback adapters are not.
+fn windows_outbound_interface_is_safe(name: &str) -> bool {
+    crate::plausible_pin_interface_name(name) && !crate::is_tunnel_interface(name)
+}
+
 /// The Windows TUN backend (native sing-box ownership, planned T0 lock).
 pub struct WindowsTunBackend {
     owner_token: String,
@@ -763,7 +800,7 @@ impl WindowsTunBackend {
         match self.coordinator.stop() {
             Ok(()) => apply_err,
             Err(stop_err) => TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "apply failed ({}) and elevated core cleanup was not verified ({})",
                     apply_err.message, stop_err.message
@@ -778,10 +815,75 @@ impl WindowsTunBackend {
         let entries = self.host.dns_v4_servers()?;
         serde_json::to_string(&entries).map_err(|err| {
             TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!("serialize DNS snapshot: {err}"),
             )
         })
+    }
+
+    /// Wait until `0.0.0.0` resolves to a physical NIC. Leftover TUN teardown
+    /// can leave Wintun as the default route for a short window; starting the
+    /// elevated core in that window makes capture look healthy with no path
+    /// off the host.
+    fn wait_physical_default_interface(&self) -> Result<String, TunError> {
+        let mut last = String::from("no default route");
+        for _ in 0..DEFAULT_ROUTE_TRIES {
+            match self.observe_physical_default_interface()? {
+                Some(name) => return Ok(name),
+                None => last = self.default_route_wait_detail()?,
+            }
+            std::thread::sleep(Duration::from_millis(DEFAULT_ROUTE_DELAY_MS));
+        }
+        Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("no physical default route before TUN start ({last})"),
+        ))
+    }
+
+    fn observe_physical_default_interface(&self) -> Result<Option<String>, TunError> {
+        let Some(identity) = self.host.route_interface("0.0.0.0")? else {
+            return Ok(None);
+        };
+        let names = self.host.list_interface_names()?;
+        for name in names {
+            let Some(state) = self.host.interface_state(&name)? else {
+                continue;
+            };
+            let owns = state
+                .addresses
+                .iter()
+                .any(|addr| routes::address_key(addr) == identity);
+            if !owns {
+                continue;
+            }
+            if windows_outbound_interface_is_safe(&name) {
+                return Ok(Some(name));
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    fn default_route_wait_detail(&self) -> Result<String, TunError> {
+        let Some(identity) = self.host.route_interface("0.0.0.0")? else {
+            return Ok("no default route".into());
+        };
+        let names = self.host.list_interface_names()?;
+        for name in names {
+            let Some(state) = self.host.interface_state(&name)? else {
+                continue;
+            };
+            let owns = state
+                .addresses
+                .iter()
+                .any(|addr| routes::address_key(addr) == identity);
+            if owns {
+                return Ok(format!("default route still on {name}"));
+            }
+        }
+        Ok(format!(
+            "default route identity {identity} is not on a live interface"
+        ))
     }
 
     /// Resolve the adapter name: the requested name when free, else a
@@ -792,7 +894,7 @@ impl WindowsTunBackend {
             Some(name) => {
                 if !valid_adapter_name(name) {
                     return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("invalid Windows adapter name: {name}"),
                     ));
                 }
@@ -816,31 +918,22 @@ impl WindowsTunBackend {
             }
         }
         Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("no free adapter name derived from {base}"),
         ))
     }
 
-    /// Whether the route table resolves `destination` to this adapter:
-    /// IPv4 routes identify their interface by IP, IPv6 by interface index.
-    fn route_owned_by_adapter(
-        &self,
-        destination: &str,
-        applied: &AppliedTun,
-    ) -> Result<bool, TunError> {
-        let Some(identity) = self.host.route_interface(destination)? else {
-            return Ok(false);
-        };
-        if destination.contains(':') {
-            return Ok(applied.interface_id.as_deref() == Some(identity.as_str()));
+    /// Whether `identity` (IPv4 interface IP or IPv6 index) belongs to this
+    /// adapter for `destination`.
+    fn identity_is_ours(destination: &str, identity: &str, applied: &AppliedTun) -> bool {
+        if routes::route_probe_address(destination).contains(':') {
+            return applied.interface_id.as_deref() == Some(identity);
         }
-        let expected_v4: Vec<&str> = applied
+        applied
             .expected_addresses
             .iter()
             .filter(|address| !address.contains(':'))
-            .map(|address| routes::address_key(address))
-            .collect();
-        Ok(expected_v4.contains(&identity.as_str()))
+            .any(|address| routes::address_key(address) == identity)
     }
 
     /// Owned resources observed after full convergence: the required
@@ -903,7 +996,7 @@ impl WindowsTunBackend {
             std::thread::sleep(Duration::from_millis(APPLY_CONVERGE_DELAY_MS));
         }
         Err(TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!(
                 "interface {name} did not converge to the required addresses and routes within {} ms; last observation: {last_diagnostic}",
                 APPLY_CONVERGE_TRIES * APPLY_CONVERGE_DELAY_MS as u32
@@ -924,18 +1017,20 @@ impl WindowsTunBackend {
         expected_v4: &[String],
         interface_id: &str,
     ) -> Result<Vec<RouteRecord>, TunError> {
-        let mut owned = Vec::new();
-        for destination in [
+        let destinations = [
             "10.0.0.0/8",
             "172.16.0.0/12",
             "192.168.0.0/16",
             "100.64.0.0/10",
             "fdfe:dcba:9876::/126",
-        ] {
-            let probe = routes::route_probe_address(destination);
-            let Some(identity) = self.host.route_interface(&probe)? else {
+        ];
+        let identities = self.host.route_interfaces(&destinations)?;
+        let mut owned = Vec::new();
+        for (destination, identity) in destinations.into_iter().zip(identities) {
+            let Some(identity) = identity else {
                 continue;
             };
+            let probe = routes::route_probe_address(destination);
             let is_ours = if probe.contains(':') {
                 identity == interface_id
             } else {
@@ -955,9 +1050,21 @@ impl WindowsTunBackend {
 
     /// Whether any journaled owned route still resolves to the adapter.
     fn owned_routes_remain(&self, applied: &AppliedTun) -> Result<bool, TunError> {
-        for route in applied.routes.iter().filter(|r| r.owned) {
-            if self.route_owned_by_adapter(&route.destination, applied)? {
-                return Ok(true);
+        let destinations: Vec<&str> = applied
+            .routes
+            .iter()
+            .filter(|route| route.owned)
+            .map(|route| route.destination.as_str())
+            .collect();
+        if destinations.is_empty() {
+            return Ok(false);
+        }
+        let identities = self.host.route_interfaces(&destinations)?;
+        for (destination, identity) in destinations.into_iter().zip(identities) {
+            if let Some(identity) = identity {
+                if Self::identity_is_ours(destination, &identity, applied) {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -981,21 +1088,21 @@ impl TunBackend for WindowsTunBackend {
     fn prepare(&self, config: &TunConfig) -> Result<PreparedTun, TunError> {
         if config.addresses.is_empty() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config requires at least one address",
             ));
         }
-        // Dual-stack lock (§24.5 point 4): an IPv4-only tun silently leaks
+        // Dual-stack requirement (`docs/tun.md`): an IPv4-only tun silently leaks
         // IPv6; IPv4 itself is mandatory.
         if !routes::has_v4(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv4 address (IPv4 is mandatory)",
             ));
         }
         if !routes::has_v6(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv6 address (dual-stack lock: an IPv4-only tun silently leaks IPv6)",
             ));
         }
@@ -1004,7 +1111,7 @@ impl TunBackend for WindowsTunBackend {
         }
         if !(1280..=9000).contains(&config.mtu) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("tun mtu must be in 1280..=9000, got {}", config.mtu),
             ));
         }
@@ -1021,7 +1128,7 @@ impl TunBackend for WindowsTunBackend {
         let config = &prepared.config;
         let Some(name) = config.interface_name.as_deref() else {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "prepare must resolve the interface name before apply",
             ));
         };
@@ -1036,33 +1143,52 @@ impl TunBackend for WindowsTunBackend {
             platform_snapshot: self.dns_snapshot_string()?,
         });
 
+        // Snapshot the physical default NIC *before* auto_route. Launch restore
+        // often follows leftover TUN teardown: the route table may still list
+        // Wintun as default, and `auto_detect_interface` would then bind
+        // Direct / proxy dials to that dying tunnel.
+        let default_iface = self.wait_physical_default_interface()?;
+        crate::pin_outbound_interface(&self.config_path, &default_iface)?;
+
         // Mutation boundary: the elevated core starts and sing-box creates
         // the adapter, assigns addresses, and installs routes in one go.
         let core_pid = self.coordinator.start_with_config(&self.config_path)?;
-        // Bounded wait for the adapter to appear (the wintun adapter shows up
-        // in netsh after the driver session starts).
-        let mut state = None;
+        // Bounded wait for the adapter to appear. Listing is one netsh per
+        // try; full address/route probes wait until the name exists.
+        let mut appeared = false;
         for _ in 0..INTERFACE_APPEAR_TRIES {
-            match self.host.interface_state(name) {
-                Ok(Some(found)) => {
-                    state = Some(found);
+            match self.host.list_interface_names() {
+                Ok(names) if names.iter().any(|existing| existing == name) => {
+                    appeared = true;
                     break;
                 }
-                Ok(None) => {}
+                Ok(_) => {}
                 Err(err) => {
                     return Err(self.rollback_after_apply_failure(err));
                 }
             }
             std::thread::sleep(Duration::from_millis(INTERFACE_APPEAR_DELAY_MS));
         }
-        let Some(interface) = state else {
+        if !appeared {
             return Err(self.rollback_after_apply_failure(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "core started but interface {name} is not present after {} ms",
                     INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
                 ),
             )));
+        }
+        let interface = match self.host.interface_state(name) {
+            Ok(Some(interface)) => interface,
+            Ok(None) => {
+                return Err(self.rollback_after_apply_failure(TunError::new(
+                    ErrorCode::TunHealthcheckFailed,
+                    format!("core started but interface {name} vanished after it appeared"),
+                )));
+            }
+            Err(err) => {
+                return Err(self.rollback_after_apply_failure(err));
+            }
         };
         let interface_id = interface.index.map(|index| index.to_string());
 
@@ -1173,17 +1299,22 @@ impl TunBackend for WindowsTunBackend {
                     .any(|actual| routes::address_key(actual) == routes::address_key(address))
             })
         });
-        // Full-route lock: every required destination must still resolve to
-        // the adapter.
+        // Full-route lock + control path: one `route print` snapshot per family.
+        let mut destinations: Vec<&str> =
+            applied.expected_routes.iter().map(String::as_str).collect();
+        destinations.push("127.0.0.1");
+        let mut identities = self.host.route_interfaces(&destinations)?;
+        let control_path = identities.pop().flatten();
         let mut routes_owned = true;
-        for destination in &applied.expected_routes {
-            if !self.route_owned_by_adapter(destination, applied)? {
-                routes_owned = false;
-                break;
+        for (destination, identity) in applied.expected_routes.iter().zip(identities.iter()) {
+            match identity {
+                Some(identity) if Self::identity_is_ours(destination, identity, applied) => {}
+                _ => {
+                    routes_owned = false;
+                    break;
+                }
             }
         }
-        // Control path: loopback must NOT resolve to this adapter.
-        let control_path = self.host.route_interface("127.0.0.1")?;
         let control_path_reachable = control_path.as_deref().is_some_and(|identity| {
             applied
                 .expected_addresses
@@ -1257,7 +1388,7 @@ impl TunBackend for WindowsTunBackend {
         }
         if !interface_gone {
             return Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "interface {} still present after core stop; removal needs the privileged helper path (T0 spike item)",
                     name.unwrap_or("<unknown>")
@@ -1266,7 +1397,7 @@ impl TunBackend for WindowsTunBackend {
         }
         if self.owned_routes_remain(applied)? {
             return Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!("owned routes still resolve to {name:?} after core stop"),
             ));
         }
@@ -1317,7 +1448,7 @@ impl TunBackend for WindowsTunBackend {
         // re-verify. Never enables capture.
         match self.restore(&applied) {
             Ok(()) => {}
-            Err(err) if err.code == TunErrorCode::RecoveryRequired => {
+            Err(err) if err.code == ErrorCode::TunRecoveryRequired => {
                 return Ok(RecoveryOutcome::RecoveryRequired);
             }
             Err(err) => return Err(err),
@@ -1342,13 +1473,13 @@ impl TunBackend for WindowsTunBackend {
 fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     let (addr, prefix) = cidr.split_once('/').ok_or_else(|| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address must be a CIDR, got {cidr}"),
         )
     })?;
     let prefix: u32 = prefix.parse().map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address has a non-numeric prefix: {cidr}"),
         )
     })?;
@@ -1359,381 +1490,20 @@ fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     };
     parsed.map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("invalid tun address: {cidr}"),
         )
     })?;
     let max = if ipv6 { 128 } else { 32 };
     if prefix == 0 || prefix > max {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address prefix must be in 1..={max}, got {prefix}"),
         ));
     }
     Ok(())
 }
+
 #[cfg(test)]
-mod parsing_tests {
-    use super::*;
-
-    #[test]
-    fn netsh_interfaces_parses_index_and_name() {
-        let output = "\
-Idx     Met         MTU          State          Name
----------------------------------------------------------------------------
-  1          75        4294967295  connected     Loopback Pseudo-Interface 1
-  5          25          1500  connected     Ethernet
- 17          25          9000  connected     Wintun
-";
-        let parsed = parse_netsh_interfaces(output);
-        assert_eq!(
-            parsed,
-            [
-                (1, "Loopback Pseudo-Interface 1".to_string()),
-                (5, "Ethernet".to_string()),
-                (17, "Wintun".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn interface_index_requires_the_raw_table_not_the_name_list() {
-        // Regression: `interface_state` used to resolve the adapter index by
-        // re-parsing the output of `list_interface_names` (bare names) as if
-        // it were the raw listing table. No name line starts with a numeric
-        // index, so the parse always yielded nothing and `interface_up`
-        // failed its identity lock on every Windows host (up + addresses +
-        // routes + DNS all verified; only the index was missing).
-        let names_only = vec![
-            "Loopback Pseudo-Interface 1".to_string(),
-            "Wintun".to_string(),
-        ];
-        assert!(
-            parse_netsh_interfaces_names(&names_only).is_empty(),
-            "a bare name list must never parse as a listing table"
-        );
-        let table = "\
-Idx     Met         MTU          State          Name
----------------------------------------------------------------------------
- 17          25          9000  connected     Wintun
-";
-        assert_eq!(parse_netsh_interfaces(table), [(17, "Wintun".to_string())]);
-    }
-
-    #[test]
-    fn netsh_interface_show_parses_connected_state() {
-        let output = "\
-Admin State    State          Type           Interface Name
--------------------------------------------------------------------------
-Enabled        Connected      Dedicated      Wintun
-Enabled        Disconnected   Dedicated      Ethernet
-";
-        let parsed = parse_netsh_interface_show(output);
-        assert_eq!(
-            parsed,
-            [
-                ("Wintun".to_string(), true),
-                ("Ethernet".to_string(), false)
-            ]
-        );
-    }
-
-    #[test]
-    fn netsh_ipv4_addresses_parses_ip_and_subnet_prefix() {
-        let output = "\
-Configuration for interface \"Wintun\"
-    DHCP enabled:                         No
-    IP Address:                           10.0.0.1
-    Subnet Prefix:                        10.0.0.0/30 (mask 255.255.255.252)
-    Default Gateway:                      .
-";
-        assert_eq!(
-            parse_netsh_ipv4_addresses(output, "Wintun"),
-            ["10.0.0.1/30"]
-        );
-        assert!(
-            parse_netsh_ipv4_addresses(output, "Other").is_empty(),
-            "addresses of another interface are not claimed"
-        );
-    }
-
-    #[test]
-    fn netsh_ipv6_addresses_parses_bare_addresses() {
-        let output = "\
-Interface 17: Wintun
----------------------------------------------------------------
-Address fdfe:dcba:9876::1
-Parameters for interface 17:
--------------------------------------------------------------
-Interface Luid     : 16883443044148183040
-Address Type       : Manual
-Valid Lifetime     : infinite
-Preferred Lifetime : infinite
-Dup Address Detection : 5
-Prefix Origin      : Well Known
-Suffix Origin      : Well Known
-Address State      : Preferred
-Scope              : Global
-";
-        assert_eq!(
-            parse_netsh_ipv6_addresses(output, "Wintun"),
-            ["fdfe:dcba:9876::1"]
-        );
-        // The probe is interface-scoped (`interface=<name>`), so the parse is
-        // name-independent; the interface name never appears before the
-        // addresses in the zh-CN output either.
-        assert_eq!(
-            parse_netsh_ipv6_addresses(output, "Other"),
-            ["fdfe:dcba:9876::1"]
-        );
-    }
-
-    #[test]
-    fn zh_cn_netsh_outputs_parse_locale_proof() {
-        // Captured live on the zh-CN host (2026-09-03).
-        let show = "\
-以太网
-    种类:     专用
-    管理状态: 已启用
-    连接状态: 已连接
-";
-        assert_eq!(
-            parse_netsh_interface_show(show),
-            [("以太网".to_string(), true)]
-        );
-        let show_down = "\
-以太网
-    管理状态: 已启用
-    连接状态: 已断开
-";
-        assert_eq!(
-            parse_netsh_interface_show(show_down),
-            [("以太网".to_string(), false)]
-        );
-
-        let v4 = "\
-接口 \"以太网\" 的配置
-    DHCP 已启用:                          是
-    IP 地址:                           10.28.10.67
-    子网前缀:                        10.28.10.0/24 (掩码 255.255.255.0)
-    默认网关:                         10.28.10.1
-";
-        assert_eq!(parse_netsh_ipv4_addresses(v4, "以太网"), ["10.28.10.67/24"]);
-
-        let dns = "\
-接口 \"以太网\" 的配置
-    通过 DHCP 配置的 DNS 服务器:      223.6.6.6
-                                          61.130.254.34
-    用哪个前缀注册:                   只是主要
-
-接口 \"Loopback Pseudo-Interface 1\" 的配置
-    静态配置的 DNS 服务器:            无
-    用哪个前缀注册:                   只是主要
-";
-        let parsed = parse_netsh_dnsservers(dns);
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].name, "以太网");
-        assert_eq!(parsed[0].source, DnsSource::Dhcp);
-        assert_eq!(parsed[0].servers, ["223.6.6.6", "61.130.254.34"]);
-        assert_eq!(parsed[1].name, "Loopback Pseudo-Interface 1");
-        assert_eq!(parsed[1].source, DnsSource::Static);
-        assert!(parsed[1].servers.is_empty());
-
-        let v6 = "\
-地址 fe80::bb78:1915:9425:d77%5 参数
----------------------------------------------------------
-接口 Luid          : 以太网
-作用域 ID          : 0.5
-有效生存时间       : infinite
-";
-        assert_eq!(
-            parse_netsh_ipv6_addresses(v6, "以太网"),
-            ["fe80::bb78:1915:9425:d77"]
-        );
-
-        let routes = "\
-===========================================================================
-接口列表
-  5...08 bf b8 00 e2 f3 ......Realtek PCIe GbE Family Controller
-===========================================================================
-
-IPv4 路由表
-===========================================================================
-活动路由:
-网络目标        网络掩码          网关      接口   跃点数
-          0.0.0.0          0.0.0.0       10.28.10.1      10.28.10.67     35
-       10.28.10.0    255.255.255.0            在链路上       10.28.10.67    291
-===========================================================================
-永久路由:
-  无
-";
-        assert_eq!(
-            parse_route_print_v4(routes, "10.28.10.67").as_deref(),
-            Some("10.28.10.67")
-        );
-        assert_eq!(
-            parse_route_print_v4(routes, "8.8.8.8").as_deref(),
-            Some("10.28.10.67"),
-            "default route wins for non-local destinations"
-        );
-
-        let routes6 = "\
-===========================================================================
-接口列表
-  5...08 bf b8 00 e2 f3 ......Realtek PCIe GbE Family Controller
-===========================================================================
-
-IPv6 路由表
-===========================================================================
-活动路由:
- 接口跃点数    网络目标                 网关
-  1    331 ::1/128                  在链路上
-  5    291 fe80::/64                在链路上
-===========================================================================
-永久路由:
-  无
-";
-        assert_eq!(parse_route_print_v6(routes6, "::1"), Some(1));
-        assert_eq!(parse_route_print_v6(routes6, "fe80::1"), Some(5));
-    }
-
-    #[test]
-    fn route_print_v4_picks_most_specific_interface_ip() {
-        let output = "\
-===========================================================================
-Interface List
- 17...00 ff ...... Wintun
-===========================================================================
-
-IPv4 Route Table
-===========================================================================
-Active Routes:
-Network Destination        Netmask          Gateway       Interface  Metric
-          0.0.0.0          0.0.0.0      192.168.5.1      192.168.5.99     25
-          10.0.0.0    255.255.255.252         On-link          10.0.0.1    281
-          10.0.0.1  255.255.255.255         On-link          10.0.0.1    281
-          127.0.0.0        255.0.0.0         On-link         127.0.0.1    331
-===========================================================================
-Persistent Routes:
-  None
-";
-        assert_eq!(
-            parse_route_print_v4(output, "10.0.0.3").as_deref(),
-            Some("10.0.0.1")
-        );
-        assert_eq!(
-            parse_route_print_v4(output, "8.8.8.8").as_deref(),
-            Some("192.168.5.99")
-        );
-        assert_eq!(
-            parse_route_print_v4(output, "127.0.0.1").as_deref(),
-            Some("127.0.0.1")
-        );
-    }
-
-    #[test]
-    fn route_print_v6_picks_most_specific_if_index() {
-        let output = "\
-IPv6 Route Table
-===========================================================================
-Active Routes:
- If Metric Network Destination      Gateway
- 17    281 ::/0                     On-link
- 17    281 fdfe:dcba:9876::/126     On-link
- 17    281 fdfe:dcba:9876::1/128    On-link
-  1    331 ::1/128                  On-link
-===========================================================================
-Persistent Routes:
-  None
-";
-        assert_eq!(parse_route_print_v6(output, "fdfe:dcba:9876::1"), Some(17));
-        assert_eq!(parse_route_print_v6(output, "fdfe:dcba:9876::3"), Some(17));
-        assert_eq!(parse_route_print_v6(output, "::1"), Some(1));
-        assert_eq!(
-            parse_route_print_v6(output, "2001:db8::1"),
-            Some(17),
-            "default via 17"
-        );
-    }
-
-    #[test]
-    fn split_prefix_handles_default_and_host_routes() {
-        assert_eq!(split_prefix("default"), ("::".to_string(), 0));
-        assert_eq!(split_prefix("::/0"), ("::".to_string(), 0));
-        assert_eq!(
-            split_prefix("fdfe:dcba:9876::/126"),
-            ("fdfe:dcba:9876::".to_string(), 126)
-        );
-        assert_eq!(split_prefix("::1/128"), ("::1".to_string(), 128));
-        assert_eq!(
-            split_prefix("2001:db8::1"),
-            ("2001:db8::1".to_string(), 128)
-        );
-    }
-
-    #[test]
-    fn netsh_interface_missing_classifies_gone_vs_probe_error() {
-        // Missing-interface netsh stderr (English, the module's assumption).
-        assert!(netsh_interface_missing(
-            "An interface with this name is not enabled on this system.",
-            ""
-        ));
-        assert!(netsh_interface_missing(
-            "The interface \"Wintun\" does not exist.",
-            ""
-        ));
-        assert!(netsh_interface_missing(
-            "",
-            "The interface cannot be found."
-        ));
-        // Any other failure is a probe error, never a verified "gone".
-        assert!(!netsh_interface_missing("", ""));
-        assert!(!netsh_interface_missing(
-            "Access is denied.",
-            "The RPC server is unavailable."
-        ));
-    }
-
-    #[test]
-    fn probe_means_interface_gone_is_locale_proof_via_the_listing() {
-        // zh-CN netsh: the localized error matches no English marker — the
-        // interface-listing cross-check is what proves the interface is gone.
-        let zh_cn = "此名称的接口未与路由器一起注册";
-        assert!(!netsh_interface_missing(zh_cn, ""));
-        assert!(probe_means_interface_gone(
-            zh_cn,
-            "",
-            Some(vec!["以太网".into(), "WLAN".into()]),
-            "Wintun"
-        ));
-        // The interface present in the listing → the probe failure is a real
-        // probe error, not a verified "gone" (fail closed).
-        assert!(!probe_means_interface_gone(
-            zh_cn,
-            "",
-            Some(vec!["Wintun".into()]),
-            "Wintun"
-        ));
-        // Listing probe failed → fail closed (not verified gone).
-        assert!(!probe_means_interface_gone(zh_cn, "", None, "Wintun"));
-        // English markers still fast-path without the listing.
-        assert!(probe_means_interface_gone(
-            "The interface does not exist.",
-            "",
-            None,
-            "Wintun"
-        ));
-    }
-
-    #[test]
-    fn adapter_name_validation() {
-        assert!(valid_adapter_name("Wintun"));
-        assert!(valid_adapter_name("My VPN Tunnel 2"));
-        assert!(!valid_adapter_name(""));
-        assert!(!valid_adapter_name(&"x".repeat(129)));
-        assert!(!valid_adapter_name("bad/name"));
-        assert!(!valid_adapter_name("bad:name"));
-        assert!(!valid_adapter_name("bad*name"));
-        assert!(!valid_adapter_name("bad\nname"));
-    }
-}
+#[path = "windows_tests.rs"]
+mod parsing_tests;

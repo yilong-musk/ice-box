@@ -15,6 +15,11 @@ const NETWORKSETUP: &str = "/usr/sbin/networksetup";
 /// Runs `networksetup` (injectable for tests).
 pub trait NetworkSetupRunner: Send {
     fn run(&self, args: &[&str]) -> Result<String, ProxySysError>;
+    /// Interface holding the IPv4 default route (`en0`), from `route -n get default`.
+    /// `None` falls back to the first enabled network service.
+    fn default_route_device(&self) -> Result<Option<String>, ProxySysError> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -44,6 +49,19 @@ impl NetworkSetupRunner for RealNetworkSetup {
             return Err(ProxySysError::ApplyFailed(msg));
         }
         Ok(stdout)
+    }
+
+    fn default_route_device(&self) -> Result<Option<String>, ProxySysError> {
+        let output = Command::new("route")
+            .args(["-n", "get", "default"])
+            .output()
+            .map_err(|e| ProxySysError::ApplyFailed(format!("spawn route: {e}")))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        Ok(parse_route_interface(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 }
 
@@ -272,6 +290,41 @@ impl<R: NetworkSetupRunner> MacosSystemProxy<R> {
         })
     }
 
+    fn primary_service_name(&self) -> Result<Option<String>, ProxySysError> {
+        if let Some(device) = self.runner.default_route_device()? {
+            if let Ok(ports) = self.runner.run(&["-listallhardwareports"]) {
+                if let Some(port) = parse_hardware_port(&ports, &device) {
+                    if let Ok(order) = self.runner.run(&["-listnetworkserviceorder"]) {
+                        if let Some(name) = parse_service_order(&order, &port) {
+                            return Ok(Some(name));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(self.list_enabled_services()?.into_iter().next())
+    }
+
+    fn primary_service_matches(&self, endpoints: &ProxyEndpoints) -> Result<bool, ProxySysError> {
+        let Some(name) = self.primary_service_name()? else {
+            return Ok(false);
+        };
+        let web = self.get_proxy("-getwebproxy", &name)?;
+        let secure = self.get_proxy("-getsecurewebproxy", &name)?;
+        if !proxy_state_matches(&web, &endpoints.http_host, endpoints.http_port)
+            || !proxy_state_matches(&secure, &endpoints.http_host, endpoints.http_port)
+        {
+            return Ok(false);
+        }
+        match (&endpoints.socks_host, endpoints.socks_port) {
+            (Some(host), Some(port)) => {
+                let socks = self.get_proxy("-getsocksfirewallproxy", &name)?;
+                Ok(proxy_state_matches(&socks, host, port))
+            }
+            _ => Ok(true),
+        }
+    }
+
     fn apply_one_service(
         &self,
         name: &str,
@@ -338,6 +391,18 @@ impl<R: NetworkSetupRunner> SystemProxy for MacosSystemProxy<R> {
         Ok(())
     }
 
+    fn live_matches_endpoints(&self, endpoints: &ProxyEndpoints) -> Result<bool, ProxySysError> {
+        self.primary_service_matches(endpoints)
+    }
+
+    fn live_matches_applied(
+        &self,
+        _record: &crate::ProxyBackupFile,
+        endpoints: &ProxyEndpoints,
+    ) -> Result<bool, ProxySysError> {
+        self.primary_service_matches(endpoints)
+    }
+
     fn restore(&self, backup: &ProxyBackup) -> Result<(), ProxySysError> {
         let services: Vec<ServiceBackup> = match backup.extra.get("services") {
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
@@ -399,6 +464,21 @@ fn map_restore(err: ProxySysError) -> ProxySysError {
     }
 }
 
+fn proxy_state_matches(state: &ServiceProxyState, host: &str, port: u16) -> bool {
+    if !state.enabled || state.port != port {
+        return false;
+    }
+    let norm = |h: &str| {
+        let h = h.trim().trim_matches(|c| c == '[' || c == ']');
+        if h.eq_ignore_ascii_case("localhost") {
+            "127.0.0.1".to_string()
+        } else {
+            h.to_ascii_lowercase()
+        }
+    };
+    norm(&state.server) == norm(host)
+}
+
 pub fn parse_proxy_get_output(out: &str) -> ServiceProxyState {
     let mut enabled = false;
     let mut server = String::new();
@@ -437,6 +517,46 @@ pub fn parse_bypass_output(out: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_route_interface(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("interface: ").map(str::to_string))
+}
+
+fn parse_hardware_port(output: &str, device: &str) -> Option<String> {
+    let mut port: Option<String> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Hardware Port: ") {
+            port = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("Device: ") {
+            if rest.trim() == device {
+                return port;
+            }
+        }
+    }
+    None
+}
+
+fn parse_service_order(output: &str, hardware_port: &str) -> Option<String> {
+    let mut previous: Option<String> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.contains(&format!("Hardware Port: {hardware_port}")) {
+            return previous;
+        }
+        if let Some(rest) = line.strip_prefix('(') {
+            if let Some(name) = rest.split_once(')') {
+                let label = name.0.trim();
+                if label == "*" || label.chars().all(|c| c.is_ascii_digit()) {
+                    previous = Some(name.1.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +568,7 @@ mod tests {
         /// Keyed by joined args; value is stdout or error message (if starts with "ERR:").
         responses: Arc<Mutex<HashMap<String, String>>>,
         calls: Arc<Mutex<Vec<String>>>,
+        default_device: Arc<Mutex<Option<String>>>,
     }
 
     impl MockRunner {
@@ -467,6 +588,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(Self::key(args), format!("ERR:{msg}"));
+        }
+
+        fn set_default_device(&self, device: &str) {
+            *self.default_device.lock().unwrap() = Some(device.to_string());
         }
     }
 
@@ -501,6 +626,10 @@ mod tests {
                 return Ok(String::new());
             }
             Err(ProxySysError::ApplyFailed(format!("unexpected: {key}")))
+        }
+
+        fn default_route_device(&self) -> Result<Option<String>, ProxySysError> {
+            Ok(self.default_device.lock().unwrap().clone())
         }
     }
 
@@ -753,6 +882,100 @@ mod tests {
         assert_eq!(
             list_calls, 1,
             "apply must not re-list services via backup(), calls: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn live_matches_probes_only_the_primary_service() {
+        let runner = MockRunner::default();
+        runner.set(
+            &["-listallnetworkservices"],
+            "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nEthernet\n",
+        );
+        runner.set(
+            &["-getwebproxy", "Wi-Fi"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        runner.set(
+            &["-getsecurewebproxy", "Wi-Fi"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        runner.set(
+            &["-getsocksfirewallproxy", "Wi-Fi"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        let calls = runner.calls.clone();
+        let proxy = MacosSystemProxy::with_runner(runner);
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        assert!(proxy.live_matches_endpoints(&endpoints).expect("probe"));
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|c| *c == "-listallnetworkservices")
+                .count(),
+            1
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("Ethernet")),
+            "must not probe secondary services: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("-getproxybypassdomains")),
+            "live probe must skip bypass domains: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn live_matches_probes_the_default_route_service_not_the_first_listed() {
+        let runner = MockRunner::default();
+        runner.set_default_device("en1");
+        runner.set(
+            &["-listallnetworkservices"],
+            "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nEthernet\n",
+        );
+        runner.set(
+            &["-listallhardwareports"],
+            "Hardware Port: Wi-Fi\nDevice: en0\n\nHardware Port: Ethernet\nDevice: en1\n",
+        );
+        runner.set(
+            &["-listnetworkserviceorder"],
+            "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n\n(2) Ethernet\n(Hardware Port: Ethernet, Device: en1)\n",
+        );
+        runner.set(
+            &["-getwebproxy", "Ethernet"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        runner.set(
+            &["-getsecurewebproxy", "Ethernet"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        runner.set(
+            &["-getsocksfirewallproxy", "Ethernet"],
+            "Enabled: Yes\nServer: 127.0.0.1\nPort: 17890\n",
+        );
+        let calls = runner.calls.clone();
+        let proxy = MacosSystemProxy::with_runner(runner);
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        assert!(proxy.live_matches_endpoints(&endpoints).expect("probe"));
+        let calls = calls.lock().unwrap();
+        assert!(
+            calls.iter().any(|c| c.contains("Ethernet")),
+            "must probe the default-route service: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("Wi-Fi")),
+            "must not probe the first-listed service when it is not the default route: {calls:?}"
         );
     }
 }

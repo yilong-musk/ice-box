@@ -7,7 +7,7 @@
 //! selected node. The domain list is a hand-curated static tier; swapping it
 //! for a bundled `geosite-cn` rule-set later only changes `default_rules()`.
 
-use ice_config::NormalizedProfile;
+use ice_config::{HostPlatform, NormalizedProfile};
 use serde_json::{json, Value};
 
 /// Common Chinese service domain suffixes routed direct.
@@ -240,9 +240,8 @@ pub fn default_uri_list_rules() -> Vec<Value> {
 /// UDP outbound is captured by its own TUN), and `ipv4_only` (the IPv6 path
 /// is broken, #4178). `route.default_domain_resolver` then resolves via the
 /// `remote-dns` final tag (wired by ice-config).
-pub fn default_uri_list_dns(detour: &str) -> Value {
-    #[cfg(target_os = "windows")]
-    {
+pub fn default_uri_list_dns(detour: &str, windows: bool) -> Value {
+    if windows {
         json!({
             "servers": [
                 { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
@@ -261,9 +260,7 @@ pub fn default_uri_list_dns(detour: &str) -> Value {
             "final": "remote-dns",
             "strategy": "ipv4_only",
         })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
+    } else {
         json!({
             "servers": [
                 { "type": "local", "tag": "local" },
@@ -293,7 +290,7 @@ pub fn default_uri_list_dns(detour: &str) -> Value {
 /// Flat (group-less) profiles route through the injected `proxy` selector so
 /// node selection takes effect; grouped profiles keep their top group as the
 /// fallback.
-pub fn apply_builtin_default_rules(profile: &mut NormalizedProfile) {
+pub fn apply_builtin_default_rules(profile: &mut NormalizedProfile, platform: HostPlatform) {
     if !profile.route.rules.is_empty() {
         return;
     }
@@ -312,7 +309,7 @@ pub fn apply_builtin_default_rules(profile: &mut NormalizedProfile) {
     profile.route.rules = default_uri_list_rules();
     profile.route.final_outbound = final_tag.clone();
     if profile.dns.is_none() {
-        profile.dns = Some(default_uri_list_dns(&final_tag));
+        profile.dns = Some(default_uri_list_dns(&final_tag, platform.is_windows()));
     }
 }
 
@@ -336,26 +333,27 @@ mod tests {
 
     #[test]
     fn default_dns_shape() {
-        let dns = default_uri_list_dns("proxy");
+        let dns = default_uri_list_dns("proxy", false);
         let servers = dns["servers"].as_array().unwrap();
         let tags: Vec<&str> = servers.iter().filter_map(|s| s["tag"].as_str()).collect();
         assert!(tags.contains(&"cn-dns"));
         assert!(tags.contains(&"remote-dns"));
+        assert!(tags.contains(&"local"));
         assert_eq!(dns["final"], "remote-dns");
-        #[cfg(target_os = "windows")]
-        {
-            assert!(
-                !tags.contains(&"local"),
-                "local re-enters the TUN on Windows; must not be emitted"
-            );
-            assert_eq!(dns["strategy"], "ipv4_only");
-            for server in servers {
-                assert_ne!(server["type"], "udp", "TCP transports only on Windows");
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            assert!(tags.contains(&"local"));
+
+        let win = default_uri_list_dns("proxy", true);
+        let win_servers = win["servers"].as_array().unwrap();
+        let win_tags: Vec<&str> = win_servers
+            .iter()
+            .filter_map(|s| s["tag"].as_str())
+            .collect();
+        assert!(
+            !win_tags.contains(&"local"),
+            "local re-enters the TUN on Windows; must not be emitted"
+        );
+        assert_eq!(win["strategy"], "ipv4_only");
+        for server in win_servers {
+            assert_ne!(server["type"], "udp", "TCP transports only on Windows");
         }
         let rules = dns["rules"].as_array().unwrap();
         assert_eq!(rules[0]["server"], "cn-dns");
@@ -368,13 +366,15 @@ mod tests {
             nodes: (0..nodes)
                 .map(|i| NormalizedOutbound {
                     tag: format!("n{i}"),
-                    outbound: json!({"type": "socks", "tag": format!("n{i}")}),
+                    outbound: std::sync::Arc::new(json!({"type": "socks", "tag": format!("n{i}")})),
                 })
                 .collect(),
             groups: (0..groups)
                 .map(|i| NormalizedOutbound {
                     tag: format!("g{i}"),
-                    outbound: json!({"type": "selector", "tag": format!("g{i}")}),
+                    outbound: std::sync::Arc::new(
+                        json!({"type": "selector", "tag": format!("g{i}")}),
+                    ),
                 })
                 .collect(),
             route: Default::default(),
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn apply_defaults_to_flat_ruleless_profile() {
         let mut p = profile(2, 0, 0, false);
-        apply_builtin_default_rules(&mut p);
+        apply_builtin_default_rules(&mut p, HostPlatform::MacOs);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "proxy");
         let dns = p.dns.unwrap();
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn apply_defaults_keeps_existing_rules_and_dns() {
         let mut p = profile(2, 0, 1, true);
-        apply_builtin_default_rules(&mut p);
+        apply_builtin_default_rules(&mut p, HostPlatform::MacOs);
         assert_eq!(p.route.rules.len(), 1, "existing rules win");
         assert!(p.dns.is_some());
     }
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn apply_defaults_grouped_profile_uses_top_group() {
         let mut p = profile(2, 1, 0, false);
-        apply_builtin_default_rules(&mut p);
+        apply_builtin_default_rules(&mut p, HostPlatform::MacOs);
         assert_eq!(p.route.rules.len(), 3);
         assert_eq!(p.route.final_outbound, "g0");
         let dns = p.dns.unwrap();

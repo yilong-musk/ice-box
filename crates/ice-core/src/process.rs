@@ -98,6 +98,7 @@ impl ProcessSpawner for CommandSpawner {
                 CoreError::SpawnFailed(format!("create log dir {}: {e}", parent.display()))
             })?;
         }
+        let _ = crate::cap_log_file(log_file, crate::CORE_LOG_MAX_BYTES, crate::CORE_LOG_KEEP);
 
         let log = OpenOptions::new()
             .create(true)
@@ -194,10 +195,138 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
     }
 }
 
+/// Shared pid liveness used by [`PidProcess::try_wait`] and orphan reclaim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidLiveness {
+    Alive,
+    Exited(i32),
+}
+
+/// Whether `pid` is still a live (non-zombie) process. `ERROR_ACCESS_DENIED` /
+/// `EPERM` count as alive.
+pub fn pid_is_alive(pid: u32) -> bool {
+    matches!(query_pid_liveness(pid), Ok(PidLiveness::Alive))
+}
+
+pub fn query_pid_liveness(pid: u32) -> io::Result<PidLiveness> {
+    #[cfg(unix)]
+    {
+        if pid_is_zombie(pid) {
+            return Ok(PidLiveness::Exited(-1));
+        }
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return Ok(PidLiveness::Alive);
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::ESRCH) => Ok(PidLiveness::Exited(-1)),
+            Some(libc::EPERM) => Ok(PidLiveness::Alive),
+            _ => Err(err),
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return match io::Error::last_os_error().raw_os_error() {
+                Some(err) if err == ERROR_INVALID_PARAMETER as i32 => Ok(PidLiveness::Exited(-1)),
+                Some(err) if err == ERROR_ACCESS_DENIED as i32 => Ok(PidLiveness::Alive),
+                _ => Err(io::Error::last_os_error()),
+            };
+        }
+        let mut exit_code: u32 = 0;
+        let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+        unsafe { CloseHandle(handle) };
+        if queried == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if exit_code == STILL_ACTIVE as u32 {
+            Ok(PidLiveness::Alive)
+        } else {
+            Ok(PidLiveness::Exited(exit_code as i32))
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "pid liveness requires a unix or windows host",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn waitid_reports_exited(pid: u32) -> bool {
+    unsafe {
+        let mut info: libc::siginfo_t = std::mem::zeroed();
+        let rc = libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        );
+        rc == 0 && {
+            // Linux exposes `si_pid()` as a method; macOS/BSD keep a field.
+            #[cfg(target_os = "linux")]
+            let reported = info.si_pid();
+            #[cfg(not(target_os = "linux"))]
+            let reported = info.si_pid;
+            reported == pid as libc::pid_t
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pid_is_zombie(pid: u32) -> bool {
+    if waitid_reports_exited(pid) {
+        return true;
+    }
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some(rparen) = stat.rfind(')') else {
+        return false;
+    };
+    stat[rparen + 1..].trim_start().starts_with('Z')
+}
+
+#[cfg(target_os = "macos")]
+fn pid_is_zombie(pid: u32) -> bool {
+    if waitid_reports_exited(pid) {
+        return true;
+    }
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let n = libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        );
+        n == size && info.pbi_status == libc::SZOMB
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn pid_is_zombie(pid: u32) -> bool {
+    waitid_reports_exited(pid)
+}
+
 /// A process the controller did not spawn itself (TUN slice: the elevated
 /// core is started by the `CoreCoordinator` helper/`sudo` path and then
 /// adopted so the normal lifecycle, health probes, reload and watchdog
-/// reaping keep working). Identity is the pid only.
+/// reaping keep working). Identity is the pid plus a platform start-key so a
+/// reused pid is not signalled.
 ///
 /// `try_wait` probes liveness: `kill(pid, 0)` on unix, `OpenProcess` +
 /// `GetExitCodeProcess` on Windows; the exit code is unavailable on unix, so
@@ -205,11 +334,36 @@ pub fn stop_process(child: &mut dyn ManagedProcess, grace: Duration) -> Result<(
 #[derive(Debug, Clone)]
 pub struct PidProcess {
     pid: u32,
+    start_key: Option<String>,
 }
 
 impl PidProcess {
     pub fn new(pid: u32) -> Self {
-        Self { pid }
+        Self {
+            pid,
+            start_key: process_start_key(pid),
+        }
+    }
+
+    fn identity_still_holds(&self) -> io::Result<bool> {
+        match (&self.start_key, process_start_key(self.pid)) {
+            (Some(expected), Some(actual)) if expected == &actual => Ok(true),
+            (Some(_), Some(_)) => Err(io::Error::other(format!(
+                "pid {} was reused; refusing to signal the new process",
+                self.pid
+            ))),
+            // Process is gone (or the start key is unavailable now): treat as
+            // already exited rather than signalling a stranger.
+            (Some(_), None) => Ok(false),
+            // No start-key at adopt: we cannot prove this pid is still the
+            // process we attached to, so refuse to signal it.
+            (None, _) => Ok(false),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_start_key(pid: u32, start_key: Option<String>) -> Self {
+        Self { pid, start_key }
     }
 }
 
@@ -219,6 +373,9 @@ impl ManagedProcess for PidProcess {
     }
 
     fn request_terminate(&mut self) -> io::Result<()> {
+        if !self.identity_still_holds()? {
+            return Ok(());
+        }
         #[cfg(unix)]
         {
             let rc = unsafe { libc::kill(self.pid as i32, libc::SIGTERM) };
@@ -274,6 +431,9 @@ impl ManagedProcess for PidProcess {
     }
 
     fn force_kill(&mut self) -> io::Result<()> {
+        if !self.identity_still_holds()? {
+            return Ok(());
+        }
         #[cfg(unix)]
         {
             let rc = unsafe { libc::kill(self.pid as i32, libc::SIGKILL) };
@@ -338,69 +498,86 @@ impl ManagedProcess for PidProcess {
     }
 
     fn try_wait(&mut self) -> io::Result<Option<i32>> {
-        #[cfg(unix)]
-        {
-            // `kill(pid, 0)` is a pure liveness probe:
-            // - 0     → the process exists and we may signal it → alive.
-            // - EPERM → the process exists but belongs to another user (the
-            //   elevated root core adopted from the helper/`sudo` path). It is
-            //   alive; signals cannot reach it from this process, so liveness
-            //   is the only thing `try_wait` can report.
-            // - ESRCH → the process is gone (or never existed).
-            let rc = unsafe { libc::kill(self.pid as i32, 0) };
-            if rc == 0 {
-                Ok(None)
-            } else {
-                let err = io::Error::last_os_error();
-                match err.raw_os_error() {
-                    Some(libc::ESRCH) => Ok(Some(-1)),
-                    Some(libc::EPERM) => Ok(None),
-                    _ => Err(err),
-                }
-            }
+        match self.identity_still_holds() {
+            Ok(true) => match query_pid_liveness(self.pid)? {
+                PidLiveness::Alive => Ok(None),
+                PidLiveness::Exited(code) => Ok(Some(code)),
+            },
+            // Missing start-key, process gone, or pid reused: report exited
+            // so the controller does not keep a stranger as "our" core.
+            Ok(false) | Err(_) => Ok(Some(-1)),
         }
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::Foundation::{
-                CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
-            };
-            use windows_sys::Win32::System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            };
-            // `OpenProcess` with query access is a pure liveness probe:
-            // - a valid handle + STILL_ACTIVE exit code → alive.
-            // - a valid handle + any other exit code → the process is gone.
-            // - ERROR_INVALID_PARAMETER → the pid never existed / was reaped.
-            // - ERROR_ACCESS_DENIED → the pid exists but belongs to another
-            //   token; treat as alive (unix EPERM parity for the elevated
-            //   core adopted from the privileged coordinator).
-            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, self.pid) };
+    }
+}
+
+/// Platform start-time token for `pid`. Compared before signalling an adopted
+/// process so a recycled pid is not killed.
+pub(crate) fn process_start_key(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rparen = stat.rfind(')')?;
+        let fields: Vec<&str> = stat[rparen + 1..].split_whitespace().collect();
+        // Field 22 (starttime) is index 19 after `(comm)`.
+        fields.get(19).map(|s| (*s).to_string())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if key.is_empty() {
+            None
+        } else {
+            Some(key)
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if handle.is_null() {
-                return match io::Error::last_os_error().raw_os_error() {
-                    Some(err) if err == ERROR_INVALID_PARAMETER as i32 => Ok(Some(-1)),
-                    Some(err) if err == ERROR_ACCESS_DENIED as i32 => Ok(None),
-                    _ => Err(io::Error::last_os_error()),
-                };
+                return None;
             }
-            let mut exit_code: u32 = 0;
-            let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
-            unsafe { CloseHandle(handle) };
-            if queried == 0 {
-                return Err(io::Error::last_os_error());
+            let mut created = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut exited = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut kernel = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let mut user = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+            CloseHandle(handle);
+            if ok == 0 {
+                return None;
             }
-            if exit_code == STILL_ACTIVE as u32 {
-                Ok(None)
-            } else {
-                Ok(Some(exit_code as i32))
-            }
+            let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+            Some(ticks.to_string())
         }
-        #[cfg(not(any(unix, windows)))]
-        {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "PidProcess liveness requires a unix or windows host",
-            ))
-        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -542,6 +719,45 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::*;
 
+    #[cfg(any(unix, windows))]
+    fn spawn_sleeper() -> std::process::Child {
+        #[cfg(unix)]
+        {
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn sleep")
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+                .spawn()
+                .expect("spawn powershell")
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn pid_process_without_start_key_does_not_signal_or_look_alive() {
+        let mut child = spawn_sleeper();
+        let mut pid_proc = PidProcess::new_with_start_key(child.id(), None);
+        assert_eq!(
+            pid_proc.try_wait().expect("try_wait"),
+            Some(-1),
+            "a pid adopted without a start-key must not look live"
+        );
+        pid_proc
+            .request_terminate()
+            .expect("refuse to signal without a start-key");
+        assert!(
+            child.try_wait().expect("child still running").is_none(),
+            "the live process must not be signalled"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
     #[cfg(unix)]
     #[test]
     fn pid_process_reports_liveness_for_own_and_exited_processes() {
@@ -663,5 +879,37 @@ mod tests {
         }
         assert!(gone, "force_kill must terminate the process");
         let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_process_try_wait_reports_zombie_as_exited() {
+        unsafe {
+            let pid = libc::fork();
+            assert!(pid >= 0, "fork");
+            if pid == 0 {
+                libc::_exit(0);
+            }
+            let mut pid_proc = PidProcess::new(pid as u32);
+            let mut saw_exit = false;
+            for _ in 0..200 {
+                if pid_proc.try_wait().expect("try_wait") == Some(-1) {
+                    saw_exit = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+            assert!(saw_exit, "an unreaped zombie must report exited");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pid_is_alive_treats_system_process_as_alive() {
+        assert!(
+            pid_is_alive(4),
+            "pid 4 (System) is ACCESS_DENIED and must count as alive"
+        );
     }
 }

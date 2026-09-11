@@ -6,10 +6,21 @@ license.workspace = true
 description = "Elevated scheduled-task launcher for the Windows TUN core"
 
 [dependencies]
-sha2 = "0.10"
+serde_json = { workspace = true }
+ice-config-guard = { workspace = true }
+ice-tun-pin = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_System_Threading",
+] }
+windows = { version = "0.61", features = [
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_TaskScheduler",
+    "Win32_System_Variant",
 ] }

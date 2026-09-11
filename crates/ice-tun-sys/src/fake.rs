@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Host-free fake backend for orchestration and fault-injection tests
-//! (plan T0 exit gate: "Inject failures after every journaled mutation in
-//! a host-free fake controller and prove that startup recovery is
-//! idempotent").
+//! Host-free fake backend for orchestration and fault-injection tests.
+//! Injects failures after every journaled mutation so startup recovery can
+//! be proven idempotent.
 //!
 //! The fake simulates the OS resource state (interface, addresses, routes,
 //! DNS), is idempotent, and writes the same journal steps a real backend
-//! writes. It models IPv4 *and* IPv6 routes (dual-stack lock, architecture
-//! §24.5), so a dual-stack or IPv6-only config can never pass health checks
+//! writes. It models IPv4 *and* IPv6 routes (dual-stack requirement in
+//! `docs/tun.md`), so a dual-stack or IPv6-only config can never pass health checks
 //! while IPv6 leaks. `FaultPlan` scripted failures can fire after any
 //! journaled mutation — including the crash window between an OS mutation
 //! and its journal record, where the fake rolls the mutation back so an
@@ -19,7 +18,7 @@ use std::path::PathBuf;
 use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 pub use crate::routes::{AUTO_ROUTE_RANGES, AUTO_ROUTE_RANGES_V6};
@@ -59,6 +58,9 @@ pub struct FaultPlan {
     pub fail_restore_after_mutations: Option<usize>,
     /// A route that cannot be removed (unverifiable cleanup).
     pub stuck_route: Option<String>,
+    /// Replace the journal path with a directory after a recover() error so
+    /// the driver's terminal persist cannot write (TUN-2).
+    pub sabotage_journal_after_recover_err: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +148,7 @@ impl FakeTunBackend {
         mutate(&mut self.state);
         let failure = if fail_journal_write == Some(mutations) {
             Some(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("injected journal write failure after {mutations} mutations"),
             ))
         } else {
@@ -164,7 +166,7 @@ impl FakeTunBackend {
         &self,
         done: Option<usize>,
         mutations: usize,
-        code: TunErrorCode,
+        code: ErrorCode,
     ) -> Result<(), TunError> {
         if done == Some(mutations) {
             return Err(TunError::new(
@@ -179,7 +181,7 @@ impl FakeTunBackend {
     fn fail_before(&self, done: Option<usize>) -> Result<(), TunError> {
         if done == Some(0) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "injected failure before any mutation",
             ));
         }
@@ -238,13 +240,13 @@ impl TunBackend for FakeTunBackend {
         self.push(TraceEvent::Prepare);
         if self.faults.fail_prepare {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "injected prepare failure",
             ));
         }
         if config.addresses.is_empty() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config requires at least one address",
             ));
         }
@@ -254,7 +256,7 @@ impl TunBackend for FakeTunBackend {
         for cidr in &config.addresses {
             if cidr.contains(':') && routes::ipv6_groups(cidr).is_none() {
                 return Err(TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("invalid IPv6 address in tun config: {cidr}"),
                 ));
             }
@@ -298,7 +300,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -326,7 +328,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -348,7 +350,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_apply_after_mutations,
                 mutations,
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
             )?;
         }
 
@@ -397,7 +399,7 @@ impl TunBackend for FakeTunBackend {
                 self.fail_after(
                     self.faults.fail_apply_after_mutations,
                     mutations,
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                 )?;
             }
         }
@@ -432,7 +434,7 @@ impl TunBackend for FakeTunBackend {
         self.push(TraceEvent::Verify);
         if self.faults.fail_verify_applied {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 "injected verify failure",
             ));
         }
@@ -514,7 +516,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_restore_after_mutations,
                 mutations,
-                TunErrorCode::RestoreFailed,
+                ErrorCode::TunRestoreFailed,
             )?;
         }
 
@@ -558,7 +560,7 @@ impl TunBackend for FakeTunBackend {
             self.fail_after(
                 self.faults.fail_restore_after_mutations,
                 mutations,
-                TunErrorCode::RestoreFailed,
+                ErrorCode::TunRestoreFailed,
             )?;
         }
 
@@ -578,7 +580,7 @@ impl TunBackend for FakeTunBackend {
                     self.fail_after(
                         self.faults.fail_restore_after_mutations,
                         mutations,
-                        TunErrorCode::RestoreFailed,
+                        ErrorCode::TunRestoreFailed,
                     )?;
                 }
                 _ => {
@@ -587,7 +589,7 @@ impl TunBackend for FakeTunBackend {
                     // a *defined* fail-closed state (recovery_required),
                     // not an unexpected failure.
                     return Err(TunError::new(
-                        TunErrorCode::RecoveryRequired,
+                        ErrorCode::TunRecoveryRequired,
                         "platform DNS no longer matches the journal's dns_after snapshot; external change preserved",
                     ));
                 }
@@ -604,12 +606,20 @@ impl TunBackend for FakeTunBackend {
         let applied = AppliedTun::from_journal(journal);
         match self.restore(&applied) {
             Ok(()) => {}
-            Err(err) if err.code == TunErrorCode::RecoveryRequired => {
+            Err(err) if err.code == ErrorCode::TunRecoveryRequired => {
                 // Defined fail-closed state (e.g. external DNS change):
                 // report it as the outcome; the driver persists the journal.
                 return Ok(RecoveryOutcome::RecoveryRequired);
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                if self.faults.sabotage_journal_after_recover_err {
+                    if let Some(path) = &self.journal_path {
+                        let _ = std::fs::remove_file(path);
+                        let _ = std::fs::create_dir(path);
+                    }
+                }
+                return Err(err);
+            }
         }
         let health = self.verify(&applied)?;
         if health.nothing_owned {

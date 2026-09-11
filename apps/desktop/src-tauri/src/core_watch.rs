@@ -59,7 +59,7 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
                 .handle_unexpected_core_exit(&mut **core, &settings)
         };
         if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-            *slot = warning;
+            *slot = warning.into_iter().collect();
         }
         return;
     }
@@ -69,7 +69,7 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
     };
     let warning = restore_proxy_after_unexpected_core_exit(&state.paths, proxy.as_ref());
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = warning;
+        *slot = warning.into_iter().collect();
     }
 }
 
@@ -86,7 +86,7 @@ fn heal_tun_dns(state: &AppState) {
     };
     let warning = state.capture.heal_tun_dns();
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-        *slot = warning;
+        *slot = warning.into_iter().collect();
     }
 }
 
@@ -99,6 +99,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
         };
         reconcile_unexpected_core_exit(state.inner());
         heal_tun_dns(state.inner());
+        crate::commands::cap_oversized_logs(state.inner());
     });
 }
 
@@ -194,7 +195,7 @@ mod tests {
             Err(CoreError::invalid_state("mock adopt unsupported"))
         }
 
-        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+        fn reclaim_orphan_pid(&mut self, _: &Path, _: &[&Path]) -> Result<(), CoreError> {
             Ok(())
         }
     }
@@ -209,14 +210,19 @@ mod tests {
         ));
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
+        let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
+            MockExitedCore::running(),
+        )
+            as Box<dyn CoreHandle>);
         Arc::new(AppState {
             paths: paths.clone(),
-            core: Mutex::new(Box::new(MockExitedCore::running()) as Box<dyn CoreHandle>),
+            core,
+            core_snapshot,
             proxy: Mutex::new(Box::new(TrackProxy {
                 restore_calls: restore_calls.clone(),
             })),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -224,6 +230,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
@@ -262,7 +272,7 @@ mod tests {
         assert_eq!(restore_calls.load(Ordering::SeqCst), 1);
         let backup = ProxyBackupFile::load(&state.paths.proxy_backup()).unwrap();
         assert!(!backup.applied);
-        assert!(state.proxy_recovery_warning.lock().unwrap().is_none());
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
 
         let _ = fs::remove_dir_all(state.paths.root());
     }
@@ -297,6 +307,24 @@ mod tests {
         reconcile_unexpected_core_exit(state.as_ref());
         assert_eq!(state.core.lock().unwrap().state().status, CoreStatus::Error);
         assert_eq!(restore_calls.load(Ordering::SeqCst), 1);
+
+        let _ = fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn cap_oversized_logs_drops_legacy_core_siblings_without_banner() {
+        let restore_calls = Arc::new(AtomicUsize::new(0));
+        let state = temp_state("cap-logs", restore_calls);
+        let core = state.paths.core_log();
+        fs::create_dir_all(core.parent().expect("parent")).unwrap();
+        fs::write(&core, b"keep").unwrap();
+        fs::write(core.with_file_name("sing-box.log.1"), b"old").unwrap();
+
+        crate::commands::cap_oversized_logs(state.as_ref());
+
+        assert_eq!(fs::read(&core).unwrap(), b"keep");
+        assert!(!core.with_file_name("sing-box.log.1").exists());
+        assert!(state.proxy_recovery_warning.lock().unwrap().is_empty());
 
         let _ = fs::remove_dir_all(state.paths.root());
     }

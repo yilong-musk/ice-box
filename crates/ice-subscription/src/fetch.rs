@@ -11,7 +11,7 @@ use crate::url::{
     addrs_are_fake_ip, pin_url_to_ip, resolve_allowed_fetch_addrs, validate_subscription_url,
 };
 
-/// Hard body size limit (architecture / plan).
+/// Hard body size limit (8 MiB).
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Reject header values that would break HTTP framing (CRLF injection).
@@ -95,6 +95,18 @@ fn url_is_https(url: &str) -> bool {
     url::Url::parse(url)
         .ok()
         .is_some_and(|u| u.scheme() == "https")
+}
+
+/// Fake-ip DNS (198.18/15) cannot be used as a connect target and must not
+/// fall back to an unpinned hostname GET (second resolve skips SSRF checks).
+fn refuse_fake_ip_connect(addrs: &[std::net::SocketAddr]) -> Result<(), SubscriptionError> {
+    if addrs_are_fake_ip(addrs) {
+        Err(SubscriptionError::FetchFailed(
+            "subscription DNS resolved only to fake-ip addresses (198.18.0.0/15); refusing an unpinned hostname connect".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn url_port(url: &str) -> Result<u16, SubscriptionError> {
@@ -278,23 +290,10 @@ fn fetch_get(
         validate_subscription_url(&current)?;
         let (host_header, addrs) = resolve_allowed_fetch_addrs(&current)?;
 
-        // When sing-box / Clash fake-ip DNS is active, pinned HTTP/1.1 to 198.18.x.x returns 403.
-        // Route by hostname through the system stack (same path curl uses) instead.
-        if addrs_are_fake_ip(&addrs) {
-            let req = agent.get(&current);
-            let req = apply_conditional_headers(req, hop, etag, last_modified)?;
-            let response = req
-                .call()
-                .map_err(|e| SubscriptionError::FetchFailed(format!("GET {current}: {e}")))?;
-            let hop_resp = hop_from_ureq(response)?;
-            match handle_hop(hop_resp, url, &current, hop)? {
-                Ok(final_hop) => return Ok(final_hop),
-                Err(next_url) => {
-                    current = next_url;
-                    continue;
-                }
-            }
-        }
+        // Fake-ip answers (198.18/15) must not fall back to a hostname
+        // connect: ureq would resolve again without the SSRF filter (DNS
+        // rebinding). Fail closed and tell the user to use a real resolver.
+        refuse_fake_ip_connect(&addrs)?;
 
         let https = url_is_https(&current);
         let _host_header = host_header;
@@ -409,6 +408,30 @@ pub enum MockFetchMode {
     Timeout,
     TooLarge,
     Fail(String),
+    /// Panic on the first `get` (shared across clones), then behave as `Ok`.
+    PanicOnce(PanicOnceMode),
+}
+
+/// Payload for [`MockFetchMode::PanicOnce`].
+#[derive(Debug, Clone)]
+pub struct PanicOnceMode {
+    pub response: FetchResponse,
+    remaining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PanicOnceMode {
+    pub fn new(response: FetchResponse) -> Self {
+        Self {
+            response,
+            remaining: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Arm so the next `get` panics; later calls return [`Self::response`].
+    pub fn arm(&self) {
+        self.remaining
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Mock fetcher for unit tests.
@@ -445,6 +468,15 @@ impl HttpFetcher for MockFetcher {
                 "body exceeds {MAX_BODY_BYTES} bytes"
             ))),
             MockFetchMode::Fail(msg) => Err(SubscriptionError::FetchFailed(msg.clone())),
+            MockFetchMode::PanicOnce(once) => {
+                if once
+                    .remaining
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    panic!("injected fetch panic");
+                }
+                Ok(once.response.clone())
+            }
         }
     }
 }
@@ -472,6 +504,18 @@ mod tests {
         let hop = fetch_get(&agent, "https://example.com/", None, None)
             .expect("HTTPS subscription-style fetch");
         assert_eq!(hop.status, 200);
+    }
+
+    #[test]
+    fn fake_ip_only_addrs_do_not_fall_back_to_hostname_connect() {
+        let addrs = vec![std::net::SocketAddr::new(
+            "198.18.7.3".parse().unwrap(),
+            443,
+        )];
+        let err = refuse_fake_ip_connect(&addrs).unwrap_err();
+        assert!(err.to_string().contains("fake-ip"), "got {err}");
+        let public = vec![std::net::SocketAddr::new("8.8.8.8".parse().unwrap(), 443)];
+        refuse_fake_ip_connect(&public).expect("public IP is not fake-ip");
     }
 
     #[test]

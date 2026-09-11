@@ -1659,8 +1659,8 @@ dependencies = [
  "ice-config",
  "ice-core",
  "ice-elevate",
+ "ice-engine",
  "ice-proxy-sys",
- "ice-subscription",
  "ice-tun-sys",
  "libc",
  "serde",
@@ -1672,6 +1672,8 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]
@@ -1681,11 +1683,24 @@ name = "ice-config"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "getrandom 0.2.17",
+ "ice-config-guard",
+ "ice-types",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
- "tracing-subscriber",
+]
+
+[[package]]
+name = "ice-config-guard"
+version = "0.1.6"
+dependencies = [
+ "ice-types",
+ "libc",
+ "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1693,7 +1708,7 @@ name = "ice-core"
 version = "0.1.6"
 dependencies = [
  "anyhow",
- "ice-config",
+ "ice-types",
  "libc",
  "serde",
  "serde_json",
@@ -1718,6 +1733,7 @@ version = "0.1.6"
 dependencies = [
  "ice-config",
  "ice-subscription",
+ "ice-types",
  "serde_json",
  "thiserror 2.0.20",
 ]
@@ -1726,11 +1742,14 @@ dependencies = [
 name = "ice-helper"
 version = "0.1.6"
 dependencies = [
- "ice-tun-sys",
+ "ice-config-guard",
+ "ice-tun-helper-proto",
+ "ice-types",
  "libc",
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tracing",
 ]
 
@@ -1756,9 +1775,13 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "ice-config",
+ "ice-config-guard",
  "percent-encoding",
+ "rcgen",
  "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1767,15 +1790,43 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
- "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ice-tun-helper-proto"
+version = "0.1.6"
+dependencies = [
+ "ice-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ice-tun-journal"
+version = "0.1.6"
+dependencies = [
+ "chrono",
+ "ice-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "ice-tun-launcher"
 version = "0.1.6"
 dependencies = [
- "sha2",
+ "ice-config-guard",
+ "ice-tun-pin",
+ "serde_json",
+ "windows",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ice-tun-pin"
+version = "0.1.6"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
@@ -1783,8 +1834,12 @@ name = "ice-tun-sys"
 version = "0.1.6"
 dependencies = [
  "chrono",
+ "ice-config-guard",
  "ice-helper",
- "ice-tun-launcher",
+ "ice-tun-helper-proto",
+ "ice-tun-journal",
+ "ice-tun-pin",
+ "ice-types",
  "libc",
  "serde",
  "serde_json",
@@ -1792,6 +1847,14 @@ dependencies = [
  "tracing",
  "uuid",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ice-types"
+version = "0.1.6"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3041,6 +3104,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3761,6 +3836,12 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"
@@ -4548,6 +4629,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.20",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5614,6 +5708,15 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
 ]
 
 [[package]]

@@ -55,22 +55,7 @@ No subscription yet? ice-box starts in direct-only mode, so the core, the captur
 
 ## TUN mode
 
-TUN captures traffic at the network layer, covering apps that never read the system proxy. Enable it from Settings or Home. The switch only decides how the *next* start captures traffic; stopping the service always tears down whichever capture is active.
-
-| | macOS | Windows |
-|---|---|---|
-| **Setup** | The first enable installs a small privileged helper through the system authorization dialog. | The first enable shows one UAC prompt to create the `ice-box-tun` scheduled task. Later starts and stops do not prompt. |
-| **Coverage** | Dual-stack IPv4 + IPv6, TCP and UDP. | **IPv4 TCP only** on the current core. |
-
-Windows TUN on the pinned core:
-
-| Works | Does not work |
-|---|---|
-| IPv4 HTTPS and other TCP traffic | UDP / QUIC / HTTP3 |
-| System DNS via DoT / DoH | IPv6 |
-| Mixed inbound for diagnostics | fake-ip DNS |
-
-Need UDP or IPv6 on Windows? Use the system proxy. The full shape, elevation model, and rationale are in [`docs/tun.md`](docs/tun.md).
+TUN captures traffic at the network layer, covering apps that never read the system proxy. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations.
 
 ## Development
 
@@ -94,15 +79,16 @@ npm run dev
 apps/desktop    React UI + Tauri shell
 apps/website    GitHub Pages site and Live Demo
 crates/         Rust workspace: subscription, config, engine, proxy-sys, tun-sys, helper
-docs/           Architecture, TUN, release process
+docs/           Architecture, TUN, testing, release process
 ```
 
 ## Documentation
 
 | Document | What you will find |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Implementation spec: processes, state machine, config generation, IPC contract |
-| [`docs/tun.md`](docs/tun.md) | TUN capture: platform shapes, elevation, known limits, live gates |
+| [`docs/architecture.md`](docs/architecture.md) | System structure, component responsibilities, data flow, and design boundaries |
+| [`docs/tun.md`](docs/tun.md) | TUN behavior, state machine, recovery, platform configuration, and limits |
+| [`docs/testing.md`](docs/testing.md) | Local and CI gate coverage, manual live tests |
 | [`docs/release-process.md`](docs/release-process.md) | Version bump, changelog, gate, tag, release pipeline |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed in every release |
 

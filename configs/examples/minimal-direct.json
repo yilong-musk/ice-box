@@ -22,7 +22,8 @@
   },
   "experimental": {
     "clash_api": {
-      "external_controller": "127.0.0.1:19090"
+      "external_controller": "127.0.0.1:19090",
+      "secret": "iceboxtestclashapisecret000001"
     }
   }
 }

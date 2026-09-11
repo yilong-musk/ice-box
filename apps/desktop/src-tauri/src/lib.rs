@@ -4,29 +4,41 @@ mod acceptance;
 mod app_update;
 mod capture;
 mod commands;
+mod core_snapshot;
 mod core_watch;
 mod helper_install;
 mod instance;
 mod log_tail;
 mod log_view;
 mod orchestrate;
+mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
 mod windows_elevation;
 
 use crate::capture::CaptureController;
+use crate::core_snapshot::{wrap_core, CoreSnapshotHub};
 use crate::orchestrate::current_settings;
+use crate::runtime::init_logging;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
-use ice_config::{init_logging, purge_invalid_pid_file, AppPaths};
-use ice_core::{CoreController, CoreHandle, TrafficMonitor};
+use ice_config::{load_settings_detailed, AppPaths, ErrorCode};
+use ice_core::{purge_invalid_pid_file, CoreController, CoreHandle, TrafficMonitor};
 use ice_proxy_sys::{create_system_proxy, ProxyEndpoints, SystemProxy};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+
+/// Shared poisoned-mutex error for command, capture, and shutdown paths.
+pub(crate) fn lock_poisoned(context: &str) -> ice_config::AppError {
+    ice_config::AppError::new(
+        ice_config::ErrorCode::LockPoisoned,
+        format!("internal lock poisoned: {context}"),
+    )
+}
 
 /// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
 /// written here so a crash on Windows (where the release binary has no console and
@@ -67,11 +79,13 @@ fn install_panic_hook() {
 pub struct AppState {
     pub paths: AppPaths,
     pub core: Mutex<Box<dyn CoreHandle>>,
+    /// Published on every core transition; `collect_status` never takes `core`.
+    pub core_snapshot: Arc<CoreSnapshotHub>,
     pub proxy: Mutex<Box<dyn SystemProxy>>,
     /// Serializes config mutations (subscriptions, settings, start/stop, node select).
     pub orchestrate: Mutex<()>,
     /// Shown in UI when startup proxy crash recovery failed.
-    pub proxy_recovery_warning: Mutex<Option<String>>,
+    pub proxy_recovery_warning: Mutex<Vec<ice_config::UiMessage>>,
     /// Memoized `is_proxy_live_applied` result (endpoints, checked-at, value); avoids a
     /// `networksetup` subprocess storm from 2s status polling. Invalidated by the
     /// `start` command and on endpoints change (cache key).
@@ -84,7 +98,7 @@ pub struct AppState {
     _instance_lock: std::fs::File,
     /// Persistent Clash `/traffic` stream; survives home-page unmounts.
     pub traffic: TrafficMonitor,
-    /// TUN capture runtime controller (plan §4.3): owns the active backend,
+    /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
     /// the capture state machine, and the recovery journal.
     pub capture: CaptureController,
     /// mtime-keyed cache of the parsed active profile (+ rule fingerprints);
@@ -92,6 +106,11 @@ pub struct AppState {
     /// each time. Invalidated implicitly: the key changes when the active
     /// subscription, its profile, or `auto_default_rules` changes on disk.
     pub profile_cache: Mutex<Option<commands::ProfileCacheEntry>>,
+    /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
+    pub profile_parse_cache: Arc<ice_engine::ProfileCache>,
+    /// Subscription auto-update watchdog liveness (SUB-4). False while the
+    /// outer loop is restarting after a panic.
+    pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
     pub log_view_cache: Mutex<Option<commands::LogViewCache>>,
@@ -159,16 +178,29 @@ pub fn run() {
             let paths_for_focus = paths.clone();
             let shutdown_requested = Arc::new(AtomicBool::new(false));
             let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
+            let (core, core_snapshot) = wrap_core(core);
+            let settings_reset_warning: Vec<ice_config::UiMessage> =
+                load_settings_detailed(&paths.settings())
+                    .reset_reason
+                    .map(|reason| ErrorCode::SettingsReset.ui_message_detail(reason))
+                    .into_iter()
+                    .collect();
             let proxy = create_system_proxy();
             let system_proxy_available = proxy.is_available();
             let resource_dir = app.path().resource_dir().ok();
-            let capture = CaptureController::new(paths.clone(), resource_dir.clone());
+            let profile_parse_cache = Arc::new(ice_engine::ProfileCache::new());
+            let capture = CaptureController::with_profile_cache(
+                paths.clone(),
+                resource_dir.clone(),
+                Arc::clone(&profile_parse_cache),
+            );
             app.manage(AppState {
                 paths,
-                core: Mutex::new(core),
+                core,
+                core_snapshot,
                 proxy: Mutex::new(proxy),
                 orchestrate: Mutex::new(()),
-                proxy_recovery_warning: Mutex::new(None),
+                proxy_recovery_warning: Mutex::new(settings_reset_warning),
                 proxy_applied_cache: Mutex::new(None),
                 system_proxy_available,
                 shutdown_requested,
@@ -176,12 +208,27 @@ pub fn run() {
                 traffic: TrafficMonitor::new(),
                 capture,
                 profile_cache: Mutex::new(None),
+                profile_parse_cache,
+                subscription_watchdog_alive: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(true),
+                ),
                 log_view_cache: Mutex::new(None),
                 helper_probe_cache: Mutex::new(None),
                 tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
                 launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
             });
+            {
+                let handle = app.handle().clone();
+                let state = app.state::<AppState>();
+                state.core_snapshot.bind_emitter(handle.clone());
+                state.traffic.set_on_sample({
+                    let handle = handle.clone();
+                    move |sample| {
+                        let _ = handle.emit(crate::core_snapshot::TRAFFIC_SAMPLE, sample);
+                    }
+                });
+            }
             // Overlap geoip copy and the bundled-core SHA-256 with leftover
             // reclaim / TUN recovery and the first UI status poll.
             {
@@ -216,9 +263,11 @@ pub fn run() {
                         return;
                     }
                     tracing::error!(error = %err, "auto-start failed");
-                    if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                        *slot = Some(format!("auto-start failed ({err})"));
-                    }
+                    crate::commands::append_recovery_warning(
+                        &state,
+                        ice_config::UiMessage::new("recover.autoStartFailed")
+                            .with("detail", err.to_string()),
+                    );
                 }
             });
             if orch_rx.recv().is_err() {
@@ -236,11 +285,18 @@ pub fn run() {
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
+                let _ = window.emit(crate::core_snapshot::WINDOW_HIDDEN, ());
             }
+            WindowEvent::Focused(focused) => {
+                if *focused {
+                    let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
@@ -277,6 +333,7 @@ pub fn run() {
             commands::add_custom_rule,
             commands::remove_custom_rule,
             commands::get_traffic_snapshot,
+            commands::get_traffic_since,
             app_update::check_app_update,
             app_update::record_update_prompt,
             app_update::skip_app_update,
@@ -450,5 +507,27 @@ mod tests {
         assert!(paths.proxy_backup().exists());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn error_codes_ts_matches_rust() {
+        let ts = include_str!("../../src/api/errorCodes.ts");
+        let rust: std::collections::HashSet<&str> = ice_config::ErrorCode::ALL
+            .iter()
+            .map(|code| code.as_str())
+            .collect();
+        let mut from_ts = std::collections::HashSet::new();
+        for line in ts.lines() {
+            let trimmed = line.trim().trim_end_matches(',');
+            if let Some(code) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                if code.contains('.') {
+                    from_ts.insert(code);
+                }
+            }
+        }
+        assert_eq!(
+            rust, from_ts,
+            "ErrorCode::ALL and apps/desktop/src/api/errorCodes.ts ERROR_CODES must be the same set"
+        );
     }
 }

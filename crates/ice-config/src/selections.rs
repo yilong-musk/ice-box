@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 pub type GroupSelections = HashMap<String, String>;
 
@@ -34,7 +35,7 @@ pub fn save_group_selections(path: &Path, selections: &GroupSelections) -> Resul
 
 /// Apply persisted selections as `default` on selector outbounds during config build.
 /// Only members of the group are honored; stale selections are ignored.
-pub fn apply_group_selections(outbounds: &mut [Value], selections: &GroupSelections) {
+pub fn apply_group_selections(outbounds: &mut [Arc<Value>], selections: &GroupSelections) {
     for ob in outbounds.iter_mut() {
         let Some(tag) = ob.get("tag").and_then(|v| v.as_str()) else {
             continue;
@@ -45,13 +46,18 @@ pub fn apply_group_selections(outbounds: &mut [Value], selections: &GroupSelecti
         let Some(member) = selections.get(tag) else {
             continue;
         };
-        let members: Vec<&str> = ob
+        let members: Vec<String> = ob
             .get("outbounds")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
-        if members.contains(&member.as_str()) {
-            ob.as_object_mut()
+        if members.iter().any(|m| m == member) {
+            Arc::make_mut(ob)
+                .as_object_mut()
                 .unwrap()
                 .insert("default".into(), Value::String(member.clone()));
         }
@@ -97,19 +103,21 @@ mod tests {
     #[test]
     fn apply_overrides_selector_default_only_for_members() {
         let mut outbounds = vec![
-            serde_json::json!({
+            Arc::new(serde_json::json!({
                 "type": "selector",
                 "tag": "Proxies",
                 "outbounds": ["HK", "JP", "direct"],
                 "default": "JP",
-            }),
-            serde_json::json!({
+            })),
+            Arc::new(serde_json::json!({
                 "type": "selector",
                 "tag": "YouTube",
                 "outbounds": ["Proxies", "direct"],
                 "default": "Proxies",
-            }),
-            serde_json::json!({"type": "urltest", "tag": "auto", "outbounds": ["HK", "JP"]}),
+            })),
+            Arc::new(
+                serde_json::json!({"type": "urltest", "tag": "auto", "outbounds": ["HK", "JP"]}),
+            ),
         ];
         let mut sel = GroupSelections::new();
         sel.insert("Proxies".into(), "HK".into());

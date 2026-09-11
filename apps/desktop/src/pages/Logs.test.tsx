@@ -2,6 +2,7 @@
 
 import { act, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { Logs } from "./Logs";
 
 const getLogView = vi.fn();
@@ -17,6 +18,7 @@ const POLL_MS = 2000;
 
 const baseTail = [
   "INFO 08-23 13:47:02 ice_core: sing-box ready",
+  "WARN 08-23 13:47:04 ice_proxy_sys: proxy apply slow",
   "ERROR 08-23 13:47:06 outbound: dial tcp: connection refused",
 ];
 
@@ -41,24 +43,27 @@ describe("Logs", () => {
     });
     expect(getLogView).toHaveBeenCalledWith(500);
     expect(view.queryByRole("combobox")).toBeNull();
-    expect(view.queryByRole("button", { name: "刷新" })).toBeNull();
-    expect(view.queryByText("日志")).toBeNull();
+    expect(view.queryByRole("button", { name: t("common.refresh") })).toBeNull();
+    expect(view.queryByText(t("app.nav.logs"))).toBeNull();
+    expect(view.queryByLabelText(t("settings.logDebug"))).toBeNull();
     expect(container.querySelector("[data-slot='card']")).toBeNull();
-    const logView = container.querySelector(".log-view");
-    expect(logView?.parentElement?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["logs-panel"]),
-    );
-    expect(logView?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining([
-        "min-h-0",
-        "flex-1",
-        "overflow-auto",
-        "bg-card",
-        "text-foreground",
-      ]),
-    );
-    expect(logView?.className.split(/\s+/)).not.toContain("bg-muted/40");
-    expect(logView?.className.split(/\s+/)).not.toContain("text-muted-foreground");
+    const logView = view.getByTestId("log-view");
+    expect(logView.parentElement).toBe(view.getByTestId("logs-panel"));
+  });
+
+  it("colors warn and error lines without changing info", async () => {
+    const { container } = render(<Logs />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(/proxy apply slow/)).toBeInTheDocument();
+    });
+    const info = view.getByText(/sing-box ready/);
+    const warn = view.getByText(/proxy apply slow/);
+    const error = view.getByText(/connection refused/);
+    expect(info).not.toHaveClass("text-warn");
+    expect(info).not.toHaveClass("text-destructive");
+    expect(warn).toHaveClass("text-warn");
+    expect(error).toHaveClass("text-destructive");
   });
 
   it("polls automatically", async () => {

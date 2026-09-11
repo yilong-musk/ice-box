@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  ice-box app entitlements (plan §5 T5).
+  ice-box app entitlements (`docs/tun.md`).
 
   The app stays unelevated; it only talks to the privileged helper over a
   Unix socket, and elevates the helper install through the system

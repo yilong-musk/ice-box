@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Fault-injection recovery tests (plan T0 exit gate).
+//! Fault-injection recovery tests.
 //!
 //! Every test drives the host-free `FakeTunBackend` against a real journal
 //! file and the `RecoveryDriver`, injecting a failure after *each* journaled
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ice_tun_sys::backend::RecoveryOutcome;
-use ice_tun_sys::error::TunErrorCode;
+use ice_tun_sys::error::ErrorCode;
 use ice_tun_sys::fake::{FakeOsState, FakeTunBackend};
 use ice_tun_sys::journal::{steps, JournalState, TunJournal};
 use ice_tun_sys::recovery::RecoveryDriver;
@@ -102,7 +102,7 @@ fn crash_during_enable(dir: &std::path::Path, after_mutations: usize) -> String 
     bk.faults.fail_apply_after_mutations = Some(after_mutations);
     let prepared = bk.prepare(&config()).unwrap();
     let err = bk.apply(&prepared).expect_err("injected apply failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     let journal = TunJournal::load(&journal_path(dir))
         .unwrap()
         .expect("journal exists after crash");
@@ -261,7 +261,7 @@ fn prepare_failure_leaves_no_mutation_and_recovers_clean() {
         )
         .unwrap();
     let err = bk.prepare(&config()).expect_err("injected prepare failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert_no_owned_resources(&bk.state);
 
     let outcome = RecoveryDriver::new(&journal_path(&dir), &mut bk, OWNER)
@@ -279,14 +279,14 @@ fn verify_failure_during_recovery_fails_closed_then_retry_converges() {
     let applied =
         AppliedTun::from_journal(&TunJournal::load(&journal_path(&dir)).unwrap().unwrap());
     let err = bk.verify(&applied).expect_err("injected verify failure");
-    assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
 
     // Cleanup could not be *verified*: recovery fails closed even though the
     // resources were removed, and the journal persists recovery_required.
     let err = RecoveryDriver::new(&journal_path(&dir), &mut bk, OWNER)
         .recover()
         .expect_err("verification failure must fail closed");
-    assert_eq!(err.code, TunErrorCode::HealthcheckFailed);
+    assert_eq!(err.code, ErrorCode::TunHealthcheckFailed);
     assert_no_owned_resources(&bk.state);
     let persisted = TunJournal::load(&journal_path(&dir)).unwrap().unwrap();
     assert_eq!(persisted.state, JournalState::RecoveryRequired);
@@ -349,7 +349,7 @@ fn recovery_failure_partial_cleanup_then_retry_converges() {
     let err = RecoveryDriver::new(&journal_path(&dir), &mut bk, OWNER)
         .recover()
         .expect_err("injected restore failure");
-    assert_eq!(err.code, TunErrorCode::RestoreFailed);
+    assert_eq!(err.code, ErrorCode::TunRestoreFailed);
     // Partial cleanup: routes removed, interface still present.
     assert!(
         bk.state.interface.is_some(),
@@ -378,6 +378,25 @@ fn recovery_failure_partial_cleanup_then_retry_converges() {
         .recover()
         .unwrap();
     assert_eq!(again, RecoveryOutcome::NothingToDo);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn journal_write_failure_during_recovery_returns_recovery_required() {
+    let dir = temp_dir("journal-write-fail");
+    let (mut bk, _applied) = apply_ok(&dir);
+    bk.faults.fail_restore_after_mutations = Some(1);
+    bk.faults.sabotage_journal_after_recover_err = true;
+
+    let err = RecoveryDriver::new(&journal_path(&dir), &mut bk, OWNER)
+        .recover()
+        .expect_err("unwritable journal must fail closed");
+    assert_eq!(err.code, ErrorCode::TunRecoveryRequired);
+
+    let jp = journal_path(&dir);
+    if jp.is_dir() {
+        let _ = fs::remove_dir(&jp);
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -832,7 +851,7 @@ fn crash_between_mutation_and_journal_write_never_leaks_resources() {
         bk.faults.fail_journal_write_after_mutations = Some(after);
         let prepared = bk.prepare(&config()).unwrap();
         let err = bk.apply(&prepared).expect_err("injected journal failure");
-        assert_eq!(err.code, TunErrorCode::ApplyFailed);
+        assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
         // The unjournaled mutation was rolled back; the journal ends at the
         // previous completed step and holds no ownership for it.
@@ -883,7 +902,7 @@ fn crash_between_dns_mutation_and_journal_write_rolls_back() {
     cfg.dns_hijack = true;
     let prepared = bk.prepare(&cfg).unwrap();
     let err = bk.apply(&prepared).expect_err("injected journal failure");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert_eq!(
         bk.state.dns_current, None,
         "the unjournaled DNS mutation must be rolled back"
@@ -1032,7 +1051,7 @@ fn invalid_ipv6_address_is_rejected_by_prepare() {
     let err = bk
         .prepare(&cfg)
         .expect_err("invalid IPv6 address must be rejected");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
     assert_no_owned_resources(&bk.state);
     let _ = fs::remove_dir_all(&dir);
 }

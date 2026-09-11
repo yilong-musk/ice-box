@@ -21,15 +21,22 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 ice-core = { workspace = true }
 ice-proxy-sys = { workspace = true }
+ice-engine = { workspace = true }
 ice-config = { workspace = true }
-ice-subscription = { workspace = true }
 ice-tun-sys = { workspace = true }
 ice-elevate = { workspace = true }
 sha2 = "0.10"
 libc = "0.2"
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 chrono = { workspace = true }
 fs2 = "0.4"
 tauri-plugin-updater = "2.11.0"
 tauri-plugin-process = "2.3.1"
 url = "2.5.8"
+
+[dev-dependencies]
+ice-config = { workspace = true, features = ["test-hooks"] }
+ice-core = { workspace = true, features = ["test-hooks"] }
+

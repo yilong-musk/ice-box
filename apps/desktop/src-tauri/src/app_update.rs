@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-app update checks and installation (architecture §25).
+//! In-app update checks and installation.
 //!
 //! Integrity is minisign via `tauri-plugin-updater`. Apple / Authenticode
 //! signing is not required. Prompt throttle and skipped-version state live in
@@ -10,7 +10,7 @@ use crate::orchestrate::current_settings;
 use crate::shutdown::graceful_stop;
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
-use ice_config::{is_loopback_host, write_json_atomic, AppError, AppSettings};
+use ice_config::{is_loopback_host, write_json_atomic, AppError, AppSettings, ErrorCode};
 use ice_core::CoreStatus;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,10 +22,10 @@ use url::Url;
 /// Background GitHub checks at most once per this interval.
 pub const CHECK_INTERVAL: Duration = Duration::hours(24);
 
-pub const ERR_UPDATE_CHECK_FAILED: &str = "update.check_failed";
-pub const ERR_UPDATE_FEED_UNAVAILABLE: &str = "update.feed_unavailable";
-pub const ERR_UPDATE_INSTALL_FAILED: &str = "update.install_failed";
-pub const ERR_UPDATE_DISABLED: &str = "update.disabled";
+pub const ERR_UPDATE_CHECK_FAILED: ErrorCode = ErrorCode::UpdateCheckFailed;
+pub const ERR_UPDATE_FEED_UNAVAILABLE: ErrorCode = ErrorCode::UpdateFeedUnavailable;
+pub const ERR_UPDATE_INSTALL_FAILED: ErrorCode = ErrorCode::UpdateInstallFailed;
+pub const ERR_UPDATE_DISABLED: ErrorCode = ErrorCode::UpdateDisabled;
 pub const UPDATE_PROGRESS_EVENT: &str = "app-update://progress";
 
 static UPDATE_INSTALLING: AtomicBool = AtomicBool::new(false);
@@ -190,20 +190,16 @@ pub fn updater_proxy_url(settings: &AppSettings, core_running: bool) -> Option<U
 }
 
 fn core_is_running(state: &AppState) -> bool {
-    state
-        .core
-        .lock()
-        .map(|core| core.state().status == CoreStatus::Running)
-        .unwrap_or(false)
+    state.core_snapshot.load().state.status == CoreStatus::Running
 }
 
-fn map_updater_err(code: &str, err: tauri_plugin_updater::Error) -> AppError {
-    AppError::with_code(code, err.to_string())
+fn map_updater_err(code: ErrorCode, err: tauri_plugin_updater::Error) -> AppError {
+    AppError::new(code, err.to_string())
 }
 
 /// `ReleaseNotFound` is a missing `latest.json` (typical before the first
 /// updater-capable GitHub Release), not a Mixed-proxy connectivity failure.
-pub fn check_error_code(err: &tauri_plugin_updater::Error) -> &'static str {
+pub fn check_error_code(err: &tauri_plugin_updater::Error) -> ErrorCode {
     match err {
         tauri_plugin_updater::Error::ReleaseNotFound => ERR_UPDATE_FEED_UNAVAILABLE,
         _ => ERR_UPDATE_CHECK_FAILED,
@@ -211,7 +207,7 @@ pub fn check_error_code(err: &tauri_plugin_updater::Error) -> &'static str {
 }
 
 fn map_check_err(err: tauri_plugin_updater::Error) -> AppError {
-    AppError::with_code(check_error_code(&err), err.to_string())
+    AppError::new(check_error_code(&err), err.to_string())
 }
 
 fn build_updater(

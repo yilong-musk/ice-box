@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! macOS TUN backend (architecture §24.5; `docs/tun.md`).
+//! macOS TUN backend (`docs/tun.md`).
 //!
 //! Native sing-box ownership model (T0 lock): the elevated core — run by the
 //! injected [`CoreCoordinator`] — owns the utun adapter, its addresses, and
@@ -24,7 +24,8 @@
 //! host-free testable on all CI hosts; `create_backend` gates activation per
 //! platform.
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -32,7 +33,7 @@ use crate::backend::{
     AppliedTun, PreparedTun, RecoveryOutcome, TunBackend, TunCapability, TunConfig, TunHealth,
 };
 use crate::coordinator::CoreCoordinator;
-use crate::error::{TunError, TunErrorCode};
+use crate::error::{ErrorCode, TunError};
 use crate::journal::{steps, CidrRecord, DnsSnapshot, JournalState, RouteRecord, TunJournal};
 use crate::routes;
 use crate::routes::netmask_to_prefix;
@@ -57,11 +58,138 @@ const INTERFACE_APPEAR_DELAY_MS: u64 = 200;
 /// one family or route must fail closed, not be recorded as owned).
 const APPLY_CONVERGE_TRIES: u32 = 15;
 const APPLY_CONVERGE_DELAY_MS: u64 = 200;
+/// Bounded retry when a DNS probe errors (unknown). Fail closed after this
+/// many attempts so a single transient `networksetup` failure is not treated
+/// as a lost capture, without stalling the verify watchdog.
+const DNS_PROBE_TRIES: u32 = 5;
+const DNS_PROBE_DELAY_MS: u64 = 50;
 /// Bounded wait for the kernel to tear down the adapter after a core stop
 /// (spike: SIGTERM removes routes + interface; `kill -9` flushes them with
 /// the fd close within ~2 s).
 const INTERFACE_TEARDOWN_TRIES: u32 = 10;
 const INTERFACE_TEARDOWN_DELAY_MS: u64 = 200;
+/// After leftover TUN teardown the kernel may still list a utun as the
+/// default route. Wait until a physical NIC owns `0.0.0.0` before starting
+/// the elevated core, otherwise `auto_detect_interface` binds Direct / proxy
+/// dials to the dying tunnel and capture looks healthy with no internet.
+const DEFAULT_ROUTE_TRIES: u32 = 10;
+const DEFAULT_ROUTE_DELAY_MS: u64 = 150;
+
+/// Interface names that must not be used as sing-box `route.default_interface`.
+/// Covers macOS utun/ipsec/ppp and Windows Wintun/TAP/Teredo/loopback leftovers.
+pub fn is_tunnel_interface(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("utun")
+        || lower.starts_with("tun")
+        || lower.starts_with("ipsec")
+        || lower.starts_with("ppp")
+        || lower.starts_with("wintun")
+        || lower.starts_with("tap")
+        || lower.starts_with("isatap")
+        || lower.starts_with("teredo")
+        || lower.starts_with("6to4")
+        || lower.starts_with("loopback")
+}
+
+/// Whether `name` is a plausible sing-box `route.default_interface` value.
+/// Allows Windows NIC names (`Ethernet`, `Wi-Fi`, localized strings) while
+/// rejecting path separators and control characters.
+pub fn plausible_pin_interface_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 256 || name.contains("..") {
+        return false;
+    }
+    !name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '/' | '\\' | '\0'))
+}
+
+/// BSD-style names (`en0`, `bridge0`). Rejects tunnels and path-like strings.
+pub fn outbound_interface_is_safe(name: &str) -> bool {
+    if name.is_empty() || name.len() > 16 || is_tunnel_interface(name) {
+        return false;
+    }
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Pin Direct / proxy dials to the pre-TUN default NIC so a leftover tunnel
+/// cannot become the detected outbound interface.
+pub fn pin_outbound_interface(config_path: &Path, iface: &str) -> Result<(), TunError> {
+    if !plausible_pin_interface_name(iface) || is_tunnel_interface(iface) {
+        return Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("refusing to pin outbound interface {iface:?}"),
+        ));
+    }
+    let raw = fs::read(config_path).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("read config to pin default interface: {err}"),
+        )
+    })?;
+    let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("parse config to pin default interface: {err}"),
+        )
+    })?;
+    let route = cfg
+        .as_object_mut()
+        .ok_or_else(|| TunError::new(ErrorCode::TunApplyFailed, "config root must be an object"))?
+        .entry("route")
+        .or_insert_with(|| serde_json::json!({}));
+    let route = route.as_object_mut().ok_or_else(|| {
+        TunError::new(ErrorCode::TunApplyFailed, "config route must be an object")
+    })?;
+    route.insert(
+        "default_interface".into(),
+        serde_json::Value::String(iface.to_string()),
+    );
+    route.insert(
+        "auto_detect_interface".into(),
+        serde_json::Value::Bool(false),
+    );
+    let encoded = serde_json::to_vec_pretty(&cfg).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("encode pinned default interface: {err}"),
+        )
+    })?;
+    write_pinned_config_atomic(config_path, &encoded)
+}
+
+fn write_pinned_config_atomic(path: &Path, bytes: &[u8]) -> Result<(), TunError> {
+    let tmp_name = format!(
+        ".{}.pin.{}.tmp",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("config"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&tmp_name),
+        _ => PathBuf::from(&tmp_name),
+    };
+    if let Err(err) = fs::write(&tmp, bytes) {
+        let _ = fs::remove_file(&tmp);
+        return Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("write pinned default interface {}: {err}", tmp.display()),
+        ));
+    }
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("replace pinned default interface {}: {err}", path.display()),
+        )
+    })
+}
 
 /// Host state of one interface as reported by `ifconfig`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +236,7 @@ pub struct ProcessMacOsHost;
 fn run_command(program: &str, args: &[&str]) -> Result<CommandOutput, TunError> {
     let output = Command::new(program).args(args).output().map_err(|err| {
         TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!("run {program}: {err}"),
         )
     })?;
@@ -130,7 +258,7 @@ impl MacOsHost for ProcessMacOsHost {
         let out = run_command("ifconfig", &["-l"])?;
         if out.status != Some(0) {
             return Err(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!("ifconfig -l failed: {}", out.stderr.trim()),
             ));
         }
@@ -184,7 +312,13 @@ impl MacOsHost for ProcessMacOsHost {
     fn dns_servers(&self, service: &str) -> Result<Vec<String>, TunError> {
         let out = run_command("networksetup", &["-getdnsservers", service])?;
         if out.status != Some(0) {
-            return Ok(Vec::new());
+            return Err(TunError::new(
+                ErrorCode::TunHealthcheckFailed,
+                format!(
+                    "networksetup -getdnsservers {service} failed: {}",
+                    out.stderr.trim()
+                ),
+            ));
         }
         Ok(parse_dns_servers(&out.stdout))
     }
@@ -320,13 +454,13 @@ fn dns_snapshot_parts(snapshot: &str) -> (String, Vec<String>) {
 fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     let (addr, prefix) = cidr.split_once('/').ok_or_else(|| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address must be a CIDR, got {cidr}"),
         )
     })?;
     let prefix: u32 = prefix.parse().map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address has a non-numeric prefix: {cidr}"),
         )
     })?;
@@ -337,14 +471,14 @@ fn validate_cidr(cidr: &str, ipv6: bool) -> Result<(), TunError> {
     };
     parsed.map_err(|_| {
         TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("invalid tun address: {cidr}"),
         )
     })?;
     let max = if ipv6 { 128 } else { 32 };
     if prefix == 0 || prefix > max {
         return Err(TunError::new(
-            TunErrorCode::ApplyFailed,
+            ErrorCode::TunApplyFailed,
             format!("tun address prefix must be in 1..={max}, got {prefix}"),
         ));
     }
@@ -413,7 +547,7 @@ impl MacosTunBackend {
         match self.coordinator.stop() {
             Ok(()) => apply_err,
             Err(stop_err) => TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "apply failed ({}) and elevated core cleanup was not verified ({})",
                     apply_err.message, stop_err.message
@@ -445,7 +579,7 @@ impl MacosTunBackend {
                     .map(|err| err.message)
                     .unwrap_or_else(|| "unknown core cleanup failure".into());
                 TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     format!(
                         "apply failed ({}); DNS cleanup: {}; elevated core cleanup: {}",
                         apply_err.message, dns_error, core_error
@@ -453,6 +587,26 @@ impl MacosTunBackend {
                 )
             }
         }
+    }
+
+    /// Wait until `0.0.0.0` resolves to a physical NIC. Leftover TUN teardown
+    /// can leave a utun as the default route for a short window; starting the
+    /// elevated core in that window makes capture look healthy with no path
+    /// off the host.
+    fn wait_physical_default_interface(&self) -> Result<String, TunError> {
+        let mut last = String::from("no default route");
+        for _ in 0..DEFAULT_ROUTE_TRIES {
+            match self.host.route_interface("0.0.0.0")? {
+                Some(iface) if outbound_interface_is_safe(&iface) => return Ok(iface),
+                Some(iface) => last = format!("default route still on {iface}"),
+                None => last = "no default route".into(),
+            }
+            std::thread::sleep(Duration::from_millis(DEFAULT_ROUTE_DELAY_MS));
+        }
+        Err(TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("no physical default route before TUN start ({last})"),
+        ))
     }
 
     /// Probe the lowest free `utun<N>` index at or above `from`. Read-only.
@@ -467,7 +621,7 @@ impl MacosTunBackend {
             .map(|index| format!("utun{index}"))
             .ok_or_else(|| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("no free utun index in {from}..1000"),
                 )
             })
@@ -481,7 +635,7 @@ impl MacosTunBackend {
             Some(name) => {
                 let Some(index) = utun_index(name) else {
                     return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("macOS requires a utun<N> interface name, got {name}"),
                     ));
                 };
@@ -571,7 +725,7 @@ impl MacosTunBackend {
             std::thread::sleep(Duration::from_millis(APPLY_CONVERGE_DELAY_MS));
         }
         Err(TunError::new(
-            TunErrorCode::HealthcheckFailed,
+            ErrorCode::TunHealthcheckFailed,
             format!(
                 "interface {name} did not converge to the required addresses and routes within {} ms; last observation: {last_diagnostic}",
                 APPLY_CONVERGE_TRIES * APPLY_CONVERGE_DELAY_MS as u32
@@ -605,6 +759,66 @@ impl MacosTunBackend {
         }
         Ok(false)
     }
+
+    /// Probe whether live DNS still matches the journaled `dns_after` snapshot.
+    ///
+    /// `None` means the probe itself failed (unknown). Fail-closed callers
+    /// must not treat unknown as consistent, and must not treat unknown as
+    /// "not owned".
+    fn dns_matches_after(&self, after: &DnsSnapshot) -> Option<bool> {
+        self.dns_matches_after_retries(after, DNS_PROBE_TRIES, DNS_PROBE_DELAY_MS)
+    }
+
+    /// Apply-path wait: keep probing until the adapter-appear deadline, then
+    /// fail closed (`tun.healthcheck_failed`) if DNS is still unknown (TUN-1).
+    fn dns_matches_after_until_deadline(&self, after: &DnsSnapshot) -> Option<bool> {
+        self.dns_matches_after_retries(after, INTERFACE_APPEAR_TRIES, INTERFACE_APPEAR_DELAY_MS)
+    }
+
+    fn dns_matches_after_retries(
+        &self,
+        after: &DnsSnapshot,
+        tries: u32,
+        delay_ms: u64,
+    ) -> Option<bool> {
+        let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
+        let mut last_err = None;
+        for attempt in 0..tries {
+            match self.host.dns_servers(&service) {
+                Ok(current) => return Some(current == expected),
+                Err(err) => {
+                    last_err = Some(err);
+                    if attempt + 1 < tries {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                    }
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            tracing::error!(
+                error = %err,
+                service = %service,
+                tries,
+                "macos tun dns probe failed"
+            );
+        }
+        None
+    }
+
+    /// `(dns_consistent, dns_owned)` for an applied capture.
+    ///
+    /// Unknown probe → not consistent (cannot mark enabled) and still owned
+    /// (cannot mark cleanup complete).
+    fn dns_verify_flags(&self, applied: &AppliedTun) -> (bool, bool) {
+        match &applied.dns_after {
+            None => (true, false),
+            Some(after) => match self.dns_matches_after(after) {
+                Some(true) => (true, true),
+                Some(false) => (false, false),
+                None => (false, true),
+            },
+        }
+    }
 }
 
 impl TunBackend for MacosTunBackend {
@@ -623,21 +837,21 @@ impl TunBackend for MacosTunBackend {
     fn prepare(&self, config: &TunConfig) -> Result<PreparedTun, TunError> {
         if config.addresses.is_empty() {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config requires at least one address",
             ));
         }
-        // Dual-stack lock (§24.5 point 4): an IPv4-only tun installs no IPv6
+        // Dual-stack requirement (`docs/tun.md`): an IPv4-only tun installs no IPv6
         // routes and silently leaks IPv6; IPv4 itself is mandatory.
         if !routes::has_v4(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv4 address (IPv4 is mandatory)",
             ));
         }
         if !routes::has_v6(&config.addresses) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "tun config must include an IPv6 address (dual-stack lock: an IPv4-only tun silently leaks IPv6)",
             ));
         }
@@ -646,7 +860,7 @@ impl TunBackend for MacosTunBackend {
         }
         if !(1280..=9000).contains(&config.mtu) {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("tun mtu must be in 1280..=9000, got {}", config.mtu),
             ));
         }
@@ -663,7 +877,7 @@ impl TunBackend for MacosTunBackend {
         let config = &prepared.config;
         let Some(name) = config.interface_name.as_deref() else {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 "prepare must resolve the interface name before apply",
             ));
         };
@@ -672,6 +886,26 @@ impl TunBackend for MacosTunBackend {
         // and every later check compares against the required sets.
         let expected_addresses = config.addresses.clone();
         let expected_routes = routes::auto_route_destinations(config);
+
+        // Snapshot the physical default NIC and its DNS service *before*
+        // auto_route. Launch restore often follows leftover TUN teardown: the
+        // kernel may still list a utun as default, and `auto_detect_interface`
+        // would then bind Direct / proxy dials to that dying tunnel.
+        let default_iface = self.wait_physical_default_interface()?;
+        pin_outbound_interface(&self.config_path, &default_iface)?;
+        let hijack_service = if config.dns_hijack {
+            match self.host.dns_service()? {
+                Some(service) => Some(service),
+                None => {
+                    return Err(TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        "no network service found to point DNS at public resolvers",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
 
         // Mutation boundary: the elevated core starts and sing-box creates
         // the adapter, assigns addresses, and installs routes in one go.
@@ -697,7 +931,7 @@ impl TunBackend for MacosTunBackend {
             // The core claims success but the adapter never appeared: stop
             // it (fail closed) so nothing half-owned survives.
             return Err(self.rollback_after_apply_failure(TunError::new(
-                TunErrorCode::HealthcheckFailed,
+                ErrorCode::TunHealthcheckFailed,
                 format!(
                     "core started but interface {name} is not present after {} ms",
                     INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
@@ -744,39 +978,46 @@ impl TunBackend for MacosTunBackend {
         // snapshot; a failed journal write restores the previous resolvers.
         let mut dns_before = None;
         let mut dns_after = None;
-        if config.dns_hijack {
-            let service = match self.host.dns_service() {
-                Ok(Some(service)) => service,
-                Ok(None) => {
-                    return Err(self.rollback_after_apply_failure(TunError::new(
-                        TunErrorCode::ApplyFailed,
-                        "no network service found to point DNS at public resolvers",
-                    )))
-                }
-                Err(err) => return Err(self.rollback_after_apply_failure(err)),
-            };
-            let before = match self.host.dns_servers(&service) {
+        if let Some(service) = hijack_service.as_deref() {
+            let before = match self.host.dns_servers(service) {
                 Ok(servers) => servers,
                 Err(err) => return Err(self.rollback_after_apply_failure(err)),
             };
             dns_before = Some(DnsSnapshot {
-                platform_snapshot: dns_snapshot(&service, &before),
+                platform_snapshot: dns_snapshot(service, &before),
             });
             let target: Vec<String> = MACOS_TUN_DNS_SERVERS
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            if let Err(err) = self.coordinator.set_dns(&service, &target) {
-                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+            if let Err(err) = self.coordinator.set_dns(service, &target) {
+                return Err(self.rollback_dns_after_apply_failure(service, &before, err));
             }
             dns_after = Some(DnsSnapshot {
-                platform_snapshot: dns_snapshot(&service, &target),
+                platform_snapshot: dns_snapshot(service, &target),
             });
             if let Err(err) = self.journal_record(steps::DNS_APPLIED, |journal| {
                 journal.dns_before = dns_before.clone();
                 journal.dns_after = dns_after.clone();
             }) {
-                return Err(self.rollback_dns_after_apply_failure(&service, &before, err));
+                return Err(self.rollback_dns_after_apply_failure(service, &before, err));
+            }
+            // TUN-1: unknown DNS after hijack is not "consistent". Keep
+            // probing up to the adapter-appear deadline, then fail closed.
+            if let Some(after) = &dns_after {
+                if self.dns_matches_after_until_deadline(after) != Some(true) {
+                    return Err(self.rollback_dns_after_apply_failure(
+                        service,
+                        &before,
+                        TunError::new(
+                            ErrorCode::TunHealthcheckFailed,
+                            format!(
+                                "DNS on {service} did not match the applied snapshot after {} ms",
+                                INTERFACE_APPEAR_TRIES * INTERFACE_APPEAR_DELAY_MS as u32
+                            ),
+                        ),
+                    ));
+                }
             }
         }
 
@@ -799,17 +1040,9 @@ impl TunBackend for MacosTunBackend {
             // No interface was ever claimed: nothing owned — unless DNS is
             // still applied (recovery must restore it before reporting
             // clean, so `nothing_owned` must be false while the platform
-            // still carries the applied `after` snapshot).
-            let dns_owned = match &applied.dns_after {
-                Some(after) => {
-                    let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                    self.host
-                        .dns_servers(&service)
-                        .map(|current| current == expected)
-                        .unwrap_or(false)
-                }
-                None => false,
-            };
+            // still carries the applied `after` snapshot, and a failed DNS
+            // probe must not look clean either).
+            let (_dns_consistent, dns_owned) = self.dns_verify_flags(applied);
             return Ok(TunHealth {
                 interface_up: false,
                 addresses_present: false,
@@ -848,30 +1081,11 @@ impl TunBackend for MacosTunBackend {
         // DNS consistency: the primary service must still carry the resolvers
         // the apply recorded (compare against the *after* snapshot; an
         // external DNS change is never silently overwritten by restore).
-        let dns_consistent = match &applied.dns_after {
-            Some(after) => {
-                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                self.host
-                    .dns_servers(&service)
-                    .map(|current| current == expected)
-                    .unwrap_or(true)
-            }
-            None => true,
-        };
+        // A failed probe is unknown: not consistent (fail the enable
+        // transition) and still owned (do not report cleanup complete).
+        let (dns_consistent, dns_owned) = self.dns_verify_flags(applied);
         let interface_gone = state.is_none();
         let owned_routes_remain = self.owned_routes_remain(applied, name)?;
-        // DNS is still "owned" only while the platform carries the applied
-        // `after` snapshot; after a restore (or an external change) it is not.
-        let dns_owned = match &applied.dns_after {
-            Some(after) => {
-                let (service, expected) = dns_snapshot_parts(&after.platform_snapshot);
-                self.host
-                    .dns_servers(&service)
-                    .map(|current| current == expected)
-                    .unwrap_or(false)
-            }
-            None => false,
-        };
         let nothing_owned = interface_gone && !owned_routes_remain && !dns_owned;
         let health = TunHealth {
             interface_up,
@@ -937,7 +1151,7 @@ impl TunBackend for MacosTunBackend {
             // privileged helper. Fail closed — the driver persists
             // recovery_required and no new capture starts.
             return Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "interface {} still present after core stop; removal needs the privileged helper",
                     name.unwrap_or("<unknown>")
@@ -948,7 +1162,7 @@ impl TunBackend for MacosTunBackend {
         if let Some(name) = name {
             if self.owned_routes_remain(applied, name)? {
                 return Err(TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     format!("owned routes still resolve to {name} after core stop"),
                 ));
             }
@@ -1003,7 +1217,7 @@ impl TunBackend for MacosTunBackend {
                 }
             } else {
                 let err = TunError::new(
-                    TunErrorCode::RecoveryRequired,
+                    ErrorCode::TunRecoveryRequired,
                     "system DNS no longer matches the journal's dns_after snapshot; external change preserved",
                 );
                 if restore_error.is_none() {
@@ -1013,7 +1227,7 @@ impl TunBackend for MacosTunBackend {
         }
         match restore_error {
             Some(err) => Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!(
                     "restore cleanup completed with unrecoverable state: {}",
                     err.message
@@ -1038,7 +1252,7 @@ impl TunBackend for MacosTunBackend {
         // re-verify. Never enables capture.
         match self.restore(&applied) {
             Ok(()) => {}
-            Err(err) if err.code == TunErrorCode::RecoveryRequired => {
+            Err(err) if err.code == ErrorCode::TunRecoveryRequired => {
                 return Ok(RecoveryOutcome::RecoveryRequired);
             }
             Err(err) => return Err(err),
@@ -1088,6 +1302,55 @@ impl TunBackend for MacosTunBackend {
 #[cfg(test)]
 mod parsing_tests {
     use super::*;
+
+    #[test]
+    fn tunnel_interface_names_are_rejected_as_outbound_pin() {
+        assert!(is_tunnel_interface("utun8"));
+        assert!(is_tunnel_interface("utun420"));
+        assert!(is_tunnel_interface("tun0"));
+        assert!(is_tunnel_interface("ipsec0"));
+        assert!(is_tunnel_interface("ppp0"));
+        assert!(is_tunnel_interface("Wintun"));
+        assert!(is_tunnel_interface("Wintun 2"));
+        assert!(is_tunnel_interface("TAP-Windows Adapter V9"));
+        assert!(is_tunnel_interface("Loopback Pseudo-Interface 1"));
+        assert!(!is_tunnel_interface("en0"));
+        assert!(!is_tunnel_interface("bridge0"));
+        assert!(!is_tunnel_interface("Ethernet"));
+        assert!(!is_tunnel_interface("Wi-Fi"));
+        assert!(outbound_interface_is_safe("en0"));
+        assert!(outbound_interface_is_safe("bridge0"));
+        assert!(!outbound_interface_is_safe("utun8"));
+        assert!(!outbound_interface_is_safe("en0/../tmp"));
+        assert!(!outbound_interface_is_safe("Wi-Fi"));
+        assert!(plausible_pin_interface_name("Wi-Fi"));
+        assert!(plausible_pin_interface_name("以太网"));
+        assert!(!plausible_pin_interface_name("en0/../tmp"));
+    }
+
+    #[test]
+    fn pin_outbound_interface_sets_route_keys() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-tun-pin-iface-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"inbounds":[],"route":{"final":"direct"}}"#).unwrap();
+        pin_outbound_interface(&path, "en0").expect("pin");
+        let cfg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(cfg["route"]["default_interface"], "en0");
+        assert_eq!(cfg["route"]["auto_detect_interface"], false);
+        assert_eq!(cfg["route"]["final"], "direct");
+        pin_outbound_interface(&path, "Wi-Fi").expect("windows nic");
+        pin_outbound_interface(&path, "utun8").expect_err("tunnel");
+        pin_outbound_interface(&path, "Wintun").expect_err("wintun");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn ifconfig_l_splits_names() {

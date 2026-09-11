@@ -4,18 +4,17 @@
 
 use std::collections::HashSet;
 
-use ice_config::NormalizedOutbound;
+use ice_config::{NormalizedOutbound, UiMessage};
 use serde_json::{json, Value};
 
 use super::names::resolve_member;
-
-pub const MAX_CLASH_GROUPS: usize = 128;
+use crate::limits::Limits;
 
 #[derive(Debug, Clone)]
 pub struct GroupParseResult {
     pub groups: Vec<NormalizedOutbound>,
     pub skipped: usize,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<UiMessage>,
 }
 
 pub fn parse_groups(doc: &Value, known: &HashSet<String>) -> GroupParseResult {
@@ -31,14 +30,12 @@ pub fn parse_groups(doc: &Value, known: &HashSet<String>) -> GroupParseResult {
         };
     };
 
-    if items.len() > MAX_CLASH_GROUPS {
-        warnings.push(format!(
-            "proxy-groups count {} exceeds limit {MAX_CLASH_GROUPS}",
-            items.len()
-        ));
+    let max_groups = Limits::default().max_groups;
+    if items.len() > max_groups {
+        warnings.push(Limits::warning("groups", items.len() - max_groups));
     }
 
-    for (idx, group) in items.iter().enumerate().take(MAX_CLASH_GROUPS) {
+    for (idx, group) in items.iter().enumerate().take(max_groups) {
         match map_group(group, idx, known, &mut warnings) {
             Some(node) => groups.push(node),
             None => skipped += 1,
@@ -56,7 +53,7 @@ fn map_group(
     group: &Value,
     idx: usize,
     known: &HashSet<String>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<UiMessage>,
 ) -> Option<NormalizedOutbound> {
     let obj = group.as_object()?;
     let name = obj
@@ -79,7 +76,11 @@ fn map_group(
                 .filter_map(|m| match resolve_member(m, known) {
                     Some(tag) => Some(tag),
                     None => {
-                        warnings.push(format!("group {name}: unknown member {m}"));
+                        warnings.push(
+                            UiMessage::new("parse.groupUnknownMember")
+                                .with("name", name.clone())
+                                .with("member", m),
+                        );
                         None
                     }
                 })
@@ -88,7 +89,7 @@ fn map_group(
         .unwrap_or_default();
 
     if members.is_empty() {
-        warnings.push(format!("group {name}: no resolvable members"));
+        warnings.push(UiMessage::new("parse.groupNoMembers").with("name", name.clone()));
         return None;
     }
 
@@ -108,6 +109,14 @@ fn map_group(
                 .get("url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("http://www.gstatic.com/generate_204");
+            if !ice_config_guard::health_check_url_is_allowed(url) {
+                warnings.push(
+                    UiMessage::new("parse.groupRestrictedUrl")
+                        .with("name", name)
+                        .with("url", url),
+                );
+                return None;
+            }
             let interval = obj.get("interval").and_then(|v| v.as_u64()).unwrap_or(300);
             json!({
                 "type": "urltest",
@@ -123,6 +132,14 @@ fn map_group(
                 .get("url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("http://www.gstatic.com/generate_204");
+            if !ice_config_guard::health_check_url_is_allowed(url) {
+                warnings.push(
+                    UiMessage::new("parse.groupRestrictedUrl")
+                        .with("name", name)
+                        .with("url", url),
+                );
+                return None;
+            }
             let interval = obj.get("interval").and_then(|v| v.as_u64()).unwrap_or(300);
             json!({
                 "type": "fallback",
@@ -145,13 +162,56 @@ fn map_group(
             })
         }
         other => {
-            warnings.push(format!("group {name}: unsupported type {other}"));
+            warnings.push(
+                UiMessage::new("parse.groupUnsupportedType")
+                    .with("name", name)
+                    .with("type", other),
+            );
             return None;
         }
     };
 
-    Some(NormalizedOutbound {
-        tag: name,
-        outbound,
-    })
+    Some(NormalizedOutbound::new(name, outbound))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn urltest_and_fallback_drop_restricted_health_urls() {
+        let mut known = HashSet::new();
+        known.insert("n".into());
+        let doc = json!({
+            "proxy-groups": [
+                {
+                    "name": "auto",
+                    "type": "url-test",
+                    "proxies": ["n"],
+                    "url": "http://169.254.169.254/latest/meta-data"
+                },
+                {
+                    "name": "ok",
+                    "type": "url-test",
+                    "proxies": ["n"],
+                    "url": "http://www.gstatic.com/generate_204"
+                },
+                {
+                    "name": "fb",
+                    "type": "fallback",
+                    "proxies": ["n"],
+                    "url": "http://127.0.0.1/"
+                }
+            ]
+        });
+        let result = parse_groups(&doc, &known);
+        let tags: Vec<&str> = result.groups.iter().map(|g| g.tag.as_str()).collect();
+        assert_eq!(tags, ["ok"]);
+        assert_eq!(result.skipped, 2);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.key == "parse.groupRestrictedUrl"));
+    }
 }

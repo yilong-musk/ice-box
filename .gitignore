@@ -35,11 +35,11 @@ third_party/sing-box/**
 !third_party/sing-box/LICENSE
 !third_party/sing-box/.gitkeep
 
-# Copied into the Tauri bundle at build time
+# Copied into the Tauri bundle at build time (CI-6: GeoIP source is third_party/)
 apps/desktop/src-tauri/resources/sing-box
 apps/desktop/src-tauri/resources/sing-box.exe
-!apps/desktop/src-tauri/resources/.gitkeep
-
-apps/desktop/src-tauri/resources/sing-box
+apps/desktop/src-tauri/resources/geoip/
 apps/desktop/src-tauri/resources/ice-helper
 apps/desktop/src-tauri/resources/ice-tun-launcher.exe
+apps/desktop/src-tauri/resources/libcronet.dll
+!apps/desktop/src-tauri/resources/.gitkeep

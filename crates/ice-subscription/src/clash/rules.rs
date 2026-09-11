@@ -2,12 +2,11 @@
 
 //! Clash `rules` → sing-box `route.rules`.
 
-use ice_config::{NormalizedRoute, ProfileParseStats};
+use ice_config::{NormalizedRoute, ProfileParseStats, UiMessage};
 use serde_json::{json, Value};
 
 use super::names::normalize_clash_target;
-
-pub const MAX_CLASH_RULES: usize = 10_000;
+use crate::limits::Limits;
 
 #[derive(Debug, Clone)]
 pub struct RuleParseResult {
@@ -34,7 +33,7 @@ pub fn parse_rules(doc: &Value, known_targets: &[String]) -> RuleParseResult {
         };
     };
 
-    for item in items.iter().take(MAX_CLASH_RULES) {
+    for item in items.iter().take(Limits::default().max_rules) {
         let Some(line) = item.as_str() else {
             stats.skipped_rules += 1;
             continue;
@@ -61,18 +60,18 @@ pub fn parse_rules(doc: &Value, known_targets: &[String]) -> RuleParseResult {
             }
             Err(RuleSkip::UnknownTarget(target)) => {
                 stats.skipped_rules += 1;
-                stats.warnings.push(format!(
-                    "rule target {target} does not resolve to any outbound; rule dropped"
-                ));
+                stats
+                    .warnings
+                    .push(UiMessage::new("parse.ruleUnknownTarget").with("target", target));
             }
             Err(RuleSkip::Invalid) => stats.skipped_rules += 1,
         }
     }
 
-    if items.len() > MAX_CLASH_RULES {
-        stats.warnings.push(format!(
-            "rules count {} exceeds limit {MAX_CLASH_RULES}; truncated",
-            items.len()
+    if items.len() > Limits::default().max_rules {
+        stats.warnings.push(Limits::warning(
+            "rules",
+            items.len() - Limits::default().max_rules,
         ));
     }
 

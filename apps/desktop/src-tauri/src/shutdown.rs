@@ -4,18 +4,11 @@
 
 use crate::capture::TrafficCapture;
 use crate::orchestrate::{current_settings, orchestrate_stop};
-use crate::AppState;
-use ice_config::{AppError, ErrorCode};
+use crate::{lock_poisoned, AppState};
+use ice_config::{AppError, ErrorCode, UiMessage};
 use ice_core::CoreStatus;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
-
-fn lock_poisoned(context: &str) -> AppError {
-    AppError::new(
-        ErrorCode::ConfigInvalid,
-        format!("internal lock poisoned: {context}"),
-    )
-}
 
 fn core_is_live(status: CoreStatus) -> bool {
     matches!(status, CoreStatus::Running | CoreStatus::Starting)
@@ -42,7 +35,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
         .lock()
         .map_err(|_| lock_poisoned("orchestrate"))?;
 
-    let mut tun_warning: Option<String> = None;
+    let mut tun_warning: Option<UiMessage> = None;
     if state.capture.active_backend() == TrafficCapture::Tun {
         let settings = current_settings(&state.paths).unwrap_or_default();
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -58,7 +51,10 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             Err(err) => {
                 // Fail closed: keep stopping the core; the journal stays for
                 // startup recovery, and the warning is surfaced.
-                tun_warning = Some(format!("TUN capture shutdown unconfirmed ({err})"));
+                tun_warning = Some(
+                    UiMessage::new("recover.tunShutdownUnconfirmed")
+                        .with("detail", err.to_string()),
+                );
             }
         }
     }
@@ -71,7 +67,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             drop(core);
             state.traffic.set_endpoints(None);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = tun_warning;
+                *slot = tun_warning.into_iter().collect();
             }
             Ok(())
         }
@@ -84,7 +80,7 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
                 .shutdown_requested
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
-                *slot = Some(err.message.clone());
+                *slot = vec![err.ui_message()];
             }
             Err(err)
         }
@@ -133,7 +129,7 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
             }
             QuitOutcome::ProxyRestoreFailed
         }
-        Err(err) if err.message.contains("lock poisoned") => {
+        Err(err) if err.code == ErrorCode::LockPoisoned.as_str() => {
             tracing::error!(error = %err, "tray quit: lock poisoned");
             QuitOutcome::LockPoisoned
         }
@@ -230,12 +226,14 @@ mod tests {
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
         let system_proxy_available = proxy.is_available();
+        let (core, core_snapshot) = crate::core_snapshot::wrap_core(core);
         AppState {
             paths: paths.clone(),
-            core: Mutex::new(core),
+            core,
+            core_snapshot,
             proxy: Mutex::new(proxy),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -243,6 +241,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
@@ -293,7 +295,7 @@ mod tests {
             Err(CoreError::invalid_state("mock adopt unsupported"))
         }
 
-        fn reclaim_orphan_pid(&mut self, _: &Path) -> Result<(), CoreError> {
+        fn reclaim_orphan_pid(&mut self, _: &Path, _: &[&Path]) -> Result<(), CoreError> {
             Ok(())
         }
     }
@@ -350,8 +352,8 @@ mod tests {
         assert_eq!(err.code, "proxy.restore_failed");
 
         let warning = state.proxy_recovery_warning.lock().unwrap().clone();
-        assert!(warning.is_some());
-        assert!(warning.unwrap().contains("system proxy recovery failed"));
+        assert_eq!(warning.len(), 1);
+        assert_eq!(warning[0].key, ErrorCode::ProxyRestoreFailed.message_key());
 
         let _ = std::fs::remove_dir_all(state.paths.root());
     }
@@ -359,10 +361,9 @@ mod tests {
     #[test]
     fn graceful_stop_leaves_core_stopped() {
         let state = temp_state("stopped", Box::new(OkProxy));
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
         graceful_stop(&state, PathBuf::from("/bin/true")).expect("stop");
         let core = state.core.lock().unwrap();
         assert_eq!(core.state().status, CoreStatus::Stopped);
@@ -380,10 +381,9 @@ mod tests {
                 status: CoreStatus::Error,
             }),
         );
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
         assert!(state.traffic.has_target());
 
         let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
@@ -402,10 +402,9 @@ mod tests {
                 status: CoreStatus::Running,
             }),
         );
-        state.traffic.set_endpoints(Some(HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: 9,
-        }));
+        state
+            .traffic
+            .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
 
         let err = graceful_stop(&state, PathBuf::from("/bin/true")).expect_err("stop fail");
         assert_eq!(err.code, "core.invalid_state");
@@ -415,5 +414,12 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn lock_poisoned_uses_stable_app_code() {
+        let err = lock_poisoned("core");
+        assert_eq!(err.code, ErrorCode::LockPoisoned.as_str());
+        assert!(err.message.contains("lock poisoned"));
     }
 }

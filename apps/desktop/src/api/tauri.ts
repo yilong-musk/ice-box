@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** Typed wrappers around Tauri invoke (architecture §14). */
+/** Typed wrappers around Tauri invoke. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { isMessageKey, t, type MessageKey } from "../lib/i18n";
+import { isErrorCode, type ErrorCode } from "./errorCodes";
 
 export type CoreStatus =
   | "stopped"
@@ -12,17 +14,23 @@ export type CoreStatus =
   | "stopping"
   | "error";
 
+/** Backend i18n payload: frontend runs `t(key, params)` (FE-5). */
+export type UiMessage = {
+  key: string;
+  params?: Record<string, string>;
+};
+
 export type CoreState = {
   status: CoreStatus;
-  message: string | null;
+  message: UiMessage | null;
   inbound_host: string | null;
   inbound_port: number | null;
 };
 
-/** Active traffic-capture backend (plan §4.3; derived only from the runtime controller). */
+/** Active traffic-capture backend (`docs/tun.md`; derived only from the runtime controller). */
 export type TrafficCapture = "inactive" | "system_proxy" | "tun";
 
-/** TUN capture lifecycle (plan §4.3). */
+/** TUN capture lifecycle (`docs/tun.md`). */
 export type TunStatus =
   | "disabled"
   | "preparing"
@@ -35,13 +43,13 @@ export type TunStatus =
 export type StatusResponse = {
   core: CoreState;
   subscription_count: number;
-  proxy_recovery_warning: string | null;
+  proxy_recovery_warning: UiMessage[] | null;
   system_proxy_applied: boolean | null;
   /** On-disk applied flag; drives「停止代理服务」when OS proxy was changed externally. */
   system_proxy_recorded: boolean | null;
   /** False when the platform has no system-proxy backend (e.g. Linux). */
   system_proxy_available: boolean;
-  // --- TUN capture status (plan §4.3) ---
+  // --- TUN capture status ---
   /** `inactive` means no backend is claimed; `tun_status=recovery_required` blocks fallback. */
   traffic_capture: TrafficCapture;
   /** Committed settings desire (`settings.tun.enabled`); not proof TUN is active. */
@@ -52,7 +60,7 @@ export type StatusResponse = {
   capture_transition_id: string | null;
   /** False when the platform gate is pending/failed; the switch stays disabled. */
   tun_available: boolean;
-  tun_unavailable_reason: string | null;
+  tun_unavailable_reason: UiMessage | null;
   /** True when the platform must not surface TUN controls at all (Windows:
    * TUN gate blocked upstream); the frontend hides the TUN card/switches. */
   tun_ui_hidden: boolean;
@@ -76,7 +84,7 @@ export type StatusResponse = {
 
 export type ProxyMode = "rule" | "global" | "direct";
 
-/** Validated TUN capture parameters (plan §4.1). Only `enabled` is user-facing. */
+/** Validated TUN capture parameters (`docs/tun.md`). Only `enabled` is user-facing. */
 export type TunSettings = {
   enabled: boolean;
   interface_name: string | null;
@@ -106,6 +114,8 @@ export type AppSettings = {
   language: "system" | "zh" | "en";
   /** Background update checks and the auto prompt. Defaults to on. */
   check_app_updates: boolean;
+  /** Logs page shows every parsed line. Default is connections and important events. */
+  log_debug: boolean;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -125,9 +135,9 @@ export type SubscriptionMeta = {
   group_count: number;
   rule_count: number;
   has_dns: boolean;
-  parse_warnings: string[];
+  parse_warnings: UiMessage[];
   last_updated: string | null;
-  last_error: string | null;
+  last_error: UiMessage | null;
   etag: string | null;
   last_modified: string | null;
   auto_update: boolean;
@@ -162,8 +172,34 @@ export type TrafficSnapshot = {
   peak: TrafficSample | null;
 };
 
+export type TrafficDelta = {
+  generation: number;
+  cursor: number | null;
+  points: TrafficPoint[];
+  latest: TrafficSample | null;
+  peak: TrafficSample | null;
+};
+
+export type SettingsPatch = {
+  mixed_listen?: string;
+  mixed_port?: number;
+  clash_api_listen?: string;
+  clash_api_port?: number;
+  selected_tag?: string | null;
+  auto_set_system_proxy?: boolean;
+  /** Home start/stop owns this; Settings omits it. */
+  proxy_service_enabled?: boolean;
+  allow_lan?: boolean;
+  proxy_mode?: ProxyMode;
+  tun?: Partial<TunSettings> & { interface_name?: string | null };
+  auto_default_rules?: boolean;
+  language?: "system" | "zh" | "en";
+  check_app_updates?: boolean;
+  log_debug?: boolean;
+};
+
 export type AppErrorPayload = {
-  code: string;
+  code: ErrorCode | string;
   message: string;
 };
 
@@ -224,21 +260,103 @@ export type ListRulesResponse = {
   items: RuleRow[];
 };
 
+const ERROR_MESSAGE_KEYS = {
+  "core.not_found": "error.core.not_found",
+  "core.spawn_failed": "error.core.spawn_failed",
+  "core.healthcheck_failed": "error.core.healthcheck_failed",
+  "core.invalid_state": "error.core.invalid_state",
+  "core.adopt_rejected": "error.core.adopt_rejected",
+  "core.api_failed": "error.core.api_failed",
+  "config.empty_outbounds": "error.config.empty_outbounds",
+  "config.invalid": "error.config.invalid",
+  "proxy.apply_failed": "error.proxy.apply_failed",
+  "proxy.apply_failed_core_reloaded": "error.proxy.apply_failed_core_reloaded",
+  "proxy.restore_failed": "error.proxy.restore_failed",
+  "proxy.backup_corrupt": "error.proxy.backup_corrupt",
+  "settings.reset": "error.settings.reset",
+  "logs.oversized": "error.logs.oversized",
+  "sub.fetch_failed": "error.sub.fetch_failed",
+  "sub.unknown_format": "error.sub.unknown_format",
+  "sub.parse_failed": "error.sub.parse_failed",
+  "sub.empty": "error.sub.empty",
+  "sub.not_found": "error.sub.not_found",
+  "sub.io": "error.sub.io",
+  "app.lock_poisoned": "error.app.lock_poisoned",
+  "tun.not_supported": "error.tun.not_supported",
+  "tun.permission_required": "error.tun.permission_required",
+  "tun.apply_failed": "error.tun.apply_failed",
+  "tun.restore_failed": "error.tun.restore_failed",
+  "tun.healthcheck_failed": "error.tun.healthcheck_failed",
+  "tun.recovery_required": "error.tun.recovery_required",
+  "tun.invalid_argument": "error.tun.invalid_argument",
+  "tun.config_rejected": "error.tun.config_rejected",
+  "tun.helper_stale": "error.tun.helper_stale",
+  "tun.helper_install_failed": "error.tun.helper_install_failed",
+  "tun.helper_install_cancelled": "error.tun.helper_install_cancelled",
+  "tun.helper_not_ready": "error.tun.helper_not_ready",
+  "tun.elevation_cancelled": "error.tun.elevation_cancelled",
+  "tun.elevation_requires_admin": "error.tun.elevation_requires_admin",
+  "update.check_failed": "error.update.check_failed",
+  "update.feed_unavailable": "error.update.feed_unavailable",
+  "update.install_failed": "error.update.install_failed",
+  "update.disabled": "error.update.disabled",
+} as const satisfies Record<ErrorCode, MessageKey>;
+
+export function formatUiMessage(
+  msg: UiMessage | string | null | undefined,
+): string {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  const params = msg.params ?? {};
+  if (msg.key === "ui.raw") return params.text ?? "";
+  const label = isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
+  const detail = params.detail;
+  if (detail && !label.includes(detail)) {
+    return `${label}: ${detail}`;
+  }
+  return label;
+}
+
 /**
- * Rust-side errors, warnings, and diagnostics stay in English and pass through
- * verbatim (see `FRIENDLY_ERROR_CODES` history): kernel messages are displayed
- * as-is, and Rust-generated text is authored in English, so no frontend
- * mapping is needed.
+ * Known IPC codes are translated via `t()`. Unknown payloads keep
+ * `code: message` so a new backend code still surfaces.
  */
 export function formatInvokeError(err: unknown): string {
   if (err && typeof err === "object") {
     const o = err as Record<string, unknown>;
     if (typeof o.code === "string" && typeof o.message === "string") {
+      if (isErrorCode(o.code)) {
+        const label = `${t(ERROR_MESSAGE_KEYS[o.code])} (${o.code})`;
+        const detail = o.message.trim();
+        if (detail && !label.includes(detail)) {
+          return `${label}: ${detail}`;
+        }
+        return label;
+      }
       return `${o.code}: ${o.message}`;
     }
     if (typeof o.message === "string") return o.message;
   }
   return String(err);
+}
+
+/** Translate a recovery-banner fragment that starts with a known error code. */
+export function formatDiagnostic(warning: string): string {
+  return warning
+    .split("；")
+    .map((part) => {
+      const trimmed = part.trim();
+      const colon = trimmed.indexOf(":");
+      const code = (colon >= 0 ? trimmed.slice(0, colon) : trimmed).trim();
+      if (isErrorCode(code)) {
+        const label = t(ERROR_MESSAGE_KEYS[code]);
+        const rest = colon >= 0 ? trimmed.slice(colon + 1).trim() : "";
+        return rest ? `${label}: ${rest}` : label;
+      }
+      return trimmed;
+    })
+    .filter(Boolean)
+    .join("；");
 }
 
 export const api = {
@@ -252,11 +370,25 @@ export const api = {
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
   getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),
+  getTrafficSince: (cursor?: number | null) =>
+    invoke<TrafficDelta>("get_traffic_since", { cursor: cursor ?? null }),
+  listenCoreStatusChanged: (handler: () => void) =>
+    listen("core://status-changed", () => handler()),
+  listenWindowHidden: (handler: () => void) =>
+    listen("window://hidden", () => handler()),
+  listenWindowShown: (handler: () => void) =>
+    listen("window://shown", () => handler()),
+  listenTrafficSample: (
+    handler: (payload: TrafficPoint) => void,
+  ) =>
+    listen<TrafficPoint>("traffic://sample", (event) =>
+      handler(event.payload),
+    ),
   start: () => invoke<void>("start"),
   stopSystemProxy: () => invoke<void>("stop_system_proxy"),
   stop: () => invoke<void>("stop"),
-  /** On-demand TUN recovery retry (plan §4.3); never enables capture. */
-  recoverTun: () => invoke<string | null>("recover_tun"),
+  /** On-demand TUN recovery retry (`docs/tun.md`); never enables capture. */
+  recoverTun: () => invoke<UiMessage[]>("recover_tun"),
   /** Install + authorize the privileged helper via the system authorization
    * dialog (unsigned elevation path). macOS only; cancel modifies nothing. */
   installHelper: () => invoke<void>("install_helper"),
@@ -275,8 +407,8 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** First-frame restore of last-session capture. No-op when it was off. */
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
-  saveSettings: (settings: AppSettings) =>
-    invoke<void>("save_settings", { settings }),
+  saveSettings: (patch: SettingsPatch) =>
+    invoke<void>("save_settings", { patch }),
   checkAppUpdate: (background = false) =>
     invoke<CheckAppUpdateResponse>("check_app_update", {
       req: { background },

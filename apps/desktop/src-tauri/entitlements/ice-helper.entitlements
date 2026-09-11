@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  ice-helper daemon entitlements (plan §5 T5).
+  ice-helper daemon entitlements (`docs/tun.md`).
 
   The helper is a plain launchd daemon binary (not sandboxed, not an XPC
   service): it runs as root and only needs the standard hard runtime

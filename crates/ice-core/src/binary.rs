@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CoreError;
 
-/// Bundled sing-box version pin (architecture §21 / `third_party/sing-box/VERSION`).
+/// Bundled sing-box version pin (`third_party/sing-box/VERSION`).
 ///
-/// Source of truth lives in the config engine (`ice_config::ENGINE_COMPAT_CORE_VERSION`);
-/// the desktop process layer only mirrors it for packaging checks.
-pub const BUNDLED_SINGBOX_VERSION: &str = ice_config::ENGINE_COMPAT_CORE_VERSION;
+/// Source of truth lives in `ice-types` and is re-exported by `ice-engine`
+/// (`ENGINE_COMPAT_CORE_VERSION`); the desktop process layer only mirrors it
+/// for packaging checks.
+pub const BUNDLED_SINGBOX_VERSION: &str = ice_types::ENGINE_COMPAT_CORE_VERSION;
 
 /// Current packaging target directory name under `third_party/sing-box/`.
 pub fn current_target_dir() -> &'static str {
@@ -51,7 +52,7 @@ pub fn binary_in_target_root(root: &Path) -> PathBuf {
 
 /// Resolve binary: development `third_party` first, then optional resource dir.
 ///
-/// Order (architecture §4.3):
+/// Resolution order:
 /// 1. `dev_third_party/<current-target>/sing-box`
 /// 2. `resource_dir/sing-box` (flat) or `resource_dir/<target>/sing-box`
 /// 3. else `core.not_found`

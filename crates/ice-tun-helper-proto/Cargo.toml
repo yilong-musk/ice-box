@@ -1,0 +1,11 @@
+[package]
+name = "ice-tun-helper-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host-free ice-box helper IPC protocol and install path constants"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ice-types = { workspace = true }

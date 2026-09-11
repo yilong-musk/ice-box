@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Host-free helper daemon end-to-end test (plan §5 T5).
+//! Host-free helper daemon end-to-end test.
 //!
 //! Starts the real `ice-helper` server logic (`serve_connection`) on a temp
 //! Unix socket, drives it with the real client (`HelperCoreCoordinator`),
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use ice_helper::{FixedPeerAuth, PeerAuth, ProcessCoreRunner, ServerConfig};
 use ice_tun_sys::coordinator::CoreCoordinator;
-use ice_tun_sys::error::TunErrorCode;
+use ice_tun_sys::error::ErrorCode;
 use ice_tun_sys::helper::HelperCoreCoordinator;
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -42,6 +42,23 @@ fn fixture_core_bin(dir: &std::path::Path) -> PathBuf {
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
+}
+
+fn write_allowed_config(path: &std::path::Path) {
+    let json = serde_json::to_vec(&ice_config_guard::minimal_allowed_config()).unwrap();
+    std::fs::write(path, json).unwrap();
+}
+
+fn server_config(dir: &std::path::Path, token: &str, core_bin: PathBuf) -> ServerConfig {
+    ServerConfig {
+        token: token.into(),
+        data_dir: dir.to_path_buf(),
+        core_bin,
+        core_log: dir.join("core.log"),
+        allowed_uid: Some(42),
+        protected_run_dir: dir.join("protected-run"),
+        resources_dir: dir.join("resources"),
+    }
 }
 
 struct ServerHandle {
@@ -70,8 +87,7 @@ fn spawn_server(config: Arc<ServerConfig>, socket_path: &std::path::Path) -> Ser
                     let auth = auth.clone();
                     let runner = runner.clone();
                     std::thread::spawn(move || {
-                        let mut runner = runner.lock().unwrap();
-                        let _ = ice_helper::serve_connection(stream, &config, &*auth, &mut *runner);
+                        let _ = ice_helper::serve_peer(stream, &config, &*auth, &runner);
                     });
                 }
                 Err(_) => break,
@@ -98,17 +114,11 @@ fn stop_server(server: ServerHandle) {
 fn helper_coordinator_end_to_end_start_stop() {
     let dir = temp_dir("e2e");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
 
-    let config = Arc::new(ServerConfig {
-        token: "e2e-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
     let server = spawn_server(config, &socket);
 
     // Let the listener come up.
@@ -132,7 +142,7 @@ fn helper_coordinator_end_to_end_start_stop() {
     let err = coordinator
         .start_with_config(&config_path)
         .expect_err("second start must be rejected");
-    assert_eq!(err.code, TunErrorCode::ApplyFailed);
+    assert_eq!(err.code, ErrorCode::TunApplyFailed);
 
     // Stop: idempotent, removes the core.
     coordinator.stop().expect("stop via helper");
@@ -154,7 +164,7 @@ fn helper_coordinator_end_to_end_start_stop() {
 fn stop_waiting_for_slow_core_does_not_time_out() {
     let dir = temp_dir("slow");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = dir.join("fake-core");
     use std::os::unix::fs::PermissionsExt;
@@ -165,13 +175,7 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
     .unwrap();
     std::fs::set_permissions(&core_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let config = Arc::new(ServerConfig {
-        token: "e2e-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -206,17 +210,11 @@ fn stop_waiting_for_slow_core_does_not_time_out() {
 fn helper_rejects_unauthorized_token() {
     let dir = temp_dir("auth");
     let config_path = dir.join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
+    write_allowed_config(&config_path);
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
 
-    let config = Arc::new(ServerConfig {
-        token: "right-token".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "right-token", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -230,7 +228,7 @@ fn helper_rejects_unauthorized_token() {
     let err = coordinator
         .start_with_config(&config_path)
         .expect_err("wrong token must fail");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
 
     stop_server(server);
     let _ = std::fs::remove_dir_all(&dir);
@@ -241,13 +239,7 @@ fn helper_rejects_config_outside_data_dir_before_ipc() {
     let dir = temp_dir("outside");
     let socket = dir.join("helper.sock");
     let core_bin = fixture_core_bin(&dir);
-    let config = Arc::new(ServerConfig {
-        token: "tok".into(),
-        data_dir: dir.clone(),
-        core_bin,
-        core_log: dir.join("core.log"),
-        allowed_uid: Some(42),
-    });
+    let config = Arc::new(server_config(&dir, "tok", core_bin));
     let server = spawn_server(config, &socket);
     for _ in 0..50 {
         if UnixStream::connect(&socket).is_ok() {
@@ -260,7 +252,69 @@ fn helper_rejects_config_outside_data_dir_before_ipc() {
     let err = coordinator
         .start_with_config(std::path::Path::new("/etc/hosts"))
         .expect_err("outside path must fail");
-    assert_eq!(err.code, TunErrorCode::PermissionRequired);
+    assert_eq!(err.code, ErrorCode::TunPermissionRequired);
+
+    stop_server(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn helper_rejects_tor_outbound_config() {
+    let dir = temp_dir("tor");
+    let config_path = dir.join("config.json");
+    let mut cfg = ice_config_guard::minimal_allowed_config();
+    cfg["outbounds"] = serde_json::json!([
+        { "type": "tor", "tag": "evil", "executable_path": "/usr/bin/tor" }
+    ]);
+    std::fs::write(&config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    let socket = dir.join("helper.sock");
+    let core_bin = fixture_core_bin(&dir);
+    let config = Arc::new(server_config(&dir, "tok", core_bin));
+    let server = spawn_server(config, &socket);
+    for _ in 0..50 {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut coordinator = HelperCoreCoordinator::new(socket.clone(), "tok".into(), dir.clone());
+    let err = coordinator
+        .start_with_config(&config_path)
+        .expect_err("tor outbound must be rejected");
+    assert_eq!(err.code, ErrorCode::TunConfigRejected);
+    assert!(
+        err.message.contains("/outbounds/0/type"),
+        "pointer in message: {}",
+        err.message
+    );
+
+    stop_server(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn truncate_core_log_empties_helper_log() {
+    let dir = temp_dir("tl");
+    let socket = dir.join("helper.sock");
+    let core_bin = fixture_core_bin(&dir);
+    let config = Arc::new(server_config(&dir, "e2e-token", core_bin));
+    std::fs::write(&config.core_log, vec![b'x'; 128]).unwrap();
+    std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+    let server = spawn_server(config, &socket);
+    for _ in 0..50 {
+        if UnixStream::connect(&socket).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let coordinator = HelperCoreCoordinator::new(socket.clone(), "e2e-token".into(), dir.clone());
+    coordinator
+        .truncate_core_log()
+        .expect("truncate via helper");
+    assert_eq!(std::fs::read(dir.join("core.log")).unwrap(), b"");
+    assert!(!dir.join("core.log.1").exists());
 
     stop_server(server);
     let _ = std::fs::remove_dir_all(&dir);

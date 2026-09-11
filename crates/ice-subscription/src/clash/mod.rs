@@ -11,7 +11,7 @@ mod rules;
 
 use std::collections::HashSet;
 
-use ice_config::{NormalizedProfile, ProfileParseStats};
+use ice_config::{HostPlatform, NormalizedProfile, ProfileParseStats};
 use serde_json::Value;
 
 use crate::error::SubscriptionError;
@@ -24,30 +24,34 @@ pub struct ClashParseResult {
 }
 
 /// Backward-compatible node-only parse for existing tests.
-pub fn parse_clash_with_stats(raw: &str) -> Result<ClashParseResult, SubscriptionError> {
-    let profile = parse_clash_profile(raw)?;
+pub fn parse_clash_with_stats(
+    raw: &str,
+    platform: HostPlatform,
+) -> Result<ClashParseResult, SubscriptionError> {
+    let profile = parse_clash_profile(raw, platform)?;
     Ok(ClashParseResult { profile })
 }
 
-pub fn parse_clash_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionError> {
+pub fn parse_clash_profile(
+    raw: &str,
+    platform: HostPlatform,
+) -> Result<NormalizedProfile, SubscriptionError> {
     let doc: Value = serde_yaml::from_str(raw)
         .map_err(|e| SubscriptionError::ParseFailed(format!("clash yaml: {e}")))?;
 
-    let proxy_result = parse_proxies(&doc).map_err(|e| match e {
-        proxies::SkipReason::TooMany => SubscriptionError::ParseFailed(format!(
-            "proxies count exceeds limit {MAX_CLASH_PROXIES}"
-        )),
-        _ => SubscriptionError::EmptyNodes,
-    })?;
+    let proxy_result = parse_proxies(&doc).map_err(|_| SubscriptionError::EmptyNodes)?;
 
     let mut known: HashSet<String> = proxy_result.nodes.iter().map(|n| n.tag.clone()).collect();
     known.insert("direct".into());
     known.insert("block".into());
 
-    // Group references resolve groups-first (plan §3.1): pre-register group names so
+    // Group references resolve groups-first: pre-register group names so
     // groups may reference other groups (e.g. Proxies → HK/JP/US sub-groups).
     if let Some(groups) = doc.get("proxy-groups").and_then(|v| v.as_array()) {
-        for g in groups.iter().take(groups::MAX_CLASH_GROUPS) {
+        for g in groups
+            .iter()
+            .take(crate::limits::Limits::default().max_groups)
+        {
             if let Some(name) = g.get("name").and_then(|v| v.as_str()) {
                 known.insert(name.to_string());
             }
@@ -74,6 +78,12 @@ pub fn parse_clash_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionE
         warnings: group_result.warnings,
         ..Default::default()
     };
+    if proxy_result.truncated > 0 {
+        stats.warnings.push(crate::limits::Limits::warning(
+            "nodes",
+            proxy_result.truncated,
+        ));
+    }
 
     let rule_known_vec: Vec<String> = rule_known.iter().cloned().collect();
     let rule_result = rules::parse_rules(&doc, &rule_known_vec);
@@ -88,7 +98,7 @@ pub fn parse_clash_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionE
         }
     }
 
-    let (dns, dns_warnings) = dns::parse_dns(&doc);
+    let (dns, dns_warnings) = dns::parse_dns_on(&doc, platform.is_windows());
     stats.warnings.extend(dns_warnings);
 
     let group_names: Vec<String> = group_result.groups.iter().map(|g| g.tag.clone()).collect();
@@ -105,13 +115,17 @@ pub fn parse_clash_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionE
         }
     }
 
-    Ok(NormalizedProfile {
-        nodes: proxy_result.nodes,
-        groups: group_result.groups,
-        route,
-        dns,
-        default_outbound,
-        parse_stats: stats,
+    Ok({
+        let mut profile = NormalizedProfile {
+            nodes: proxy_result.nodes,
+            groups: group_result.groups,
+            route,
+            dns,
+            default_outbound,
+            parse_stats: stats,
+        };
+        crate::prune::prune_dangling_refs(&mut profile);
+        profile
     })
 }
 
@@ -128,7 +142,7 @@ mod tests {
     fn g6_1_clash_ss() {
         let raw =
             std::fs::read_to_string(fixtures_dir().join("subscription-clash-ss.yaml")).unwrap();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(profile.nodes.len(), 1);
         assert_eq!(profile.nodes[0].outbound["type"], "shadowsocks");
     }
@@ -137,7 +151,7 @@ mod tests {
     fn g6_6_clash_with_proxy_groups() {
         let raw =
             std::fs::read_to_string(fixtures_dir().join("subscription-clash-mixed.yaml")).unwrap();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::MacOs).unwrap();
         assert_eq!(profile.nodes.len(), 5);
         assert!(!profile.groups.is_empty());
     }
@@ -159,7 +173,7 @@ mod fixture_tests {
             std::fs::read_to_string(fixtures_dir().join("subscription-clash-profile-full.yaml"))
                 .unwrap();
         let start = Instant::now();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::MacOs).unwrap();
         let elapsed = start.elapsed();
         assert_eq!(profile.nodes.len(), 90);
         assert_eq!(profile.groups.len(), 21);
@@ -172,7 +186,7 @@ mod fixture_tests {
                 .parse_stats
                 .warnings
                 .iter()
-                .all(|w| !w.contains("GEOIP")),
+                .all(|w| !w.to_string().contains("GEOIP")),
             "GEOIP is supported via bundled rule-sets, no warning expected"
         );
         assert!(
@@ -185,7 +199,7 @@ mod fixture_tests {
     fn s3_rules_min_covers_all_types() {
         let raw = std::fs::read_to_string(fixtures_dir().join("subscription-clash-rules-min.yaml"))
             .unwrap();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::MacOs).unwrap();
         let rule_types: Vec<String> = profile
             .route
             .rules
@@ -232,13 +246,12 @@ mod fixture_tests {
         assert!(types.contains(&"loadbalance"));
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn s4_dns_fakeip_local_and_domain_resolver() {
         let raw =
             std::fs::read_to_string(fixtures_dir().join("subscription-clash-dns-fakeip.yaml"))
                 .unwrap();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::MacOs).unwrap();
         let dns = profile.dns.expect("dns block");
         assert!(
             dns.get("listen").is_none(),
@@ -273,13 +286,12 @@ mod fixture_tests {
             .any(|r| r["server"] == "local"));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn s4_windows_dns_shape_drops_fakeip_and_local_and_anchors() {
         let raw =
             std::fs::read_to_string(fixtures_dir().join("subscription-clash-dns-fakeip.yaml"))
                 .unwrap();
-        let profile = parse_clash_profile(&raw).unwrap();
+        let profile = parse_clash_profile(&raw, HostPlatform::Windows).unwrap();
         let dns = profile.dns.expect("dns block");
         let servers = dns["servers"].as_array().unwrap();
         assert!(

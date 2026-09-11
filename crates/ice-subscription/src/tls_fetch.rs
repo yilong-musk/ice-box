@@ -4,10 +4,12 @@
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use flate2::read::GzDecoder;
 use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, RootCertStore};
+use rustls::ClientConfig;
+use rustls_platform_verifier::ConfigVerifierExt;
 
 use crate::error::SubscriptionError;
 use crate::fetch::{sanitize_http_header_value, FETCH_TIMEOUT, MAX_BODY_BYTES};
@@ -47,6 +49,25 @@ pub(crate) fn url_path_query(url: &str) -> Result<String, SubscriptionError> {
     Ok(path)
 }
 
+fn ensure_crypto_provider() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// Process-wide rustls client config using the OS trust store (SUB-3).
+fn tls_client_config() -> Result<Arc<ClientConfig>, SubscriptionError> {
+    static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    if let Some(config) = CONFIG.get() {
+        return Ok(Arc::clone(config));
+    }
+    ensure_crypto_provider();
+    let built = ClientConfig::with_platform_verifier()
+        .map_err(|e| SubscriptionError::FetchFailed(format!("TLS platform verifier: {e}")))?;
+    Ok(Arc::clone(CONFIG.get_or_init(|| Arc::new(built))))
+}
+
 pub(crate) fn tls_get_pinned(
     host: &str,
     port: u16,
@@ -55,6 +76,26 @@ pub(crate) fn tls_get_pinned(
     conditional: &[(&str, &str)],
     log_url: &str,
 ) -> Result<RawHttpResponse, SubscriptionError> {
+    tls_get_pinned_with_config(
+        host,
+        port,
+        ip,
+        path_query,
+        conditional,
+        log_url,
+        tls_client_config()?,
+    )
+}
+
+fn tls_get_pinned_with_config(
+    host: &str,
+    port: u16,
+    ip: IpAddr,
+    path_query: &str,
+    conditional: &[(&str, &str)],
+    log_url: &str,
+    config: Arc<ClientConfig>,
+) -> Result<RawHttpResponse, SubscriptionError> {
     let addr = SocketAddr::new(ip, port);
     let mut stream = TcpStream::connect_timeout(&addr, FETCH_TIMEOUT).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: connect: {e}"))
@@ -62,22 +103,19 @@ pub(crate) fn tls_get_pinned(
     let _ = stream.set_read_timeout(Some(FETCH_TIMEOUT));
     let _ = stream.set_write_timeout(Some(FETCH_TIMEOUT));
 
-    let mut root_store = RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
     let server_name = ServerName::try_from(host.to_string()).map_err(|_| {
         SubscriptionError::FetchFailed(format!("GET {log_url}: invalid TLS server name"))
     })?;
-    let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+    let mut conn = rustls::ClientConnection::new(config, server_name)
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: tls: {e}")))?;
     let mut tls = rustls::Stream::new(&mut conn, &mut stream);
 
     // `Accept` must be present: some subscription frontends WAF-reject requests
     // without it (HTTP 403) regardless of TLS/HTTP version.
+    // `Accept-Encoding: gzip, identity` plus gzip decode (below) covers
+    // servers that ignore identity-only requests.
     let mut req = format!(
-        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\n"
+        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\nAccept-Encoding: gzip, identity\r\n"
     );
     for (k, v) in conditional {
         let safe = sanitize_http_header_value(v)?;
@@ -170,6 +208,28 @@ fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>
     Ok(raw_body.to_vec())
 }
 
+fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+    let Some(raw) = header_value(headers, "Content-Encoding") else {
+        return Ok(body);
+    };
+    let encoding = raw.split(',').next().unwrap_or(raw).trim();
+    if encoding.is_empty() || encoding.eq_ignore_ascii_case("identity") {
+        return Ok(body);
+    }
+    if encoding.eq_ignore_ascii_case("gzip") || encoding.eq_ignore_ascii_case("x-gzip") {
+        let mut decoder = GzDecoder::new(body.as_slice()).take(MAX_BODY_BYTES as u64 + 1);
+        let mut out = Vec::new();
+        decoder
+            .read_to_end(&mut out)
+            .map_err(|e| format!("gzip decode: {e}"))?;
+        if out.len() > MAX_BODY_BYTES {
+            return Err(body_too_large());
+        }
+        return Ok(out);
+    }
+    Err(format!("unsupported Content-Encoding: {encoding}"))
+}
+
 fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
     let header_end = raw
         .windows(4)
@@ -195,6 +255,11 @@ fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
     }
     let raw_body = &raw[(header_end + 4)..];
     let body = extract_body(raw_body, &headers)?;
+    let body = if body.is_empty() || matches!(status, 100..=199 | 204 | 304) {
+        body
+    } else {
+        decode_content_encoding(body, &headers)?
+    };
     Ok(RawHttpResponse {
         status,
         headers,
@@ -205,6 +270,9 @@ fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
 
     #[test]
     fn parse_simple_http_response() {
@@ -220,6 +288,21 @@ mod tests {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
         let resp = parse_http_response(raw).unwrap();
         assert_eq!(resp.body, b"hello");
+    }
+
+    #[test]
+    fn parse_gzip_http_response() {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(br#"{"ok":true}"#).unwrap();
+        let gz = encoder.finish().unwrap();
+        let mut raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+            gz.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&gz);
+        let resp = parse_http_response(&raw).unwrap();
+        assert_eq!(resp.body, br#"{"ok":true}"#);
     }
 
     #[test]
@@ -253,5 +336,90 @@ mod tests {
             url_path_query("https://example.com/a/b?x=1").unwrap(),
             "/a/b?x=1"
         );
+    }
+
+    #[test]
+    fn tls_client_config_is_cached() {
+        let a = tls_client_config().expect("platform verifier");
+        let b = tls_client_config().expect("platform verifier");
+        assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn fetch_gzip_body_from_private_ca_tls_server() {
+        ensure_crypto_provider();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_der = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+        );
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], key_der)
+            .expect("server cert");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(false).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let mut body = Vec::new();
+        {
+            let mut encoder = GzEncoder::new(&mut body, Compression::default());
+            encoder.write_all(br#"{"outbounds":[]}"#).unwrap();
+            encoder.finish().unwrap();
+        }
+        let response = {
+            let mut raw = format!(
+                "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            raw.extend_from_slice(&body);
+            raw
+        };
+
+        let server = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("accept");
+            let mut conn =
+                rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
+            {
+                let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+                let mut req = [0u8; 1024];
+                let _ = tls.read(&mut req);
+                tls.write_all(&response).expect("write");
+                tls.flush().expect("flush");
+            }
+            // rustls clients treat TCP EOF without close_notify as an error.
+            conn.send_close_notify();
+            while conn.wants_write() {
+                conn.write_tls(&mut tcp).expect("close_notify");
+            }
+        });
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert_der).expect("trust test CA");
+        let client = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let resp = tls_get_pinned_with_config(
+            "localhost",
+            addr.port(),
+            addr.ip(),
+            "/",
+            &[],
+            "https://localhost/",
+            Arc::new(client),
+        )
+        .expect("pinned GET");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, br#"{"outbounds":[]}"#);
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn parse_skips_gzip_on_empty_not_modified() {
+        let raw = b"HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\n\r\n";
+        let resp = parse_http_response(raw).unwrap();
+        assert_eq!(resp.status, 304);
+        assert!(resp.body.is_empty());
     }
 }

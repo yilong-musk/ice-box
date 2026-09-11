@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Headless acceptance scenarios (plan G9.1 / G9.6 / G9.7). Live UI/proxy cases are covered by the macOS release gate.
+//! Headless acceptance scenarios (G9.1 / G9.6 / G9.7). Live UI/proxy cases are covered by the macOS release gate.
 
 #[cfg(test)]
 mod tests {
@@ -8,11 +8,11 @@ mod tests {
     use crate::test_settings;
     use ice_config::{write_json_atomic, AppPaths, AppSettings, CaptureIntent};
     use ice_core::{CoreController, CoreStatus, ImmediateHealthProbe, MockReloader, MockSpawner};
-    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
-    use ice_subscription::{
+    use ice_engine::{
         FetchResponse, MockFetchMode, MockFetcher, SubscriptionFormat, SubscriptionManager,
         SubscriptionPaths,
     };
+    use ice_proxy_sys::{ProxyBackup, ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
     use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
@@ -210,12 +210,15 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let paths = temp_app("shutdown-lock");
+        let (core, core_snapshot) =
+            crate::core_snapshot::wrap_core(Box::new(mock_core_ok()) as Box<dyn CoreHandle>);
         let state = Arc::new(AppState {
             paths: paths.clone(),
-            core: Mutex::new(Box::new(mock_core_ok()) as Box<dyn CoreHandle>),
+            core,
+            core_snapshot,
             proxy: Mutex::new(Box::new(TrackProxy::default())),
             orchestrate: Mutex::new(()),
-            proxy_recovery_warning: Mutex::new(None),
+            proxy_recovery_warning: Mutex::new(Vec::new()),
             proxy_applied_cache: Mutex::new(None),
             system_proxy_available: true,
             shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -223,6 +226,10 @@ mod tests {
             traffic: ice_core::TrafficMonitor::new(),
             capture: CaptureController::new(paths.clone(), None),
             profile_cache: Mutex::new(None),
+            profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
+            subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                true,
+            )),
             log_view_cache: Mutex::new(None),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
@@ -262,10 +269,10 @@ mod live {
     };
     use ice_config::{AppPaths, AppSettings, CaptureIntent};
     use ice_core::{resolve_singbox_binary, CoreController, CoreStatus};
-    use ice_proxy_sys::{create_system_proxy, ProxyBackupFile, SystemProxy};
-    use ice_subscription::{
+    use ice_engine::{
         FetchResponse, MockFetchMode, MockFetcher, SubscriptionManager, SubscriptionPaths,
     };
+    use ice_proxy_sys::{create_system_proxy, ProxyBackupFile, SystemProxy};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -622,7 +629,9 @@ mod live {
         assert_eq!(meta.group_count, 21);
         assert!(meta.rule_count > 3000);
         assert!(
-            meta.parse_warnings.iter().all(|w| !w.contains("GEOIP")),
+            meta.parse_warnings
+                .iter()
+                .all(|w| !w.to_string().contains("GEOIP")),
             "GEOIP must parse to bundled rule-sets, no warning expected"
         );
 
@@ -669,8 +678,9 @@ mod live {
     #[test]
     #[ignore = "live: real sing-box + Clash API group state"]
     fn g9_10_live_group_exits_listable_and_switchable() {
+        use ice_config::HostPlatform;
         use ice_core::{proxy_groups, select_group, GroupState, HealthEndpoints};
-        use ice_subscription::{list_profile_outbounds, load_active_profile, load_index};
+        use ice_engine::{list_profile_outbounds, load_active_profile, load_index};
 
         let paths = temp_app("group-exits");
         let body = repo_fixture("subscription-clash-profile-full.yaml");
@@ -711,10 +721,9 @@ mod live {
         .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
 
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: CLASH_PORT,
-        };
+        let secret =
+            ice_config::ensure_clash_api_secret(&paths.clash_api_secret()).expect("secret");
+        let endpoints = HealthEndpoints::new("127.0.0.1", CLASH_PORT).with_secret(secret);
         let groups: Vec<GroupState> = proxy_groups(&endpoints).expect("list groups");
         assert!(
             groups.iter().any(|g| !g.all.is_empty()),
@@ -723,7 +732,7 @@ mod live {
 
         let sub = SubscriptionPaths::from_app(&paths);
         let index = load_index(&sub).expect("index");
-        let profile = load_active_profile(&sub, &index).expect("profile");
+        let profile = load_active_profile(&sub, &index, HostPlatform::MacOs).expect("profile");
         let static_groups: Vec<_> = list_profile_outbounds(&profile)
             .into_iter()
             .filter(|o| {
@@ -823,10 +832,9 @@ mod live {
         )
         .expect("start");
         assert_eq!(core.state().status, CoreStatus::Running);
-        let endpoints = HealthEndpoints {
-            host: "127.0.0.1".into(),
-            port: CLASH_PORT,
-        };
+        let secret =
+            ice_config::ensure_clash_api_secret(&paths.clash_api_secret()).expect("secret");
+        let endpoints = HealthEndpoints::new("127.0.0.1", CLASH_PORT).with_secret(secret);
 
         let rule = ice_config::clash_mode_name(ice_config::ProxyMode::Rule);
         assert_eq!(get_mode(&endpoints).expect("get mode"), rule);
@@ -871,7 +879,7 @@ mod live {
         println!("G9.11 ok: Rule -> Global -> Direct -> Rule via rebuild + reload, no restart");
     }
 
-    /// macOS TUN live gate (plan §6 live acceptance; §5 T3 exit gate).
+    /// macOS TUN live gate (`docs/testing.md`).
     /// Uses the dev `sudo` runner (`ICE_BOX_TUN_DEV_SUDO`, cached root
     /// credential or NOPASSWD) to exercise the native-path enable →
     /// traffic → disable roundtrip on a real host. Run via
@@ -959,7 +967,7 @@ mod live {
     }
 
     /// macOS TUN live gate through the **production privileged helper**
-    /// (plan §5 T5). Runs the native-path enable → traffic → disable
+    /// (`docs/testing.md`). Runs the native-path enable → traffic → disable
     /// roundtrip via the installed launchd helper instead of the dev `sudo`
     /// runner. Run via `scripts/run-acceptance-macos-tun.sh --helper`,
     /// which installs the helper (sudo) with the real app data dir,
@@ -1159,8 +1167,9 @@ mod live {
             .expect("session B: reclaim orphaned elevated core");
         let warning = capture_b.recover(&mut core_b).expect("session B: recover");
         restore_settings().expect("restore original settings");
-        assert!(warning.is_none(), "recovery warning: {warning:?}");
-        let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone());
+        assert!(warning.is_empty(), "recovery warning: {warning:?}");
+        let core_paths = crate::orchestrate::build_core_paths(&paths, &settings, bin.clone())
+            .expect("core paths");
         core_b.start(&core_paths).expect("session B: auto-start");
         assert_eq!(core_b.state().status, CoreStatus::Running);
 
@@ -1195,7 +1204,7 @@ mod live {
         println!("G9.15 ok: TUN survived an app restart; reclaim + auto-start + re-enable + disable stayed healthy");
     }
 
-    /// Windows TUN live gate (plan §6 live Windows acceptance; the
+    /// Windows TUN live gate (`docs/testing.md`; the
     /// `windows_tun_ready` live gate (flipped 2026-09-03): the production
     /// Windows backend generates the real Tun config on this host. Requires
     /// an already-elevated context (run the acceptance suite from an

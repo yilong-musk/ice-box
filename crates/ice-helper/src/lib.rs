@@ -1,25 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Privileged helper daemon core (plan §5 T5, macOS production path).
+//! Privileged helper daemon core (`docs/tun.md`, macOS production path).
 //!
-//! The daemon runs as root under launchd. It owns exactly one capability:
-//! start the bundled sing-box with an allowlisted config path and terminate
-//! it again (TERM→KILL with bounded grace). sing-box owns the adapter /
-//! routes / DNS; `ice-tun-sys` coordinates and verifies (T0 lock §24.5.5),
-//! so the helper never needs route / adapter / DNS primitives and its IPC
-//! surface stays narrow (plan §7).
+//! The daemon runs as root under launchd. It owns a narrow privileged
+//! surface: start the bundled sing-box with an allowlisted config path,
+//! stop it (TERM→KILL with bounded grace), apply validated `SetDns`
+//! updates via `networksetup`, and truncate the fixed core log in place.
+//! sing-box owns the adapter / routes; the helper never accepts a binary
+//! path, interface name, or shell string from the client.
 //!
 //! Security model:
 //!
 //! - One request frame per connection; the client reconnects per command.
-//! - Peer identity: the socket's `getpeereid` uid must equal the authorized
-//!   user (the uid the installer recorded). Everything else is rejected
-//!   before the frame is read.
+//! - Peer identity: the socket is owned by the authorized user (`0600`);
+//!   the peer uid from `getpeereid` must match that user. Everything else
+//!   is rejected before dispatch.
 //! - The request must carry the per-installation token (constant-time
-//!   compare) and protocol version 1.
+//!   compare) and protocol version 2.
 //! - `Start` accepts a config path only when it canonicalizes inside the
-//!   data directory the daemon was installed with. The core binary path is
-//!   fixed at install; the client never supplies it.
+//!   data directory the daemon was installed with. The JSON is then
+//!   sanitised (`ice-config-guard`) and written to a root-owned run dir;
+//!   sing-box is started from that copy, never from the user-writable file.
+//! - The core binary path is fixed at install; the client never supplies it.
+//! - `SetDns` is validated (`validate_set_dns`) before `networksetup` runs.
+//! - `TruncateCoreLog` empties the daemon's own core log path (never a
+//!   client-supplied path) so the app can shrink a running elevated
+//!   core's output.
 //!
 //! The server logic is host-free (inject the peer uid and a fake core
 //! binary), so the same code tests on Linux and macOS CI. On non-unix
@@ -28,19 +34,23 @@
 
 #[cfg(unix)]
 mod imp {
+    use std::ffi::CString;
     use std::fs::OpenOptions;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use ice_tun_sys::error::{TunError, TunErrorCode};
-    use ice_tun_sys::helper_protocol::{
-        validate_config_path, HelperCommand, HelperRequest, HelperResponse, MAX_FRAME_BYTES,
-        PROTOCOL_VERSION,
+    use ice_tun_helper_proto::{
+        validate_config_path, validate_set_dns, HelperCommand, HelperRequest, HelperResponse,
+        MAX_FRAME_BYTES, PROTOCOL_VERSION,
     };
+    use ice_types::{ErrorCode, TunError};
 
     /// How long to wait for the elevated core to stay alive during startup
     /// (config/bind errors surface as an early exit) before accepting it.
@@ -54,6 +64,129 @@ mod imp {
     /// (the daemon serves each connection on its own thread with a bounded
     /// concurrent-connection cap).
     const READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// Cap the core log at 20 MiB by dropping the oldest 5 MiB (CORE-7).
+    fn rotated_log_path(path: &std::path::Path, n: u32) -> std::path::PathBuf {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{n}"));
+        match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+            _ => std::path::PathBuf::from(name),
+        }
+    }
+
+    fn cap_core_log(path: &std::path::Path) {
+        cap_core_log_at(path, 20 * 1024 * 1024, 3);
+    }
+
+    fn cap_core_log_at(path: &std::path::Path, max_bytes: u64, keep: u32) {
+        let oversized = std::fs::metadata(path)
+            .map(|m| m.len() > max_bytes)
+            .unwrap_or(false);
+        if oversized {
+            let _ = retain_log_tail(path, max_bytes);
+        }
+        for i in 1..=keep {
+            let _ = std::fs::remove_file(rotated_log_path(path, i));
+        }
+    }
+
+    /// Keep in sync with `ice_core::trim_log_file`.
+    fn retain_log_tail(path: &std::path::Path, max_bytes: u64) -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        let len = file.metadata()?.len();
+        let start = if len <= 1 {
+            0
+        } else {
+            let drop = (max_bytes / 4).max(1);
+            let over = len.saturating_sub(max_bytes);
+            drop.max(over).min(len - 1)
+        };
+        let kept = if start == 0 || len <= 1 {
+            file.seek(SeekFrom::Start(0))?;
+            let mut all = Vec::new();
+            file.read_to_end(&mut all)?;
+            all
+        } else {
+            let at_line_start = {
+                file.seek(SeekFrom::Start(start - 1))?;
+                let mut prev = [0u8; 1];
+                file.read_exact(&mut prev)?;
+                prev[0] == b'\n'
+            };
+            file.seek(SeekFrom::Start(start))?;
+            let mut tail = Vec::new();
+            file.read_to_end(&mut tail)?;
+            if !at_line_start {
+                if let Some(i) = tail.iter().position(|&b| b == b'\n') {
+                    if i + 1 < tail.len() {
+                        tail.drain(..=i);
+                    }
+                }
+            }
+            tail
+        };
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&kept)?;
+        file.flush()?;
+        Ok(())
+    }
+
+    /// Empty the core log in place so a running sing-box keeps writing to the
+    /// same inode, and drop rotated siblings. The path is the daemon's own
+    /// `core_log` (never client-supplied).
+    fn truncate_core_log_file(path: &std::path::Path) -> Result<(), TunError> {
+        const KEEP: u32 = 3;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        format!("create log dir {}: {e}", parent.display()),
+                    )
+                })?;
+            }
+        }
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|e| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("truncate core log {}: {e}", path.display()),
+                )
+            })?;
+        for i in 1..=KEEP {
+            let _ = std::fs::remove_file(rotated_log_path(path, i));
+        }
+        Ok(())
+    }
+
+    /// Give the authorized user ownership of the core log so the unelevated
+    /// app can truncate it in place (the directory stays root-owned, so the
+    /// user cannot replace the path with a symlink).
+    fn chown_core_log_to_allowed_uid(path: &std::path::Path, uid: u32) {
+        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+            return;
+        };
+        let rc = unsafe { libc::chown(c_path.as_ptr(), uid, 0) };
+        if rc != 0 {
+            tracing::warn!(
+                path = %path.display(),
+                uid,
+                error = %std::io::Error::last_os_error(),
+                "chown core log to allowed uid failed"
+            );
+        }
+    }
 
     /// Immutable daemon configuration, set by the installer.
     #[derive(Debug, Clone)]
@@ -69,6 +202,10 @@ mod imp {
         /// Peer uid authorized to talk to the helper. `None` = accept any peer
         /// (dev/test only; the installer always sets it).
         pub allowed_uid: Option<u32>,
+        /// Root-owned directory for the sanitised config the core actually loads.
+        pub protected_run_dir: PathBuf,
+        /// Bundled resources dir; `route.rule_set[].path` must canonicalise here.
+        pub resources_dir: PathBuf,
     }
 
     /// Peer-identity probe. Production uses the real socket credential;
@@ -78,7 +215,7 @@ mod imp {
     }
 
     /// Reads the peer uid from the socket (`getpeereid` on macOS; `SO_PEERCRED`
-    /// on Linux). Used by `main`; tests inject [`FixedPeerAuth`].
+    /// on Linux). Used by `main`; tests inject a fixed uid.
     pub struct SocketPeerAuth;
 
     #[cfg(target_os = "macos")]
@@ -90,7 +227,7 @@ mod imp {
             let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
             if rc != 0 {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("getpeereid: {}", std::io::Error::last_os_error()),
                 ));
             }
@@ -115,7 +252,7 @@ mod imp {
             };
             if rc != 0 {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("SO_PEERCRED: {}", std::io::Error::last_os_error()),
                 ));
             }
@@ -124,25 +261,28 @@ mod imp {
     }
 
     /// Test-only peer auth with a fixed uid.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub struct FixedPeerAuth(pub u32);
 
+    #[cfg(any(test, feature = "test-hooks"))]
     impl PeerAuth for FixedPeerAuth {
         fn peer_uid(&self, _stream: &UnixStream) -> Result<u32, TunError> {
             Ok(self.0)
         }
     }
 
-    /// Constant-time string compare (token check).
+    /// Constant-time token compare (SEC-7).
+    ///
+    /// Both sides are hashed to a fixed 32-byte SHA-256 digest before
+    /// `subtle::ConstantTimeEq`, so a length mismatch cannot take an early
+    /// return. The installer token is already 64 hex chars; hashing also
+    /// covers tests that use shorter fixtures.
     fn constant_time_eq(a: &str, b: &str) -> bool {
-        let a = a.as_bytes();
-        let b = b.as_bytes();
-        if a.len() != b.len() {
-            return false;
-        }
-        a.iter()
-            .zip(b.iter())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
+        use sha2::{Digest, Sha256};
+        use subtle::ConstantTimeEq;
+        let ha = Sha256::digest(a.as_bytes());
+        let hb = Sha256::digest(b.as_bytes());
+        ha.ct_eq(&hb).into()
     }
 
     /// Authenticate a connection: peer uid (when configured) and request token.
@@ -154,14 +294,14 @@ mod imp {
         if let Some(allowed) = config.allowed_uid {
             if peer_uid != allowed {
                 return Err(TunError::new(
-                    TunErrorCode::PermissionRequired,
+                    ErrorCode::TunPermissionRequired,
                     format!("peer uid {peer_uid} is not the authorized user {allowed}"),
                 ));
             }
         }
         if request.v != PROTOCOL_VERSION {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!(
                     "protocol version mismatch: client {}, daemon {PROTOCOL_VERSION}",
                     request.v
@@ -170,32 +310,22 @@ mod imp {
         }
         if !constant_time_eq(&config.token, &request.token) {
             return Err(TunError::new(
-                TunErrorCode::PermissionRequired,
+                ErrorCode::TunPermissionRequired,
                 "invalid helper token",
             ));
         }
         Ok(())
     }
 
-    /// One request per connection: read a frame, authenticate, dispatch, reply.
-    /// The caller owns the core lifecycle (`CoreRunner`); `serve_connection`
-    /// keeps it across frames is not needed because the client reconnects per
-    /// command, so the runner is passed in and out.
-    pub fn serve_connection(
-        stream: UnixStream,
-        config: &ServerConfig,
-        peer_auth: &dyn PeerAuth,
-        runner: &mut dyn CoreRunner,
-    ) -> Result<(), TunError> {
-        let peer_uid = peer_auth.peer_uid(&stream)?;
+    fn read_helper_request(stream: &UnixStream) -> Result<HelperRequest, TunError> {
         // Bounded read: a peer that connects but never finishes its frame
         // must not hold a daemon thread for long.
         stream.set_read_timeout(Some(READ_TIMEOUT)).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("set read timeout: {e}"))
+            TunError::new(ErrorCode::TunApplyFailed, format!("set read timeout: {e}"))
         })?;
         let mut reader =
             BufReader::new(stream.try_clone().map_err(|e| {
-                TunError::new(TunErrorCode::ApplyFailed, format!("clone stream: {e}"))
+                TunError::new(ErrorCode::TunApplyFailed, format!("clone stream: {e}"))
             })?);
         // Cap the request at MAX_FRAME_BYTES + 1 bytes: an oversized or
         // unterminated frame is rejected without buffering unbounded input
@@ -205,19 +335,55 @@ mod imp {
             .by_ref()
             .take((MAX_FRAME_BYTES + 1) as u64)
             .read_line(&mut line)
-            .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("read request: {e}")))?;
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("read request: {e}")))?;
         if read == 0 {
-            return Err(TunError::new(TunErrorCode::ApplyFailed, "empty request"));
+            return Err(TunError::new(ErrorCode::TunApplyFailed, "empty request"));
         }
         if line.len() > MAX_FRAME_BYTES {
             return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("request frame exceeds {MAX_FRAME_BYTES} bytes"),
             ));
         }
-        let request: HelperRequest = serde_json::from_str(line.trim_end()).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("decode request: {e}"))
+        serde_json::from_str(line.trim_end())
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("decode request: {e}")))
+    }
+
+    fn write_helper_response(
+        stream: &UnixStream,
+        response: HelperResponse,
+    ) -> Result<(), TunError> {
+        let mut frame = serde_json::to_vec(&response).map_err(|e| {
+            TunError::new(ErrorCode::TunApplyFailed, format!("encode response: {e}"))
         })?;
+        if frame.len() > ice_tun_helper_proto::MAX_FRAME_BYTES {
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                "response frame exceeds limit",
+            ));
+        }
+        frame.push(b'\n');
+        let mut writer = stream
+            .try_clone()
+            .map_err(|e| TunError::new(ErrorCode::TunApplyFailed, format!("clone stream: {e}")))?;
+        writer.write_all(&frame).map_err(|e| {
+            TunError::new(ErrorCode::TunApplyFailed, format!("write response: {e}"))
+        })?;
+        writer.flush().ok();
+        Ok(())
+    }
+
+    /// One request per connection: read a frame, authenticate, dispatch, reply.
+    /// The caller already holds the runner (tests). Production uses
+    /// [`serve_peer`], which authenticates before taking the mutex.
+    pub fn serve_connection(
+        stream: UnixStream,
+        config: &ServerConfig,
+        peer_auth: &dyn PeerAuth,
+        runner: &mut dyn CoreRunner,
+    ) -> Result<(), TunError> {
+        let peer_uid = peer_auth.peer_uid(&stream)?;
+        let request = read_helper_request(&stream)?;
         let response = if let Err(err) = authenticate(config, peer_uid, &request) {
             HelperResponse::err(&err)
         } else {
@@ -226,24 +392,32 @@ mod imp {
                 Err(err) => HelperResponse::err(&err),
             }
         };
-        let mut frame = serde_json::to_vec(&response).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("encode response: {e}"))
-        })?;
-        if frame.len() > ice_tun_sys::helper_protocol::MAX_FRAME_BYTES {
-            return Err(TunError::new(
-                TunErrorCode::ApplyFailed,
-                "response frame exceeds limit",
-            ));
-        }
-        frame.push(b'\n');
-        let mut writer = stream
-            .try_clone()
-            .map_err(|e| TunError::new(TunErrorCode::ApplyFailed, format!("clone stream: {e}")))?;
-        writer.write_all(&frame).map_err(|e| {
-            TunError::new(TunErrorCode::ApplyFailed, format!("write response: {e}"))
-        })?;
-        writer.flush().ok();
-        Ok(())
+        write_helper_response(&stream, response)
+    }
+
+    /// Production accept-loop entry: authenticate the peer and frame, then
+    /// take the runner mutex only for dispatch. An unauthenticated connection
+    /// cannot stall Start/Stop/SetDns.
+    pub fn serve_peer<R: CoreRunner>(
+        stream: UnixStream,
+        config: &ServerConfig,
+        peer_auth: &dyn PeerAuth,
+        runner: &Mutex<R>,
+    ) -> Result<(), TunError> {
+        let peer_uid = peer_auth.peer_uid(&stream)?;
+        let request = read_helper_request(&stream)?;
+        let response = if let Err(err) = authenticate(config, peer_uid, &request) {
+            HelperResponse::err(&err)
+        } else {
+            let mut runner = runner
+                .lock()
+                .map_err(|_| TunError::new(ErrorCode::TunApplyFailed, "runner lock poisoned"))?;
+            match dispatch(config, &request.command, &mut *runner) {
+                Ok(pid) => HelperResponse::ok(pid),
+                Err(err) => HelperResponse::err(&err),
+            }
+        };
+        write_helper_response(&stream, response)
     }
 
     /// Dispatch one validated command onto the runner.
@@ -260,20 +434,159 @@ mod imp {
             }
             HelperCommand::Start { config: path } => {
                 let canonical = validate_config_path(&config.data_dir, path)?;
-                let pid = runner.start(&config.core_bin, &canonical, &config.core_log)?;
+                let protected = sanitize_user_config(config, &canonical)?;
+                let pid = runner.start(&config.core_bin, &protected, &config.core_log)?;
+                if let Some(uid) = config.allowed_uid {
+                    chown_core_log_to_allowed_uid(&config.core_log, uid);
+                }
                 Ok(Some(pid))
             }
             HelperCommand::SetDns { service, servers } => {
-                set_system_dns(service, servers)?;
+                validate_set_dns(service, servers)?;
+                runner.set_dns(service, servers)?;
+                Ok(None)
+            }
+            HelperCommand::TruncateCoreLog => {
+                truncate_core_log_file(&config.core_log)?;
+                if let Some(uid) = config.allowed_uid {
+                    chown_core_log_to_allowed_uid(&config.core_log, uid);
+                }
                 Ok(None)
             }
         }
     }
 
+    /// Read the user-writable config, sanitise it, and write a copy under the
+    /// helper-owned run directory. The elevated core is started from that
+    /// copy so a swapped `config.json` cannot pass gadgets through.
+    fn sanitize_user_config(
+        config: &ServerConfig,
+        user_path: &std::path::Path,
+    ) -> Result<PathBuf, TunError> {
+        let raw = ice_config_guard::read_config_file(user_path).map_err(|err| {
+            let code = if err.message.contains("open config")
+                || err.message.contains("read config")
+                || err.message.contains("stat config")
+            {
+                ErrorCode::TunApplyFailed
+            } else {
+                ErrorCode::TunConfigRejected
+            };
+            TunError::new(code, err.to_string())
+        })?;
+        let mut cfg: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunConfigRejected,
+                format!("config is not JSON: {err}"),
+            )
+        })?;
+        std::fs::create_dir_all(&config.protected_run_dir).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!(
+                    "create protected run dir {}: {err}",
+                    config.protected_run_dir.display()
+                ),
+            )
+        })?;
+        let rule_set_staging = config.protected_run_dir.join("rule-sets");
+        let ctx = ice_config_guard::GuardContext {
+            data_dir: config.data_dir.clone(),
+            resources_dir: config.resources_dir.clone(),
+            log_output: Some(config.core_log.clone()),
+            cache_file_path: Some(config.protected_run_dir.join("cache.db")),
+            rule_set_staging_dir: Some(rule_set_staging.clone()),
+        };
+        ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx)
+            .map_err(|err| TunError::new(ErrorCode::TunConfigRejected, err.to_string()))?;
+        let dest = config.protected_run_dir.join("config.json");
+        let bytes = serde_json::to_vec(&cfg).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("encode sanitised config: {err}"),
+            )
+        })?;
+        std::fs::write(&dest, bytes).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("write sanitised config {}: {err}", dest.display()),
+            )
+        })?;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod sanitised config {}: {err}", dest.display()),
+            )
+        })?;
+        if rule_set_staging.is_dir() {
+            std::fs::set_permissions(&rule_set_staging, std::fs::Permissions::from_mode(0o700))
+                .map_err(|err| {
+                    TunError::new(
+                        ErrorCode::TunApplyFailed,
+                        format!(
+                            "chmod rule_set staging {}: {err}",
+                            rule_set_staging.display()
+                        ),
+                    )
+                })?;
+        }
+        Ok(dest)
+    }
+
+    /// Atomically reserve one connection slot. Returns false when `max`
+    /// connections are already in flight, without overflowing the cap.
+    pub fn try_acquire_connection_slot(active: &AtomicUsize, max: usize) -> bool {
+        loop {
+            let n = active.load(Ordering::SeqCst);
+            if n >= max {
+                return false;
+            }
+            if active
+                .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    /// Own the listen socket by the authorized uid and mode `0600` so only
+    /// that user can connect. Peer-uid + token still authorize the frame.
+    pub fn restrict_helper_socket(
+        path: &std::path::Path,
+        allowed_uid: Option<u32>,
+    ) -> Result<(), TunError> {
+        if let Some(uid) = allowed_uid {
+            let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    "helper socket path is not C-safe",
+                )
+            })?;
+            let rc = unsafe { libc::chown(c_path.as_ptr(), uid, !0u32) };
+            if rc != 0 {
+                return Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!(
+                        "chown helper socket {}: {}",
+                        path.display(),
+                        std::io::Error::last_os_error()
+                    ),
+                ));
+            }
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("chmod helper socket {}: {err}", path.display()),
+            )
+        })
+    }
+
     /// Run `networksetup -setdnsservers <service> <servers...>` as root. An
     /// empty `servers` list clears the override ("Empty" = DHCP fallback).
-    /// The service name and server values were validated by the protocol
-    /// layer; the command runs with an argv list, never a shell.
+    /// Callers must run [`validate_set_dns`] first; the command uses an argv
+    /// list, never a shell.
     fn set_system_dns(service: &str, servers: &[String]) -> Result<(), TunError> {
         let mut args = vec!["-setdnsservers", service];
         if servers.is_empty() {
@@ -289,7 +602,7 @@ mod imp {
             .status()
             .map_err(|err| {
                 TunError::new(
-                    TunErrorCode::ApplyFailed,
+                    ErrorCode::TunApplyFailed,
                     format!("run networksetup {args:?}: {err}"),
                 )
             })?;
@@ -297,7 +610,7 @@ mod imp {
             Ok(())
         } else {
             Err(TunError::new(
-                TunErrorCode::ApplyFailed,
+                ErrorCode::TunApplyFailed,
                 format!("networksetup -setdnsservers {service} failed (exit {status:?})"),
             ))
         }
@@ -320,6 +633,9 @@ mod imp {
         /// (an unreaped zombie would keep `kill(pid, 0)` reporting alive, and
         /// a stale pid would wrongly reject the next Start).
         fn running_pid(&mut self) -> Option<u32>;
+        /// Apply `networksetup -setdnsservers` for one service. The daemon
+        /// validates arguments before calling this.
+        fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError>;
     }
 
     /// Real runner: spawns the bundled sing-box as root and terminates it with
@@ -374,7 +690,7 @@ mod imp {
                     self.child = None;
                 } else {
                     return Err(TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         "core already running; stop it first",
                     ));
                 }
@@ -382,11 +698,12 @@ mod imp {
             if let Some(parent) = log.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("create log dir {}: {e}", parent.display()),
                     )
                 })?;
             }
+            cap_core_log(log);
             let log_file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -394,12 +711,12 @@ mod imp {
                 .open(log)
                 .map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("open core log {}: {e}", log.display()),
                     )
                 })?;
             let log_err = log_file.try_clone().map_err(|e| {
-                TunError::new(TunErrorCode::ApplyFailed, format!("clone log handle: {e}"))
+                TunError::new(ErrorCode::TunApplyFailed, format!("clone log handle: {e}"))
             })?;
             let mut child = Command::new(bin)
                 .arg("run")
@@ -411,7 +728,7 @@ mod imp {
                 .spawn()
                 .map_err(|e| {
                     TunError::new(
-                        TunErrorCode::ApplyFailed,
+                        ErrorCode::TunApplyFailed,
                         format!("spawn {} run -c {}: {e}", bin.display(), config.display()),
                     )
                 })?;
@@ -423,7 +740,7 @@ mod imp {
                 match child.try_wait() {
                     Ok(Some(code)) => {
                         return Err(TunError::new(
-                            TunErrorCode::HealthcheckFailed,
+                            ErrorCode::TunHealthcheckFailed,
                             format!(
                                 "core exited during startup (code {code}); check {}",
                                 log.display()
@@ -433,7 +750,7 @@ mod imp {
                     Ok(None) => {}
                     Err(e) => {
                         return Err(TunError::new(
-                            TunErrorCode::ApplyFailed,
+                            ErrorCode::TunApplyFailed,
                             format!("poll core: {e}"),
                         ));
                     }
@@ -468,7 +785,7 @@ mod imp {
                         Ok(())
                     } else {
                         Err(TunError::new(
-                            TunErrorCode::RestoreFailed,
+                            ErrorCode::TunRestoreFailed,
                             format!("kill TERM {pid}: {err}"),
                         ))
                     }
@@ -484,7 +801,7 @@ mod imp {
                             Ok(None) => {}
                             Err(e) => {
                                 return Err(TunError::new(
-                                    TunErrorCode::RestoreFailed,
+                                    ErrorCode::TunRestoreFailed,
                                     format!("wait core {pid}: {e}"),
                                 ));
                             }
@@ -508,7 +825,7 @@ mod imp {
                                 Ok(None) => {}
                                 Err(e) => {
                                     return Err(TunError::new(
-                                        TunErrorCode::RestoreFailed,
+                                        ErrorCode::TunRestoreFailed,
                                         format!("wait core {pid}: {e}"),
                                     ));
                                 }
@@ -525,7 +842,7 @@ mod imp {
                             // Status/Stop request can still observe and retry
                             // cleanup of the live process.
                             Err(TunError::new(
-                                TunErrorCode::RecoveryRequired,
+                                ErrorCode::TunRecoveryRequired,
                                 format!("core (pid {pid}) survived TERM and KILL"),
                             ))
                         }
@@ -553,6 +870,10 @@ mod imp {
                 // a caller does not treat a live core as stopped.
                 Err(_) => Some(child.id()),
             }
+        }
+
+        fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+            set_system_dns(service, servers)
         }
     }
 
@@ -617,20 +938,208 @@ mod imp {
         !String::from_utf8_lossy(&output.stdout).trim().contains('Z')
     }
 
-    /// Whether `pid`'s command line carries `core_bin`'s path — i.e. it is
-    /// this installation's bundled core (the installer pins the location).
-    fn pid_matches_core(pid: u32, core_bin: &std::path::Path) -> bool {
-        let output = match Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return false,
+    /// Whether `pid`'s executable image is this installation's bundled core.
+    /// Uses `proc_pidpath` / `/proc/pid/exe`, not `ps -o command=` (argv0 is
+    /// forgeable via `exec -a`). A shebang leftover (`sh /path/to/core`) is
+    /// accepted only when the image is a Unix interpreter and argv1 is the
+    /// core path — the helper test fixture is a `#!/bin/sh` script.
+    fn pid_matches_core(pid: u32, core_bin: &Path) -> bool {
+        let Some(image) = pid_image_path(pid) else {
+            return false;
         };
-        if !output.status.success() {
+        if path_is_core_bin(&image.to_string_lossy(), core_bin) {
+            return true;
+        }
+        if !argv0_is_unix_interpreter(&image.to_string_lossy()) {
             return false;
         }
-        String::from_utf8_lossy(&output.stdout).contains(core_bin.to_string_lossy().as_ref())
+        pid_argv(pid)
+            .as_ref()
+            .and_then(|argv| argv.get(1))
+            .is_some_and(|script| !script.starts_with('-') && path_is_core_bin(script, core_bin))
+    }
+
+    fn pid_image_path(pid: u32) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            macos_proc_pidpath(pid)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_proc_pidpath(pid: u32) -> Option<PathBuf> {
+        let mut buf = [0u8; 4096];
+        let n = unsafe {
+            libc::proc_pidpath(
+                pid as libc::c_int,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        if n <= 0 {
+            return None;
+        }
+        let path = std::str::from_utf8(&buf[..n as usize]).ok()?;
+        Some(PathBuf::from(path))
+    }
+
+    fn pid_argv(pid: u32) -> Option<Vec<String>> {
+        #[cfg(target_os = "macos")]
+        {
+            macos_pid_argv(pid)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+            let argv: Vec<String> = raw
+                .split(|b| *b == 0)
+                .filter(|s| !s.is_empty())
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+                .collect();
+            if argv.is_empty() {
+                None
+            } else {
+                Some(argv)
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_pid_argv(pid: u32) -> Option<Vec<String>> {
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
+        let mut size = 0usize;
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 || size < 4 {
+            return None;
+        }
+        let mut buf = vec![0u8; size];
+        let rc = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        buf.truncate(size);
+        let argc = i32::from_ne_bytes(buf.get(0..4)?.try_into().ok()?);
+        if !(1..=4096).contains(&argc) {
+            return None;
+        }
+        let rest = buf.get(4..)?;
+        let exec_end = rest.iter().position(|&b| b == 0)?;
+        let mut pos = exec_end + 1;
+        while pos < rest.len() && rest[pos] == 0 {
+            pos += 1;
+        }
+        let mut args = Vec::with_capacity(argc as usize);
+        for _ in 0..argc {
+            if pos >= rest.len() {
+                break;
+            }
+            let rel = rest[pos..].iter().position(|&b| b == 0)?;
+            let end = pos + rel;
+            args.push(std::str::from_utf8(&rest[pos..end]).ok()?.to_string());
+            pos = end + 1;
+        }
+        if args.is_empty() {
+            None
+        } else {
+            Some(args)
+        }
+    }
+
+    /// argv0 of a `ps` command line must be this core — not a substring of a
+    /// longer path (`sing-box-wrapper`) or a shell `-c` string. A shebang
+    /// leftover (`sh /path/to/core …`) matches argv1 against the core.
+    /// Production reclaim uses image path + argv; this stays as the unit-test
+    /// oracle for that argv0/shebang parsing.
+    #[cfg(test)]
+    fn command_matches_core_bin(command: &str, core_bin: &std::path::Path) -> bool {
+        let (argv0, rest) = split_command_argv0(command);
+        if path_is_core_bin(argv0, core_bin) {
+            return true;
+        }
+        if !argv0_is_unix_interpreter(argv0) {
+            return false;
+        }
+        shebang_script_arg(rest).is_some_and(|script| path_is_core_bin(script, core_bin))
+    }
+
+    #[cfg(test)]
+    fn split_command_argv0(command: &str) -> (&str, &str) {
+        let trimmed = command.trim();
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                return (&rest[..end], rest.get(end + 1..).unwrap_or(""));
+            }
+        }
+        match trimmed.split_once(char::is_whitespace) {
+            Some((head, tail)) => (head, tail),
+            None => (trimmed, ""),
+        }
+    }
+
+    #[cfg(test)]
+    fn shebang_script_arg(rest: &str) -> Option<&str> {
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+        let tok = if let Some(inner) = rest.strip_prefix('"') {
+            let end = inner.find('"')?;
+            &inner[..end]
+        } else {
+            rest.split_whitespace().next()?
+        };
+        if tok.starts_with('-') {
+            None
+        } else {
+            Some(tok)
+        }
+    }
+
+    fn argv0_is_unix_interpreter(path: &str) -> bool {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        matches!(name, "sh" | "bash" | "dash" | "zsh" | "busybox" | "env")
+    }
+
+    fn path_is_core_bin(image: &str, core_bin: &std::path::Path) -> bool {
+        let image_path = std::path::Path::new(image);
+        if let (Ok(left), Ok(right)) = (image_path.canonicalize(), core_bin.canonicalize()) {
+            return left == right;
+        }
+        let left = image_path.to_string_lossy().replace('/', "\\");
+        let right = core_bin.to_string_lossy().replace('/', "\\");
+        left.eq_ignore_ascii_case(&right)
     }
 
     /// TERM→KILL a pid with bounded grace, probing liveness via `kill(pid, 0)`.
@@ -655,7 +1164,7 @@ mod imp {
         }
         if pid_running(pid) {
             Err(TunError::new(
-                TunErrorCode::RecoveryRequired,
+                ErrorCode::TunRecoveryRequired,
                 format!("orphan core (pid {pid}, {desc}) survived TERM and KILL"),
             ))
         } else {
@@ -668,6 +1177,7 @@ mod imp {
     mod tests {
         use super::*;
         use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixStream;
         use std::sync::Arc;
 
@@ -687,7 +1197,14 @@ mod imp {
                 core_bin: PathBuf::from("/bin/sleep"),
                 core_log: std::env::temp_dir().join("ice-helper-test.log"),
                 allowed_uid: Some(42),
+                protected_run_dir: data_dir.join("protected-run"),
+                resources_dir: data_dir.join("resources"),
             }
+        }
+
+        fn write_allowed_config(path: &std::path::Path) {
+            let json = serde_json::to_vec(&ice_config_guard::minimal_allowed_config()).unwrap();
+            std::fs::write(path, json).unwrap();
         }
 
         /// Build a runner scoped to a fixture config's data dir / core binary.
@@ -718,22 +1235,21 @@ mod imp {
             bin
         }
 
-        /// In-process roundtrip: `serve_connection` on one end of a socketpair,
+        /// In-process roundtrip: `serve_peer` on one end of a socketpair,
         /// the test drives the other end. The runner is shared across
         /// connections like the daemon's accept loop does.
-        fn roundtrip(
+        fn roundtrip<R: CoreRunner + Send + 'static>(
             config: &ServerConfig,
             auth: &'static dyn PeerAuth,
-            runner: Arc<std::sync::Mutex<ProcessCoreRunner>>,
-            request: &ice_tun_sys::helper_protocol::HelperRequest,
-        ) -> Result<ice_tun_sys::helper_protocol::HelperResponse, TunError> {
+            runner: Arc<std::sync::Mutex<R>>,
+            request: &ice_tun_helper_proto::HelperRequest,
+        ) -> Result<ice_tun_helper_proto::HelperResponse, TunError> {
             let (client, server) = UnixStream::pair().expect("socketpair");
             let config = config.clone();
             std::thread::spawn(move || {
-                let mut runner = runner.lock().expect("runner lock");
-                let _ = serve_connection(server, &config, auth, &mut *runner);
+                let _ = serve_peer(server, &config, auth, &runner);
             });
-            let mut line = ice_tun_sys::helper_protocol::encode_request(request)?;
+            let mut line = ice_tun_helper_proto::encode_request(request)?;
             line.push(b'\n');
             let mut writer = client.try_clone()?;
             writer.write_all(&line)?;
@@ -741,11 +1257,11 @@ mod imp {
             let mut reader = BufReader::new(client);
             let mut response = String::new();
             reader.read_line(&mut response)?;
-            ice_tun_sys::helper_protocol::decode_response(response.as_bytes())
+            ice_tun_helper_proto::decode_response(response.as_bytes())
         }
 
-        fn status_request(token: &str) -> ice_tun_sys::helper_protocol::HelperRequest {
-            ice_tun_sys::helper_protocol::HelperRequest {
+        fn status_request(token: &str) -> ice_tun_helper_proto::HelperRequest {
+            ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: token.to_string(),
                 command: HelperCommand::Status,
@@ -758,6 +1274,23 @@ mod imp {
             let config = fixture_config("tok", &dir);
             let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
             let response = roundtrip(&config, &PEER7, runner, &status_request("tok")).unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.permission_required"));
+        }
+
+        #[test]
+        fn unauthenticated_request_does_not_wait_for_runner_lock() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+            let _held = runner.lock().expect("hold runner");
+            let started = Instant::now();
+            let response = roundtrip(&config, &PEER7, Arc::clone(&runner), &status_request("tok"))
+                .expect("auth should complete without the runner mutex");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "unauthenticated peers must not wait on the runner lock"
+            );
             assert!(!response.ok);
             assert_eq!(response.code.as_deref(), Some("tun.permission_required"));
         }
@@ -796,6 +1329,52 @@ mod imp {
         }
 
         #[test]
+        fn truncate_core_log_empties_current_and_drops_rotations() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-truncate-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut config = fixture_config("tok", &dir);
+            config.core_log = dir.join("core.log");
+            std::fs::write(&config.core_log, vec![b'x'; 64]).unwrap();
+            std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+            let mut req = status_request("tok");
+            req.command = HelperCommand::TruncateCoreLog;
+            let response = roundtrip(&config, &PEER42, runner, &req).unwrap();
+            assert!(response.ok, "{response:?}");
+            assert_eq!(std::fs::read(&config.core_log).unwrap(), b"");
+            assert!(!dir.join("core.log.1").exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn cap_core_log_drops_oldest_quarter_and_siblings() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-cap-log-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("core.log");
+            std::fs::write(&path, vec![b'x'; 64]).unwrap();
+            std::fs::write(dir.join("core.log.1"), b"old").unwrap();
+            cap_core_log_at(&path, 32, 3);
+            assert_eq!(std::fs::read(&path).unwrap(), vec![b'x'; 32]);
+            assert!(!dir.join("core.log.1").exists());
+            std::fs::write(&path, vec![b'y'; 8]).unwrap();
+            cap_core_log_at(&path, 32, 3);
+            assert_eq!(std::fs::read(&path).unwrap()[0], b'y');
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
         fn start_rejects_config_outside_data_dir() {
             let dir = std::env::temp_dir().join(format!(
                 "ice-helper-outside-{}",
@@ -817,6 +1396,108 @@ mod imp {
             std::fs::remove_dir_all(&dir).unwrap();
         }
 
+        struct RecordingDnsRunner {
+            last_dns: Option<(String, Vec<String>)>,
+        }
+
+        impl CoreRunner for RecordingDnsRunner {
+            fn start(
+                &mut self,
+                _bin: &std::path::Path,
+                _config: &std::path::Path,
+                _log: &std::path::Path,
+            ) -> Result<u32, TunError> {
+                Err(TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    "RecordingDnsRunner does not start a core",
+                ))
+            }
+
+            fn stop(&mut self) -> Result<(), TunError> {
+                Ok(())
+            }
+
+            fn running_pid(&mut self) -> Option<u32> {
+                None
+            }
+
+            fn set_dns(&mut self, service: &str, servers: &[String]) -> Result<(), TunError> {
+                self.last_dns = Some((service.to_string(), servers.to_vec()));
+                Ok(())
+            }
+        }
+
+        fn set_dns_request(service: &str, servers: &[&str]) -> ice_tun_helper_proto::HelperRequest {
+            ice_tun_helper_proto::HelperRequest {
+                v: PROTOCOL_VERSION,
+                token: "tok".into(),
+                command: HelperCommand::SetDns {
+                    service: service.into(),
+                    servers: servers.iter().map(|s| (*s).to_string()).collect(),
+                },
+            }
+        }
+
+        #[test]
+        fn set_dns_rejects_invalid_service_server_and_count() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(RecordingDnsRunner { last_dns: None }));
+
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi; rm -rf /", &["1.1.1.1"]),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &["8.8.8.8 evil"]),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+
+            let five = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"];
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &five),
+            )
+            .unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.invalid_argument"));
+            assert!(runner.lock().unwrap().last_dns.is_none());
+        }
+
+        #[test]
+        fn set_dns_accepts_validated_payload() {
+            let dir = std::env::temp_dir();
+            let config = fixture_config("tok", &dir);
+            let runner = Arc::new(std::sync::Mutex::new(RecordingDnsRunner { last_dns: None }));
+            let response = roundtrip(
+                &config,
+                &PEER42,
+                runner.clone(),
+                &set_dns_request("Wi-Fi", &["1.1.1.1"]),
+            )
+            .unwrap();
+            assert!(response.ok, "set_dns failed: {:?}", response.message);
+            assert_eq!(
+                runner.lock().unwrap().last_dns,
+                Some(("Wi-Fi".into(), vec!["1.1.1.1".into()]))
+            );
+        }
+
         #[test]
         fn start_and_stop_roundtrip_with_fake_core() {
             let dir = std::env::temp_dir().join(format!(
@@ -828,7 +1509,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             // The fixture "core" ignores args and sleeps so liveness holds.
             let mut config = fixture_config("tok", &dir);
@@ -841,9 +1522,12 @@ mod imp {
             };
             let response = roundtrip(&config, &PEER42, runner.clone(), &req).unwrap();
             assert!(response.ok, "start failed: {:?}", response.message);
+            let dest = dir.join("protected-run").join("config.json");
+            let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "sanitised config must be 0600");
             let pid = response.pid.expect("pid");
 
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,
@@ -856,12 +1540,83 @@ mod imp {
         }
 
         #[test]
+        fn start_rejects_tor_outbound() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-tor-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let config_path = dir.join("config.json");
+            let mut cfg = ice_config_guard::minimal_allowed_config();
+            cfg["outbounds"] = serde_json::json!([{
+                "type": "tor",
+                "tag": "evil",
+                "executable_path": "/usr/bin/tor"
+            }]);
+            std::fs::write(&config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+
+            let mut config = fixture_config("tok", &dir);
+            config.core_bin = fixture_core_bin(&dir);
+            let runner = Arc::new(std::sync::Mutex::new(runner_for(&config)));
+
+            let mut req = status_request("tok");
+            req.command = HelperCommand::Start {
+                config: config_path.to_string_lossy().into_owned(),
+            };
+            let response = roundtrip(&config, &PEER42, runner, &req).unwrap();
+            assert!(!response.ok);
+            assert_eq!(response.code.as_deref(), Some("tun.config_rejected"));
+            assert!(
+                response
+                    .message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("/outbounds/0/type"),
+                "{:?}",
+                response.message
+            );
+
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
         fn constant_time_eq_works() {
             assert!(constant_time_eq("abc", "abc"));
             assert!(!constant_time_eq("abc", "abd"));
             assert!(!constant_time_eq("abc", "abcd"));
             assert!(!constant_time_eq("", "a"));
             assert!(constant_time_eq("", ""));
+        }
+
+        #[test]
+        fn try_acquire_connection_slot_never_exceeds_max() {
+            let active = AtomicUsize::new(15);
+            assert!(try_acquire_connection_slot(&active, 16));
+            assert_eq!(active.load(Ordering::SeqCst), 16);
+            assert!(!try_acquire_connection_slot(&active, 16));
+            assert_eq!(active.load(Ordering::SeqCst), 16);
+        }
+
+        #[test]
+        fn try_acquire_connection_slot_is_atomic_under_contention() {
+            use std::sync::Arc;
+            let active = Arc::new(AtomicUsize::new(0));
+            let joins: Vec<_> = (0..32)
+                .map(|_| {
+                    let active = Arc::clone(&active);
+                    std::thread::spawn(move || try_acquire_connection_slot(&active, 16))
+                })
+                .collect();
+            let acquired = joins
+                .into_iter()
+                .map(|j| j.join().expect("join"))
+                .filter(|ok| *ok)
+                .count();
+            assert_eq!(acquired, 16);
+            assert_eq!(active.load(Ordering::SeqCst), 16);
         }
 
         #[test]
@@ -881,8 +1636,7 @@ mod imp {
             let config = config.clone();
             let runner = runner.clone();
             let handle = std::thread::spawn(move || {
-                let mut runner = runner.lock().expect("runner lock");
-                let _ = serve_connection(server, &config, &PEER42, &mut *runner);
+                let _ = serve_peer(server, &config, &PEER42, &runner);
             });
 
             // A well-formed request whose config field pushes the line over
@@ -922,7 +1676,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
@@ -944,7 +1698,7 @@ mod imp {
             assert!(!second.ok, "second start must be rejected");
 
             // Cleanup: TERM the running sleep.
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,
@@ -964,7 +1718,7 @@ mod imp {
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let config_path = dir.join("config.json");
-            std::fs::write(&config_path, b"{}").unwrap();
+            write_allowed_config(&config_path);
 
             let mut config = fixture_config("tok", &dir);
             config.core_bin = fixture_core_bin(&dir);
@@ -1000,7 +1754,7 @@ mod imp {
             let pid2 = resp.pid.expect("pid2");
             assert_ne!(pid2, pid, "a fresh process must be spawned");
 
-            let stop_req = ice_tun_sys::helper_protocol::HelperRequest {
+            let stop_req = ice_tun_helper_proto::HelperRequest {
                 v: PROTOCOL_VERSION,
                 token: "tok".into(),
                 command: HelperCommand::Stop,
@@ -1052,7 +1806,10 @@ mod imp {
                     .as_nanos()
             ));
             std::fs::create_dir_all(&dir).unwrap();
-            let config = fixture_config("tok", &dir);
+            let mut config = fixture_config("tok", &dir);
+            // Must not be `/bin/sleep`: real image-path matching would then
+            // treat the spawned `sleep` as this install's core.
+            config.core_bin = dir.join("not-this-installs-core");
 
             // A live process that is NOT this install's core binary.
             let mut child = std::process::Command::new("sleep")
@@ -1073,10 +1830,57 @@ mod imp {
             let _ = child.wait();
             std::fs::remove_dir_all(&dir).unwrap();
         }
+
+        #[test]
+        fn command_matches_core_bin_requires_argv0_identity() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-core-id-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let bin = dir.join("sing-box");
+            std::fs::write(&bin, b"x").unwrap();
+            let cmd = format!("{} run -c /tmp/c.json", bin.display());
+            assert!(command_matches_core_bin(&cmd, &bin));
+            let wrapper = format!("{}-wrapper run -c /tmp/c.json", bin.display());
+            assert!(!command_matches_core_bin(&wrapper, &bin));
+            let via_shell = format!("/bin/sh -c {} run -c /tmp/c.json", bin.display());
+            assert!(!command_matches_core_bin(&via_shell, &bin));
+            let shebang = format!("/bin/sh {} run -c /tmp/c.json", bin.display());
+            assert!(command_matches_core_bin(&shebang, &bin));
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn restrict_helper_socket_is_owner_only() {
+            let dir = std::env::temp_dir().join(format!(
+                "ice-helper-sock-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let sock = dir.join("helper.sock");
+            let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+            let uid = unsafe { libc::getuid() };
+            restrict_helper_socket(&sock, Some(uid)).expect("restrict");
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&sock).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "socket must be 0600, got {mode:#o}");
+            drop(listener);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 } // mod imp
 
+#[cfg(all(unix, any(test, feature = "test-hooks")))]
+pub use imp::FixedPeerAuth;
 #[cfg(unix)]
 pub use imp::{
-    serve_connection, FixedPeerAuth, PeerAuth, ProcessCoreRunner, ServerConfig, SocketPeerAuth,
+    restrict_helper_socket, serve_connection, serve_peer, try_acquire_connection_slot, PeerAuth,
+    ProcessCoreRunner, ServerConfig, SocketPeerAuth,
 };

@@ -1,0 +1,19 @@
+[package]
+name = "ice-config-guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Allowlist sanitizer for elevated sing-box JSON configs"
+
+[dependencies]
+serde_json = { workspace = true }
+ice-types = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
