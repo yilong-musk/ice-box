@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The tray menu now carries the two actions that do not need the window: a
+  proxy service switch (「启动代理服务」/「停止代理服务」, the same call as the
+  Home power button; disabled where the platform has no capture backend) and a
+  「代理模式」submenu with the routing mode group (规则 / 全局 / 直连, the same
+  call as the Home mode selector). A watchdog re-derives both from the runtime
+  state every 5s, so the menu follows changes made from the window, by
+  recovery, or by hand in the OS.
+- On Windows the tray icon opens the app window on left click and the menu on
+  right click (the menu used to pop up on both). Restoring the window from the
+  tray unminimizes it first, so a minimized window comes back to the front.
+
 ### Fixed
 
 - GitHub Release publish copies bundled `third_party/sing-box/LICENSE` to

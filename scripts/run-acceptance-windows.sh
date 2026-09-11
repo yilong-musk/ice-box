@@ -41,7 +41,7 @@ cargo test -p ice-proxy-sys g4_3 -- --ignored --nocapture
 echo ""
 echo "========== Manual only (not automated) =========="
 echo "  Installer: npm run build:win → NSIS; sing-box.exe must land in the install dir"
-echo "  Tray / 关窗隐藏 — npm run dev:win 后目视确认"
+echo "  Tray / 关窗隐藏 / 托盘菜单代理开关与模式切换 — npm run dev:win 后目视确认"
 echo "  System proxy on/off from UI; mode switch while downloading"
 echo ""
 echo "Windows acceptance run: OK (automated + live)"

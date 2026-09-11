@@ -435,6 +435,45 @@ pub(crate) fn reset_tun_task_cache(state: &AppState) {
     }
 }
 
+/// Live proxy-service posture: the OS proxy match plus the on-disk ownership
+/// record. Read by `collect_status` (window) and by the tray menu, which both
+/// answer the same question —「is the proxy service on?」— from one place.
+pub(crate) struct ProxyServicePosture {
+    /// Live OS match for the configured endpoints. `None` while the core is
+    /// not running, the platform backend is unavailable, or an apply/restore
+    /// holds the proxy lock (never wait on it from a status poll).
+    pub live: Option<bool>,
+    /// On-disk `applied` flag; `None` while the core is not running.
+    pub recorded: Option<bool>,
+}
+
+impl ProxyServicePosture {
+    /// Mirrors the Home power control (`proxyOn`): live or recorded counts as
+    /// on, so an out-of-sync OS can still be restored; TUN owns capture on its
+    /// own.
+    pub fn engaged(&self, tun_active: bool) -> bool {
+        tun_active || self.live == Some(true) || self.recorded == Some(true)
+    }
+}
+
+pub(crate) fn proxy_service_posture(
+    state: &AppState,
+    settings: Option<&AppSettings>,
+    running: bool,
+) -> ProxyServicePosture {
+    let recorded = running.then(|| match disk_proxy_state(&state.paths.proxy_backup()) {
+        DiskProxyState::Applied => true,
+        DiskProxyState::NotApplied => false,
+        DiskProxyState::Unknown => true,
+    });
+    let live = if running && state.system_proxy_available {
+        settings.and_then(|settings| cached_system_proxy_applied(state, settings))
+    } else {
+        None
+    };
+    ProxyServicePosture { live, recorded }
+}
+
 pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     // ORCH-1: never take `state.core`. Unexpected-exit reaping lives on the
     // watchdog (`reconcile_unexpected_core_exit`); status reads the snapshot.
@@ -452,22 +491,9 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         .unwrap_or_default();
     let proxy_available = state.system_proxy_available;
     let settings = current_settings(&state.paths).ok();
-    let system_proxy_recorded = if running {
-        Some(match disk_proxy_state(&state.paths.proxy_backup()) {
-            DiskProxyState::Applied => true,
-            DiskProxyState::NotApplied => false,
-            DiskProxyState::Unknown => true,
-        })
-    } else {
-        None
-    };
-    let system_proxy_applied = if running && proxy_available {
-        settings
-            .as_ref()
-            .and_then(|settings| cached_system_proxy_applied(state, settings))
-    } else {
-        None
-    };
+    let posture = proxy_service_posture(state, settings.as_ref(), running);
+    let system_proxy_recorded = posture.recorded;
+    let system_proxy_applied = posture.live;
     let capture = settings
         .as_ref()
         .map(|settings| state.capture.status(settings))

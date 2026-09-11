@@ -88,8 +88,10 @@ mutation and restored on stop or failure.
 Startup reconciles leftover processes and capture state before starting the
 core. Recovery itself does not enable capture; restoring the user's saved
 service choice is a separate action. Closing the window leaves the app in the
-tray. Quitting releases capture before stopping the core. TUN state transitions
-and recovery rules are maintained only in [tun.md](tun.md).
+tray, whose menu mirrors the Home power switch (start / stop the proxy service)
+and the routing-mode selector; both call the same command paths the window does.
+Quitting releases capture before stopping the core. TUN state transitions and
+recovery rules are maintained only in [tun.md](tun.md).
 
 ## Trust boundaries
 

@@ -120,8 +120,18 @@ pub(crate) fn set_proxy_mode_inner(
     state: &AppState,
     req: SetProxyModeRequest,
 ) -> Result<(), AppError> {
-    let _orch = lock_orchestrate(state)?;
     let mode = parse_proxy_mode(&req.mode)?;
+    apply_proxy_mode(app, state, mode)
+}
+
+/// Persist + apply a routing mode. Shared by the IPC command and the tray menu
+/// so both paths run the same lock/rollback sequence.
+pub(crate) fn apply_proxy_mode(
+    app: &AppHandle,
+    state: &AppState,
+    mode: ProxyMode,
+) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
     let previous = current_settings(&state.paths)?;
     if previous.proxy_mode == mode {
         return Ok(());

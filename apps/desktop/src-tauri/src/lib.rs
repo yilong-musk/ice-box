@@ -281,6 +281,7 @@ pub fn run() {
                     .unwrap_or(tray::TrayLanguage::En)
             };
             tray::setup_tray(app.handle(), tray_language)?;
+            tray::spawn_state_watchdog(app.handle().clone());
             core_watch::spawn_core_watchdog(app.handle().clone());
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             Ok(())

@@ -281,6 +281,35 @@ fn parse_proxy_mode_accepts_valid_and_rejects_unknown() {
 }
 
 #[test]
+fn proxy_posture_counts_live_recorded_or_tun_as_engaged() {
+    // Mirrors Home's `proxyOn`; the tray menu renders the same answer.
+    let off = ProxyServicePosture {
+        live: Some(false),
+        recorded: Some(false),
+    };
+    assert!(!off.engaged(false));
+    assert!(off.engaged(true), "TUN owns capture on its own");
+    assert!(ProxyServicePosture {
+        live: Some(true),
+        recorded: Some(false),
+    }
+    .engaged(false));
+    assert!(
+        ProxyServicePosture {
+            live: Some(false),
+            recorded: Some(true),
+        }
+        .engaged(false),
+        "an on-disk record must stay stoppable"
+    );
+    let unknown = ProxyServicePosture {
+        live: None,
+        recorded: None,
+    };
+    assert!(!unknown.engaged(false), "stopped core is off");
+}
+
+#[test]
 fn collect_status_snapshots_stopped_core() {
     let state = temp_state_with_node("status");
     let status = collect_status(&state).expect("status");
