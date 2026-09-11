@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - On Windows the tray icon opens the app window on left click and the menu on
   right click (the menu used to pop up on both). Restoring the window from the
   tray unminimizes it first, so a minimized window comes back to the front.
+- On Windows the tray menu scrolls with the mouse wheel. Classic Win32 popup
+  menus ignore `WM_MOUSEWHEEL`, so a menu taller than the screen (the node list
+  of a large subscription) offered only the keyboard and the two scroll arrows.
+  A wheel message over an open menu is now turned into the arrow keys the menu
+  already understands — one node per line the OS reports for the wheel — and is
+  consumed, so the window behind the menu does not scroll along. macOS and GTK
+  menus scroll with the wheel natively and are unchanged.
 
 ### Fixed
 

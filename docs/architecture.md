@@ -92,7 +92,10 @@ tray, whose menu mirrors the Home power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active
 subscription, and the Nodes page for switching the active exit (one node per
 strategy group, nested one level down); all of them call the same command paths
-the window does.
+the window does. On Windows those menus are classic Win32 popup menus, which
+ignore the mouse wheel: `tray_wheel.rs` hooks the tray thread and turns wheel
+messages into the arrow keys a long menu (the node list of a large
+subscription) already scrolls with.
 Quitting releases capture before stopping the core. TUN state transitions and
 recovery rules are maintained only in [tun.md](tun.md).
 

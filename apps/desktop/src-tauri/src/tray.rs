@@ -628,6 +628,12 @@ fn show_main_window(app: &AppHandle) {
 }
 
 pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> {
+    // Windows draws the menu with `TrackPopupMenu`, which ignores the wheel: a
+    // menu taller than the screen would leave the node list to the keyboard and
+    // the scroll arrows. The hook has to live on the thread that shows the menu
+    // — this one.
+    #[cfg(target_os = "windows")]
+    crate::tray_wheel::install();
     let labels = labels(language);
     let view = current_view(app).unwrap_or_default();
     let service = MenuItem::with_id(

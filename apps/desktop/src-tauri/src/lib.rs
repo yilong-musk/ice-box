@@ -15,6 +15,8 @@ mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
+#[cfg(target_os = "windows")]
+mod tray_wheel;
 mod windows_elevation;
 
 use crate::capture::CaptureController;
