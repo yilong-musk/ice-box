@@ -124,9 +124,9 @@ Published assets:
 - `latest.json` (`version`, `notes`, `pub_date`, `platforms.darwin-aarch64` /
   `platforms.windows-x86_64`; each `signature` is the **full `.sig` file text**,
   each `url` is `https://github.com/yilong-musk/ice-box/releases/download/<tag>/<asset>`)
-- `LICENSE`, `NOTICE` (bundled sing-box is GPL-3.0-or-later; the `NOTICE` file
-  satisfies the redistribution requirements, the upstream license text is
-  attached as `third_party/sing-box/LICENSE`)
+- `LICENSE`, `NOTICE`, `sing-box-LICENSE` (root GPLv3 plus bundled sing-box
+  license; the upstream text is copied from `third_party/sing-box/LICENSE`
+  because two GitHub Release assets cannot share the name `LICENSE`)
 
 ### 6. Verify
 
