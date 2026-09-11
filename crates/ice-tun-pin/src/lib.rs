@@ -271,6 +271,50 @@ pub fn protected_run_dir(program_data: &Path) -> PathBuf {
     protected_data_dir(program_data).join("run")
 }
 
+/// Well-known SIDs used when locking ProgramData copies with `icacls`.
+pub const SID_SYSTEM: &str = "*S-1-5-18";
+/// `BUILTIN\Administrators`.
+pub const SID_ADMINISTRATORS: &str = "*S-1-5-32-544";
+/// `BUILTIN\Users`.
+pub const SID_USERS: &str = "*S-1-5-32-545";
+
+/// How `BUILTIN\Users` may access a protected ProgramData path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtectedUsersAccess {
+    None,
+    Read,
+    ReadExecute,
+}
+
+/// `icacls` extra args that disable inherited ACEs on **one** object.
+///
+/// Never include `/T`. `icacls /inheritance:r /T` followed by
+/// `/grant SYSTEM:(OI)(CI)F Administrators:(OI)(CI)F /T` strips inherited
+/// ACEs from files, then fails to restore `FILE_READ_DATA` because `(OI)(CI)`
+/// is directory-only. Staged `rule-sets\*.srs` end up with an empty DACL, so
+/// the second elevated TUN start dies with `Access is denied`.
+pub fn icacls_reset_inheritance_args() -> Vec<String> {
+    vec!["/inheritance:r".to_string()]
+}
+
+/// `icacls` extra args that grant SYSTEM + Administrators (and optional Users)
+/// on **one** object. Directory grants use `(OI)(CI)` so *new* children inherit;
+/// file grants must not, or the ACE does not apply to the file itself.
+pub fn icacls_grant_protected_args(directory: bool, users: ProtectedUsersAccess) -> Vec<String> {
+    let inherit = if directory { "(OI)(CI)" } else { "" };
+    let mut extra = vec![
+        "/grant:r".to_string(),
+        format!("{SID_SYSTEM}:{inherit}F"),
+        format!("{SID_ADMINISTRATORS}:{inherit}F"),
+    ];
+    match users {
+        ProtectedUsersAccess::None => {}
+        ProtectedUsersAccess::Read => extra.push(format!("{SID_USERS}:{inherit}R")),
+        ProtectedUsersAccess::ReadExecute => extra.push(format!("{SID_USERS}:{inherit}RX")),
+    }
+    extra
+}
+
 pub fn protected_launcher_path(program_files: &Path) -> PathBuf {
     protected_bin_dir(program_files).join("ice-tun-launcher.exe")
 }
@@ -1170,5 +1214,54 @@ mod tests {
             Some("ITaskService::RegisterTask failed: 0x80041318")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn protected_acl_icacls_args_never_recurse() {
+        for directory in [false, true] {
+            for users in [
+                ProtectedUsersAccess::None,
+                ProtectedUsersAccess::Read,
+                ProtectedUsersAccess::ReadExecute,
+            ] {
+                let reset = icacls_reset_inheritance_args();
+                let grant = icacls_grant_protected_args(directory, users);
+                for args in [&reset, &grant] {
+                    assert!(
+                        args.iter()
+                            .all(|a| !a.eq_ignore_ascii_case("/T") && !a.eq_ignore_ascii_case("/C")),
+                        "protected ACL icacls must not use /T or /C (directory={directory:?} users={users:?}): {args:?}"
+                    );
+                }
+                if directory {
+                    assert!(
+                        grant.iter().any(|a| a.contains("(OI)(CI)")),
+                        "directory grant must be inheritable: {grant:?}"
+                    );
+                } else {
+                    assert!(
+                        grant
+                            .iter()
+                            .all(|a| !a.contains("(OI)") && !a.contains("(CI)")),
+                        "file grant must not use directory inherit flags: {grant:?}"
+                    );
+                    assert!(
+                        grant.iter().any(|a| a == &format!("{SID_SYSTEM}:F")),
+                        "file grant must give SYSTEM FILE_READ_DATA: {grant:?}"
+                    );
+                    assert!(
+                        grant
+                            .iter()
+                            .any(|a| a == &format!("{SID_ADMINISTRATORS}:F")),
+                        "file grant must give Administrators FILE_READ_DATA: {grant:?}"
+                    );
+                }
+            }
+        }
+        let none = icacls_grant_protected_args(true, ProtectedUsersAccess::None);
+        assert!(
+            none.iter().all(|a| !a.contains(SID_USERS)),
+            "UsersAccess::None must omit Users: {none:?}"
+        );
     }
 }

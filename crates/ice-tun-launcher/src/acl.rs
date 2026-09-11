@@ -10,21 +10,18 @@ use std::process::{Command, Stdio};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-#[derive(Clone, Copy)]
-pub enum UsersAccess {
-    None,
-    Read,
-    ReadExecute,
-}
+pub use ice_tun_pin::ProtectedUsersAccess as UsersAccess;
 
 pub fn wipe_and_create_dir(path: &Path, users: UsersAccess) -> Result<(), ()> {
     if path.exists() {
         let _ = take_ownership(path);
+        // Recursive grant is only to make a pre-existing tree deletable.
+        // The tree that sing-box later reads is locked by [`apply_acl`].
         let _ = icacls(
             path,
             &[
                 "/grant:r".to_string(),
-                "*S-1-5-32-544:(OI)(CI)F".to_string(),
+                format!("{}:(OI)(CI)F", ice_tun_pin::SID_ADMINISTRATORS),
                 "/T".to_string(),
                 "/C".to_string(),
             ],
@@ -44,30 +41,45 @@ pub fn copy_protected_file(src: &Path, dest: &Path, users: UsersAccess) -> Resul
     set_owner_administrators(dest, false)
 }
 
+/// Lock `path` to SYSTEM + Administrators (and optional Users).
+///
+/// Directory grants are inheritable `(OI)(CI)` so *new* children pick them up.
+/// Existing files are then locked with a **file** DACL (`SYSTEM:F` /
+/// `Administrators:F`, no inherit flags). Do not run `icacls /T` with
+/// `(OI)(CI)`: that combination strips file DACLs and leaves staged
+/// `.srs` copies unreadable by the elevated core on the next TUN start.
 pub fn apply_acl(path: &Path, directory: bool, users: UsersAccess) -> Result<(), ()> {
-    let inherit = if directory { "(OI)(CI)" } else { "" };
-    let mut grants = vec![
-        format!("*S-1-5-18:{inherit}F"),
-        format!("*S-1-5-32-544:{inherit}F"),
-    ];
-    match users {
-        UsersAccess::None => {}
-        UsersAccess::Read => grants.push(format!("*S-1-5-32-545:{inherit}R")),
-        UsersAccess::ReadExecute => grants.push(format!("*S-1-5-32-545:{inherit}RX")),
-    }
-    let mut inherit_reset = vec!["/inheritance:r".to_string()];
+    apply_acl_object(path, directory, users)?;
     if directory {
-        inherit_reset.push("/T".to_string());
-        inherit_reset.push("/C".to_string());
+        apply_acl_children(path, users)?;
     }
-    icacls(path, &inherit_reset)?;
-    let mut extra = vec!["/grant:r".to_string()];
-    extra.extend(grants);
-    if directory {
-        extra.push("/T".to_string());
-        extra.push("/C".to_string());
+    Ok(())
+}
+
+fn apply_acl_object(path: &Path, directory: bool, users: UsersAccess) -> Result<(), ()> {
+    icacls(path, &ice_tun_pin::icacls_reset_inheritance_args())?;
+    icacls(
+        path,
+        &ice_tun_pin::icacls_grant_protected_args(directory, users),
+    )
+}
+
+fn apply_acl_children(dir: &Path, users: UsersAccess) -> Result<(), ()> {
+    let entries = std::fs::read_dir(dir).map_err(|_| ())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| ())?;
+        let child = entry.path();
+        let file_type = entry.file_type().map_err(|_| ())?;
+        if file_type.is_symlink() {
+            return Err(());
+        }
+        if file_type.is_dir() {
+            apply_acl(&child, true, users)?;
+        } else {
+            apply_acl_object(&child, false, users)?;
+        }
     }
-    icacls(path, &extra)
+    Ok(())
 }
 
 pub fn take_ownership(path: &Path) -> Result<(), ()> {
@@ -86,7 +98,10 @@ pub fn take_ownership(path: &Path) -> Result<(), ()> {
 }
 
 pub fn set_owner_administrators(path: &Path, recursive: bool) -> Result<(), ()> {
-    let mut extra = vec!["/setowner".to_string(), "*S-1-5-32-544".to_string()];
+    let mut extra = vec![
+        "/setowner".to_string(),
+        ice_tun_pin::SID_ADMINISTRATORS.to_string(),
+    ];
     if recursive {
         extra.push("/T".to_string());
         extra.push("/C".to_string());
@@ -103,7 +118,7 @@ pub fn remove_protected_tree(path: &Path) {
         path,
         &[
             "/grant:r".to_string(),
-            "*S-1-5-32-544:(OI)(CI)F".to_string(),
+            format!("{}:(OI)(CI)F", ice_tun_pin::SID_ADMINISTRATORS),
             "/T".to_string(),
             "/C".to_string(),
         ],

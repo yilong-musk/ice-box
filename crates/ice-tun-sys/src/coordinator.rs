@@ -233,34 +233,78 @@ fn restrict_sanitised_config_permissions(dest: &Path) -> Result<(), TunError> {
 
 #[cfg(windows)]
 fn restrict_users_none_acl(path: &Path, directory: bool) -> Result<(), TunError> {
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let inherit = if directory { "(OI)(CI)" } else { "" };
-    let mut reset = Command::new("icacls.exe");
-    reset.arg(path).arg("/inheritance:r");
+    restrict_users_none_acl_object(path, directory)?;
     if directory {
-        reset.args(["/T", "/C"]);
+        restrict_users_none_acl_children(path)?;
     }
+    Ok(())
+}
+
+/// Lock one object. Directory grants stay inheritable; file grants are
+/// `SYSTEM:F` / `Administrators:F` without `(OI)(CI)` or `/T` — see
+/// [`ice_tun_pin::icacls_reset_inheritance_args`].
+#[cfg(windows)]
+fn restrict_users_none_acl_object(path: &Path, directory: bool) -> Result<(), TunError> {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut reset = Command::new("icacls.exe");
+    reset
+        .arg(path)
+        .args(ice_tun_pin::icacls_reset_inheritance_args());
     run_hidden_ok(&mut reset, CREATE_NO_WINDOW).map_err(|_| {
         TunError::new(
             ErrorCode::TunApplyFailed,
             format!("reset ACL on {}: failed", path.display()),
         )
     })?;
+    let grant_args = ice_tun_pin::icacls_grant_protected_args(
+        directory,
+        ice_tun_pin::ProtectedUsersAccess::None,
+    );
     let mut grant = Command::new("icacls.exe");
-    grant.arg(path).args([
-        "/grant:r",
-        &format!("*S-1-5-18:{inherit}F"),
-        &format!("*S-1-5-32-544:{inherit}F"),
-    ]);
-    if directory {
-        grant.args(["/T", "/C"]);
-    }
+    grant.arg(path).args(&grant_args);
     run_hidden_ok(&mut grant, CREATE_NO_WINDOW).map_err(|_| {
         TunError::new(
             ErrorCode::TunApplyFailed,
             format!("restrict ACL on {}: failed", path.display()),
         )
     })
+}
+
+#[cfg(windows)]
+fn restrict_users_none_acl_children(dir: &Path) -> Result<(), TunError> {
+    let entries = std::fs::read_dir(dir).map_err(|err| {
+        TunError::new(
+            ErrorCode::TunApplyFailed,
+            format!("list rule_set staging {}: {err}", dir.display()),
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("list rule_set staging {}: {err}", dir.display()),
+            )
+        })?;
+        let child = entry.path();
+        let file_type = entry.file_type().map_err(|err| {
+            TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("stat {}: {err}", child.display()),
+            )
+        })?;
+        if file_type.is_symlink() {
+            return Err(TunError::new(
+                ErrorCode::TunApplyFailed,
+                format!("refusing to lock symlink {}", child.display()),
+            ));
+        }
+        if file_type.is_dir() {
+            restrict_users_none_acl(&child, true)?;
+        } else {
+            restrict_users_none_acl_object(&child, false)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1936,6 +1980,32 @@ mod tests {
         );
         assert!(coordinator.stop().is_ok());
         assert_eq!(coordinator.pid, None);
+    }
+
+    #[test]
+    fn windows_users_none_acl_grants_files_without_recursive_inherit_flags() {
+        let reset = ice_tun_pin::icacls_reset_inheritance_args();
+        let dir_grant =
+            ice_tun_pin::icacls_grant_protected_args(true, ice_tun_pin::ProtectedUsersAccess::None);
+        let file_grant = ice_tun_pin::icacls_grant_protected_args(
+            false,
+            ice_tun_pin::ProtectedUsersAccess::None,
+        );
+        for args in [&reset, &dir_grant, &file_grant] {
+            assert!(
+                args.iter()
+                    .all(|a| !a.eq_ignore_ascii_case("/T") && !a.eq_ignore_ascii_case("/C")),
+                "rule-set ACL icacls must not recurse with /T: {args:?}"
+            );
+        }
+        assert!(
+            file_grant.iter().any(|a| a == "*S-1-5-18:F"),
+            "staged .srs files need SYSTEM:F, not (OI)(CI): {file_grant:?}"
+        );
+        assert!(
+            dir_grant.iter().any(|a| a.contains("(OI)(CI)")),
+            "the staging directory must stay inheritable for new copies: {dir_grant:?}"
+        );
     }
 
     #[test]

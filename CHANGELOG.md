@@ -40,6 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows TUN can start a second time in one session: locking staged GeoIP
+  `rule-sets` no longer runs `icacls /inheritance:r /T` plus `(OI)(CI) /T`,
+  which stripped `.srs` file DACLs so the elevated core died with
+  `Access is denied` after the first successful capture.
 - Generated Clash API configs include a per-install `secret`. Clients send
   `Authorization: Bearer …`; elevated sanitiser rejects a missing or weak
   secret so loopback `PUT /proxies` cannot steer traffic without it.
