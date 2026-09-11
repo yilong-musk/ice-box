@@ -1652,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "chrono",
  "fs2",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config-guard"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ice-types",
  "libc",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "ice-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "ice-types",
@@ -1722,14 +1722,14 @@ dependencies = [
 
 [[package]]
 name = "ice-elevate"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ice-engine"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ice-config",
  "ice-subscription",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "ice-helper"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ice-config-guard",
  "ice-tun-helper-proto",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "ice-proxy-sys"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1770,7 +1770,7 @@ dependencies = [
 
 [[package]]
 name = "ice-subscription"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-helper-proto"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ice-types",
  "serde",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-journal"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "chrono",
  "ice-types",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-launcher"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ice-config-guard",
  "ice-tun-pin",
@@ -1824,14 +1824,14 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-pin"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "ice-tun-sys"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "chrono",
  "ice-config-guard",
@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "ice-types"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",

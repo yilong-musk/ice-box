@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-11
+
 ### Changed
 
 - ice-box is now licensed under GPL-3.0-or-later (previously MIT). `LICENSE`
@@ -40,6 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Website typecheck no longer fails when formatting traffic-chart tooltip
+  timestamps: Recharts `labelFormatter` values are `ReactNode`, so the chart
+  narrows them before constructing a `Date`.
 - Windows TUN can start a second time in one session: locking staged GeoIP
   `rule-sets` no longer runs `icacls /inheritance:r /T` plus `(OI)(CI) /T`,
   which stripped `.srs` file DACLs so the elevated core died with
