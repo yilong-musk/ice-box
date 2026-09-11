@@ -5,6 +5,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The macOS Settings page picks what the menu-bar item shows: the icon with the
+  live speed readout (default), the icon only, or the readout only. The choice
+  persists in `settings.json` (`tray_display_mode`) and the menu-bar watchdog
+  applies it within a second. A readout item keeps its text, and with it its
+  width, while the core is stopped: the readout-only item therefore never
+  shrinks to an unclickable sliver of the bar.
+- On macOS the tray icon carries a live traffic readout next to it: the newest
+  Clash `/traffic` sample as two stacked lines (`↓ 00.3 K/s` over
+  `↑ 01.2 M/s`), 1024-based like the Home chart and always the same three
+  digits `00.0`: the byte band is padded (`00.0 B/s` when idle) and a rate that
+  would need a fourth digit steps up a unit (over 100 B reads `00.1 K/s`, over
+  100 KB `00.1 M/s`), so the item holds one width as the rate moves. The unit
+  labels are the short `K/s` and `M/s` the item has room for. Icon and
+  readout are drawn into one image at 9pt — two lines of the menu-bar font do
+  not fit the bar, and 9pt keeps the pair as narrow as a short one-line title.
+  Drawing both is what centres them: a status item centres an image in its
+  button but pins a title to the top of the item, so the readout keeps the
+  font's own, compact leading and still lines up with the icon. A 1s watchdog
+  re-derives it from the traffic monitor, and it holds its place instead of
+  clearing and coming back when the proxy service is toggled: a detached stream
+  (core stopped) or a stale newest tick (stream wedged) reads `00.0 B/s` rather
+  than freezing the last rate as if it were live, and the text dims to the menu
+  bar's secondary label colour while the proxy service is off, so those zeroes
+  do not read as live traffic. The dim follows the service switch — the Home
+  power control and the tray menu item, not the core process, which can run on
+  its own with the service off — and the watchdog touches the platform only
+  when the text or the dim changed.
+
 ### Changed
 
 - The tray menu now carries the actions that do not need the window: a proxy

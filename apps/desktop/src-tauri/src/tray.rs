@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! System tray: close → hide; left click → show; Quit → Stop then exit.
+//! On macOS the icon also carries the live traffic speed to its right.
 //!
 //! The menu also carries the actions that do not need the window: the proxy
 //! service switch (labeled with the action, like the Home power button), the
@@ -37,6 +38,10 @@ use uuid::Uuid;
 /// action anyway). The `proxy_applied_cache` is shared with the poll, so while
 /// the window is open the probe is usually a cache hit.
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Tray icon id. The macOS speed readout looks the icon up by id instead of
+/// holding a handle, so the managed menu state stays free of the platform icon.
+pub(crate) const TRAY_ID: &str = "ice-box";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -748,7 +753,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         mode_value: AtomicU8::new(mode_code(view.mode)),
     });
 
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("ice-box")
         // Windows pops the menu on left click by default, which competes with

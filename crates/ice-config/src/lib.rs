@@ -45,7 +45,7 @@ pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, load_settings, load_settings_detailed,
     save_settings, save_settings_for, set_proxy_service_enabled, set_proxy_service_enabled_for,
     tun_interface_name_valid, AppSettings, LanguagePreference, LoadSettingsOutcome, ProxyMode,
-    SettingsPatch, TunSettings, TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS,
+    SettingsPatch, TrayDisplayMode, TunSettings, TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS,
     TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 

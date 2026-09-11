@@ -41,6 +41,7 @@ const defaultSettings = {
   language: "system",
   check_app_updates: true,
   log_debug: false,
+  tray_display_mode: "icon_and_speed",
 } as const;
 
 const tunStatus = {

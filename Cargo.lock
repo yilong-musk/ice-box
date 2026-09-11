@@ -1654,6 +1654,7 @@ dependencies = [
 name = "ice-box"
 version = "0.1.7"
 dependencies = [
+ "block2",
  "chrono",
  "fs2",
  "ice-config",
@@ -1663,6 +1664,9 @@ dependencies = [
  "ice-proxy-sys",
  "ice-tun-sys",
  "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "sha2",

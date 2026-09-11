@@ -56,6 +56,7 @@ const settings: AppSettings = {
   selected_tag: "Tokyo / edge-01",
   auto_set_system_proxy: true,
   proxy_service_enabled: false,
+  tray_display_mode: "icon_and_speed",
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,

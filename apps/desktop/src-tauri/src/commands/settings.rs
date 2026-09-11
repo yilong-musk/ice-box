@@ -40,6 +40,10 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
             persist_settings(&state.paths.settings(), &settings, host_platform())?;
             return Ok(());
         }
+        if only_tray_display_mode_changed(&previous, &settings) {
+            persist_settings(&state.paths.settings(), &settings, host_platform())?;
+            return Ok(());
+        }
         // Live TUN topology reconfigure (addresses / MTU / stack / …) while
         // TUN capture stays the active backend. Enabled flips never belong
         // here — they were handled above.
@@ -101,6 +105,16 @@ fn only_log_debug_changed(previous: &AppSettings, next: &AppSettings) -> bool {
     left.log_debug = false;
     right.log_debug = false;
     left == right && previous.log_debug != next.log_debug
+}
+
+/// Persist-only: the menu-bar item is drawn by the tray watchdog, which reads
+/// `settings.json` every second, so this needs no runtime-config apply.
+pub(crate) fn only_tray_display_mode_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.tray_display_mode = TrayDisplayMode::IconAndSpeed;
+    right.tray_display_mode = TrayDisplayMode::IconAndSpeed;
+    left == right && previous.tray_display_mode != next.tray_display_mode
 }
 
 pub(crate) fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {

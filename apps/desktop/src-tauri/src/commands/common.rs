@@ -17,7 +17,7 @@ pub(crate) use ice_config::{
     rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
     save_settings_for as persist_settings, set_proxy_service_enabled_for, AppError, AppPaths,
     AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
-    SettingsPatch, UiMessage,
+    SettingsPatch, TrayDisplayMode, UiMessage,
 };
 pub(crate) use ice_core::{
     proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,

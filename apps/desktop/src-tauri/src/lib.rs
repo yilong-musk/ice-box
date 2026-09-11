@@ -15,6 +15,8 @@ mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
+#[cfg(target_os = "macos")]
+mod tray_speed;
 #[cfg(target_os = "windows")]
 mod tray_wheel;
 mod windows_elevation;
@@ -283,6 +285,8 @@ pub fn run() {
                     .unwrap_or(tray::TrayLanguage::En)
             };
             tray::setup_tray(app.handle(), tray_language)?;
+            #[cfg(target_os = "macos")]
+            tray_speed::spawn_watchdog(app.handle().clone());
             tray::spawn_state_watchdog(app.handle().clone());
             core_watch::spawn_core_watchdog(app.handle().clone());
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());

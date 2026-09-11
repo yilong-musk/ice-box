@@ -860,3 +860,22 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
         .contains("blockme.com"));
     let _ = fs::remove_dir_all(state.paths.root());
 }
+
+#[test]
+fn only_tray_display_mode_changed_ignores_other_fields() {
+    use crate::commands::settings::only_tray_display_mode_changed;
+
+    let both = AppSettings::default();
+    let speed = AppSettings {
+        tray_display_mode: TrayDisplayMode::Speed,
+        ..AppSettings::default()
+    };
+    assert!(only_tray_display_mode_changed(&both, &speed));
+    // A save that also touches anything else is a full apply, not this
+    // persist-only path.
+    let mut other = speed.clone();
+    other.mixed_port = 18080;
+    assert!(!only_tray_display_mode_changed(&both, &other));
+    // Unchanged mode: nothing to do.
+    assert!(!only_tray_display_mode_changed(&both, &both));
+}

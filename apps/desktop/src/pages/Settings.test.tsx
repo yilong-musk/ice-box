@@ -19,6 +19,13 @@ import {
 import { Settings } from "./Settings";
 import { RuntimeStoreProvider } from "../lib/runtimeStore";
 
+/** The macOS-only menu bar card is gated on the host classifier; jsdom is not a
+ * macOS host, so that one test flips the flag. */
+const hostState = vi.hoisted(() => ({ macos: false }));
+vi.mock("../lib/windowChrome", () => ({
+  isMacosHost: () => hostState.macos,
+}));
+
 const getSettings = vi.fn();
 const getStatus = vi.fn();
 const saveSettings = vi.fn();
@@ -104,6 +111,7 @@ const defaultStatus = {
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hostState.macos = false;
     saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
@@ -121,6 +129,7 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -333,6 +342,7 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
 
@@ -375,6 +385,7 @@ describe("Settings", () => {
       language: "system" as const,
       check_app_updates: true,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     };
     const updated = { ...initial, mixed_port: 17900, proxy_mode: "global" as const };
@@ -429,6 +440,41 @@ describe("Settings", () => {
     ).toHaveAttribute("data-state", "on");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("hides the menu bar item setting away from macOS", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() =>
+      expect(view.getByLabelText(t("settings.language"))).toBeInTheDocument(),
+    );
+    expect(view.queryByLabelText(t("settings.tray"))).toBeNull();
+  });
+
+  it("persists the menu bar item mode on macOS", async () => {
+    hostState.macos = true;
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() =>
+      expect(view.getByLabelText(t("settings.tray"))).toBeInTheDocument(),
+    );
+    const tray = view.getByLabelText(t("settings.tray"));
+    expect(
+      within(tray).getByRole("radio", { name: t("settings.trayIconAndSpeed") }),
+    ).toHaveAttribute("data-state", "on");
+
+    fireEvent.click(
+      within(tray).getByRole("radio", { name: t("settings.traySpeedOnly") }),
+    );
+    await waitFor(
+      () =>
+        expect(saveSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ tray_display_mode: "speed" }),
+        ),
+      { timeout: 2000 },
+    );
   });
 
   it("defaults language to the system locale and persists changes", async () => {
@@ -488,6 +534,7 @@ describe("Settings", () => {
       language: "en",
       check_app_updates: true,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
     render(<Settings />);
@@ -621,6 +668,7 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: { ...tunSettings, enabled: true },
     });
 
@@ -1389,6 +1437,7 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: false,
       log_debug: false,
+      tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
     checkAppUpdate.mockResolvedValue({
