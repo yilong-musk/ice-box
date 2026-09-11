@@ -96,6 +96,29 @@ export function Subscriptions() {
     void refresh();
   }, [refresh]);
 
+  // The tray「订阅」submenu switches the active subscription while this page may
+  // be on screen. Re-read the index so the active badge and switch follow
+  // without waiting for a manual refresh; the node list moved with it, so drop
+  // the snapshot the Nodes page paints from on its next mount.
+  useEffect(() => {
+    if (typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        clearNodesSnapshot();
+        void refresh();
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [refresh]);
+
   async function run(action: () => Promise<unknown>, isUpdate = false) {
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();

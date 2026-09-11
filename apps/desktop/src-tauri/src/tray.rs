@@ -4,20 +4,21 @@
 //!
 //! The menu also carries the actions that do not need the window: the proxy
 //! service switch (labeled with the action, like the Home power button), the
-//! routing mode group, and the node groups. A watchdog re-derives all of them
-//! from the runtime state, so the menu follows changes made anywhere else —
-//! window, recovery, or a manual OS edit.
+//! routing mode group, the subscription group, and the node groups. A watchdog
+//! re-derives all of them from the runtime state, so the menu follows changes
+//! made anywhere else — window, recovery, or a manual OS edit.
 
 use crate::capture::TrafficCapture;
 use crate::commands::{
-    apply_proxy_mode, broadcast_state_change, collect_nodes, current_settings,
-    disable_active_backend_inner, lock_orchestrate, proxy_service_posture, select_group_member,
-    select_node, start_service, NodeInfo,
+    apply_after_subscription_change, apply_proxy_mode, broadcast_state_change, collect_nodes,
+    current_settings, disable_active_backend_inner, lock_orchestrate, proxy_service_posture,
+    select_group_member, select_node, start_service, NodeInfo,
 };
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
 use ice_core::CoreStatus;
+use ice_engine::{read_index, set_active, SubscriptionMeta, SubscriptionPaths};
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -28,6 +29,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Wry,
 };
+use uuid::Uuid;
 
 /// Menu re-derivation cadence. Longer than the 2s status poll on purpose: the
 /// live OS-proxy probe spawns `networksetup` subprocesses on macOS, and the
@@ -94,6 +96,7 @@ struct TrayLabels {
     mode_global: &'static str,
     mode_direct: &'static str,
     nodes: &'static str,
+    subs: &'static str,
     show: &'static str,
     quit: &'static str,
 }
@@ -119,6 +122,7 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_global: "全局",
             mode_direct: "直连",
             nodes: "节点",
+            subs: "订阅",
             show: "显示",
             quit: "退出",
         },
@@ -130,6 +134,7 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_global: "Global",
             mode_direct: "Direct",
             nodes: "Nodes",
+            subs: "Subscriptions",
             show: "Show",
             quit: "Quit",
         },
@@ -267,9 +272,59 @@ fn group_label(tag: &str, now: Option<&str>) -> String {
     }
 }
 
+/// One check item of the subscription submenu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubscriptionMenuItem {
+    id: Uuid,
+    label: String,
+    checked: bool,
+    /// The active entry is not clickable: the tray switches subscriptions, and
+    /// re-activating the live one would re-apply the running config for nothing
+    /// (turning the active subscription off stays on the Subscriptions page).
+    enabled: bool,
+}
+
+impl SubscriptionMenuItem {
+    /// Menu id carrying the subscription id. Encoded as a JSON array like the
+    /// node actions, so the click path needs no shared map to look the entry up
+    /// (it must never block the main thread) and the id space stays disjoint.
+    fn menu_id(&self) -> String {
+        serde_json::json!(["sub", self.id.to_string()]).to_string()
+    }
+}
+
+/// Decode an id built by [`SubscriptionMenuItem::menu_id`]. `None` for every
+/// other menu id (service switch, mode group, node items, submenu parents, …).
+fn subscription_id_from_menu_id(id: &str) -> Option<Uuid> {
+    if !id.starts_with('[') {
+        return None;
+    }
+    let parts: Vec<String> = serde_json::from_str(id).ok()?;
+    match parts.as_slice() {
+        [kind, id] if kind == "sub" => Uuid::parse_str(id).ok(),
+        _ => None,
+    }
+}
+
+/// Derive the subscription submenu body: one check item per stored
+/// subscription, the active one checked. The Subscriptions page lists the same
+/// entries; a pick here mirrors its switch by making that subscription the only
+/// active one and applying the change.
+fn subscription_menu_entries(metas: &[SubscriptionMeta]) -> Vec<SubscriptionMenuItem> {
+    metas
+        .iter()
+        .map(|meta| SubscriptionMenuItem {
+            id: meta.id,
+            label: meta.name.clone(),
+            checked: meta.active,
+            enabled: !meta.active,
+        })
+        .collect()
+}
+
 /// muda reads `&` as a mnemonic marker on Windows and strips a lone `&` on
-/// macOS; doubling keeps subscription tags containing `&` literal. GTK uses the
-/// text as-is.
+/// macOS; doubling keeps node tags and subscription names containing `&`
+/// literal. GTK uses the text as-is.
 fn menu_text(text: &str) -> Cow<'_, str> {
     if cfg!(any(target_os = "windows", target_os = "macos")) && text.contains('&') {
         Cow::Owned(text.replace('&', "&&"))
@@ -321,6 +376,15 @@ struct TrayMenuState {
     /// re-click or a failed switch would leave a wrong check mark on screen.
     /// Written from the menu thread (no lock), consumed by the sync.
     nodes_dirty: AtomicBool,
+    subs: Submenu<Wry>,
+    /// Body currently attached to `subs`, with the same locking rule as
+    /// `nodes_model`.
+    subs_model: Mutex<Vec<SubscriptionMenuItem>>,
+    /// Set by a subscription click, same reason as `nodes_dirty`: the platform
+    /// toggles the clicked check item itself, so a failed or repeated pick must
+    /// not leave a wrong check mark behind. Written from the menu thread (no
+    /// lock), consumed by the sync.
+    subs_dirty: AtomicBool,
     show: MenuItem<Wry>,
     quit: MenuItem<Wry>,
     language: AtomicU8,
@@ -364,6 +428,7 @@ impl TrayMenuState {
         self.update_label("global mode", self.mode_global.set_text(labels.mode_global))?;
         self.update_label("direct mode", self.mode_direct.set_text(labels.mode_direct))?;
         self.update_label("nodes", self.nodes.set_text(labels.nodes))?;
+        self.update_label("subscriptions", self.subs.set_text(labels.subs))?;
         self.update_label("Show", self.show.set_text(labels.show))?;
         self.update_label("Quit", self.quit.set_text(labels.quit))?;
         self.language.store(language.code(), Ordering::SeqCst);
@@ -393,6 +458,36 @@ impl TrayMenuState {
             .map_err(|err| tray_error("update tray nodes enabled", err))?;
         *applied = entries.to_vec();
         self.nodes_dirty.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Attach the derived subscription body, rebuilding the submenu only when
+    /// the model changed. Mirrors [`Self::apply_nodes`], including the lock rule:
+    /// only ever called off the main thread.
+    fn apply_subscriptions(
+        &self,
+        app: &AppHandle,
+        entries: &[SubscriptionMenuItem],
+    ) -> Result<(), AppError> {
+        let dirty = self.subs_dirty.load(Ordering::SeqCst);
+        let mut applied = self
+            .subs_model
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !dirty && applied.as_slice() == entries {
+            return Ok(());
+        }
+        clear_subscription_children(&self.subs)?;
+        if let Err(err) = append_subscription_items(app, &self.subs, entries) {
+            // Leave the model as it was, so the next sync retries the rebuild.
+            let _ = clear_subscription_children(&self.subs);
+            return Err(err);
+        }
+        self.subs
+            .set_enabled(!entries.is_empty())
+            .map_err(|err| tray_error("update tray subscriptions enabled", err))?;
+        *applied = entries.to_vec();
+        self.subs_dirty.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -487,6 +582,40 @@ fn node_check_item(app: &AppHandle, item: &NodeMenuItem) -> Result<CheckMenuItem
     .map_err(|err| tray_error("create tray node item", err))
 }
 
+/// Drop every child of the subscription submenu.
+fn clear_subscription_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
+    while parent
+        .remove_at(0)
+        .map_err(|err| tray_error("clear tray subscriptions", err))?
+        .is_some()
+    {}
+    Ok(())
+}
+
+/// Build and attach the subscription submenu body: one check item per
+/// subscription, nothing else.
+fn append_subscription_items(
+    app: &AppHandle,
+    parent: &Submenu<Wry>,
+    entries: &[SubscriptionMenuItem],
+) -> Result<(), AppError> {
+    for entry in entries {
+        let item = CheckMenuItem::with_id(
+            app,
+            entry.menu_id(),
+            menu_text(&entry.label),
+            entry.enabled,
+            entry.checked,
+            None::<&str>,
+        )
+        .map_err(|err| tray_error("create tray subscription item", err))?;
+        parent
+            .append(&item)
+            .map_err(|err| tray_error("append tray subscription item", err))?;
+    }
+    Ok(())
+}
+
 fn show_main_window(app: &AppHandle) {
     let Some(win) = app.get_webview_window("main") else {
         return;
@@ -563,10 +692,36 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             }
         }
     };
+    // Same seeding rule as the node submenu above: `apply_subscriptions` takes a
+    // lock the main thread must never hold while the watchdog rebuilds.
+    let sub_entries = current_subscription_entries(app).unwrap_or_default();
+    let subs = Submenu::with_id(app, "subs", labels.subs, false)?;
+    let subs_model = if sub_entries.is_empty() {
+        Vec::new()
+    } else {
+        match append_subscription_items(app, &subs, &sub_entries) {
+            Ok(()) => {
+                let _ = subs.set_enabled(true);
+                sub_entries
+            }
+            Err(err) => {
+                tracing::warn!(
+                    code = %err.code,
+                    error = %err.message,
+                    "tray subscription menu setup failed"
+                );
+                let _ = clear_subscription_children(&subs);
+                Vec::new()
+            }
+        }
+    };
     let show = MenuItem::with_id(app, "show", labels.show, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&service, &mode, &nodes, &separator, &show, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&service, &mode, &nodes, &subs, &separator, &show, &quit],
+    )?;
     app.manage(TrayMenuState {
         service,
         mode,
@@ -576,6 +731,9 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         nodes,
         nodes_model: Mutex::new(node_model),
         nodes_dirty: AtomicBool::new(false),
+        subs,
+        subs_model: Mutex::new(subs_model),
+        subs_dirty: AtomicBool::new(false),
         show,
         quit,
         language: AtomicU8::new(language.code()),
@@ -595,6 +753,10 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             let id = event.id.as_ref();
             if let Some(action) = node_action_from_menu_id(id) {
                 switch_node(app, action);
+                return;
+            }
+            if let Some(id) = subscription_id_from_menu_id(id) {
+                switch_subscription(app, id);
                 return;
             }
             match id {
@@ -665,6 +827,16 @@ fn current_node_entries(app: &AppHandle) -> Option<Vec<NodeMenuEntry>> {
     Some(node_menu_entries(&nodes, &selected))
 }
 
+/// Derive the subscription submenu body from the stored index. `None` while the
+/// app state or the index is unavailable (first launch, teardown): callers keep
+/// the previous menu. `read_index` skips the commit lock, like the status poll.
+fn current_subscription_entries(app: &AppHandle) -> Option<Vec<SubscriptionMenuItem>> {
+    let state = app.try_state::<AppState>()?;
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let index = read_index(&paths).ok()?;
+    Some(subscription_menu_entries(&index.items))
+}
+
 /// Mirrors the Nodes page: a `selected_tag` that is not in the list falls back
 /// to the first node, the same default `build_runtime_json` bakes in.
 fn resolve_selected_tag(nodes: &[NodeInfo], selected: Option<&str>) -> String {
@@ -681,7 +853,8 @@ fn resolve_selected_tag(nodes: &[NodeInfo], selected: Option<&str>) -> String {
 
 /// Re-derive the menu from the runtime state. Cheap enough for the watchdog:
 /// one settings read, one proxy record read, the memoized OS probe, and the
-/// node list (a cached profile plus, while the core runs, one Clash API call).
+/// subscription index plus the node list (a cached profile plus, while the core
+/// runs, one Clash API call).
 ///
 /// Off-main-thread only: rebuilding the node submenu blocks on main-thread menu
 /// mutations, so a watchdog rebuild plus a main-thread caller here would
@@ -694,6 +867,15 @@ pub fn sync_menu(app: &AppHandle) {
         return;
     };
     menu.apply_view(view);
+    if let Some(entries) = current_subscription_entries(app) {
+        if let Err(err) = menu.apply_subscriptions(app, &entries) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                "tray subscription menu sync failed"
+            );
+        }
+    }
     if let Some(entries) = current_node_entries(app) {
         if let Err(err) = menu.apply_nodes(app, &entries) {
             tracing::warn!(
@@ -705,9 +887,9 @@ pub fn sync_menu(app: &AppHandle) {
     }
 }
 
-/// Keep the service switch, the mode group, and the node groups in step with
-/// state changes the tray did not make: window actions, recovery, subscription
-/// updates, and external OS edits.
+/// Keep the service switch, the mode group, the subscription group, and the
+/// node groups in step with state changes the tray did not make: window actions,
+/// recovery, subscription updates, and external OS edits.
 pub fn spawn_state_watchdog(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(SYNC_INTERVAL);
@@ -787,6 +969,51 @@ fn switch_node(app: &AppHandle, action: NodeAction) {
     });
 }
 
+/// Tray「subscriptions」: make the clicked subscription the active one — the same
+/// pick the Subscriptions page switch makes. The pick persists for the next
+/// start and is applied live (the running core reloads onto the new profile,
+/// which also replaces the node submenu), so it goes off the main thread like
+/// the other tray actions.
+fn switch_subscription(app: &AppHandle, id: Uuid) {
+    if let Some(menu) = app.try_state::<TrayMenuState>() {
+        // The platform toggles the clicked check item before the event reaches
+        // us; have the next sync rebuild the group from reality.
+        menu.subs_dirty.store(true, Ordering::SeqCst);
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let result = (|| -> Result<(), AppError> {
+            let _orch = lock_orchestrate(state.inner())?;
+            let paths = SubscriptionPaths::from_app(&state.paths);
+            set_active(&paths, id, true).map_err(AppError::from)?;
+            let settings = current_settings(&state.paths)?;
+            if let Some(err) = apply_after_subscription_change(&app, state.inner(), &settings) {
+                tracing::warn!(
+                    code = %err.code,
+                    error = %err.message,
+                    "tray subscription switch apply warning"
+                );
+            }
+            Ok(())
+        })();
+        if let Err(err) = result {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                %id,
+                "tray subscription switch failed"
+            );
+        }
+        // Re-sync the menu and let the window re-read status/settings. Always
+        // announced: a failed switch can still leave a different state, and the
+        // group the platform checked on click must be re-derived from reality.
+        broadcast_state_change(&app);
+    });
+}
+
 /// Tray「proxy mode」: same call the Home mode selector makes.
 fn switch_mode(app: &AppHandle, mode: ProxyMode) {
     if let Some(menu) = app.try_state::<TrayMenuState>() {
@@ -834,6 +1061,7 @@ mod tests {
             ("规则", "全局", "直连")
         );
         assert_eq!(zh.nodes, "节点");
+        assert_eq!(zh.subs, "订阅");
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
 
         let en = labels(TrayLanguage::En);
@@ -845,6 +1073,7 @@ mod tests {
             ("Rule", "Global", "Direct")
         );
         assert_eq!(en.nodes, "Nodes");
+        assert_eq!(en.subs, "Subscriptions");
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
     }
 
@@ -962,6 +1191,57 @@ mod tests {
         for id in ["service", "show", "quit", "[\"group\",0]", "[\"member\"]"] {
             assert_eq!(node_action_from_menu_id(id), None, "{id}");
         }
+    }
+
+    fn subscription(id: &str, name: &str, active: bool) -> SubscriptionMeta {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "url": "https://example.com/sub",
+            "active": active,
+            "format": "sing_box",
+            "node_count": 2,
+        }))
+        .expect("subscription meta")
+    }
+
+    #[test]
+    fn subscription_menu_marks_the_active_one_and_keeps_it_unclickable() {
+        let first = "11111111-1111-4111-8111-111111111111";
+        let second = "22222222-2222-4222-8222-222222222222";
+        let metas = vec![
+            subscription(first, "机场 A", false),
+            subscription(second, "机场 B & C", true),
+        ];
+        let entries = subscription_menu_entries(&metas);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].label, "机场 A");
+        assert!(!entries[0].checked);
+        assert!(entries[0].enabled);
+        assert_eq!(entries[1].label, "机场 B & C");
+        assert!(entries[1].checked);
+        assert!(!entries[1].enabled);
+    }
+
+    #[test]
+    fn subscription_menu_ids_round_trip_and_keep_their_own_id_space() {
+        let id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let item = SubscriptionMenuItem {
+            id,
+            label: "机场 A".into(),
+            checked: true,
+            enabled: false,
+        };
+        assert_eq!(item.menu_id(), format!("[\"sub\",\"{id}\"]"));
+        assert_eq!(subscription_id_from_menu_id(&item.menu_id()), Some(id));
+        // Node items and plain ids stay in their own space.
+        assert_eq!(subscription_id_from_menu_id("service"), None);
+        assert_eq!(subscription_id_from_menu_id("[\"node\",\"香港 01\"]"), None);
+        assert_eq!(
+            subscription_id_from_menu_id("[\"sub\",\"not-a-uuid\"]"),
+            None
+        );
+        assert_eq!(subscription_id_from_menu_id("[\"sub\"]"), None);
     }
 
     #[test]
