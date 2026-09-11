@@ -374,6 +374,10 @@ export const api = {
     invoke<TrafficDelta>("get_traffic_since", { cursor: cursor ?? null }),
   listenCoreStatusChanged: (handler: () => void) =>
     listen("core://status-changed", () => handler()),
+  /** Emitted after a state mutation the window did not initiate (tray menu
+   * actions, launch-time restore) so pages re-read status and settings. */
+  listenStateChanged: (handler: () => void) =>
+    listen("app://state-changed", () => handler()),
   listenWindowHidden: (handler: () => void) =>
     listen("window://hidden", () => handler()),
   listenWindowShown: (handler: () => void) =>

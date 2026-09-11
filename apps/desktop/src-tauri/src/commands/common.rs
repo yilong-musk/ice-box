@@ -474,6 +474,18 @@ pub(crate) fn proxy_service_posture(
     ProxyServicePosture { live, recorded }
 }
 
+/// Announce a state change to the window and the tray.
+///
+/// Anything the window did not itself initiate (tray menu actions, launch-time
+/// restore) must not leave the Home page showing stale status or mode until its
+/// fallback poll: the event makes the UI re-read both, and the tray re-derives
+/// its menu items at once. Callers announce after releasing their locks.
+pub(crate) fn broadcast_state_change(app: &AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit(crate::core_snapshot::APP_STATE_CHANGED, ());
+    tray::sync_menu(app);
+}
+
 pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     // ORCH-1: never take `state.core`. Unexpected-exit reaping lives on the
     // watchdog (`reconcile_unexpected_core_exit`); status reads the snapshot.

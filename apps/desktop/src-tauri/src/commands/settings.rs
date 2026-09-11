@@ -185,6 +185,12 @@ pub(crate) fn apply_proxy_mode(
     if let Ok(mut cache) = state.clash_live_mode_cache.lock() {
         *cache = live_mode_ok;
     }
+    drop(proxy);
+    drop(core);
+    drop(_orch);
+    // The mode is persisted before the apply, so the window must re-read even
+    // when the apply failed (the Home selector refreshes on failure too).
+    broadcast_state_change(app);
     result
 }
 

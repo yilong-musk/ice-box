@@ -15,6 +15,10 @@ pub const CORE_STATUS_CHANGED: &str = "core://status-changed";
 pub const WINDOW_HIDDEN: &str = "window://hidden";
 pub const WINDOW_SHOWN: &str = "window://shown";
 pub const TRAFFIC_SAMPLE: &str = "traffic://sample";
+/// A mutation the window did not initiate (today: tray actions, launch-time
+/// restore). Pages re-read status and settings instead of waiting for their
+/// fallback poll.
+pub const APP_STATE_CHANGED: &str = "app://state-changed";
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct CoreSnapshot {

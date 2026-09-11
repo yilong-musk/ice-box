@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   「代理模式」submenu with the routing mode group (规则 / 全局 / 直连, the same
   call as the Home mode selector). A watchdog re-derives both from the runtime
   state every 5s, so the menu follows changes made from the window, by
-  recovery, or by hand in the OS.
+  recovery, or by hand in the OS; every tray action also announces the change,
+  so the window re-reads status and settings instead of waiting for its
+  fallback poll.
 - On Windows the tray icon opens the app window on left click and the menu on
   right click (the menu used to pop up on both). Restoring the window from the
   tray unminimizes it first, so a minimized window comes back to the front.

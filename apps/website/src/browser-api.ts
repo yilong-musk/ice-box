@@ -243,6 +243,9 @@ export const api = {
   async listenCoreStatusChanged(): Promise<() => void> {
     return () => {};
   },
+  async listenStateChanged(): Promise<() => void> {
+    return () => {};
+  },
   async listenWindowHidden(): Promise<() => void> {
     return () => {};
   },

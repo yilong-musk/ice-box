@@ -32,6 +32,7 @@ const installAppUpdate = vi.fn();
 const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
 const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
+const listenStateChanged = vi.fn().mockResolvedValue(() => {});
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -47,6 +48,7 @@ vi.mock("../api/tauri", () => ({
       listenCoreStatusChanged(...args),
     listenWindowHidden: (...args: unknown[]) => listenWindowHidden(...args),
     listenWindowShown: (...args: unknown[]) => listenWindowShown(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     installHelper: (...args: unknown[]) => installHelper(...args),
     uninstallHelper: (...args: unknown[]) => uninstallHelper(...args),
     relaunchElevatedForTun: (...args: unknown[]) =>

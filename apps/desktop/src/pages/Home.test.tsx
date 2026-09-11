@@ -18,6 +18,10 @@ const recoverTun = vi.fn();
 const installHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
 const ensureTunElevation = vi.fn();
+const listenStateChanged = vi.fn();
+
+/** Handler the page registers for `app://state-changed` (tray actions). */
+let stateChangedHandler: (() => void) | null = null;
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -35,6 +39,7 @@ vi.mock("../api/tauri", () => ({
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
     ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
@@ -79,6 +84,11 @@ const tunSettings = {
 describe("Home", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stateChangedHandler = null;
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      stateChangedHandler = handler;
+      return Promise.resolve(() => {});
+    });
     clearNodesSnapshot();
     getStatus.mockResolvedValue({
       core: {
@@ -175,6 +185,64 @@ describe("Home", () => {
       within(statusCard).getByRole("button", { name: t("home.power.stop") }),
     ).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("nodes.batchTest") })).toBeNull();
+  });
+
+  it("re-reads status and settings after an out-of-window state change", async () => {
+    // Sitting on Home with the service off and mode「规则」.
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.power.start") }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      view.getByRole("radio", { name: t("home.mode.rule") }),
+    ).toHaveAttribute("data-state", "on");
+
+    // The tray menu starts the service and switches the mode.
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "global",
+      tun: tunSettings,
+    });
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.power.stop") }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      view.getByRole("radio", { name: t("home.mode.global") }),
+    ).toHaveAttribute("data-state", "on");
+    expect(
+      view.getByRole("radio", { name: t("home.mode.rule") }),
+    ).toHaveAttribute("data-state", "off");
   });
 
   it("ignores a poll response that finishes after the pane is deactivated", async () => {

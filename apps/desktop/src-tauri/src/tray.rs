@@ -10,8 +10,8 @@
 
 use crate::capture::TrafficCapture;
 use crate::commands::{
-    apply_proxy_mode, current_settings, disable_active_backend_inner, proxy_service_posture,
-    start_service,
+    apply_proxy_mode, broadcast_state_change, current_settings, disable_active_backend_inner,
+    proxy_service_posture, start_service,
 };
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use crate::AppState;
@@ -421,7 +421,9 @@ fn toggle_service(app: &AppHandle) {
                 "tray proxy service switch failed"
             );
         }
-        sync_menu(&app);
+        // Re-sync the menu and let the window re-read status/settings. Always
+        // announced: a failed transition can still leave a different state.
+        broadcast_state_change(&app);
     });
 }
 
@@ -446,7 +448,7 @@ fn switch_mode(app: &AppHandle, mode: ProxyMode) {
                 "tray proxy mode switch failed"
             );
         }
-        sync_menu(&app);
+        broadcast_state_change(&app);
     });
 }
 

@@ -74,6 +74,7 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
     let unHidden = () => {};
     let unShown = () => {};
     let unCore = () => {};
+    let unState = () => {};
     void listenOptional(api.listenWindowHidden, () => setVisible(false)).then(
       (u) => {
         unHidden = u;
@@ -89,11 +90,17 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
     }).then((u) => {
       unCore = u;
     });
+    void listenOptional(api.listenStateChanged, () => {
+      void refreshStatus();
+    }).then((u) => {
+      unState = u;
+    });
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       unHidden();
       unShown();
       unCore();
+      unState();
     };
   }, [enabled, refreshStatus]);
 
