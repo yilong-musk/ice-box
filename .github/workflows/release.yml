@@ -82,7 +82,7 @@ jobs:
           echo "updater signature: ${sig[0]}"
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ice-box-macos
           path: |
@@ -191,7 +191,7 @@ jobs:
           done
 
       - name: Upload NSIS artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ice-box-windows
           path: |
