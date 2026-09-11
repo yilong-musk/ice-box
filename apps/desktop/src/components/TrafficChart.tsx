@@ -27,6 +27,21 @@ type Props = {
   className?: string;
 };
 
+function formatChartTime(value: unknown): string {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 export function TrafficChart({ running, paused = false, className }: Props) {
   useLanguagePreference();
   const chartConfig: ChartConfig = {
@@ -221,27 +236,13 @@ export function TrafficChart({ running, paused = false, className }: Props) {
             axisLine={false}
             tickMargin={8}
             minTickGap={32}
-            tickFormatter={(value) => {
-              const date = new Date(value);
-              return date.toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              });
-            }}
+            tickFormatter={(value) => formatChartTime(value)}
           />
           <ChartTooltip
             cursor={false}
             content={
               <ChartTooltipContent
-                labelFormatter={(value) => {
-                  const date = new Date(value);
-                  return date.toLocaleTimeString(undefined, {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  });
-                }}
+                labelFormatter={(value) => formatChartTime(value)}
                 indicator="dot"
                 formatter={(value) => formatRate(Number(value))}
               />
