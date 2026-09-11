@@ -7,15 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The tray menu now carries the two actions that do not need the window: a
-  proxy service switch (「启动代理服务」/「停止代理服务」, the same call as the
-  Home power button; disabled where the platform has no capture backend) and a
+- The tray menu now carries the actions that do not need the window: a proxy
+  service switch (「启动代理服务」/「停止代理服务」, the same call as the Home
+  power button; disabled where the platform has no capture backend), a
   「代理模式」submenu with the routing mode group (规则 / 全局 / 直连, the same
-  call as the Home mode selector). A watchdog re-derives both from the runtime
-  state every 5s, so the menu follows changes made from the window, by
-  recovery, or by hand in the OS; every tray action also announces the change,
-  so the window re-reads status and settings instead of waiting for its
-  fallback poll.
+  call as the Home mode selector), and a 「节点」submenu using the same switching
+  paths as the Nodes page. Profiles without strategy groups list every node
+  (checked item = the current exit); grouped profiles nest one submenu per group
+  with its members, where the live member is checked and non-selector groups are
+  read-only, and a group's entry shows the live exit (`tag → member`). Node
+  picks persist for the next start and switch the running core immediately.
+- A watchdog re-derives the service switch, the mode group, and the node
+  submenu from the runtime state every 5s, so the menu follows changes made from
+  the window, by recovery, by a subscription update, or by hand in the OS; every
+  tray action also announces the change, so the window (Home and Nodes) re-reads
+  status and settings instead of waiting for its fallback poll.
 - On Windows the tray icon opens the app window on left click and the menu on
   right click (the menu used to pop up on both). Restoring the window from the
   tray unminimizes it first, so a minimized window comes back to the front.
