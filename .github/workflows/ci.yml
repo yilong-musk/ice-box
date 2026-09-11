@@ -130,7 +130,7 @@ jobs:
           echo "helper embedded: $APP/Contents/Resources/ice-helper"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ice-box-macos
           path: |
@@ -238,7 +238,7 @@ jobs:
           done
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ice-box-windows
           path: |
