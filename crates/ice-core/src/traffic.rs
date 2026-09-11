@@ -71,6 +71,10 @@ struct Shared {
     changed: Condvar,
     shutdown: AtomicBool,
     on_sample: Mutex<Option<SampleCallback>>,
+    /// Test-only: panic the next `/traffic` stream on this monitor, not a
+    /// process-global flag that races parallel `ice-core` tests.
+    #[cfg(test)]
+    panic_next_stream: AtomicBool,
 }
 
 /// App-lifetime collector: idle until endpoints are set, then one `/traffic` stream.
@@ -92,6 +96,8 @@ impl TrafficMonitor {
                 changed: Condvar::new(),
                 shutdown: AtomicBool::new(false),
                 on_sample: Mutex::new(None),
+                #[cfg(test)]
+                panic_next_stream: AtomicBool::new(false),
             }),
             thread: Mutex::new(None),
         }
@@ -162,6 +168,11 @@ impl TrafficMonitor {
     fn seed_history_for_test(&self, sample: TrafficSample) {
         let mut inner = lock_inner(&self.shared);
         push_sample(&mut inner, sample, now_ms());
+    }
+
+    #[cfg(test)]
+    fn inject_next_stream_panic(&self) {
+        self.shared.panic_next_stream.store(true, Ordering::SeqCst);
     }
 
     fn ensure_thread(&self) {
@@ -285,7 +296,7 @@ fn wait_for_desired(shared: &Shared) -> Option<HealthEndpoints> {
 
 fn run_stream(endpoints: &HealthEndpoints, shared: &Shared) -> Result<TrafficStreamEnd, CoreError> {
     #[cfg(test)]
-    if PANIC_NEXT_STREAM.swap(false, Ordering::SeqCst) {
+    if shared.panic_next_stream.swap(false, Ordering::SeqCst) {
         panic!("injected traffic stream panic");
     }
     traffic_foreach(endpoints, STREAM_READ_TIMEOUT, |sample| {
@@ -293,7 +304,7 @@ fn run_stream(endpoints: &HealthEndpoints, shared: &Shared) -> Result<TrafficStr
             return false;
         }
         #[cfg(test)]
-        if PANIC_NEXT_STREAM.swap(false, Ordering::SeqCst) {
+        if shared.panic_next_stream.swap(false, Ordering::SeqCst) {
             panic!("injected traffic stream panic");
         }
         let mut inner = lock_inner(shared);
@@ -309,9 +320,6 @@ fn run_stream(endpoints: &HealthEndpoints, shared: &Shared) -> Result<TrafficStr
         true
     })
 }
-
-#[cfg(test)]
-static PANIC_NEXT_STREAM: AtomicBool = AtomicBool::new(false);
 
 fn supervisor_loop(shared: Arc<Shared>) {
     let mut backoff = RECONNECT_BACKOFF;
@@ -555,7 +563,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
 
-        PANIC_NEXT_STREAM.store(true, Ordering::SeqCst);
+        monitor.inject_next_stream_panic();
         let after_panic = Instant::now();
         let before = monitor.snapshot().points.len();
         loop {
