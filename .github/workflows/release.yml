@@ -239,10 +239,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # `file#label` only sets the GitHub label; the asset name stays the
+          # basename. Two LICENSE files would collide, so copy the bundled
+          # sing-box text to a unique name first.
+          cp third_party/sing-box/LICENSE sing-box-LICENSE
           gh release create "${{ github.ref_name }}" \
             release-assets/* \
             NOTICE \
             LICENSE \
-            "third_party/sing-box/LICENSE#sing-box-LICENSE" \
+            sing-box-LICENSE \
             --title "ice-box ${{ github.ref_name }}" \
             --notes-file RELEASE_NOTES.md

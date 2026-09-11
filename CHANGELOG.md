@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub Release publish copies bundled `third_party/sing-box/LICENSE` to
+  `sing-box-LICENSE` so it does not collide with the root `LICENSE` asset.
+
 ## [0.1.7] - 2026-09-11
 
 ### Changed
