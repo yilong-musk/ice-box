@@ -36,7 +36,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSAttributedStringNSStringDrawing, NSColor, NSFont, NSFontAttributeName,
+    NSAttributedStringNSStringDrawing, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSImage, NSLineBreakMode, NSMutableParagraphStyle,
     NSParagraphStyleAttributeName, NSStatusBarButton, NSTextAlignment,
 };
@@ -71,6 +71,17 @@ const READOUT_STALE_MS: u64 = 5_000;
 /// its content without reaching the menu bar's edges.
 const READOUT_FONT_SIZE: f64 = 9.0;
 
+/// The unit labels `format_rate` prints, in step order. [`readout_cell_width`]
+/// measures all of them, so a unit that is not in this list could widen the
+/// item; `format_rate` takes its labels from here.
+const RATE_UNITS: [&str; 4] = ["B/s", "K/s", "M/s", "G/s"];
+
+/// One figure space (U+2007), the width of one tabular digit — 5.84pt at 9pt in
+/// the readout font, against 2.70pt for a plain space. Numbers are right-aligned
+/// in their cell with these, so a short number keeps the unit beside it in
+/// column without printing a leading zero to hold the place.
+const FIGURE_SPACE: char = '\u{2007}';
+
 /// Gap between the icon and the text column. Matches the spacing a status item
 /// leaves between its image and its title.
 const ICON_TEXT_GAP: f64 = 3.0;
@@ -89,7 +100,7 @@ const READOUT_PADDING: f64 = 0.5;
 pub fn spawn_watchdog(app: AppHandle) {
     std::thread::spawn(move || {
         // This loop is the only writer of the readout, so the cache needs no lock:
-        // it keeps an unchanged item (idle traffic reads the same `00.0 B/s`
+        // it keeps an unchanged item (idle traffic reads the same `0.0 B/s`
         // every tick, and past ticks reject the cache) from hopping to the main
         // thread every second.
         let mut applied: Option<(TrayDisplayMode, Option<String>, bool)> = None;
@@ -172,17 +183,18 @@ fn readout_text(latest: Option<TimedTrafficSample>, now_ms: u64) -> String {
     format!("↓ {}\n↑ {}", format_rate(down), format_rate(up))
 }
 
-/// Rate text for the readout, 1024-based like the Home chart. Every reading
-/// fills the same four characters, the three digits of `00.0` with the leading
-/// zero padded in — `00.0 B/s`, `03.0 K/s`, `47.2 K/s`, `01.0 M/s` — so the
-/// item holds one width as the rate moves instead of gaining and losing a
-/// digit. The unit labels are the short `B/s`, `K/s`, `M/s`, `G/s` the menu bar
+/// Rate text for the readout, 1024-based like the Home chart. A reading is one
+/// decimal in three or four characters — `0.3 K/s`, `47.2 K/s` — right-aligned
+/// in a fixed four-character cell by [`FIGURE_SPACE`] where a number is short,
+/// so the item holds one width as the rate moves instead of gaining and losing
+/// a character, and a number below ten reads `0.3` rather than `00.3`. The unit
+/// labels ([`RATE_UNITS`]) are the short `B/s`, `K/s`, `M/s`, `G/s` the menu bar
 /// has room for, where the Home chart spells out `KB/s` and `MB/s`.
 ///
-/// The unit steps up before the number would need a fourth digit, i.e. at
+/// The unit steps up before the number would need a fifth character, i.e. at
 /// `99.95` of the current unit, where one decimal rounds to `100.0`. A rate
-/// just over 100 B therefore reads `00.1 K/s` and one just over 100 KB reads
-/// `00.1 M/s`. The Home chart (`formatRate` in
+/// just over 100 B therefore reads `0.1 K/s` and one just over 100 KB reads
+/// `0.1 M/s`. The Home chart (`formatRate` in
 /// `apps/desktop/src/lib/traffic.ts`) keeps its own form, which prints whole
 /// bytes and two decimals from a MiB up; the item is the one that has to stay
 /// narrow.
@@ -190,15 +202,21 @@ fn format_rate(bytes_per_sec: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
     const GIB: u64 = MIB * 1024;
-    if (bytes_per_sec as f64) < 99.95 {
-        format!("{:04.1} B/s", bytes_per_sec as f64)
-    } else if (bytes_per_sec as f64) < 99.95 * KIB as f64 {
-        format!("{:04.1} K/s", bytes_per_sec as f64 / KIB as f64)
-    } else if (bytes_per_sec as f64) < 99.95 * MIB as f64 {
-        format!("{:04.1} M/s", bytes_per_sec as f64 / MIB as f64)
+    let bytes = bytes_per_sec as f64;
+    let (unit, scaled) = if bytes < 99.95 {
+        (0, bytes)
+    } else if bytes < 99.95 * KIB as f64 {
+        (1, bytes / KIB as f64)
+    } else if bytes < 99.95 * MIB as f64 {
+        (2, bytes / MIB as f64)
     } else {
-        format!("{:04.1} G/s", bytes_per_sec as f64 / GIB as f64)
-    }
+        (3, bytes / GIB as f64)
+    };
+    let number = format!("{scaled:.1}");
+    let pad = FIGURE_SPACE
+        .to_string()
+        .repeat(4usize.saturating_sub(number.chars().count()));
+    format!("{pad}{number} {}", RATE_UNITS[unit])
 }
 
 /// Unix time in milliseconds, the clock the traffic monitor stamps samples
@@ -293,7 +311,9 @@ fn empty_title() -> Retained<NSAttributedString> {
 
 /// What the status item draws: the tray icon with the two readout lines to its
 /// right, both centred on the image's middle, so the item puts them on the menu
-/// bar's centre line.
+/// bar's centre line. The text always gets the same cell ([`readout_cell_width`]),
+/// so the image — and with it the status item — keeps one width as the rate
+/// moves.
 fn composed_image(
     icon: Option<Retained<NSImage>>,
     readout: &str,
@@ -301,6 +321,7 @@ fn composed_image(
 ) -> Retained<NSImage> {
     let text = attributed_readout(readout, color);
     let text_size = text.size();
+    let cell_width = readout_cell_width();
     let icon_size = icon
         .as_deref()
         .map(NSImage::size)
@@ -310,7 +331,7 @@ fn composed_image(
     } else {
         0.0
     };
-    let width = text_x + text_size.width;
+    let width = text_x + cell_width;
     let height = text_size.height.max(icon_size.height) + 2.0 * READOUT_PADDING;
     let handler = RcBlock::new(move |_rect: NSRect| -> Bool {
         // Inside the image the y axis grows up from the bottom edge, and both
@@ -323,13 +344,57 @@ fn composed_image(
             );
             icon.drawInRect(rect);
         }
+        // The block is centred inside the cell, which is at least as wide as
+        // the widest reading, so a shorter reading sits in the middle of the
+        // space the item reserves for it instead of shrinking the item.
         text.drawInRect(NSRect::new(
             NSPoint::new(text_x, (height - text_size.height) / 2.0),
-            text_size,
+            NSSize::new(cell_width, text_size.height),
         ));
         Bool::YES
     });
     NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(width, height), false, &handler)
+}
+
+/// Width of the text cell every reading is drawn into.
+///
+/// The readout font's tabular digits (see [`readout_font`]) make every number
+/// as wide as every other, but the unit letter is still proportional: `M` is
+/// wider than `K`, and the composed image is only as wide as the text inside
+/// it. Measuring all four units and taking the widest as the cell pins the
+/// item's width, so stepping up a unit cannot shift the item — or everything
+/// beside it in the menu bar — by a fraction of a point. Measured at 9pt on
+/// macOS 26, `↓ 99.9 M/s` is the widest at 48.76pt, 1.94pt wider than the
+/// `K/s` reading the item shows at ordinary rates.
+///
+/// Re-measured per compose rather than cached: a compose happens only when the
+/// text changes, and four short strings cost far less than the drawing that
+/// follows them. A rate past `99.95 G/s` — some 800 Gbps, more than any
+/// interface the core can carry — would print a fifth character and outgrow
+/// the cell; `format_rate` has no unit above `G/s`.
+fn readout_cell_width() -> f64 {
+    RATE_UNITS
+        .iter()
+        .map(|unit| {
+            // The widest reading of every unit: two digits, one decimal, no
+            // padding. A short number fills the same cell with figure spaces.
+            attributed_readout(&format!("↓ 99.9 {unit}"), NSColor::labelColor())
+                .size()
+                .width
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+/// The readout font: the menu bar's font at [`READOUT_FONT_SIZE`], with tabular
+/// figures, so `11.1` is exactly as wide as `88.8` and the digits do not
+/// shimmer or drag the item's width around as the rate moves. Measured on
+/// macOS 26, the same reading set spans 41.86pt to 48.38pt in the proportional
+/// system font.
+fn readout_font() -> Retained<NSFont> {
+    // SAFETY: AppKit declares the weight as a constant `CGFloat`; reading it
+    // neither mutates nor races with anything.
+    let weight = unsafe { NSFontWeightRegular };
+    NSFont::monospacedDigitSystemFontOfSize_weight(READOUT_FONT_SIZE, weight)
 }
 
 /// The two readout lines as one block, centred, in the readout font and in
@@ -340,7 +405,7 @@ fn attributed_readout(readout: &str, color: Retained<NSColor>) -> Retained<NSAtt
     let paragraph = NSMutableParagraphStyle::new();
     paragraph.setAlignment(NSTextAlignment::Center);
     paragraph.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
-    let font = NSFont::systemFontOfSize(READOUT_FONT_SIZE);
+    let font = readout_font();
     let values: [&AnyObject; 3] = [&font, &paragraph, &color];
     // SAFETY: AppKit's attribute-name constants are `&'static` keys, valid for
     // as long as the dictionary that copies them.
@@ -369,35 +434,36 @@ mod tests {
 
     #[test]
     fn rates_step_up_a_unit_at_a_hundred() {
-        assert_eq!(format_rate(0), "00.0 B/s");
-        assert_eq!(format_rate(3), "03.0 B/s");
+        // A number below ten keeps its cell with figure spaces, not zeroes.
+        assert_eq!(format_rate(0), "\u{2007}0.0 B/s");
+        assert_eq!(format_rate(3), "\u{2007}3.0 B/s");
         assert_eq!(format_rate(47), "47.0 B/s");
         assert_eq!(format_rate(99), "99.0 B/s");
-        // Just over 100 B: a fraction of a KB, not four digits of bytes.
-        assert_eq!(format_rate(100), "00.1 K/s");
-        assert_eq!(format_rate(1023), "01.0 K/s");
+        // Just over 100 B: a fraction of a KB, not three digits of bytes.
+        assert_eq!(format_rate(100), "\u{2007}0.1 K/s");
+        assert_eq!(format_rate(1023), "\u{2007}1.0 K/s");
         assert_eq!(format_rate(47 * 1024 + 204), "47.2 K/s");
         // The same step at 100 KB, and the same again at 100 MB.
-        assert_eq!(format_rate(100 * 1024), "00.1 M/s");
-        assert_eq!(format_rate(1024 * 1024), "01.0 M/s");
-        assert_eq!(format_rate(3 * 1024 * 1024 / 2), "01.5 M/s");
-        assert_eq!(format_rate(100 * 1024 * 1024), "00.1 G/s");
+        assert_eq!(format_rate(100 * 1024), "\u{2007}0.1 M/s");
+        assert_eq!(format_rate(1024 * 1024), "\u{2007}1.0 M/s");
+        assert_eq!(format_rate(3 * 1024 * 1024 / 2), "\u{2007}1.5 M/s");
+        assert_eq!(format_rate(100 * 1024 * 1024), "\u{2007}0.1 G/s");
     }
 
     #[test]
-    fn rates_step_up_before_rounding_to_a_fourth_digit() {
+    fn rates_step_up_before_rounding_to_a_fifth_character() {
         // 99.95 of a unit is where a tenth rounds to `100.0` — a digit more
         // than the readout keeps room for — so the step lands there.
         assert_eq!(format_rate(99), "99.0 B/s");
-        assert_eq!(format_rate(100), "00.1 K/s");
+        assert_eq!(format_rate(100), "\u{2007}0.1 K/s");
         assert_eq!(format_rate(102_348), "99.9 K/s");
-        assert_eq!(format_rate(102_349), "00.1 M/s");
+        assert_eq!(format_rate(102_349), "\u{2007}0.1 M/s");
         assert_eq!(format_rate(104_805_171), "99.9 M/s");
-        assert_eq!(format_rate(104_805_172), "00.1 G/s");
+        assert_eq!(format_rate(104_805_172), "\u{2007}0.1 G/s");
     }
 
     #[test]
-    fn rates_fill_the_same_three_digit_cell() {
+    fn rates_fill_one_number_cell_without_a_leading_zero() {
         let probes = [
             0,
             1,
@@ -417,21 +483,54 @@ mod tests {
         ];
         for bytes in probes {
             let text = format_rate(bytes);
-            let number = text.split(' ').next().unwrap();
-            assert_eq!(number.len(), 4, "{bytes}: {number}");
+            let (cell, unit) = text
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("{bytes}: {text} has no unit"));
+            // One four-character cell whatever the reading: figure spaces stand
+            // in for the digits a number below ten does not use.
+            assert_eq!(cell.chars().count(), 4, "{bytes}: {cell:?}");
+            assert!(
+                cell.chars()
+                    .all(|c| c == FIGURE_SPACE || c.is_ascii_digit() || c == '.'),
+                "{bytes}: {cell:?}"
+            );
+            let number = cell.trim_start_matches(FIGURE_SPACE);
             let (whole, fraction) = number
                 .split_once('.')
                 .unwrap_or_else(|| panic!("{bytes}: {number} has no decimal"));
-            assert_eq!(whole.len(), 2, "{bytes}: {number}");
+            // `0.5` and `47.2`, never `05.5` or `005.5`.
+            assert!(
+                (1..=2).contains(&whole.len()) && (whole.len() == 1 || !whole.starts_with('0')),
+                "{bytes}: {number}"
+            );
             assert_eq!(fraction.len(), 1, "{bytes}: {number}");
+            assert!(RATE_UNITS.contains(&unit), "{bytes}: {unit}");
         }
+    }
+
+    #[test]
+    fn rates_step_through_the_measured_units() {
+        // `readout_cell_width` reserves room for exactly `RATE_UNITS`, and
+        // `format_rate` prints exactly `RATE_UNITS`, in the same order: a unit
+        // added to one list and not the other would let the item change width.
+        let units: Vec<String> = [0, 100, 100 * 1024, 100 * 1024 * 1024]
+            .into_iter()
+            .map(|bytes| {
+                format_rate(bytes)
+                    .split(' ')
+                    .nth(1)
+                    .expect("rate text is `number unit`")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(units, RATE_UNITS);
     }
 
     #[test]
     fn readout_stacks_down_over_up() {
         assert_eq!(
             readout_text(Some(tick(1024, 2 * 1024 * 1024, 1_000)), 1_500),
-            "↓ 02.0 M/s\n↑ 01.0 K/s"
+            "↓ \u{2007}2.0 M/s\n↑ \u{2007}1.0 K/s"
         );
     }
 
@@ -442,7 +541,7 @@ mod tests {
         // its width — instead of dropping the text on every service toggle.
         assert_eq!(
             readout_text(None, 1_500),
-            "↓ 00.0 B/s\n↑ 00.0 B/s".to_string()
+            "↓ \u{2007}0.0 B/s\n↑ \u{2007}0.0 B/s".to_string()
         );
     }
 
@@ -453,17 +552,17 @@ mod tests {
         // later, instead of showing a rate the stream stopped updating.
         assert_eq!(
             readout_text(Some(sample), 1_000 + READOUT_STALE_MS),
-            "↓ 02.0 M/s\n↑ 01.0 K/s"
+            "↓ \u{2007}2.0 M/s\n↑ \u{2007}1.0 K/s"
         );
         assert_eq!(
             readout_text(Some(sample), 1_001 + READOUT_STALE_MS),
-            "↓ 00.0 B/s\n↑ 00.0 B/s"
+            "↓ \u{2007}0.0 B/s\n↑ \u{2007}0.0 B/s"
         );
     }
 
     #[test]
     fn display_modes_pick_the_parts_of_the_item() {
-        let readout = "↓ 02.0 M/s\n↑ 01.0 K/s".to_string();
+        let readout = "↓ \u{2007}2.0 M/s\n↑ \u{2007}1.0 K/s".to_string();
         // Icon + speed: both, whatever the stream does — a detached stream
         // reads zero (see `readout_has_no_gap_without_a_stream`) rather than
         // leaving the watchdog with no text to hand over.

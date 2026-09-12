@@ -234,7 +234,7 @@ const zh = {
   "settings.language.en": "English",
   "settings.tray": "系统托盘图标",
   "settings.trayDesc":
-    "菜单栏图标显示的内容；「仅网速」在核心停止、没有实时数据时暂时显示图标，避免入口消失",
+    "菜单栏图标显示的内容；选「仅网速」时读数一直显示，没有实时数据就显示 0.0",
   "settings.trayIconAndSpeed": "图标 + 网速",
   "settings.trayIconOnly": "仅图标",
   "settings.traySpeedOnly": "仅网速",
@@ -630,7 +630,7 @@ const en: Record<MessageKey, string> = {
   "settings.language.en": "English",
   "settings.tray": "Menu Bar Item",
   "settings.trayDesc":
-    "What the menu bar shows; Speed only falls back to the icon while the core is stopped and no live data is available, so the entry never disappears",
+    "What the menu bar shows; Speed only keeps the readout up, showing 0.0 while there is no live data",
   "settings.trayIconAndSpeed": "Icon + speed",
   "settings.trayIconOnly": "Icon only",
   "settings.traySpeedOnly": "Speed only",
