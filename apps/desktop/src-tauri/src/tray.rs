@@ -99,18 +99,21 @@ fn locale_tag_is_chinese(tag: &str) -> bool {
 }
 
 fn system_locale_is_chinese() -> bool {
+    let from_tag = locale_tag_is_chinese(&system_locale_tag());
     #[cfg(windows)]
     {
-        windows_ui_language_is_chinese()
+        // Display language can be Chinese while the locale name is `en-US`
+        // (formats only). Either source matching `zh` is enough.
+        from_tag || windows_ui_language_is_chinese()
     }
     #[cfg(not(windows))]
     {
-        locale_tag_is_chinese(&system_locale_tag())
+        from_tag
     }
 }
 
-/// Windows display language, the same source the webview uses for
-/// `navigator.language` on this platform.
+/// Windows display language. Complements [`system_locale_tag`]: WebView2's
+/// `navigator.language` usually follows this, not the format locale.
 #[cfg(windows)]
 fn windows_ui_language_is_chinese() -> bool {
     const LANG_CHINESE: u16 = 0x04;
@@ -119,6 +122,26 @@ fn windows_ui_language_is_chinese() -> bool {
     // current user's UI language; it has no pointers to keep alive.
     let langid = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
     langid & PRIMARYLANGID_MASK == LANG_CHINESE
+}
+
+/// BCP-47 locale name (`zh-CN`), the same shape [`locale_tag_is_chinese`]
+/// already parses for macOS / Unix tags.
+#[cfg(windows)]
+fn system_locale_tag() -> String {
+    const LOCALE_NAME_MAX_LENGTH: usize = 85;
+    let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH];
+    // SAFETY: the buffer is `LOCALE_NAME_MAX_LENGTH` wide chars, which is
+    // what the API documents; a positive return includes the trailing NUL.
+    let n = unsafe {
+        windows_sys::Win32::Globalization::GetUserDefaultLocaleName(
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        )
+    };
+    if n <= 1 {
+        return "en".into();
+    }
+    String::from_utf16_lossy(&buf[..(n as usize - 1)])
 }
 
 #[cfg(target_os = "macos")]
