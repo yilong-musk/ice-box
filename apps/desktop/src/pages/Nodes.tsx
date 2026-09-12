@@ -488,6 +488,29 @@ export function Nodes({ onNavigate, active = true }: Props) {
     }
   }, [isStale, nextGeneration, shareStatus]);
 
+  // The tray menu can switch the active exit (flat pick or group member) while
+  // this page is on screen. Those selections are otherwise read only on poll
+  // boundaries, so re-read on the announcement instead; a local switch in
+  // flight publishes its own result on top.
+  useEffect(() => {
+    if (typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        if (!activeRef.current) return;
+        void refresh();
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [refresh]);
+
   useEffect(() => {
     activeRef.current = active;
     if (!active) {

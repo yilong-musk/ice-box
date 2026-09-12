@@ -84,6 +84,11 @@ export type StatusResponse = {
 
 export type ProxyMode = "rule" | "global" | "direct";
 
+/** macOS menu-bar item: icon with the live speed readout, icon only, or
+ * readout only. Stored on every platform; the Settings page shows the control
+ * on macOS only. */
+export type TrayDisplayMode = "icon_and_speed" | "icon" | "speed";
+
 /** Validated TUN capture parameters (`docs/tun.md`). Only `enabled` is user-facing. */
 export type TunSettings = {
   enabled: boolean;
@@ -116,6 +121,8 @@ export type AppSettings = {
   check_app_updates: boolean;
   /** Logs page shows every parsed line. Default is connections and important events. */
   log_debug: boolean;
+  /** macOS menu-bar item: icon + live speed, icon only, or speed only. */
+  tray_display_mode: TrayDisplayMode;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -196,6 +203,7 @@ export type SettingsPatch = {
   language?: "system" | "zh" | "en";
   check_app_updates?: boolean;
   log_debug?: boolean;
+  tray_display_mode?: TrayDisplayMode;
 };
 
 export type AppErrorPayload = {
@@ -374,6 +382,10 @@ export const api = {
     invoke<TrafficDelta>("get_traffic_since", { cursor: cursor ?? null }),
   listenCoreStatusChanged: (handler: () => void) =>
     listen("core://status-changed", () => handler()),
+  /** Emitted after a state mutation the window did not initiate (tray menu
+   * actions, launch-time restore) so pages re-read status and settings. */
+  listenStateChanged: (handler: () => void) =>
+    listen("app://state-changed", () => handler()),
   listenWindowHidden: (handler: () => void) =>
     listen("window://hidden", () => handler()),
   listenWindowShown: (handler: () => void) =>

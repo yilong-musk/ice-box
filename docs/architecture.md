@@ -88,8 +88,32 @@ mutation and restored on stop or failure.
 Startup reconciles leftover processes and capture state before starting the
 core. Recovery itself does not enable capture; restoring the user's saved
 service choice is a separate action. Closing the window leaves the app in the
-tray. Quitting releases capture before stopping the core. TUN state transitions
-and recovery rules are maintained only in [tun.md](tun.md).
+tray, whose menu mirrors the Home power switch (start / stop the proxy service)
+and the routing-mode selector, the Subscriptions page for switching the active
+subscription, and the Nodes page for switching the active exit (one node per
+strategy group, nested one level down); all of them call the same command paths
+the window does. On macOS the icon also carries a live traffic readout next to
+it, re-derived once a second from the same `/traffic` stream the Home chart
+reads. The readout is drawn in a tabular-figure font inside one cell measured
+from the widest unit, with the number right-aligned by figure spaces rather than
+a leading zero, so the item keeps one width whether the rate is `0.0` or
+`99.9 M/s`; a detached stream or a stale tick reads `0.0 B/s` instead of
+clearing the text, so the item holds its width while the proxy service starts
+and stops, and the text dims while that service is off — the power control's
+state, which the same posture answers, not the core process, which can run on
+its own — so those zeroes read as idle rather than as live traffic. The two
+stacked lines are set as one image together with the icon (`tray_speed.rs`),
+because a status item centres an image but pins a title to the top of the item
+— two lines of the menu-bar font would not fit the bar either. The Settings
+page picks what the item shows — icon + readout, icon only, or readout only —
+through `tray_display_mode`, which the same watchdog reads once a second;
+readout-only
+always has that text to draw, which is what keeps the item clickable. On
+Windows those menus are classic Win32 popup menus, which ignore the mouse wheel:
+`tray_wheel.rs` hooks the tray thread and turns wheel messages into the arrow
+keys a long menu (the node list of a large subscription) already scrolls with.
+Quitting releases capture before stopping the core. TUN state transitions and
+recovery rules are maintained only in [tun.md](tun.md).
 
 ## Trust boundaries
 

@@ -41,6 +41,7 @@ const defaultSettings = {
   language: "system",
   check_app_updates: true,
   log_debug: false,
+  tray_display_mode: "icon_and_speed",
 } as const;
 
 const tunStatus = {
@@ -82,6 +83,7 @@ vi.mock("./api/tauri", () => ({
     checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
+    listenStateChanged: vi.fn().mockResolvedValue(() => {}),
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
     getTrafficSnapshot: vi

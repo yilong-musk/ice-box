@@ -231,6 +231,33 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }, [runtime?.status, onStatus]);
 
+  // The tray menu can start/stop the service and switch the routing mode while
+  // this page is on screen. The settings (mode) are otherwise read only on
+  // mount, so re-read them here instead of waiting for the fallback poll; the
+  // shared store covers status. A local action in flight owns the controls, and
+  // its own trailing refresh converges.
+  useEffect(() => {
+    if (typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
+          return;
+        }
+        pollGenRef.current += 1;
+        void refresh(pollGenRef.current, { settings: true });
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [refresh]);
+
   useEffect(() => {
     activeRef.current = active;
     pollGenRef.current += 1;

@@ -13,77 +13,83 @@ pub struct NodeInfo {
     pub group_all: Option<Vec<String>>,
 }
 
+/// Node list with the live group state. Shared by the `list_nodes` command and
+/// the tray node menu (which re-derives it on every sync tick).
+pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError> {
+    let Some(outbounds) = merged_outbounds_opt(state)? else {
+        return Ok(vec![]);
+    };
+    let settings = current_settings(&state.paths)?;
+    let selections = load_group_selections(&state.paths.group_selections());
+    let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
+    let live = if core_running {
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
+        proxy_groups(&endpoints).ok()
+    } else {
+        None
+    };
+    Ok(outbounds
+        .iter()
+        .map(|o| {
+            let ty = o
+                .outbound
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let is_group = ["selector", "urltest", "fallback", "loadbalance"]
+                .iter()
+                .any(|g| g == &ty);
+            let live_state = live
+                .as_ref()
+                .and_then(|groups| groups.iter().find(|g| g.tag == o.tag));
+            let static_members: Vec<String> = o
+                .outbound
+                .get("outbounds")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let static_now = if ty == "selector" {
+                selections
+                    .get(&o.tag)
+                    .cloned()
+                    .or_else(|| {
+                        o.outbound
+                            .get("default")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .or_else(|| static_members.first().cloned())
+            } else {
+                None
+            };
+            NodeInfo {
+                tag: o.tag.clone(),
+                outbound_type: ty,
+                group_now: live_state
+                    .map(|g| g.now.clone())
+                    .filter(|n| !n.is_empty())
+                    .or(static_now)
+                    .filter(|_| is_group),
+                group_all: if is_group {
+                    Some(live_state.map(|g| g.all.clone()).unwrap_or(static_members))
+                } else {
+                    None
+                },
+            }
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub async fn list_nodes(app: AppHandle) -> Result<Vec<NodeInfo>, AppError> {
     run_blocking("list_nodes", move || {
         let state = app.state::<AppState>();
-        let Some(outbounds) = merged_outbounds_opt(&state)? else {
-            return Ok(vec![]);
-        };
-        let settings = current_settings(&state.paths)?;
-        let selections = load_group_selections(&state.paths.group_selections());
-        let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
-        let live = if core_running {
-            let endpoints = clash_endpoints(&state.paths, &settings)?;
-            proxy_groups(&endpoints).ok()
-        } else {
-            None
-        };
-        Ok(outbounds
-            .iter()
-            .map(|o| {
-                let ty = o
-                    .outbound
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let is_group = ["selector", "urltest", "fallback", "loadbalance"]
-                    .iter()
-                    .any(|g| g == &ty);
-                let live_state = live
-                    .as_ref()
-                    .and_then(|groups| groups.iter().find(|g| g.tag == o.tag));
-                let static_members: Vec<String> = o
-                    .outbound
-                    .get("outbounds")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|m| m.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let static_now = if ty == "selector" {
-                    selections
-                        .get(&o.tag)
-                        .cloned()
-                        .or_else(|| {
-                            o.outbound
-                                .get("default")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
-                        .or_else(|| static_members.first().cloned())
-                } else {
-                    None
-                };
-                NodeInfo {
-                    tag: o.tag.clone(),
-                    outbound_type: ty,
-                    group_now: live_state
-                        .map(|g| g.now.clone())
-                        .filter(|n| !n.is_empty())
-                        .or(static_now)
-                        .filter(|_| is_group),
-                    group_all: if is_group {
-                        Some(live_state.map(|g| g.all.clone()).unwrap_or(static_members))
-                    } else {
-                        None
-                    },
-                }
-            })
-            .collect())
+        collect_nodes(state.inner())
     })
     .await
 }
@@ -604,115 +610,126 @@ pub struct TagRequest {
     pub tag: String,
 }
 
-#[tauri::command]
-pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), AppError> {
-    run_blocking("set_selected_node", move || {
-        let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        // One profile load (mtime-cached) validates the tag and computes the
-        // selection group; the pick itself is applied live via the Clash API.
-        let profile = active_profile(&state)?;
-        if !profile.all_tags().iter().any(|t| t == &req.tag) {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                format!("unknown node tag: {}", req.tag),
-            ));
-        }
+/// Persist and apply a node pick. Shared by the `set_selected_node` command and
+/// the tray node menu; callers hold the orchestrate lock.
+pub(crate) fn select_node(app: &AppHandle, state: &AppState, tag: &str) -> Result<(), AppError> {
+    // One profile load (mtime-cached) validates the tag and computes the
+    // selection group; the pick itself is applied live via the Clash API.
+    let profile = active_profile(state)?;
+    if !profile.all_tags().iter().any(|t| t == tag) {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("unknown node tag: {tag}"),
+        ));
+    }
 
-        // With strategy groups the pick applies to the group containing the tag (top-level
-        // group preferred); flat profiles use the injected `proxy` selector.
-        let selection_group = if profile.groups.is_empty() {
-            None
-        } else {
-            selection_group_for(&profile, &req.tag)
-        };
+    // With strategy groups the pick applies to the group containing the tag (top-level
+    // group preferred); flat profiles use the injected `proxy` selector.
+    let selection_group = if profile.groups.is_empty() {
+        None
+    } else {
+        selection_group_for(&profile, tag)
+    };
 
-        // Picking a strategy group that isn't itself a member of any other group (e.g. the
-        // top-level group) is a live no-op: grouped profiles have no flat `proxy` selector
-        // for select_outbound to target, and there is no parent group to set its member in.
-        if is_unselectable_group(&profile, &req.tag) {
-            return Ok(());
-        }
+    // Picking a strategy group that isn't itself a member of any other group (e.g. the
+    // top-level group) is a live no-op: grouped profiles have no flat `proxy` selector
+    // for select_outbound to target, and there is no parent group to set its member in.
+    if is_unselectable_group(&profile, tag) {
+        return Ok(());
+    }
 
-        let previous = current_settings(&state.paths)?;
-        let mut settings = previous.clone();
-        settings.selected_tag = Some(req.tag.clone());
+    let previous = current_settings(&state.paths)?;
+    let mut settings = previous.clone();
+    settings.selected_tag = Some(tag.to_string());
 
-        // Persist the group member selection too (mirrors set_group_selection) so grouped
-        // profiles keep the pick across restarts / config regeneration.
-        let previous_selection = if let Some(group) = &selection_group {
-            let mut selections = load_group_selections(&state.paths.group_selections());
-            let prev = selections.insert(group.clone(), req.tag.clone());
-            save_group_selections(&state.paths.group_selections(), &selections)?;
-            Some((group.clone(), prev))
-        } else {
-            None
-        };
+    // Persist the group member selection too (mirrors set_group_selection) so grouped
+    // profiles keep the pick across restarts / config regeneration.
+    let previous_selection = if let Some(group) = &selection_group {
+        let mut selections = load_group_selections(&state.paths.group_selections());
+        let prev = selections.insert(group.clone(), tag.to_string());
+        save_group_selections(&state.paths.group_selections(), &selections)?;
+        Some((group.clone(), prev))
+    } else {
+        None
+    };
 
-        persist_settings(&state.paths.settings(), &settings, host_platform())?;
-        // Persist the default in the runtime config. The live switch (below)
-        // already applied the pick; the config write only bakes it in for
-        // restarts, so patch the target selector's `default` instead of a full
-        // rebuild. Fall back to `generate_config` when the selector is not
-        // locatable (e.g. first run without a config yet).
-        let selector_tag = if profile.groups.is_empty() {
-            Some("proxy".to_string())
-        } else {
-            selection_group.clone()
-        };
-        let persist_result = match &selector_tag {
-            Some(sel) => match patch_selected_tag_default(&state.paths, sel, &req.tag) {
-                Ok(true) => Ok(()),
-                Ok(false) => generate_config_with_cache(
-                    &state.paths,
-                    &settings,
-                    resource_dir(&app).as_deref(),
-                    state.capture.apply_intent(),
-                    Some(state.profile_parse_cache.as_ref()),
-                )
-                .map(|_| ()),
-                Err(err) => Err(err),
-            },
-            None => generate_config_with_cache(
+    persist_settings(&state.paths.settings(), &settings, host_platform())?;
+    // Persist the default in the runtime config. The live switch (below)
+    // already applied the pick; the config write only bakes it in for
+    // restarts, so patch the target selector's `default` instead of a full
+    // rebuild. Fall back to `generate_config` when the selector is not
+    // locatable (e.g. first run without a config yet).
+    let selector_tag = if profile.groups.is_empty() {
+        Some("proxy".to_string())
+    } else {
+        selection_group.clone()
+    };
+    let persist_result = match &selector_tag {
+        Some(sel) => match patch_selected_tag_default(&state.paths, sel, tag) {
+            Ok(true) => Ok(()),
+            Ok(false) => generate_config_with_cache(
                 &state.paths,
                 &settings,
-                resource_dir(&app).as_deref(),
+                resource_dir(app).as_deref(),
                 state.capture.apply_intent(),
                 Some(state.profile_parse_cache.as_ref()),
             )
             .map(|_| ()),
+            Err(err) => Err(err),
+        },
+        None => generate_config_with_cache(
+            &state.paths,
+            &settings,
+            resource_dir(app).as_deref(),
+            state.capture.apply_intent(),
+            Some(state.profile_parse_cache.as_ref()),
+        )
+        .map(|_| ()),
+    };
+    if let Err(err) = persist_result {
+        let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
+        rollback_group_selection(state, &previous_selection);
+        return Err(err);
+    }
+
+    let should_select = {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        core.state().status == CoreStatus::Running
+    };
+    if should_select {
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
+        let result = match &selection_group {
+            Some(group) => select_group(&endpoints, group, tag),
+            None => select_outbound(&endpoints, tag),
         };
-        if let Err(err) = persist_result {
+        if let Err(err) = result {
             let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
-            rollback_group_selection(&state, &previous_selection);
-            return Err(err);
+            rollback_group_selection(state, &previous_selection);
+            let _ = generate_config_with_cache(
+                &state.paths,
+                &previous,
+                resource_dir(app).as_deref(),
+                state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
+            );
+            return Err(AppError::from(err));
         }
+    }
 
-        let should_select = {
-            let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-            core.state().status == CoreStatus::Running
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), AppError> {
+    run_blocking("set_selected_node", move || {
+        let state = app.state::<AppState>();
+        let result = {
+            let _orch = lock_orchestrate(&state)?;
+            select_node(&app, state.inner(), &req.tag)
         };
-        if should_select {
-            let endpoints = clash_endpoints(&state.paths, &settings)?;
-            let result = match &selection_group {
-                Some(group) => select_group(&endpoints, group, &req.tag),
-                None => select_outbound(&endpoints, &req.tag),
-            };
-            if let Err(err) = result {
-                let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
-                rollback_group_selection(&state, &previous_selection);
-                let _ = generate_config_with_cache(
-                    &state.paths,
-                    &previous,
-                    resource_dir(&app).as_deref(),
-                    state.capture.apply_intent(),
-                    Some(state.profile_parse_cache.as_ref()),
-                );
-                return Err(AppError::from(err));
-            }
-        }
-
-        Ok(())
+        // The tray menu otherwise waits for the 5s watchdog.
+        broadcast_state_change(&app);
+        result
     })
     .await
 }
@@ -775,8 +792,45 @@ pub struct GroupSelectionRequest {
     pub member: String,
 }
 
-/// Switch a strategy group member: persists the selection always (survives restarts /
-/// config regeneration), and applies it live via Clash API when the core is running.
+/// Persist and apply a strategy-group member pick. Shared by the
+/// `set_group_selection` command and the tray node menu; callers hold the
+/// orchestrate lock. The pick always survives restarts / config regeneration,
+/// and is applied live via the Clash API when the core is running.
+pub(crate) fn select_group_member(
+    app: &AppHandle,
+    state: &AppState,
+    group: &str,
+    member: &str,
+) -> Result<(), AppError> {
+    let outbounds = merged_outbounds(state)?;
+    validate_static_group_member(&outbounds, group, member)?;
+
+    let mut selections = load_group_selections(&state.paths.group_selections());
+    selections.insert(group.to_string(), member.to_string());
+    save_group_selections(&state.paths.group_selections(), &selections)?;
+
+    let settings = current_settings(&state.paths)?;
+    let should_apply_live = {
+        let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        core.state().status == CoreStatus::Running
+    };
+    if should_apply_live {
+        let endpoints = clash_endpoints(&state.paths, &settings)?;
+        select_group(&endpoints, group, member).map_err(AppError::from)?;
+    } else if !patch_selected_tag_default(&state.paths, group, member)? {
+        generate_config_with_cache(
+            &state.paths,
+            &settings,
+            resource_dir(app).as_deref(),
+            state.capture.apply_intent(),
+            Some(state.profile_parse_cache.as_ref()),
+        )?;
+    }
+    Ok(())
+}
+
+/// Switch a strategy group member: persists the selection always, and applies
+/// it live when the core is running. Same path as the tray node menu.
 #[tauri::command]
 pub async fn set_group_selection(
     app: AppHandle,
@@ -784,32 +838,12 @@ pub async fn set_group_selection(
 ) -> Result<(), AppError> {
     run_blocking("set_group_selection", move || {
         let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        let outbounds = merged_outbounds(state.inner())?;
-        validate_static_group_member(&outbounds, &req.group, &req.member)?;
-
-        let mut selections = load_group_selections(&state.paths.group_selections());
-        selections.insert(req.group.clone(), req.member.clone());
-        save_group_selections(&state.paths.group_selections(), &selections)?;
-
-        let settings = current_settings(&state.paths)?;
-        let should_apply_live = {
-            let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-            core.state().status == CoreStatus::Running
+        let result = {
+            let _orch = lock_orchestrate(&state)?;
+            select_group_member(&app, state.inner(), &req.group, &req.member)
         };
-        if should_apply_live {
-            let endpoints = clash_endpoints(&state.paths, &settings)?;
-            select_group(&endpoints, &req.group, &req.member).map_err(AppError::from)?;
-        } else if !patch_selected_tag_default(&state.paths, &req.group, &req.member)? {
-            generate_config_with_cache(
-                &state.paths,
-                &settings,
-                resource_dir(&app).as_deref(),
-                state.capture.apply_intent(),
-                Some(state.profile_parse_cache.as_ref()),
-            )?;
-        }
-        Ok(())
+        broadcast_state_change(&app);
+        result
     })
     .await
 }

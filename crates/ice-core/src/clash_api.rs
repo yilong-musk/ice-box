@@ -346,8 +346,8 @@ pub(crate) fn traffic_foreach(
         let line = match line {
             Ok(line) => line,
             // A core restart (or an aborted stream) resets the /traffic
-            // connection: on Windows the read surfaces as EINVAL / reset
-            // instead of a clean EOF. The follow legitimately ends there.
+            // connection: the read surfaces as EINVAL or a reset instead of a
+            // clean EOF. The follow legitimately ends there.
             Err(err) if traffic_stream_ended(&err) => break,
             Err(err) => {
                 return Err(clash_api_err("/traffic", format!("read: {err}")));
@@ -378,7 +378,14 @@ fn traffic_stream_ended(err: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::UnexpectedEof
             | std::io::ErrorKind::BrokenPipe
-    ) || (cfg!(target_os = "windows") && err.raw_os_error() == Some(22))
+            // EINVAL (`InvalidInput`): a peer that goes away mid-read does not
+            // always surface as a reset. Windows has always reported it this
+            // way, and the macOS CI runner reports the same "Invalid argument
+            // (os error 22)" when the close races the read. Either way the
+            // connection is unusable, so the follow ends here and the
+            // supervisor reconnects instead of logging a stream failure.
+            | std::io::ErrorKind::InvalidInput
+    )
 }
 
 fn percent_encode_path(s: &str) -> String {
@@ -666,6 +673,35 @@ mod tests {
         .expect("eof");
         assert!(ticks > 0, "expected at least one tick before close");
         assert_eq!(end, TrafficStreamEnd::Eof);
+    }
+
+    #[test]
+    fn aborted_stream_reads_count_as_the_stream_ending() {
+        // A peer that closes mid-read does not surface as one clean error:
+        // the macOS CI runner reports `Invalid argument (os error 22)` where
+        // Linux reports a reset. None of those may end the follow as a
+        // failure, or the stream supervisor would log one on every core
+        // restart.
+        #[cfg(unix)]
+        assert!(
+            traffic_stream_ended(&std::io::Error::from_raw_os_error(libc::EINVAL)),
+            "raw EINVAL (the macOS failure) ends the stream"
+        );
+        for kind in [
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::BrokenPipe,
+        ] {
+            assert!(
+                traffic_stream_ended(&std::io::Error::from(kind)),
+                "{kind:?} ends the stream"
+            );
+        }
+        // A read timeout is not an end: the caller backs off and retries.
+        assert!(!traffic_stream_ended(&std::io::Error::from(
+            std::io::ErrorKind::TimedOut
+        )));
     }
 
     #[test]

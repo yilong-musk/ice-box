@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it, vi } from "vitest";
-import { detectWindowChrome, runWindowCommand } from "./windowChrome";
+import { detectWindowChrome, isMacosHost, runWindowCommand } from "./windowChrome";
 
 const minimize = vi.fn().mockResolvedValue(undefined);
 const toggleMaximize = vi.fn().mockResolvedValue(undefined);
@@ -40,6 +40,20 @@ describe("detectWindowChrome", () => {
   it("leaves Linux on the default decorated window", () => {
     expect(detectWindowChrome("Mozilla/5.0 (X11; Linux x86_64)", "Linux x86_64")).toBe(
       "plain",
+    );
+  });
+});
+
+describe("isMacosHost", () => {
+  it("gates host-specific settings on macOS only", () => {
+    expect(
+      isMacosHost("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", "MacIntel"),
+    ).toBe(true);
+    expect(
+      isMacosHost("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Win32"),
+    ).toBe(false);
+    expect(isMacosHost("Mozilla/5.0 (X11; Linux x86_64)", "Linux x86_64")).toBe(
+      false,
     );
   });
 });

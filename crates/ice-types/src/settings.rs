@@ -37,6 +37,27 @@ pub enum LanguagePreference {
     En,
 }
 
+/// macOS only: what the menu-bar item draws — the icon with the live traffic
+/// readout beside it, the icon alone, or the readout alone.
+///
+/// A detached traffic stream still reads as `0.0`, so [`Self::Speed`] keeps
+/// the zeroed readout rather than swapping back to the icon. The icon is only
+/// restored when there is no text at all: an item with neither icon nor text
+/// is an unclickable sliver of the menu bar, and the tray menu is the window's
+/// only entry point while it is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayDisplayMode {
+    /// Icon and live speed readout (default).
+    #[default]
+    IconAndSpeed,
+    /// Icon only; the readout stays off the bar.
+    Icon,
+    /// Speed readout only. A detached stream still prints `0.0`; the icon
+    /// returns only when no readout text is available.
+    Speed,
+}
+
 /// Capitalized Clash runtime mode, matching sing-box's case-sensitive `mode-list`
 /// membership checks (the pinned 1.13.19 does not accept an emitted `mode_list`).
 ///
@@ -332,6 +353,12 @@ pub struct AppSettings {
     /// off (connections and important events). Missing field → false.
     #[serde(default)]
     pub log_debug: bool,
+    /// macOS menu-bar item: icon + live readout, icon only, or readout only.
+    /// The frontend hides the control elsewhere, but the field is stored on
+    /// every platform so a settings file survives a platform move. Defaults to
+    /// icon + readout for existing `settings.json` files.
+    #[serde(default)]
+    pub tray_display_mode: TrayDisplayMode,
 }
 
 fn default_auto_default_rules() -> bool {
@@ -359,6 +386,7 @@ impl Default for AppSettings {
             language: LanguagePreference::System,
             check_app_updates: true,
             log_debug: false,
+            tray_display_mode: TrayDisplayMode::IconAndSpeed,
         }
     }
 }
@@ -458,6 +486,9 @@ impl AppSettings {
         if let Some(v) = patch.log_debug {
             next.log_debug = v;
         }
+        if let Some(v) = patch.tray_display_mode {
+            next.tray_display_mode = v;
+        }
         next
     }
 }
@@ -500,6 +531,8 @@ pub struct SettingsPatch {
     pub check_app_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_debug: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_display_mode: Option<TrayDisplayMode>,
 }
 
 /// Nested TUN patch; omitted fields keep the current `TunSettings`.

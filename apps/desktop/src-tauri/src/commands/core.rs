@@ -133,6 +133,8 @@ pub(crate) fn start_service(app: &AppHandle, state: &AppState) -> Result<(), App
     // Persist after capture is on so a crash/quit still restores next launch.
     set_proxy_service_enabled_for(&state.paths.settings(), true, host_platform())?;
     attach_traffic(state, &settings)?;
+    drop(_orch);
+    broadcast_state_change(app);
     Ok(())
 }
 
@@ -366,6 +368,8 @@ pub(crate) fn disable_active_backend_inner(
     if running {
         attach_traffic(state, &settings)?;
     }
+    drop(_orch);
+    broadcast_state_change(app);
     Ok(())
 }
 

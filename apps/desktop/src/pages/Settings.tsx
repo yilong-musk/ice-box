@@ -26,8 +26,10 @@ import { useRuntimeStore } from "../lib/runtimeStore";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
+import { TrayCard } from "./settings/Tray";
 import { TunCard } from "./settings/Tun";
 import { formatUpdateError, UpdateCard } from "./settings/Update";
+import { isMacosHost } from "../lib/windowChrome";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -43,6 +45,7 @@ const defaults: AppSettings = {
   language: "system",
   check_app_updates: true,
   log_debug: false,
+  tray_display_mode: "icon_and_speed",
   tun: {
     enabled: false,
     interface_name: null,
@@ -77,6 +80,7 @@ function settingsOwnedPatch(form: AppSettings): SettingsPatch {
     language: form.language,
     check_app_updates: form.check_app_updates,
     log_debug: form.log_debug,
+    tray_display_mode: form.tray_display_mode,
   };
 }
 
@@ -494,6 +498,15 @@ export function Settings({
               setForm({ ...form, language: value });
             }}
           />
+
+          {isMacosHost() && (
+            <TrayCard
+              mode={form.tray_display_mode}
+              busy={busy}
+              loaded={loaded}
+              onChange={(value) => setForm({ ...form, tray_display_mode: value })}
+            />
+          )}
 
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
@@ -13,6 +13,10 @@ const getStatus = vi.fn();
 const setSelectedNode = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
+const listenStateChanged = vi.fn();
+
+/** Handler the page registers for `app://state-changed` (tray actions). */
+let stateChangedHandler: (() => void) | null = null;
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -22,6 +26,7 @@ vi.mock("../api/tauri", () => ({
     setSelectedNode: (...args: unknown[]) => setSelectedNode(...args),
     setGroupSelection: (...args: unknown[]) => setGroupSelection(...args),
     testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -29,6 +34,11 @@ vi.mock("../api/tauri", () => ({
 describe("Nodes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stateChangedHandler = null;
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      stateChangedHandler = handler;
+      return Promise.resolve(() => {});
+    });
     clearNodesSnapshot();
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
@@ -106,6 +116,37 @@ describe("Nodes", () => {
     });
     await waitFor(() => {
       expect(readNodesSnapshot()?.selectedTag).toBe("node-b");
+    });
+  });
+
+  it("re-reads the active exit after an out-of-window switch", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
+    });
+    const fetchesBefore = listNodes.mock.calls.length;
+
+    // The tray menu switched the strategy group to another member.
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "node-b",
+        group_all: ["node-a", "node-b"],
+      },
+    ]);
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(listNodes.mock.calls.length).toBeGreaterThan(fetchesBefore);
+      const group = readNodesSnapshot()?.nodes.find((n) => n.tag === "选择组");
+      expect(group?.group_now).toBe("node-b");
     });
   });
 

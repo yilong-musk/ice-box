@@ -5,6 +5,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The macOS Settings page picks what the menu-bar item shows: the icon with the
+  live speed readout (default), the icon only, or the readout only. The choice
+  persists in `settings.json` (`tray_display_mode`) and the menu-bar watchdog
+  applies it within a second. A readout item keeps its text, and with it its
+  width, while the core is stopped: the readout-only item therefore never
+  shrinks to an unclickable sliver of the bar.
+- On macOS the tray icon carries a live traffic readout next to it: the newest
+  Clash `/traffic` sample as two stacked lines (`↓ 0.3 K/s` over `↑ 1.2 M/s`),
+  1024-based like the Home chart and always one decimal, with no leading zero:
+  a fraction of a unit reads `0.5`, and a rate that would need a fifth
+  character steps up a unit instead (over 100 B reads `0.1 K/s`, over 100 KB
+  `0.1 M/s`). The readout font has tabular figures — `11.1` is as wide as
+  `88.8` — and the number is right-aligned in a four-character cell with figure
+  spaces (U+2007, exactly a digit wide), so the unit keeps its column and the
+  item holds one width: the cell is measured from the widest unit, and the
+  composed image is only ever as wide as that. The unit labels are the short
+  `K/s` and `M/s` the item has room for. Icon and readout are drawn into one
+  image at 9pt — two lines of the menu-bar font do not fit the bar, and 9pt
+  keeps the pair as narrow as a short one-line title.
+  Drawing both is what centres them: a status item centres an image in its
+  button but pins a title to the top of the item, so the readout keeps the
+  font's own, compact leading and still lines up with the icon. A 1s watchdog
+  re-derives it from the traffic monitor, and it holds its place instead of
+  clearing and coming back when the proxy service is toggled: a detached stream
+  (core stopped) or a stale newest tick (stream wedged) reads `0.0 B/s` rather
+  than freezing the last rate as if it were live, and the text dims to the menu
+  bar's secondary label colour while the proxy service is off, so those zeroes
+  do not read as live traffic. The dim follows the service switch — the Home
+  power control and the tray menu item, not the core process, which can run on
+  its own with the service off — and the watchdog touches the platform only
+  when the text or the dim changed.
+
+### Changed
+
+- The tray menu now carries the actions that do not need the window: a proxy
+  service switch (「启动代理服务」/「停止代理服务」, the same call as the Home
+  power button; disabled where the platform has no capture backend), a
+  「代理模式」submenu with the routing mode group (规则 / 全局 / 直连, the same
+  call as the Home mode selector), a 「订阅」submenu listing the stored
+  subscriptions (checked item = the active one, the same pick as the
+  Subscriptions page switch: it persists for the next start and reloads the
+  running core onto the new profile), and a 「节点」submenu using the same
+  switching paths as the Nodes page. Profiles without strategy groups list every
+  node (checked item = the current exit); grouped profiles nest one submenu per
+  group with its members, where the live member is checked and non-selector
+  groups are read-only, and a group's entry shows the live exit
+  (`tag → member`). Node picks persist for the next start and switch the running
+  core immediately.
+- A watchdog re-derives the service switch, the mode group, and the subscription
+  and node submenus from the runtime state every 5s, so the menu follows changes
+  made from the window, by recovery, by a subscription update, or by hand in the
+  OS; every tray action also announces the change, so the window (Home, Nodes,
+  and Subscriptions) re-reads status/settings and the subscription list instead
+  of waiting for its fallback poll.
+- On Windows the tray icon opens the app window on left click and the menu on
+  right click (the menu used to pop up on both). Restoring the window from the
+  tray unminimizes it first, so a minimized window comes back to the front.
+- On Windows the tray menu scrolls with the mouse wheel. Classic Win32 popup
+  menus ignore `WM_MOUSEWHEEL`, so a menu taller than the screen (the node list
+  of a large subscription) offered only the keyboard and the two scroll arrows.
+  A wheel message over an open menu is now turned into the arrow keys the menu
+  already understands — one node per line the OS reports for the wheel — and is
+  consumed, so the window behind the menu does not scroll along. macOS and GTK
+  menus scroll with the wheel natively and are unchanged.
+
 ### Fixed
 
 - GitHub Release publish copies bundled `third_party/sing-box/LICENSE` to

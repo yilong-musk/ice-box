@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   formatInvokeError,
@@ -62,6 +62,10 @@ function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
   return t(`subs.interval.${interval}`);
 }
 
+function activeSubscriptionId(items: SubscriptionMeta[]): string | null {
+  return items.find((item) => item.active)?.id ?? null;
+}
+
 export function Subscriptions() {
   useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
@@ -79,12 +83,20 @@ export function Subscriptions() {
   const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
     null,
   );
+  const activeIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
       if (isStale(gen)) return;
+      const nextActive = activeSubscriptionId(next);
+      // Drop the node snapshot only when the live profile moved. A mode or
+      // service toggle also lands on `app://state-changed`.
+      if (activeIdRef.current !== null && activeIdRef.current !== nextActive) {
+        clearNodesSnapshot();
+      }
+      activeIdRef.current = nextActive;
       setItems(next);
       setError(null);
     } catch (e) {
@@ -94,6 +106,28 @@ export function Subscriptions() {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // The tray「订阅」submenu switches the active subscription while this page may
+  // be on screen. Re-read the index so the active badge and switch follow
+  // without waiting for a manual refresh. `refresh` drops the node snapshot
+  // only when the active id actually changed.
+  useEffect(() => {
+    if (typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        void refresh();
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
   }, [refresh]);
 
   async function run(action: () => Promise<unknown>, isUpdate = false) {

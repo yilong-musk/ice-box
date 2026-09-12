@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { api } from "../api/tauri";
+import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
 
 const listSubscriptions = vi.fn();
 const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
+const listenStateChanged = vi.fn();
+
+vi.mock("../lib/nodes", () => ({
+  clearNodesSnapshot: vi.fn(),
+}));
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -20,6 +26,7 @@ vi.mock("../api/tauri", () => ({
     setSubscriptionActive: vi.fn(),
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -42,6 +49,9 @@ vi.mock("../api/tauri", () => ({
     return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
   },
 }));
+
+/** Handler the page registers for `app://state-changed` (tray actions). */
+let stateChangedHandler: (() => void) | null = null;
 
 function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -68,7 +78,13 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
 describe("Subscriptions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stateChangedHandler = null;
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      stateChangedHandler = handler;
+      return Promise.resolve(() => {});
+    });
     listSubscriptions.mockResolvedValue([]);
+    vi.mocked(clearNodesSnapshot).mockClear();
   });
 
   afterEach(() => {
@@ -89,6 +105,62 @@ describe("Subscriptions", () => {
     ).toBeInTheDocument();
     expect(container.querySelector(".sub-list")).toBeNull();
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
+  });
+
+  it("re-reads the active subscription after a tray switch", async () => {
+    const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: true }),
+      sampleMeta({ id: secondId, name: "sub-b", active: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    vi.mocked(clearNodesSnapshot).mockClear();
+    const fetchesBefore = listSubscriptions.mock.calls.length;
+
+    // The tray「订阅」submenu made sub-b the active one.
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: false }),
+      sampleMeta({ id: secondId, name: "sub-b", active: true }),
+    ]);
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
+      const title = view.getByText("sub-b").closest("[data-slot=item-title]");
+      expect(title).toHaveTextContent(t("subs.activeBadge"));
+    });
+    expect(clearNodesSnapshot).toHaveBeenCalled();
+  });
+
+  it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: true }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    vi.mocked(clearNodesSnapshot).mockClear();
+    const fetchesBefore = listSubscriptions.mock.calls.length;
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
+    });
+    expect(clearNodesSnapshot).not.toHaveBeenCalled();
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {

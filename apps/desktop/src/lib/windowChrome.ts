@@ -14,6 +14,16 @@ export function detectWindowChrome(
   return "plain";
 }
 
+/** True when the frontend runs inside the macOS webview. Gate macOS-only
+ * settings on this rather than on the tray itself: the Tauri window is the
+ * only surface the frontend can inspect. */
+export function isMacosHost(
+  userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
+  platform = typeof navigator === "undefined" ? "" : navigator.platform,
+): boolean {
+  return detectWindowChrome(userAgent, platform) === "macos-overlay";
+}
+
 export async function runWindowCommand(command: WindowCommand): Promise<void> {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");

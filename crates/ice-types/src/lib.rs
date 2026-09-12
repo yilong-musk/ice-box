@@ -21,8 +21,8 @@ pub use platform::HostPlatform;
 pub use settings::{
     clash_mode_name, default_auto_set_system_proxy, is_plausible_clash_api_secret,
     tun_interface_name_valid, AppSettings, LanguagePreference, ProxyMode, SettingsPatch,
-    TunSettings, TunSettingsPatch, EXAMPLE_CLASH_API_SECRET, TUN_DEFAULT_IPV4_ADDRESS,
-    TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+    TrayDisplayMode, TunSettings, TunSettingsPatch, EXAMPLE_CLASH_API_SECRET,
+    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 pub use ui::{UiMessage, UI_RAW_KEY};
 

@@ -40,3 +40,48 @@ url = "2.5.8"
 ice-config = { workspace = true, features = ["test-hooks"] }
 ice-core = { workspace = true, features = ["test-hooks"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The menu-bar readout: `with_inner_tray_icon` reaches the status item's button
+# so the icon and the two-line speed label can be composed into the item's image
+# (see `tray_speed.rs`). Versions match what `tauri`'s own macOS stack already
+# resolves to, so no extra code enters the app.
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "block2",
+    "NSButton",
+    "NSColor",
+    "NSControl",
+    "NSFont",
+    "NSFontDescriptor",
+    "NSImage",
+    "NSParagraphStyle",
+    "NSResponder",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSText",
+    "NSStringDrawing",
+    "NSView",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSAttributedString",
+    "NSDictionary",
+    "NSLocale",
+    "NSObject",
+    "NSString",
+    "objc2-core-foundation",
+] }

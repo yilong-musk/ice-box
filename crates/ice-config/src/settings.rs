@@ -11,7 +11,7 @@ use crate::HostPlatform;
 
 pub use ice_types::{
     clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppSettings,
-    LanguagePreference, ProxyMode, SettingsPatch, TunSettings, TunSettingsPatch,
+    LanguagePreference, ProxyMode, SettingsPatch, TrayDisplayMode, TunSettings, TunSettingsPatch,
     TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
 };
 
@@ -344,6 +344,39 @@ mod tests {
             !s.proxy_service_enabled,
             "missing flag must mean off so launch stays core-only"
         );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn tray_display_mode_defaults_to_icon_and_speed_for_legacy_files() {
+        let path = temp_settings_path("legacy-tray-display");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let loaded = load_settings(&path).expect("legacy json without tray_display_mode");
+        assert_eq!(loaded.tray_display_mode, TrayDisplayMode::IconAndSpeed);
+        assert_eq!(
+            AppSettings::default().tray_display_mode,
+            TrayDisplayMode::IconAndSpeed
+        );
+
+        // The value survives a save / load cycle, and a patch that carries only
+        // this field applies without touching the rest.
+        let patched = loaded.apply_patch(&SettingsPatch {
+            tray_display_mode: Some(TrayDisplayMode::Speed),
+            ..SettingsPatch::default()
+        });
+        assert_eq!(patched.tray_display_mode, TrayDisplayMode::Speed);
+        assert_eq!(patched.mixed_port, loaded.mixed_port);
+        save_settings(&path, &patched).expect("save");
+        let reloaded = load_settings(&path).expect("reload");
+        assert_eq!(reloaded.tray_display_mode, TrayDisplayMode::Speed);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

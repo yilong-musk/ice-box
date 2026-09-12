@@ -88,6 +88,8 @@ pub async fn add_subscription(
         let mut value = serde_json::to_value(meta)
             .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
         attach_apply_warning(&mut value, apply_warning);
+        drop(_orch);
+        broadcast_state_change(&app);
         Ok(value)
     })
     .await
@@ -113,6 +115,8 @@ pub async fn remove_subscription(
         let apply_warning = apply_after_subscription_change(&app, &state, &settings);
         let mut value = serde_json::json!({ "ok": true });
         attach_apply_warning(&mut value, apply_warning);
+        drop(_orch);
+        broadcast_state_change(&app);
         Ok(value)
     })
     .await
@@ -148,6 +152,8 @@ pub async fn update_subscription(
         let mut value = serde_json::to_value(meta)
             .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
         attach_apply_warning(&mut value, apply_warning);
+        drop(_orch);
+        broadcast_state_change(&app);
         Ok(value)
     })
     .await
@@ -182,6 +188,8 @@ pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Valu
             .collect();
         let mut value = serde_json::json!({ "results": summary });
         attach_apply_warning(&mut value, apply_warning);
+        drop(_orch);
+        broadcast_state_change(&app);
         Ok(value)
     })
     .await
@@ -209,6 +217,8 @@ pub async fn set_active_subscription(
         let mut value = serde_json::to_value(meta)
             .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
         attach_apply_warning(&mut value, apply_warning);
+        drop(_orch);
+        broadcast_state_change(&app);
         Ok(value)
     })
     .await

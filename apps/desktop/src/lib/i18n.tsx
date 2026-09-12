@@ -232,6 +232,12 @@ const zh = {
   "settings.language.system": "跟随系统",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
+  "settings.tray": "系统托盘图标",
+  "settings.trayDesc":
+    "菜单栏图标显示的内容；选「仅网速」时读数一直显示，没有实时数据就显示 0.0",
+  "settings.trayIconAndSpeed": "图标 + 网速",
+  "settings.trayIconOnly": "仅图标",
+  "settings.traySpeedOnly": "仅网速",
   "settings.tun": "TUN 模式",
   "settings.tunDesc":
     "决定下次启动代理服务时走透明代理还是系统代理；切换本开关不会立即启停当前服务",
@@ -622,6 +628,12 @@ const en: Record<MessageKey, string> = {
   "settings.language.system": "System",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
+  "settings.tray": "Menu Bar Item",
+  "settings.trayDesc":
+    "What the menu bar shows; Speed only keeps the readout up, showing 0.0 while there is no live data",
+  "settings.trayIconAndSpeed": "Icon + speed",
+  "settings.trayIconOnly": "Icon only",
+  "settings.traySpeedOnly": "Speed only",
   "settings.tun": "TUN Mode",
   "settings.tunDesc":
     "Chooses transparent proxy vs the system proxy for the next time the proxy service starts. Toggling this switch does not start or stop the current service",

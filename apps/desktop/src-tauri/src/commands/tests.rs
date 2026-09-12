@@ -281,6 +281,35 @@ fn parse_proxy_mode_accepts_valid_and_rejects_unknown() {
 }
 
 #[test]
+fn proxy_posture_counts_live_recorded_or_tun_as_engaged() {
+    // Mirrors Home's `proxyOn`; the tray menu renders the same answer.
+    let off = ProxyServicePosture {
+        live: Some(false),
+        recorded: Some(false),
+    };
+    assert!(!off.engaged(false));
+    assert!(off.engaged(true), "TUN owns capture on its own");
+    assert!(ProxyServicePosture {
+        live: Some(true),
+        recorded: Some(false),
+    }
+    .engaged(false));
+    assert!(
+        ProxyServicePosture {
+            live: Some(false),
+            recorded: Some(true),
+        }
+        .engaged(false),
+        "an on-disk record must stay stoppable"
+    );
+    let unknown = ProxyServicePosture {
+        live: None,
+        recorded: None,
+    };
+    assert!(!unknown.engaged(false), "stopped core is off");
+}
+
+#[test]
 fn collect_status_snapshots_stopped_core() {
     let state = temp_state_with_node("status");
     let status = collect_status(&state).expect("status");
@@ -830,4 +859,23 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
         .unwrap()
         .contains("blockme.com"));
     let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn only_tray_display_mode_changed_ignores_other_fields() {
+    use crate::commands::settings::only_tray_display_mode_changed;
+
+    let both = AppSettings::default();
+    let speed = AppSettings {
+        tray_display_mode: TrayDisplayMode::Speed,
+        ..AppSettings::default()
+    };
+    assert!(only_tray_display_mode_changed(&both, &speed));
+    // A save that also touches anything else is a full apply, not this
+    // persist-only path.
+    let mut other = speed.clone();
+    other.mixed_port = 18080;
+    assert!(!only_tray_display_mode_changed(&both, &other));
+    // Unchanged mode: nothing to do.
+    assert!(!only_tray_display_mode_changed(&both, &both));
 }
