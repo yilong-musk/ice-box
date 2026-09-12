@@ -276,9 +276,10 @@ fn set_readout(
 /// [`TrayDisplayMode::Icon`] gets `None`, so the item never loses half of itself
 /// when the proxy service starts or stops: a detached stream reads zero in
 /// [`readout_text`] instead of clearing the text. [`TrayDisplayMode::Speed`]
-/// still falls back to the icon when no text arrives, because an item with
-/// neither icon nor text is an unclickable sliver of the menu bar, and the tray
-/// menu is the window's only entry point while it is closed.
+/// therefore keeps drawing `0.0` while the stream is down, and only falls back
+/// to the icon when no text arrives at all — an item with neither icon nor
+/// text is an unclickable sliver of the menu bar, and the tray menu is the
+/// window's only entry point while it is closed.
 fn item_content(mode: TrayDisplayMode, readout: Option<String>) -> (bool, Option<String>) {
     match mode {
         TrayDisplayMode::Icon => (true, None),
@@ -344,9 +345,9 @@ fn composed_image(
             );
             icon.drawInRect(rect);
         }
-        // The block is centred inside the cell, which is at least as wide as
-        // the widest reading, so a shorter reading sits in the middle of the
-        // space the item reserves for it instead of shrinking the item.
+        // Left-aligned in the cell so `↓` and `↑` share one column when the
+        // two lines use different units (`M/s` vs `K/s`). Extra width from
+        // the widest unit is padding on the right, not a centred shift.
         text.drawInRect(NSRect::new(
             NSPoint::new(text_x, (height - text_size.height) / 2.0),
             NSSize::new(cell_width, text_size.height),
@@ -361,11 +362,10 @@ fn composed_image(
 /// The readout font's tabular digits (see [`readout_font`]) make every number
 /// as wide as every other, but the unit letter is still proportional: `M` is
 /// wider than `K`, and the composed image is only as wide as the text inside
-/// it. Measuring all four units and taking the widest as the cell pins the
-/// item's width, so stepping up a unit cannot shift the item — or everything
-/// beside it in the menu bar — by a fraction of a point. Measured at 9pt on
-/// macOS 26, `↓ 99.9 M/s` is the widest at 48.76pt, 1.94pt wider than the
-/// `K/s` reading the item shows at ordinary rates.
+/// it. Measuring every unit under both arrows and taking the widest as the
+/// cell pins the item's width, so stepping up a unit cannot shift the item —
+/// or everything beside it in the menu bar — by a fraction of a point. `↑`
+/// is included because it can measure wider than `↓` in the same font.
 ///
 /// Re-measured per compose rather than cached: a compose happens only when the
 /// text changes, and four short strings cost far less than the drawing that
@@ -373,14 +373,17 @@ fn composed_image(
 /// interface the core can carry — would print a fifth character and outgrow
 /// the cell; `format_rate` has no unit above `G/s`.
 fn readout_cell_width() -> f64 {
-    RATE_UNITS
+    const ARROWS: [&str; 2] = ["↓", "↑"];
+    ARROWS
         .iter()
-        .map(|unit| {
-            // The widest reading of every unit: two digits, one decimal, no
-            // padding. A short number fills the same cell with figure spaces.
-            attributed_readout(&format!("↓ 99.9 {unit}"), NSColor::labelColor())
-                .size()
-                .width
+        .flat_map(|arrow| {
+            RATE_UNITS.iter().map(move |unit| {
+                // The widest reading of every unit: two digits, one decimal, no
+                // padding. A short number fills the same cell with figure spaces.
+                attributed_readout(&format!("{arrow} 99.9 {unit}"), NSColor::labelColor())
+                    .size()
+                    .width
+            })
         })
         .fold(0.0_f64, f64::max)
 }
@@ -397,13 +400,14 @@ fn readout_font() -> Retained<NSFont> {
     NSFont::monospacedDigitSystemFontOfSize_weight(READOUT_FONT_SIZE, weight)
 }
 
-/// The two readout lines as one block, centred, in the readout font and in
-/// `color`. AppKit stacks the lines with the font's own leading — the compact
-/// spacing the item wants — and the composed image decides where the block
-/// lands.
+/// The two readout lines as one left-aligned block, in the readout font and in
+/// `color`. Left alignment keeps the arrows in one column when the two lines
+/// print different units. AppKit stacks the lines with the font's own leading
+/// — the compact spacing the item wants — and the composed image decides where
+/// the block lands.
 fn attributed_readout(readout: &str, color: Retained<NSColor>) -> Retained<NSAttributedString> {
     let paragraph = NSMutableParagraphStyle::new();
-    paragraph.setAlignment(NSTextAlignment::Center);
+    paragraph.setAlignment(NSTextAlignment::Left);
     paragraph.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
     let font = readout_font();
     let values: [&AnyObject; 3] = [&font, &paragraph, &color];

@@ -22,7 +22,7 @@
 
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, TRUE, WPARAM};
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
@@ -76,6 +76,12 @@ const MAX_STEPS: u32 = 32;
 /// per notch.
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// The thread that owns the tray (and therefore the popup menu). Stored so the
+/// menu watchdog — which runs on another thread — can ask whether *this*
+/// thread is in a menu modal loop. `GetGUIThreadInfo(0)` is the foreground
+/// thread, which may be another process.
+static TRAY_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
 /// Set by whichever hook translated a wheel message, so the other one does not
 /// translate it a second time. The retrieval hook always runs before the menu
 /// filter hook for one message, so a plain flag is enough.
@@ -94,11 +100,14 @@ static WHEEL_REMAINDER: AtomicI32 = AtomicI32::new(0);
 /// life of the thread — the menu can open at any time — and go away with the
 /// process.
 pub fn install() {
+    // SAFETY: no arguments are involved; the id is always valid.
+    let thread = unsafe { GetCurrentThreadId() };
+    // Remember the tray thread even when the wheel hooks fail: the node-menu
+    // watchdog still needs to know whether this thread is showing a popup.
+    TRAY_THREAD_ID.store(thread, Ordering::SeqCst);
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
-    // SAFETY: no arguments are involved; the id is always valid.
-    let thread = unsafe { GetCurrentThreadId() };
     // Two hooks for one translation: `WH_GETMESSAGE` sees every message the
     // thread retrieves, `WH_MSGFILTER` the ones a menu's modal loop filters.
     // Which of the two a Windows release routes a menu message through is an
@@ -221,16 +230,30 @@ unsafe fn scroll_wheel_message(msg: *const MSG) -> bool {
 /// Whether the wheel belongs to a menu of ours: either this thread is running a
 /// menu's modal loop, or the message went straight to one of our menu windows.
 fn menu_is_up(wheel_window: HWND) -> bool {
-    thread_in_menu_mode() || is_menu_window_of_this_process(wheel_window)
+    let thread = TRAY_THREAD_ID.load(Ordering::SeqCst);
+    (thread != 0 && thread_in_menu_mode(thread)) || is_menu_window_of_this_process(wheel_window)
 }
 
-/// Whether the calling thread runs a menu's modal loop. `0` asks about the
-/// calling thread, which is the one processing the message under the hook.
-fn thread_in_menu_mode() -> bool {
+/// Whether the tray thread is running a menu's modal loop.
+///
+/// The watchdog asks from another thread, so this must name the tray thread
+/// rather than passing `0` (`GetGUIThreadInfo(0)` is the foreground thread,
+/// which can be another process).
+pub(crate) fn popup_menu_open() -> bool {
+    let thread = TRAY_THREAD_ID.load(Ordering::SeqCst);
+    if thread == 0 {
+        return false;
+    }
+    thread_in_menu_mode(thread)
+}
+
+/// Whether `thread` runs a menu's modal loop. The wheel hook names the tray
+/// thread (the one processing the message).
+fn thread_in_menu_mode(thread: u32) -> bool {
     let mut info: GUITHREADINFO = unsafe { std::mem::zeroed() };
     info.cbSize = size_of::<GUITHREADINFO>() as u32;
     // SAFETY: `cbSize` is set, and the API fills the rest of the struct.
-    let ok = unsafe { GetGUIThreadInfo(0, &mut info) };
+    let ok = unsafe { GetGUIThreadInfo(thread, &mut info) };
     ok != 0 && (info.flags & MENU_MODE_FLAGS) != 0
 }
 
@@ -388,5 +411,15 @@ mod tests {
         assert_eq!(items_per_notch(0), 1);
         assert_eq!(items_per_notch(WHEEL_PAGESCROLL), MAX_SCROLL_LINES);
         assert_eq!(items_per_notch(1000), MAX_SCROLL_LINES);
+    }
+
+    #[test]
+    fn popup_menu_open_does_not_query_the_foreground_thread() {
+        // `GetGUIThreadInfo(0)` is the foreground thread (possibly another
+        // process). With no tray thread recorded, the watchdog must not skip
+        // rebuilds — and must not look at someone else's menu.
+        let previous = TRAY_THREAD_ID.swap(0, Ordering::SeqCst);
+        assert!(!popup_menu_open());
+        TRAY_THREAD_ID.store(previous, Ordering::SeqCst);
     }
 }

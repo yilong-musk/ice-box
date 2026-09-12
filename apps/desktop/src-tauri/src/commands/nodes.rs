@@ -723,8 +723,13 @@ pub(crate) fn select_node(app: &AppHandle, state: &AppState, tag: &str) -> Resul
 pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), AppError> {
     run_blocking("set_selected_node", move || {
         let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        select_node(&app, state.inner(), &req.tag)
+        let result = {
+            let _orch = lock_orchestrate(&state)?;
+            select_node(&app, state.inner(), &req.tag)
+        };
+        // The tray menu otherwise waits for the 5s watchdog.
+        broadcast_state_change(&app);
+        result
     })
     .await
 }
@@ -787,12 +792,10 @@ pub struct GroupSelectionRequest {
     pub member: String,
 }
 
-/// Switch a strategy group member: persists the selection always (survives restarts /
-/// config regeneration), and applies it live via Clash API when the core is running.
-#[tauri::command]
 /// Persist and apply a strategy-group member pick. Shared by the
 /// `set_group_selection` command and the tray node menu; callers hold the
-/// orchestrate lock.
+/// orchestrate lock. The pick always survives restarts / config regeneration,
+/// and is applied live via the Clash API when the core is running.
 pub(crate) fn select_group_member(
     app: &AppHandle,
     state: &AppState,
@@ -826,6 +829,8 @@ pub(crate) fn select_group_member(
     Ok(())
 }
 
+/// Switch a strategy group member: persists the selection always, and applies
+/// it live when the core is running. Same path as the tray node menu.
 #[tauri::command]
 pub async fn set_group_selection(
     app: AppHandle,
@@ -833,8 +838,12 @@ pub async fn set_group_selection(
 ) -> Result<(), AppError> {
     run_blocking("set_group_selection", move || {
         let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        select_group_member(&app, state.inner(), &req.group, &req.member)
+        let result = {
+            let _orch = lock_orchestrate(&state)?;
+            select_group_member(&app, state.inner(), &req.group, &req.member)
+        };
+        broadcast_state_change(&app);
+        result
     })
     .await
 }

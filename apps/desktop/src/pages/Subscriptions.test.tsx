@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { api } from "../api/tauri";
+import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
 
 const listSubscriptions = vi.fn();
@@ -11,8 +12,9 @@ const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
 const listenStateChanged = vi.fn();
 
-/** Handler the page registers for `app://state-changed` (tray actions). */
-let stateChangedHandler: (() => void) | null = null;
+vi.mock("../lib/nodes", () => ({
+  clearNodesSnapshot: vi.fn(),
+}));
 
 vi.mock("../api/tauri", () => ({
   api: {
@@ -48,6 +50,9 @@ vi.mock("../api/tauri", () => ({
   },
 }));
 
+/** Handler the page registers for `app://state-changed` (tray actions). */
+let stateChangedHandler: (() => void) | null = null;
+
 function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -79,6 +84,7 @@ describe("Subscriptions", () => {
       return Promise.resolve(() => {});
     });
     listSubscriptions.mockResolvedValue([]);
+    vi.mocked(clearNodesSnapshot).mockClear();
   });
 
   afterEach(() => {
@@ -113,6 +119,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
+    vi.mocked(clearNodesSnapshot).mockClear();
     const fetchesBefore = listSubscriptions.mock.calls.length;
 
     // The tray「订阅」submenu made sub-b the active one.
@@ -130,6 +137,30 @@ describe("Subscriptions", () => {
       const title = view.getByText("sub-b").closest("[data-slot=item-title]");
       expect(title).toHaveTextContent(t("subs.activeBadge"));
     });
+    expect(clearNodesSnapshot).toHaveBeenCalled();
+  });
+
+  it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: true }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    vi.mocked(clearNodesSnapshot).mockClear();
+    const fetchesBefore = listSubscriptions.mock.calls.length;
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
+    });
+    expect(clearNodesSnapshot).not.toHaveBeenCalled();
   });
 
   it("shows partial update failures from updateAllSubscriptions", async () => {

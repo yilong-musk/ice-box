@@ -15,6 +15,7 @@ use crate::commands::{
     current_settings, disable_active_backend_inner, lock_orchestrate, proxy_service_posture,
     select_group_member, select_node, start_service, NodeInfo,
 };
+use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
@@ -28,7 +29,7 @@ use std::time::Duration;
 use tauri::{
     menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Wry,
+    AppHandle, Emitter, Manager, Wry,
 };
 use uuid::Uuid;
 
@@ -71,9 +72,74 @@ impl From<LanguagePreference> for TrayLanguage {
     fn from(preference: LanguagePreference) -> Self {
         match preference {
             LanguagePreference::Zh => Self::Zh,
-            LanguagePreference::System | LanguagePreference::En => Self::En,
+            LanguagePreference::En => Self::En,
+            // Same rule as the web UI (`navigator.language.startsWith("zh")`):
+            // resolve against the OS now, so a Chinese system does not flash
+            // English labels until the window calls `set_tray_language`.
+            LanguagePreference::System => {
+                if system_locale_is_chinese() {
+                    Self::Zh
+                } else {
+                    Self::En
+                }
+            }
         }
     }
+}
+
+/// Whether a locale / language tag is Chinese. Mirrors the web UI: the primary
+/// subtag is `zh` (or the Windows `Chinese_*` form).
+fn locale_tag_is_chinese(tag: &str) -> bool {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return false;
+    }
+    let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or(tag);
+    primary.eq_ignore_ascii_case("zh") || primary.eq_ignore_ascii_case("chinese")
+}
+
+fn system_locale_is_chinese() -> bool {
+    #[cfg(windows)]
+    {
+        windows_ui_language_is_chinese()
+    }
+    #[cfg(not(windows))]
+    {
+        locale_tag_is_chinese(&system_locale_tag())
+    }
+}
+
+/// Windows display language, the same source the webview uses for
+/// `navigator.language` on this platform.
+#[cfg(windows)]
+fn windows_ui_language_is_chinese() -> bool {
+    const LANG_CHINESE: u16 = 0x04;
+    const PRIMARYLANGID_MASK: u16 = 0x3ff;
+    // SAFETY: `GetUserDefaultUILanguage` is a pure kernel32 read of the
+    // current user's UI language; it has no pointers to keep alive.
+    let langid = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+    langid & PRIMARYLANGID_MASK == LANG_CHINESE
+}
+
+#[cfg(target_os = "macos")]
+fn system_locale_tag() -> String {
+    use objc2_foundation::NSLocale;
+    // `preferredLanguages` returns an immutable copy of the user's language
+    // list; the first entry is what WKWebView reports as `navigator.language`.
+    NSLocale::preferredLanguages()
+        .firstObject()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "en".into())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn system_locale_tag() -> String {
+    std::env::var("LC_ALL")
+        .ok()
+        .filter(|value| !value.is_empty() && value != "C" && value != "POSIX")
+        .or_else(|| std::env::var("LC_MESSAGES").ok())
+        .or_else(|| std::env::var("LANG").ok())
+        .unwrap_or_else(|| "en".into())
 }
 
 fn mode_code(mode: ProxyMode) -> u8 {
@@ -394,7 +460,9 @@ struct TrayMenuState {
     quit: MenuItem<Wry>,
     language: AtomicU8,
     service_on: AtomicBool,
-    service_enabled: AtomicBool,
+    /// Set for the life of one start/stop so a second click cannot queue the
+    /// same action (the label is read before the worker runs).
+    service_busy: AtomicBool,
     mode_value: AtomicU8,
 }
 
@@ -409,8 +477,18 @@ impl TrayMenuState {
         self.service_on.load(Ordering::SeqCst)
     }
 
-    fn service_enabled(&self) -> bool {
-        self.service_enabled.load(Ordering::SeqCst)
+    fn service_busy(&self) -> bool {
+        self.service_busy.load(Ordering::SeqCst)
+    }
+
+    /// `true` if this click owns the switch. A second click while the first
+    /// worker is still running is ignored, like the Home power button.
+    fn try_begin_service_switch(&self) -> bool {
+        !self.service_busy.swap(true, Ordering::SeqCst)
+    }
+
+    fn end_service_switch(&self) {
+        self.service_busy.store(false, Ordering::SeqCst);
     }
 
     fn mode(&self) -> ProxyMode {
@@ -445,6 +523,15 @@ impl TrayMenuState {
     /// rewriting its title without touching this path.
     fn apply_nodes(&self, app: &AppHandle, entries: &[NodeMenuEntry]) -> Result<(), AppError> {
         let dirty = self.nodes_dirty.load(Ordering::SeqCst);
+        // Win32 `TrackPopupMenu` runs a nested message loop; muda hops menu
+        // mutations onto that thread, so tearing the HMENU down while the
+        // popup is open can dismiss it or corrupt the menu. A click sets
+        // `nodes_dirty` and needs a rebuild even then (the platform has
+        // already toggled the check mark); live urltest/fallback `now`
+        // changes wait until the popup closes.
+        if skip_live_node_rebuild(dirty, tray_popup_menu_open()) {
+            return Ok(());
+        }
         let mut applied = self
             .nodes_model
             .lock()
@@ -505,13 +592,17 @@ impl TrayMenuState {
         self.mode_value.store(mode_code(mode), Ordering::SeqCst);
     }
 
-    /// Apply a derived view, touching only the items that changed.
+    /// Apply a derived view. The service item's enabled state is always
+    /// rewritten so an in-flight switch can disable it and the next sync
+    /// can turn it back on.
     fn apply_view(&self, view: TrayView) {
-        if self.service_enabled() != view.service_enabled {
-            let _ = self.service.set_enabled(view.service_enabled);
-            self.service_enabled
-                .store(view.service_enabled, Ordering::SeqCst);
-        }
+        // Always re-apply enabled: a switch in flight forces the item off
+        // even when the platform capability did not change, and the next
+        // sync must turn it back on.
+        let _ = self.service.set_enabled(service_item_enabled(
+            view.service_enabled,
+            self.service_busy(),
+        ));
         if self.service_on() != view.service_on {
             let _ = self
                 .service
@@ -521,6 +612,32 @@ impl TrayMenuState {
         if self.mode() != view.mode {
             self.apply_mode(view.mode);
         }
+    }
+}
+
+/// The switch is clickable only when this platform can start capture and no
+/// start/stop is already running.
+fn service_item_enabled(capability: bool, busy: bool) -> bool {
+    capability && !busy
+}
+
+/// Skip a live (non-click) node rebuild while the tray popup is open. Click
+/// rebuilds still go through: the platform has already toggled the item.
+fn skip_live_node_rebuild(dirty: bool, popup_open: bool) -> bool {
+    !dirty && popup_open
+}
+
+/// Whether the tray thread is showing a popup. Windows only: classic Win32
+/// menus are the ones that break if their HMENU is rebuilt mid-loop. macOS
+/// and GTK menus update live and are left alone.
+fn tray_popup_menu_open() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        crate::tray_wheel::popup_menu_open()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
     }
 }
 
@@ -749,7 +866,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         quit,
         language: AtomicU8::new(language.code()),
         service_on: AtomicBool::new(view.service_on),
-        service_enabled: AtomicBool::new(view.service_enabled),
+        service_busy: AtomicBool::new(false),
         mode_value: AtomicU8::new(mode_code(view.mode)),
     });
 
@@ -887,13 +1004,22 @@ pub fn sync_menu(app: &AppHandle) {
             );
         }
     }
-    if let Some(entries) = current_node_entries(app) {
-        if let Err(err) = menu.apply_nodes(app, &entries) {
-            tracing::warn!(
-                code = %err.code,
-                error = %err.message,
-                "tray node menu sync failed"
-            );
+    // Skip the Clash `/proxies` fetch as well as the rebuild: both are wasted
+    // while the popup is open, and the fetch is what makes urltest `now`
+    // churn trigger a teardown.
+    let skip_nodes = skip_live_node_rebuild(
+        menu.nodes_dirty.load(Ordering::SeqCst),
+        tray_popup_menu_open(),
+    );
+    if !skip_nodes {
+        if let Some(entries) = current_node_entries(app) {
+            if let Err(err) = menu.apply_nodes(app, &entries) {
+                tracing::warn!(
+                    code = %err.code,
+                    error = %err.message,
+                    "tray node menu sync failed"
+                );
+            }
         }
     }
 }
@@ -919,9 +1045,31 @@ fn toggle_service(app: &AppHandle) {
     let Some(menu) = app.try_state::<TrayMenuState>() else {
         return;
     };
+    // Claim the switch before reading the label: two clicks must not both
+    // see "off" and queue two starts (or two stops).
+    if !menu.try_begin_service_switch() {
+        return;
+    }
     let engaged = menu.service_on();
+    let _ = menu.service.set_enabled(false);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Clears `service_busy` then re-syncs, so `apply_view` can re-enable
+        // the item. `start_service` / `disable_active_backend_inner` already
+        // announced the window on success, while busy was still set; this
+        // drop only rebuilds the menu.
+        struct ServiceSwitchGuard {
+            app: AppHandle,
+        }
+        impl Drop for ServiceSwitchGuard {
+            fn drop(&mut self) {
+                if let Some(menu) = self.app.try_state::<TrayMenuState>() {
+                    menu.end_service_switch();
+                }
+                sync_menu(&self.app);
+            }
+        }
+        let _guard = ServiceSwitchGuard { app: app.clone() };
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
@@ -937,10 +1085,11 @@ fn toggle_service(app: &AppHandle) {
                 engaged,
                 "tray proxy service switch failed"
             );
+            // Inner start/stop only announce on success. Tell the window so a
+            // failed switch can still surface a warning; the drop re-enables
+            // the item afterwards.
+            let _ = app.emit(APP_STATE_CHANGED, ());
         }
-        // Re-sync the menu and let the window re-read status/settings. Always
-        // announced: a failed transition can still leave a different state.
-        broadcast_state_change(&app);
     });
 }
 
@@ -1045,8 +1194,11 @@ fn switch_mode(app: &AppHandle, mode: ProxyMode) {
                 mode = ?mode,
                 "tray proxy mode switch failed"
             );
+            // `apply_proxy_mode` already announced after a persist. A failure
+            // before that still needs the menu rebuilt: `apply_mode` above
+            // checked the clicked item and reality may not have moved.
+            sync_menu(&app);
         }
-        broadcast_state_change(&app);
     });
 }
 
@@ -1271,7 +1423,44 @@ mod tests {
         assert_eq!(TrayLanguage::from(LanguagePreference::En), TrayLanguage::En);
         assert_eq!(
             TrayLanguage::from(LanguagePreference::System),
-            TrayLanguage::En
+            if system_locale_is_chinese() {
+                TrayLanguage::Zh
+            } else {
+                TrayLanguage::En
+            }
         );
+    }
+
+    #[test]
+    fn locale_tags_treat_chinese_like_the_web_ui() {
+        assert!(locale_tag_is_chinese("zh"));
+        assert!(locale_tag_is_chinese("zh-CN"));
+        assert!(locale_tag_is_chinese("zh_TW"));
+        assert!(locale_tag_is_chinese("zh-Hans-CN"));
+        assert!(locale_tag_is_chinese("zh_CN.UTF-8"));
+        assert!(locale_tag_is_chinese("Chinese_China.936"));
+        assert!(!locale_tag_is_chinese("en"));
+        assert!(!locale_tag_is_chinese("en-US"));
+        assert!(!locale_tag_is_chinese("ja-JP"));
+        assert!(!locale_tag_is_chinese("C"));
+        assert!(!locale_tag_is_chinese(""));
+    }
+
+    #[test]
+    fn service_item_is_disabled_while_a_switch_is_in_flight() {
+        assert!(service_item_enabled(true, false));
+        assert!(!service_item_enabled(true, true));
+        assert!(!service_item_enabled(false, false));
+        assert!(!service_item_enabled(false, true));
+    }
+
+    #[test]
+    fn live_node_rebuild_waits_while_the_popup_is_open() {
+        // A watchdog tick with no click must not tear the HMENU down.
+        assert!(skip_live_node_rebuild(false, true));
+        // A click still rebuilds: the platform already toggled the check mark.
+        assert!(!skip_live_node_rebuild(true, true));
+        assert!(!skip_live_node_rebuild(false, false));
+        assert!(!skip_live_node_rebuild(true, false));
     }
 }

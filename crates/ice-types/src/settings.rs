@@ -40,10 +40,11 @@ pub enum LanguagePreference {
 /// macOS only: what the menu-bar item draws — the icon with the live traffic
 /// readout beside it, the icon alone, or the readout alone.
 ///
-/// The readout only ever shows live samples, so [`Self::Speed`] falls back to
-/// the icon while the traffic stream is detached: an item with neither icon nor
-/// text is an unclickable sliver of the menu bar, and the tray menu is the
-/// window's only entry point while it is closed.
+/// A detached traffic stream still reads as `0.0`, so [`Self::Speed`] keeps
+/// the zeroed readout rather than swapping back to the icon. The icon is only
+/// restored when there is no text at all: an item with neither icon nor text
+/// is an unclickable sliver of the menu bar, and the tray menu is the window's
+/// only entry point while it is closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TrayDisplayMode {
@@ -52,7 +53,8 @@ pub enum TrayDisplayMode {
     IconAndSpeed,
     /// Icon only; the readout stays off the bar.
     Icon,
-    /// Speed readout only; the icon returns while no stream is attached.
+    /// Speed readout only. A detached stream still prints `0.0`; the icon
+    /// returns only when no readout text is available.
     Speed,
 }
 
