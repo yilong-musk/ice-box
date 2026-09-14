@@ -200,6 +200,7 @@ export const api = {
     return { available: false, version: null, notes: null, skipped: false, should_prompt: false };
   },
   async recordUpdatePrompt(): Promise<void> {},
+  async recordAppUpdateCheck(): Promise<void> {},
   async skipAppUpdate(): Promise<void> {},
   async installAppUpdate(): Promise<void> { await delay(); },
   async listenAppUpdateProgress(): Promise<() => void> {

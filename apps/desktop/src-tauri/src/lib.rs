@@ -343,6 +343,7 @@ pub fn run() {
             commands::get_traffic_since,
             app_update::check_app_update,
             app_update::record_update_prompt,
+            app_update::record_app_update_check,
             app_update::skip_app_update,
             app_update::install_app_update,
         ])

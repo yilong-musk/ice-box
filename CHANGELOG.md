@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-14
+
+### Fixed
+
+- A failed background app-update check retries with backoff (sooner if the
+  core becomes ready after the failed attempt). If the 15-minute retry still
+  fails, that attempt is the last: `last_check_at` is written and the usual
+  24-hour cooldown starts. In-session retries before that do not write the
+  cooldown.
+
 ## [0.1.8] - 2026-09-12
 
 ### Added

@@ -426,6 +426,8 @@ export const api = {
       req: { background },
     }),
   recordUpdatePrompt: () => invoke<void>("record_update_prompt"),
+  /** Persist `last_check_at` after the background retry ladder is exhausted. */
+  recordAppUpdateCheck: () => invoke<void>("record_app_update_check"),
   skipAppUpdate: (version: string) =>
     invoke<void>("skip_app_update", { req: { version } }),
   installAppUpdate: () => invoke<void>("install_app_update"),

@@ -19,7 +19,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
-/// Background GitHub checks at most once per this interval.
+/// Background GitHub checks at most once per this interval after a successful
+/// round-trip, or after the UI exhausts its failure retries and records
+/// `last_check_at`. In-session retries happen before that write.
 pub const CHECK_INTERVAL: Duration = Duration::hours(24);
 
 pub const ERR_UPDATE_CHECK_FAILED: ErrorCode = ErrorCode::UpdateCheckFailed;
@@ -275,8 +277,30 @@ pub async fn check_app_update(
     }
 
     let proxy = updater_proxy_url(&settings, core_running);
-    let updater = build_updater(&app, proxy)?;
-    let found = updater.check().await.map_err(map_check_err)?;
+    let updater = match build_updater(&app, proxy) {
+        Ok(updater) => updater,
+        Err(err) => {
+            tracing::warn!(
+                background = req.background,
+                error = %err,
+                "app-update check failed; last_check_at unchanged"
+            );
+            return Err(err);
+        }
+    };
+    let found = match updater.check().await {
+        Ok(found) => found,
+        Err(err) => {
+            // In-session retries do not write `last_check_at`. Exhausted
+            // retries persist it via `record_app_update_check`.
+            tracing::warn!(
+                background = req.background,
+                error = %err,
+                "app-update check failed; last_check_at unchanged"
+            );
+            return Err(map_check_err(err));
+        }
+    };
 
     disk.last_check_at = Some(now);
     let Some(update) = found else {
@@ -300,12 +324,26 @@ pub async fn check_app_update(
     })
 }
 
+pub fn touch_last_check_at(path: &std::path::Path, now: DateTime<Utc>) -> Result<(), AppError> {
+    let mut disk = load_update_check_state(path);
+    disk.last_check_at = Some(now);
+    save_update_check_state(path, &disk)
+}
+
 #[tauri::command]
 pub async fn record_update_prompt(app: AppHandle) -> Result<(), AppError> {
     let paths = app.state::<AppState>().paths.clone();
     let mut disk = load_update_check_state(&paths.update_check());
     disk.last_prompt_at = Some(Utc::now());
     save_update_check_state(&paths.update_check(), &disk)
+}
+
+/// Persist `last_check_at` after the background retry ladder is exhausted so
+/// the 24h cooldown applies even when GitHub was never reached.
+#[tauri::command]
+pub async fn record_app_update_check(app: AppHandle) -> Result<(), AppError> {
+    let paths = app.state::<AppState>().paths.clone();
+    touch_last_check_at(&paths.update_check(), Utc::now())
 }
 
 #[tauri::command]
@@ -514,6 +552,28 @@ mod tests {
         let loaded = load_update_check_state(&paths.update_check());
         assert_eq!(loaded.available_version.as_deref(), Some("0.1.6"));
         assert_eq!(loaded.available_notes.as_deref(), Some("fixes"));
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn touch_last_check_at_starts_cooldown_without_clearing_available() {
+        let paths = temp_paths("touch-check");
+        let state = UpdateCheckState {
+            available_version: Some("0.1.8".into()),
+            available_notes: Some("fixes".into()),
+            ..UpdateCheckState::default()
+        };
+        save_update_check_state(&paths.update_check(), &state).unwrap();
+        let now = Utc::now();
+        touch_last_check_at(&paths.update_check(), now).unwrap();
+        let loaded = load_update_check_state(&paths.update_check());
+        assert_eq!(
+            loaded.last_check_at.map(|at| at.timestamp()),
+            Some(now.timestamp())
+        );
+        assert_eq!(loaded.available_version.as_deref(), Some("0.1.8"));
+        assert!(!check_is_due(&loaded, now + Duration::hours(1)));
+        assert!(check_is_due(&loaded, now + Duration::hours(25)));
         let _ = std::fs::remove_dir_all(paths.root());
     }
 

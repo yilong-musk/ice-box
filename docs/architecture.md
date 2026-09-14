@@ -142,6 +142,12 @@ App updates run in Rust and verify signed artifacts before installation.
 Installation uses the same capture/core shutdown path as Quit. Update integrity
 signing is separate from OS application signing; artifact production and
 distribution policy are defined in [release-process.md](release-process.md).
+Background checks run after the first UI frame. A successful GitHub fetch
+starts a 24-hour cooldown in `update-check.json`. A failure is logged and
+retried silently with exponential backoff (sooner if the core becomes Running)
+through one 15-minute attempt; that last failure records `last_check_at` and
+starts the same 24-hour cooldown. In-session retries before exhaustion do not
+write the cooldown.
 
 ## Further reading
 

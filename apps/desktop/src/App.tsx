@@ -48,6 +48,7 @@ import {
   type MessageKey,
 } from "./lib/i18n";
 import { useThemePreference } from "./lib/theme";
+import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import logo from "./assets/logo.png";
 
@@ -151,22 +152,32 @@ function AppShell() {
     });
   }, []);
 
+  const updateCheckerRef = useRef<ReturnType<
+    typeof startBackgroundAppUpdateCheck
+  > | null>(null);
+
   useEffect(() => {
-    let cancelled = false;
-    void api
-      .checkAppUpdate(true)
-      .then((result) => {
-        if (!cancelled && result.available && result.version) {
+    const checker = startBackgroundAppUpdateCheck({
+      check: () => api.checkAppUpdate(true),
+      recordCooldown: () => api.recordAppUpdateCheck(),
+      onResult: (result) => {
+        if (result.available && result.version) {
           setAvailableUpdate(result);
         }
-      })
-      .catch(() => {
-        // Background checks stay silent.
-      });
+      },
+    });
+    updateCheckerRef.current = checker;
     return () => {
-      cancelled = true;
+      checker.stop();
+      updateCheckerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (status?.core.status === "running") {
+      updateCheckerRef.current?.notifyCoreRunning();
+    }
+  }, [status?.core.status]);
 
   useEffect(() => {
     let cancelled = false;
