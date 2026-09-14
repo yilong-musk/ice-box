@@ -143,7 +143,13 @@ the Mixed env for one new process and never touch shell profiles or user
 environment. Rust owns both the command text and the clipboard, so a copied
 command cannot drift from the env a terminal opened by the app receives; the
 one-liner follows the login shell (POSIX `export`, fish `set -gx`) and the
-Terminal.app launch passes the vars through `env`, which needs no shell syntax.
+Terminal.app launch passes the vars through `env` and resolves the login shell
+in `/bin/sh -c`, so the typed line stays within syntax every login shell accepts
+(a fish or csh window cannot abort it) and needs no shell-specific form.
+Its do-script line wipes screen and saved lines (`2J`/`3J`, the latter ignored
+where unsupported) before it replaces the shell: Terminal types that line into
+a shell it has already started, so the login banner and the echoed command
+would otherwise stay in the new window.
 `mixed_listen` is unvalidated while Allow LAN is on, so the resolved host is
 allow-listed (hostname / IPv4 / bracketed IPv6 characters) before it is
 embedded in a generated `export` / `set` / AppleScript string, and a denied

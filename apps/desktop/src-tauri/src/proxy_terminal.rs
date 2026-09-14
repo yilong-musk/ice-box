@@ -329,9 +329,31 @@ fn open_proxy_terminal_with_envs(envs: &[(String, String)]) -> Result<(), AppErr
     Ok(())
 }
 
+/// Wipe screen and scrollback before the session shell takes over.
+///
+/// Terminal.app types the do-script line into a shell it already started, so
+/// its login banner plus the echoed command line would otherwise stay in the
+/// new window. `3J` erases the saved lines (terminals without it ignore the
+/// sequence), `2J` the screen, `H` homes the cursor. Absolute `printf` path
+/// because the login shell may lack a builtin with these escapes; `;` keeps
+/// the wipe best-effort, so a failing `printf` cannot cost the user the shell.
+#[cfg(any(test, target_os = "macos"))]
+const MACOS_CLEAR_PRELUDE: &str = "/usr/bin/printf '\\033[3J\\033[2J\\033[H'; ";
+
+/// Login-shell lookup for the typed line, resolved by `/bin/sh`.
+///
+/// Terminal types the do-script text into the window's login shell, which may
+/// be fish or csh; the POSIX default-value form `${SHELL:-/bin/sh}` is a syntax
+/// error there and would abort the whole line, proxy env included. Passing
+/// that one expansion to `/bin/sh -c` keeps the typed line within syntax every
+/// login shell shares (`;`, `exec`, single quotes) and still falls back to
+/// `/bin/sh` when `SHELL` is unset.
+#[cfg(any(test, target_os = "macos"))]
+const MACOS_SESSION_SHELL: &str = "/bin/sh -c 'exec \"${SHELL:-/bin/sh}\" -l'";
+
 /// Terminal.app does not inherit our process env, so the do-script hands the
 /// vars to the shell it starts. `env` takes them as arguments, which keeps the
-/// line valid in every shell — fish rejects POSIX `export`.
+/// line valid in every shell — fish rejects POSIX `export` and `${var:-word}`.
 #[cfg(any(test, target_os = "macos"))]
 fn macos_do_script_command(envs: &[(String, String)]) -> String {
     let assignments: String = envs
@@ -339,15 +361,21 @@ fn macos_do_script_command(envs: &[(String, String)]) -> String {
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("exec env {assignments} \"${{SHELL:-/bin/sh}}\" -l")
+    format!("{MACOS_CLEAR_PRELUDE}exec env {assignments} {MACOS_SESSION_SHELL}")
+}
+
+/// Escape `shell_cmd` for the AppleScript double-quoted string. Only the
+/// quotes are escaped for AppleScript; `$SHELL` must reach the shell as-is.
+#[cfg(any(test, target_os = "macos"))]
+fn macos_do_script_apple_script(shell_cmd: &str) -> String {
+    let escaped = shell_cmd.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("tell application \"Terminal\" to do script \"{escaped}\"")
 }
 
 #[cfg(target_os = "macos")]
 fn open_proxy_terminal_with_envs(envs: &[(String, String)]) -> Result<(), AppError> {
     let shell_cmd = macos_do_script_command(envs);
-    // Escape for AppleScript double quotes only; `$SHELL` must reach the shell.
-    let escaped = shell_cmd.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!("tell application \"Terminal\" to do script \"{escaped}\"");
+    let script = macos_do_script_apple_script(&shell_cmd);
 
     // Wait for osascript: the first call raises the one-time Automation consent
     // prompt, so a denial (`-1743`) has to reach the UI instead of failing
@@ -552,16 +580,51 @@ mod tests {
     }
 
     #[test]
-    fn macos_do_script_uses_env_so_it_works_in_fish() {
+    fn macos_do_script_uses_env_so_it_works_in_non_posix_shells() {
         let pairs = proxy_env_pairs("127.0.0.1", 17890);
         let line = macos_do_script_command(&pairs);
         assert!(
-            line.starts_with("exec env HTTP_PROXY=http://127.0.0.1:17890 "),
+            line.contains("exec env HTTP_PROXY=http://127.0.0.1:17890 "),
             "{line}"
         );
         assert!(line.contains("no_proxy=localhost,127.0.0.1,::1 "), "{line}");
-        assert!(line.ends_with(" \"${SHELL:-/bin/sh}\" -l"), "{line}");
         // `export` is a POSIX builtin; fish rejects it.
         assert!(!line.contains("export"), "{line}");
+        // `${SHELL:-/bin/sh}` is POSIX-only: fish and csh reject the expansion
+        // itself, so the login shell must only ever see it as the single-quoted
+        // payload of `/bin/sh -c`.
+        let (login_shell_line, payload) = line
+            .split_once(" /bin/sh -c ")
+            .expect("the line resolves the login shell in /bin/sh");
+        assert!(!login_shell_line.contains("${SHELL"), "{line}");
+        assert_eq!(payload, "'exec \"${SHELL:-/bin/sh}\" -l'", "{line}");
+    }
+
+    #[test]
+    fn macos_do_script_wipes_the_banner_and_the_echoed_line() {
+        let pairs = proxy_env_pairs("127.0.0.1", 17890);
+        let line = macos_do_script_command(&pairs);
+        // Saved lines (3J) + screen (2J) + cursor home, all before the exec.
+        assert!(
+            line.starts_with("/usr/bin/printf '\\033[3J\\033[2J\\033[H'; exec env "),
+            "{line}"
+        );
+        // Best-effort wipe: a clear failure must not stop the session shell.
+        assert!(!line.contains("&&"), "{line}");
+    }
+
+    #[test]
+    fn macos_apple_script_keeps_the_clear_escapes_for_the_shell() {
+        let pairs = proxy_env_pairs("127.0.0.1", 17890);
+        let script = macos_do_script_apple_script(&macos_do_script_command(&pairs));
+        // AppleScript turns `\\033` back into the `\033` printf interprets.
+        assert!(script.contains("\\\\033[3J"), "{script}");
+        // Quotes are escaped for AppleScript only: `$SHELL` stays unexpanded
+        // and the single quotes still reach the login shell untouched.
+        assert!(
+            script.contains("-c 'exec \\\"${SHELL:-/bin/sh}\\\" -l'"),
+            "{script}"
+        );
+        assert!(!script.contains("\\'"), "{script}");
     }
 }
