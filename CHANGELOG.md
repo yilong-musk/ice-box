@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.9] - 2026-09-14
 
+### Added
+
+- The Home proxy-status card copies a one-line command that sends the current
+  terminal session through Mixed (session env only; no global/user profile
+  changes): POSIX `export` on macOS/Linux, PowerShell `$env:` on Windows.
+
 ### Fixed
 
 - A failed background app-update check retries with backoff (sooner if the

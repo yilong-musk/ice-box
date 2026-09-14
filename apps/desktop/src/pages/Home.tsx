@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Power } from "lucide-react";
+import { Copy, Power } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -46,6 +46,12 @@ import { Toggle } from "@/components/ui/toggle";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
+import {
+  copyText,
+  detectShellProxyPlatform,
+  formatShellProxyCommand,
+  resolveShellProxyEndpoint,
+} from "../lib/shellProxy";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -119,6 +125,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
   const settingsRef = useRef<AppSettings | null>(null);
+  const [copiedCliProxy, setCopiedCliProxy] = useState(false);
+  const copiedCliProxyTimerRef = useRef<number | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
 
   const refresh = useCallback(
@@ -257,6 +265,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       unlisten();
     };
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (copiedCliProxyTimerRef.current !== null) {
+        window.clearTimeout(copiedCliProxyTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     activeRef.current = active;
@@ -414,6 +430,29 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
+  async function onCopyCliProxy() {
+    const endpoint = resolveShellProxyEndpoint(settings, {
+      host: core?.inbound_host ?? null,
+      port: core?.inbound_port ?? null,
+    });
+    if (!endpoint) return;
+    const command = formatShellProxyCommand(
+      detectShellProxyPlatform(),
+      endpoint.host,
+      endpoint.port,
+    );
+    const ok = await copyText(command);
+    if (!ok) return;
+    setCopiedCliProxy(true);
+    if (copiedCliProxyTimerRef.current !== null) {
+      window.clearTimeout(copiedCliProxyTimerRef.current);
+    }
+    copiedCliProxyTimerRef.current = window.setTimeout(() => {
+      copiedCliProxyTimerRef.current = null;
+      setCopiedCliProxy(false);
+    }, 2000);
+  }
+
   /** TUN setting switch on the home page: persists `tun.enabled` as the
    * desired backend for the *next* service start. It never starts or stops
    * the live proxy service. Enabling without an authorized helper guides
@@ -478,6 +517,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
       : t("common.dash");
+  const cliProxyEndpoint = resolveShellProxyEndpoint(settings, {
+    host: core?.inbound_host ?? null,
+    port: core?.inbound_port ?? null,
+  });
   const emptyTitle = running
     ? t("home.empty.runningTitle")
     : t("home.empty.idleTitle");
@@ -646,6 +689,22 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.unsupported")}
               </p>
             )}
+            {cliProxyEndpoint ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-2 w-full justify-start gap-2"
+                aria-label={t("home.copyCliProxy")}
+                title={t("home.copyCliProxyHint")}
+                onClick={() => void onCopyCliProxy()}
+              >
+                <Copy />
+                {copiedCliProxy
+                  ? t("home.copyCliProxyCopied")
+                  : t("home.copyCliProxy")}
+              </Button>
+            ) : null}
             <ToggleGroup
               type="single"
               variant="outline"

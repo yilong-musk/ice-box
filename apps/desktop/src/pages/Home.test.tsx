@@ -1410,4 +1410,48 @@ describe("Home", () => {
       );
     });
   });
+
+  it("copies a platform shell proxy command from the proxy-status card", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      platform: "Win32",
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.copyCliProxy") }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "$env:HTTP_PROXY='http://127.0.0.1:17890'; $env:HTTPS_PROXY='http://127.0.0.1:17890'; $env:ALL_PROXY='socks5://127.0.0.1:17890'; $env:NO_PROXY='localhost,127.0.0.1,::1'",
+      );
+    });
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toHaveTextContent(t("home.copyCliProxyCopied"));
+    });
+    vi.unstubAllGlobals();
+  });
 });
