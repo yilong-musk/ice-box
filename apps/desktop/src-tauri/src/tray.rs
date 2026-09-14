@@ -221,8 +221,8 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_direct: "直连",
             nodes: "节点",
             subs: "订阅",
-            copy_cli_proxy: "复制命令",
-            open_cli_proxy: "打开终端",
+            copy_cli_proxy: "复制代理命令",
+            open_cli_proxy: "打开代理终端",
             show: "显示",
             quit: "退出",
         },
@@ -235,8 +235,8 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_direct: "Direct",
             nodes: "Nodes",
             subs: "Subscriptions",
-            copy_cli_proxy: "Copy Command",
-            open_cli_proxy: "Open Terminal",
+            copy_cli_proxy: "Copy Proxy Command",
+            open_cli_proxy: "Open Proxy Terminal",
             show: "Show",
             quit: "Quit",
         },
@@ -1335,7 +1335,7 @@ mod tests {
         assert_eq!(zh.subs, "订阅");
         assert_eq!(
             (zh.copy_cli_proxy, zh.open_cli_proxy),
-            ("复制命令", "打开终端")
+            ("复制代理命令", "打开代理终端")
         );
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
 
@@ -1351,7 +1351,7 @@ mod tests {
         assert_eq!(en.subs, "Subscriptions");
         assert_eq!(
             (en.copy_cli_proxy, en.open_cli_proxy),
-            ("Copy Command", "Open Terminal")
+            ("Copy Proxy Command", "Open Proxy Terminal")
         );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
     }
