@@ -45,6 +45,7 @@ pub(crate) fn proxy_env_pairs(host: &str, port: u16) -> Vec<(String, String)> {
     ]
 }
 
+#[cfg(not(target_os = "macos"))]
 fn apply_envs(cmd: &mut Command, envs: &[(String, String)]) {
     for (key, value) in envs {
         cmd.env(key, value);
