@@ -5,18 +5,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- Opening a proxy terminal on macOS works when the login shell is not POSIX
-  (fish, csh): the do-script line resolves the login shell inside
-  `/bin/sh -c` instead of expanding `${SHELL:-/bin/sh}` in the window's own
-  shell, where that syntax is an error that skipped the whole line.
-
-- Opening a proxy terminal on macOS no longer leaves Terminal's login banner
-  and the echoed `exec env ...` command line visible: the do-script line wipes
-  screen and scrollback (`3J`, ignored by terminals that lack it) before it
-  replaces the shell.
-
 ## [0.1.9] - 2026-09-14
 
 ### Added
@@ -53,6 +41,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fails, that attempt is the last: `last_check_at` is written and the usual
   24-hour cooldown starts. In-session retries before that do not write the
   cooldown.
+
+- Opening a proxy terminal on macOS works when the login shell is not POSIX
+  (fish, csh): the do-script line resolves the login shell inside
+  `/bin/sh -c` instead of expanding `${SHELL:-/bin/sh}` in the window's own
+  shell, where that syntax is an error that skipped the whole line.
+
+- Opening a proxy terminal on macOS no longer leaves Terminal's login banner
+  and the echoed `exec env ...` command line visible: the do-script line wipes
+  screen and scrollback (`3J`, ignored by terminals that lack it) before it
+  replaces the shell.
 
 ## [0.1.8] - 2026-09-12
 
