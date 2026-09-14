@@ -279,6 +279,7 @@ export const api = {
   },
   async getRuntimeConfig(): Promise<string> { return "{\n  \"route\": { \"final\": \"Tokyo / edge-01\" }\n}"; },
   async revealDataDir(): Promise<void> {},
+  async openProxyTerminal(): Promise<void> { await delay(); },
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },
   async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null }; subscriptions.push(sub); return sub; },

@@ -18,6 +18,7 @@ const recoverTun = vi.fn();
 const installHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
 const ensureTunElevation = vi.fn();
+const openProxyTerminal = vi.fn();
 const listenStateChanged = vi.fn();
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
@@ -39,6 +40,7 @@ vi.mock("../api/tauri", () => ({
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
     ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    openProxyTerminal: (...args: unknown[]) => openProxyTerminal(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     stop: vi.fn(),
   },
@@ -1453,5 +1455,35 @@ describe("Home", () => {
       ).toHaveTextContent(t("home.copyCliProxyCopied"));
     });
     vi.unstubAllGlobals();
+  });
+
+  it("opens a proxy terminal from the proxy-status card", async () => {
+    openProxyTerminal.mockResolvedValue(undefined);
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.openCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.openCliProxy") }));
+    await waitFor(() => {
+      expect(openProxyTerminal).toHaveBeenCalledTimes(1);
+    });
   });
 });

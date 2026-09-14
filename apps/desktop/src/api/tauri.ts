@@ -416,6 +416,8 @@ export const api = {
     invoke<string[]>("get_log_view", { req: { n } }),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
+  /** Open the default terminal with session-only Mixed proxy env vars. */
+  openProxyTerminal: () => invoke<void>("open_proxy_terminal"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** First-frame restore of last-session capture. No-op when it was off. */
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),

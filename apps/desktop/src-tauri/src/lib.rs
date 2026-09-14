@@ -11,6 +11,7 @@ mod instance;
 mod log_tail;
 mod log_view;
 mod orchestrate;
+mod proxy_terminal;
 mod runtime;
 mod shutdown;
 mod subscription_watch;
@@ -320,6 +321,7 @@ pub fn run() {
             commands::get_log_view,
             commands::get_runtime_config,
             commands::reveal_data_dir,
+            commands::open_proxy_terminal,
             commands::get_settings,
             commands::save_settings,
             commands::set_tray_language,

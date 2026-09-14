@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Home proxy-status card copies a one-line command that sends the current
   terminal session through Mixed (session env only; no global/user profile
   changes): POSIX `export` on macOS/Linux, PowerShell `$env:` on Windows.
+  A second control opens the platform default terminal with the same
+  session-only proxy environment already set.
 
 ### Fixed
 

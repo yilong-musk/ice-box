@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, Power } from "lucide-react";
+import { Copy, Power, Terminal } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -453,6 +453,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }, 2000);
   }
 
+  async function onOpenCliProxy() {
+    setError(null);
+    try {
+      await api.openProxyTerminal();
+    } catch (err) {
+      setError(formatInvokeError(err));
+    }
+  }
+
   /** TUN setting switch on the home page: persists `tun.enabled` as the
    * desired backend for the *next* service start. It never starts or stops
    * the live proxy service. Enabling without an authorized helper guides
@@ -689,22 +698,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.unsupported")}
               </p>
             )}
-            {cliProxyEndpoint ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="mt-2 w-full justify-start gap-2"
-                aria-label={t("home.copyCliProxy")}
-                title={t("home.copyCliProxyHint")}
-                onClick={() => void onCopyCliProxy()}
-              >
-                <Copy />
-                {copiedCliProxy
-                  ? t("home.copyCliProxyCopied")
-                  : t("home.copyCliProxy")}
-              </Button>
-            ) : null}
             <ToggleGroup
               type="single"
               variant="outline"
@@ -781,6 +774,38 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.tunMode")}
               </Toggle>
             )}
+            {cliProxyEndpoint ? (
+              <div className="mt-3 flex w-full gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-w-0 flex-1 justify-start gap-2"
+                  aria-label={t("home.copyCliProxy")}
+                  title={t("home.copyCliProxyHint")}
+                  onClick={() => void onCopyCliProxy()}
+                >
+                  <Copy />
+                  <span className="truncate">
+                    {copiedCliProxy
+                      ? t("home.copyCliProxyCopied")
+                      : t("home.copyCliProxy")}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-w-0 flex-1 justify-start gap-2"
+                  aria-label={t("home.openCliProxy")}
+                  title={t("home.openCliProxyHint")}
+                  onClick={() => void onOpenCliProxy()}
+                >
+                  <Terminal />
+                  <span className="truncate">{t("home.openCliProxy")}</span>
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 
