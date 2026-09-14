@@ -3,8 +3,8 @@
 //! Open a new interactive terminal with Mixed proxy env for *this session only*.
 //!
 //! Env is injected into the new process (or via a one-shot `export` / `$env:` in
-//! the launch command). Never uses `setx`, User/Machine environment APIs, or
-//! shell profile edits.
+//! the launch command). Never uses User/Machine environment APIs, or shell
+//! profile edits.
 
 use ice_config::{AppError, ErrorCode};
 use std::process::Command;
@@ -45,20 +45,27 @@ pub(crate) fn proxy_env_pairs(host: &str, port: u16) -> Vec<(String, String)> {
     ]
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(not(target_os = "macos"))]
 fn apply_envs(cmd: &mut Command, envs: &[(String, String)]) {
     for (key, value) in envs {
         cmd.env(key, value);
     }
 }
 
-/// PowerShell session prelude: process-scoped `$env:` only (no User/Machine persistence).
+/// `cmd /k` prelude using `&&` only.
+///
+/// Windows Terminal treats `;` as a *wt* command separator, so a PowerShell
+/// `$env:A=...; $env:B=...` string must never appear on the `wt.exe` command
+/// line — it splits into multiple bogus launches (0x80070002).
 #[cfg(any(test, windows))]
-fn powershell_env_prelude(envs: &[(String, String)]) -> String {
-    envs.iter()
-        .map(|(k, v)| format!("$env:{k}='{v}'"))
+fn cmd_session_prelude(envs: &[(String, String)]) -> String {
+    let sets = envs
+        .iter()
+        .map(|(k, v)| format!("set \"{k}={v}\""))
         .collect::<Vec<_>>()
-        .join("; ")
+        .join("&&");
+    // Hand off to PowerShell in the same tab; env is inherited from cmd.
+    format!("{sets}&& powershell -NoExit -NoLogo")
 }
 
 fn spawn_err(context: &str, err: std::io::Error) -> AppError {
@@ -85,28 +92,21 @@ fn open_proxy_terminal_with_envs(envs: &[(String, String)]) -> Result<(), AppErr
     use std::os::windows::process::CommandExt;
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-    // Windows Terminal does not forward the launching process environment into
-    // the profile shell. Set session vars inside PowerShell via -Command.
-    let prelude = powershell_env_prelude(envs);
+    let prelude = cmd_session_prelude(envs);
 
+    // Prefer Windows Terminal: one tab, cmd sets env then starts PowerShell.
+    // Never put `;` on this command line (wt command separator).
     let mut wt = Command::new("wt.exe");
-    wt.args([
-        "-w",
-        "0",
-        "nt",
-        "powershell",
-        "-NoExit",
-        "-NoLogo",
-        "-Command",
-        &prelude,
-    ]);
+    wt.args(["-w", "0", "nt", "cmd", "/k", &prelude]);
     if wt.spawn().is_ok() {
         return Ok(());
     }
 
+    // Fallback: console PowerShell inherits process env from this spawn.
     let mut ps = Command::new("powershell.exe");
+    apply_envs(&mut ps, envs);
     ps.creation_flags(CREATE_NEW_CONSOLE);
-    ps.args(["-NoExit", "-NoLogo", "-Command", &prelude]);
+    ps.args(["-NoExit", "-NoLogo"]);
     ps.spawn().map_err(|e| spawn_err("powershell", e))?;
     Ok(())
 }
@@ -205,13 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn powershell_env_prelude_sets_process_scoped_vars() {
+    fn cmd_session_prelude_avoids_wt_command_separator() {
         let pairs = proxy_env_pairs("127.0.0.1", 17890);
-        let prelude = powershell_env_prelude(&pairs);
-        assert!(prelude.contains("$env:HTTP_PROXY='http://127.0.0.1:17890'"));
-        assert!(prelude.contains("$env:ALL_PROXY='socks5://127.0.0.1:17890'"));
-        assert!(prelude.contains("$env:NO_PROXY='localhost,127.0.0.1,::1'"));
+        let prelude = cmd_session_prelude(&pairs);
+        assert!(prelude.contains("set \"HTTP_PROXY=http://127.0.0.1:17890\""));
+        assert!(prelude.contains("set \"ALL_PROXY=socks5://127.0.0.1:17890\""));
+        assert!(prelude.contains("&& powershell -NoExit -NoLogo"));
+        // ';' would be parsed by wt.exe as another wt command.
+        assert!(!prelude.contains(';'));
         assert!(!prelude.contains("setx"));
-        assert!(!prelude.contains("SetEnvironmentVariable"));
     }
 }

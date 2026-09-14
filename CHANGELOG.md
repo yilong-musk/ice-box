@@ -17,8 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Opening a proxy terminal on Windows sets `$env:` inside the new PowerShell
-  session (Windows Terminal does not forward the parent process environment).
+- Opening a proxy terminal on Windows sets session env via `cmd /k set ...&&`
+  (and then PowerShell). A `$env:...; ...` string must not be passed to
+  `wt.exe` — Windows Terminal treats `;` as a command separator and opens
+  multiple broken tabs.
 
 - A failed background app-update check retries with backoff (sooner if the
   core becomes ready after the failed attempt). If the 15-minute retry still
