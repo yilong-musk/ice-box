@@ -142,16 +142,17 @@ fn copy_text(text: &str) -> Result<(), AppError> {
         }
         let status = child.wait().map_err(|e| spawn_err("clipboard", e))?;
         if status.success() {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "copy proxy command: clip failed",
+            ))
         }
-        return Err(AppError::new(
-            ErrorCode::ConfigInvalid,
-            "copy proxy command: clip failed",
-        ));
     }
     #[cfg(target_os = "macos")]
     {
-        return pipe_to_clipboard(Command::new("pbcopy"), text, "pbcopy");
+        pipe_to_clipboard(Command::new("pbcopy"), text, "pbcopy")
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -166,10 +167,10 @@ fn copy_text(text: &str) -> Result<(), AppError> {
                 return Ok(());
             }
         }
-        return Err(AppError::new(
+        Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "copy proxy command: no clipboard tool (wl-copy, xclip, or xsel)",
-        ));
+        ))
     }
 }
 
