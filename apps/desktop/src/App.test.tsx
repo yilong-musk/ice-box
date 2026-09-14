@@ -82,6 +82,8 @@ vi.mock("./api/tauri", () => ({
     restoreLaunchProxy: (...args: unknown[]) => restoreLaunchProxy(...args),
     checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
+    recordAppUpdateCheck: vi.fn().mockResolvedValue(undefined),
+    copyProxyCommand: vi.fn().mockResolvedValue(undefined),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     listenStateChanged: vi.fn().mockResolvedValue(() => {}),
     saveSettings: (...args: unknown[]) => saveSettings(...args),

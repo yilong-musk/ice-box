@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Power } from "lucide-react";
+import { Copy, Power, Terminal } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -46,6 +46,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
+import { resolveShellProxyEndpoint } from "../lib/shellProxy";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -119,6 +120,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
   const settingsRef = useRef<AppSettings | null>(null);
+  const [copiedCliProxy, setCopiedCliProxy] = useState(false);
+  const copiedCliProxyTimerRef = useRef<number | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
 
   const refresh = useCallback(
@@ -257,6 +260,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       unlisten();
     };
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (copiedCliProxyTimerRef.current !== null) {
+        window.clearTimeout(copiedCliProxyTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     activeRef.current = active;
@@ -414,6 +425,40 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
+  async function onCopyCliProxy() {
+    const endpoint = resolveShellProxyEndpoint(settings, {
+      host: core?.inbound_host ?? null,
+      port: core?.inbound_port ?? null,
+    });
+    if (!endpoint) return;
+    setError(null);
+    try {
+      // Rust builds the one-liner and owns the clipboard, so the text cannot
+      // drift from the env an opened terminal gets.
+      await api.copyProxyCommand();
+    } catch (err) {
+      setError(formatInvokeError(err));
+      return;
+    }
+    setCopiedCliProxy(true);
+    if (copiedCliProxyTimerRef.current !== null) {
+      window.clearTimeout(copiedCliProxyTimerRef.current);
+    }
+    copiedCliProxyTimerRef.current = window.setTimeout(() => {
+      copiedCliProxyTimerRef.current = null;
+      setCopiedCliProxy(false);
+    }, 2000);
+  }
+
+  async function onOpenCliProxy() {
+    setError(null);
+    try {
+      await api.openProxyTerminal();
+    } catch (err) {
+      setError(formatInvokeError(err));
+    }
+  }
+
   /** TUN setting switch on the home page: persists `tun.enabled` as the
    * desired backend for the *next* service start. It never starts or stops
    * the live proxy service. Enabling without an authorized helper guides
@@ -478,6 +523,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     core?.inbound_host && core.inbound_port
       ? `${core.inbound_host}:${core.inbound_port}`
       : t("common.dash");
+  const cliProxyEndpoint = resolveShellProxyEndpoint(settings, {
+    host: core?.inbound_host ?? null,
+    port: core?.inbound_port ?? null,
+  });
   const emptyTitle = running
     ? t("home.empty.runningTitle")
     : t("home.empty.idleTitle");
@@ -722,6 +771,38 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.tunMode")}
               </Toggle>
             )}
+            {cliProxyEndpoint ? (
+              <div className="mt-3 flex w-full gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-w-0 flex-1 justify-start gap-2"
+                  aria-label={t("home.copyCliProxy")}
+                  title={t("home.copyCliProxyHint")}
+                  onClick={() => void onCopyCliProxy()}
+                >
+                  <Copy />
+                  <span className="truncate">
+                    {copiedCliProxy
+                      ? t("home.copyCliProxyCopied")
+                      : t("home.copyCliProxy")}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-w-0 flex-1 justify-start gap-2"
+                  aria-label={t("home.openCliProxy")}
+                  title={t("home.openCliProxyHint")}
+                  onClick={() => void onOpenCliProxy()}
+                >
+                  <Terminal />
+                  <span className="truncate">{t("home.openCliProxy")}</span>
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 

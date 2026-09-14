@@ -18,6 +18,8 @@ const recoverTun = vi.fn();
 const installHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
 const ensureTunElevation = vi.fn();
+const copyProxyCommand = vi.fn();
+const openProxyTerminal = vi.fn();
 const listenStateChanged = vi.fn();
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
@@ -39,6 +41,8 @@ vi.mock("../api/tauri", () => ({
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
     ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    copyProxyCommand: (...args: unknown[]) => copyProxyCommand(...args),
+    openProxyTerminal: (...args: unknown[]) => openProxyTerminal(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     stop: vi.fn(),
   },
@@ -1408,6 +1412,107 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
+    });
+  });
+
+  it("copies the session proxy command through the Rust command", async () => {
+    copyProxyCommand.mockResolvedValue(undefined);
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.copyCliProxy") }));
+    await waitFor(() => {
+      expect(copyProxyCommand).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toHaveTextContent(t("home.copyCliProxyCopied"));
+    });
+  });
+
+  it("surfaces a clipboard failure from the proxy-status card", async () => {
+    copyProxyCommand.mockRejectedValue(
+      new Error("copy proxy command: no clipboard tool"),
+    );
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.copyCliProxy") }));
+    await waitFor(() => {
+      expect(view.getByText(/no clipboard tool/)).toBeInTheDocument();
+    });
+    // The card must not claim success.
+    expect(
+      view.getByRole("button", { name: t("home.copyCliProxy") }),
+    ).not.toHaveTextContent(t("home.copyCliProxyCopied"));
+  });
+
+  it("opens a proxy terminal from the proxy-status card", async () => {
+    openProxyTerminal.mockResolvedValue(undefined);
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.openCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.openCliProxy") }));
+    await waitFor(() => {
+      expect(openProxyTerminal).toHaveBeenCalledTimes(1);
     });
   });
 });

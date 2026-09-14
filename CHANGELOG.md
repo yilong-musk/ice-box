@@ -5,6 +5,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening a proxy terminal on macOS works when the login shell is not POSIX
+  (fish, csh): the do-script line resolves the login shell inside
+  `/bin/sh -c` instead of expanding `${SHELL:-/bin/sh}` in the window's own
+  shell, where that syntax is an error that skipped the whole line.
+
+- Opening a proxy terminal on macOS no longer leaves Terminal's login banner
+  and the echoed `exec env ...` command line visible: the do-script line wipes
+  screen and scrollback (`3J`, ignored by terminals that lack it) before it
+  replaces the shell.
+
+## [0.1.9] - 2026-09-14
+
+### Added
+
+- The Home proxy-status card copies a one-line command that sends the current
+  terminal session through Mixed (session env only; no global/user profile
+  changes): POSIX `export` (fish `set -gx`) on macOS/Linux, PowerShell `$env:`
+  on Windows. A second control opens the platform default terminal with the
+  same session-only proxy environment already set. Both actions are also on
+  the system tray menu.
+
+### Fixed
+
+- Opening a proxy terminal on Windows sets session env via `cmd /k set ...&&`
+  (and then PowerShell). A `$env:...; ...` string must not be passed to
+  `wt.exe` — Windows Terminal treats `;` as a command separator and opens
+  multiple broken tabs.
+
+- The session terminal helpers check the Mixed host before it is embedded in a
+  generated `export` / `set` / AppleScript string — Allow LAN skips
+  `mixed_listen` validation — and the macOS path waits for `osascript` so a
+  denied Automation consent reports the System Settings path instead of opening
+  nothing. The bundle declares `NSAppleEventsUsageDescription` for that prompt.
+
+- The copied command is built in Rust from the same variable set a terminal
+  opened by the app receives (upper + lower case on POSIX, upper case on
+  Windows, where env names are case-insensitive), follows the login shell
+  (`export` or fish `set -gx`), and reports a clipboard failure in the Home card
+  instead of doing nothing. The macOS Terminal.app launch passes env through
+  `env`, so it works with any shell.
+
+- A failed background app-update check retries with backoff (sooner if the
+  core becomes ready after the failed attempt). If the 15-minute retry still
+  fails, that attempt is the last: `last_check_at` is written and the usual
+  24-hour cooldown starts. In-session retries before that do not write the
+  cooldown.
+
 ## [0.1.8] - 2026-09-12
 
 ### Added

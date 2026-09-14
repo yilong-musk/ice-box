@@ -416,6 +416,10 @@ export const api = {
     invoke<string[]>("get_log_view", { req: { n } }),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
+  /** Copy the session-only Mixed command (Rust owns the text and clipboard). */
+  copyProxyCommand: () => invoke<void>("copy_proxy_command"),
+  /** Open the default terminal with session-only Mixed proxy env vars. */
+  openProxyTerminal: () => invoke<void>("open_proxy_terminal"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** First-frame restore of last-session capture. No-op when it was off. */
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
@@ -426,6 +430,8 @@ export const api = {
       req: { background },
     }),
   recordUpdatePrompt: () => invoke<void>("record_update_prompt"),
+  /** Persist `last_check_at` after the background retry ladder is exhausted. */
+  recordAppUpdateCheck: () => invoke<void>("record_app_update_check"),
   skipAppUpdate: (version: string) =>
     invoke<void>("skip_app_update", { req: { version } }),
   installAppUpdate: () => invoke<void>("install_app_update"),

@@ -48,6 +48,7 @@ vi.mock("../api/tauri", () => ({
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
     recordUpdatePrompt: vi.fn(),
+    recordAppUpdateCheck: vi.fn(),
     skipAppUpdate: vi.fn(),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),

@@ -138,10 +138,37 @@ other than `clash_api` / `cache_file`). User-mode generation drops remote
 fetch/file surface.
 Platform privilege and ownership rules live in [tun.md](tun.md).
 
+The Home card and the tray also expose session-only terminal helpers: they set
+the Mixed env for one new process and never touch shell profiles or user
+environment. Rust owns both the command text and the clipboard, so a copied
+command cannot drift from the env a terminal opened by the app receives; the
+one-liner follows the login shell (POSIX `export`, fish `set -gx`) and the
+Terminal.app launch passes the vars through `env` and resolves the login shell
+in `/bin/sh -c`, so the typed line stays within syntax every login shell accepts
+(a fish or csh window cannot abort it) and needs no shell-specific form.
+Its do-script line wipes screen and saved lines (`2J`/`3J`, the latter ignored
+where unsupported) before it replaces the shell: Terminal types that line into
+a shell it has already started, so the login banner and the echoed command
+would otherwise stay in the new window.
+`mixed_listen` is unvalidated while Allow LAN is on, so the resolved host is
+allow-listed (hostname / IPv4 / bracketed IPv6 characters) before it is
+embedded in a generated `export` / `set` / AppleScript string, and a denied
+macOS Automation consent surfaces as an IPC error instead of a silent no-op.
+Both helpers stay available while the proxy service is stopped — the port falls
+back to the saved settings so a command can be prepared before starting it —
+and they never read or write the user's environment outside the process they
+start.
+
 App updates run in Rust and verify signed artifacts before installation.
 Installation uses the same capture/core shutdown path as Quit. Update integrity
 signing is separate from OS application signing; artifact production and
 distribution policy are defined in [release-process.md](release-process.md).
+Background checks run after the first UI frame. A successful GitHub fetch
+starts a 24-hour cooldown in `update-check.json`. A failure is logged and
+retried silently with exponential backoff (sooner if the core becomes Running)
+through one 15-minute attempt; that last failure records `last_check_at` and
+starts the same 24-hour cooldown. In-session retries before exhaustion do not
+write the cooldown.
 
 ## Further reading
 

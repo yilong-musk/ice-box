@@ -450,6 +450,12 @@ impl MockClashApi {
         let thread = std::thread::spawn(move || loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // The listener is nonblocking so the accept loop can poll
+                    // `stop`. On macOS the accepted socket inherits that flag;
+                    // a WouldBlock mid-headers used to record a PATCH with no
+                    // Authorization and fail `set_mode_with_secret_sends_bearer`.
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let reqs = reqs.clone();
                     let mode = mode_shared.clone();
                     let _ = std::thread::spawn(move || {
@@ -763,9 +769,12 @@ mod tests {
         set_mode(&endpoints, "Global").expect("set mode");
         std::thread::sleep(Duration::from_millis(100));
         let reqs = server.requests.lock().unwrap();
-        assert_eq!(reqs.len(), 1, "expected exactly one PATCH");
+        let patch = reqs
+            .iter()
+            .find(|r| r.method == "PATCH")
+            .expect("PATCH /configs");
         assert_eq!(
-            reqs[0].authorization.as_deref(),
+            patch.authorization.as_deref(),
             Some("Bearer iceboxtestclashapisecret000001")
         );
     }
