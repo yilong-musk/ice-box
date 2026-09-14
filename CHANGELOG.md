@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   terminal session through Mixed (session env only; no global/user profile
   changes): POSIX `export` on macOS/Linux, PowerShell `$env:` on Windows.
   A second control opens the platform default terminal with the same
-  session-only proxy environment already set.
+  session-only proxy environment already set. Both actions are also on the
+  system tray menu.
 
 ### Fixed
 

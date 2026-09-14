@@ -5,15 +5,17 @@
 //!
 //! The menu also carries the actions that do not need the window: the proxy
 //! service switch (labeled with the action, like the Home power button), the
-//! routing mode group, the subscription group, and the node groups. A watchdog
+//! routing mode group, the subscription group, the node groups, and the
+//! session-only Mixed terminal helpers (copy command / open terminal). A watchdog
 //! re-derives all of them from the runtime state, so the menu follows changes
 //! made anywhere else — window, recovery, or a manual OS edit.
 
 use crate::capture::TrafficCapture;
 use crate::commands::{
     apply_after_subscription_change, apply_proxy_mode, broadcast_state_change, collect_nodes,
-    current_settings, disable_active_backend_inner, lock_orchestrate, proxy_service_posture,
-    select_group_member, select_node, start_service, NodeInfo,
+    copy_proxy_terminal_command, current_settings, disable_active_backend_inner, lock_orchestrate,
+    open_proxy_terminal_from_state, proxy_service_posture, select_group_member, select_node,
+    start_service, NodeInfo,
 };
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
@@ -191,6 +193,8 @@ struct TrayLabels {
     mode_direct: &'static str,
     nodes: &'static str,
     subs: &'static str,
+    copy_cli_proxy: &'static str,
+    open_cli_proxy: &'static str,
     show: &'static str,
     quit: &'static str,
 }
@@ -217,6 +221,8 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_direct: "直连",
             nodes: "节点",
             subs: "订阅",
+            copy_cli_proxy: "复制命令",
+            open_cli_proxy: "打开终端",
             show: "显示",
             quit: "退出",
         },
@@ -229,6 +235,8 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             mode_direct: "Direct",
             nodes: "Nodes",
             subs: "Subscriptions",
+            copy_cli_proxy: "Copy Command",
+            open_cli_proxy: "Open Terminal",
             show: "Show",
             quit: "Quit",
         },
@@ -441,6 +449,7 @@ struct TrayView {
     /// `tunAvailable` in the Home page); the switch is disabled otherwise.
     service_enabled: bool,
     mode: ProxyMode,
+    cli_proxy_enabled: bool,
 }
 
 impl Default for TrayView {
@@ -450,6 +459,7 @@ impl Default for TrayView {
             // A failed read must not disable the switch; the next sync decides.
             service_enabled: true,
             mode: ProxyMode::Rule,
+            cli_proxy_enabled: true,
         }
     }
 }
@@ -479,6 +489,8 @@ struct TrayMenuState {
     /// not leave a wrong check mark behind. Written from the menu thread (no
     /// lock), consumed by the sync.
     subs_dirty: AtomicBool,
+    copy_cli_proxy: MenuItem<Wry>,
+    open_cli_proxy: MenuItem<Wry>,
     show: MenuItem<Wry>,
     quit: MenuItem<Wry>,
     language: AtomicU8,
@@ -535,6 +547,14 @@ impl TrayMenuState {
         self.update_label("direct mode", self.mode_direct.set_text(labels.mode_direct))?;
         self.update_label("nodes", self.nodes.set_text(labels.nodes))?;
         self.update_label("subscriptions", self.subs.set_text(labels.subs))?;
+        self.update_label(
+            "copy command",
+            self.copy_cli_proxy.set_text(labels.copy_cli_proxy),
+        )?;
+        self.update_label(
+            "open terminal",
+            self.open_cli_proxy.set_text(labels.open_cli_proxy),
+        )?;
         self.update_label("Show", self.show.set_text(labels.show))?;
         self.update_label("Quit", self.quit.set_text(labels.quit))?;
         self.language.store(language.code(), Ordering::SeqCst);
@@ -635,6 +655,8 @@ impl TrayMenuState {
         if self.mode() != view.mode {
             self.apply_mode(view.mode);
         }
+        let _ = self.copy_cli_proxy.set_enabled(view.cli_proxy_enabled);
+        let _ = self.open_cli_proxy.set_enabled(view.cli_proxy_enabled);
     }
 }
 
@@ -866,12 +888,36 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             }
         }
     };
+    let copy_cli_proxy = MenuItem::with_id(
+        app,
+        "copy-cli-proxy",
+        labels.copy_cli_proxy,
+        view.cli_proxy_enabled,
+        None::<&str>,
+    )?;
+    let open_cli_proxy = MenuItem::with_id(
+        app,
+        "open-cli-proxy",
+        labels.open_cli_proxy,
+        view.cli_proxy_enabled,
+        None::<&str>,
+    )?;
     let show = MenuItem::with_id(app, "show", labels.show, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&service, &mode, &nodes, &subs, &separator, &show, &quit],
+        &[
+            &service,
+            &mode,
+            &nodes,
+            &subs,
+            &copy_cli_proxy,
+            &open_cli_proxy,
+            &separator,
+            &show,
+            &quit,
+        ],
     )?;
     app.manage(TrayMenuState {
         service,
@@ -885,6 +931,8 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         subs,
         subs_model: Mutex::new(subs_model),
         subs_dirty: AtomicBool::new(false),
+        copy_cli_proxy,
+        open_cli_proxy,
         show,
         quit,
         language: AtomicU8::new(language.code()),
@@ -915,6 +963,8 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
                 "mode:rule" => switch_mode(app, ProxyMode::Rule),
                 "mode:global" => switch_mode(app, ProxyMode::Global),
                 "mode:direct" => switch_mode(app, ProxyMode::Direct),
+                "copy-cli-proxy" => on_copy_cli_proxy(app),
+                "open-cli-proxy" => on_open_cli_proxy(app),
                 "show" => show_main_window(app),
                 "quit" => {
                     // The stop can take seconds with TUN active (teardown waits +
@@ -964,6 +1014,7 @@ fn current_view(app: &AppHandle) -> Option<TrayView> {
         service_on: posture.engaged(tun_active),
         service_enabled: state.system_proxy_available || capture.tun_available,
         mode: settings.proxy_mode,
+        cli_proxy_enabled: crate::commands::mixed_proxy_endpoint(state.inner()).is_ok(),
     })
 }
 
@@ -1058,6 +1109,40 @@ pub fn spawn_state_watchdog(app: AppHandle) {
             break;
         }
         sync_menu(&app);
+    });
+}
+
+/// Tray copy: same one-line Mixed command as the Home proxy-status card.
+fn on_copy_cli_proxy(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        if let Err(err) = copy_proxy_terminal_command(state.inner()) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                "tray copy proxy command failed"
+            );
+        }
+    });
+}
+
+/// Tray open: same session-only Mixed terminal as the Home proxy-status card.
+fn on_open_cli_proxy(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        if let Err(err) = open_proxy_terminal_from_state(state.inner()) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                "tray open proxy terminal failed"
+            );
+        }
     });
 }
 
@@ -1248,6 +1333,10 @@ mod tests {
         );
         assert_eq!(zh.nodes, "节点");
         assert_eq!(zh.subs, "订阅");
+        assert_eq!(
+            (zh.copy_cli_proxy, zh.open_cli_proxy),
+            ("复制命令", "打开终端")
+        );
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
 
         let en = labels(TrayLanguage::En);
@@ -1260,6 +1349,10 @@ mod tests {
         );
         assert_eq!(en.nodes, "Nodes");
         assert_eq!(en.subs, "Subscriptions");
+        assert_eq!(
+            (en.copy_cli_proxy, en.open_cli_proxy),
+            ("Copy Command", "Open Terminal")
+        );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
     }
 
@@ -1374,7 +1467,15 @@ mod tests {
             assert_eq!(node_action_from_menu_id(&action.menu_id()), Some(action));
         }
         // Everything else keeps its own id space.
-        for id in ["service", "show", "quit", "[\"group\",0]", "[\"member\"]"] {
+        for id in [
+            "service",
+            "show",
+            "quit",
+            "copy-cli-proxy",
+            "open-cli-proxy",
+            "[\"group\",0]",
+            "[\"member\"]",
+        ] {
             assert_eq!(node_action_from_menu_id(id), None, "{id}");
         }
     }
