@@ -279,6 +279,7 @@ export const api = {
   },
   async getRuntimeConfig(): Promise<string> { return "{\n  \"route\": { \"final\": \"Tokyo / edge-01\" }\n}"; },
   async revealDataDir(): Promise<void> {},
+  async copyProxyCommand(): Promise<void> { await delay(); },
   async openProxyTerminal(): Promise<void> { await delay(); },
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },

@@ -46,12 +46,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
-import {
-  copyText,
-  detectShellProxyPlatform,
-  formatShellProxyCommand,
-  resolveShellProxyEndpoint,
-} from "../lib/shellProxy";
+import { resolveShellProxyEndpoint } from "../lib/shellProxy";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -436,13 +431,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       port: core?.inbound_port ?? null,
     });
     if (!endpoint) return;
-    const command = formatShellProxyCommand(
-      detectShellProxyPlatform(),
-      endpoint.host,
-      endpoint.port,
-    );
-    const ok = await copyText(command);
-    if (!ok) return;
+    setError(null);
+    try {
+      // Rust builds the one-liner and owns the clipboard, so the text cannot
+      // drift from the env an opened terminal gets.
+      await api.copyProxyCommand();
+    } catch (err) {
+      setError(formatInvokeError(err));
+      return;
+    }
     setCopiedCliProxy(true);
     if (copiedCliProxyTimerRef.current !== null) {
       window.clearTimeout(copiedCliProxyTimerRef.current);

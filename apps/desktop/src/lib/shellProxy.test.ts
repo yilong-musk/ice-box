@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  copyText,
-  detectShellProxyPlatform,
-  formatShellProxyCommand,
+  isSafeShellProxyHost,
   resolveShellProxyEndpoint,
   shellProxyHost,
 } from "./shellProxy";
@@ -23,54 +21,38 @@ describe("shellProxyHost", () => {
   });
 });
 
-describe("detectShellProxyPlatform", () => {
-  it("selects PowerShell on Windows and POSIX elsewhere", () => {
-    expect(
-      detectShellProxyPlatform(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Win32",
-      ),
-    ).toBe("windows");
-    expect(
-      detectShellProxyPlatform(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-        "MacIntel",
-      ),
-    ).toBe("posix");
-    expect(
-      detectShellProxyPlatform("Mozilla/5.0 (X11; Linux x86_64)", "Linux x86_64"),
-    ).toBe("posix");
-  });
-});
-
-describe("formatShellProxyCommand", () => {
-  it("exports session variables for POSIX shells", () => {
-    const cmd = formatShellProxyCommand("posix", "127.0.0.1", 17890);
-    expect(cmd).toBe(
-      "export http_proxy=http://127.0.0.1:17890 https_proxy=http://127.0.0.1:17890 all_proxy=socks5://127.0.0.1:17890 no_proxy=localhost,127.0.0.1,::1",
-    );
-    // Must stay shell-session scoped (no profile / system env persistence).
-    expect(cmd).not.toMatch(/bashrc|zshrc|profile|\/etc\/environment|setx/i);
+describe("isSafeShellProxyHost", () => {
+  it("accepts IPv4, bracketed IPv6, and hostnames", () => {
+    for (const host of [
+      "127.0.0.1",
+      "::1",
+      "[::1]",
+      "localhost",
+      "my-host.local",
+      "node_1",
+    ]) {
+      expect(isSafeShellProxyHost(host), host).toBe(true);
+    }
   });
 
-  it("sets PowerShell session variables on Windows", () => {
-    const cmd = formatShellProxyCommand("windows", "127.0.0.1", 17890);
-    expect(cmd).toBe(
-      "$env:HTTP_PROXY='http://127.0.0.1:17890'; $env:HTTPS_PROXY='http://127.0.0.1:17890'; $env:ALL_PROXY='socks5://127.0.0.1:17890'; $env:NO_PROXY='localhost,127.0.0.1,::1'",
-    );
-    // Must stay process-scoped (no User/Machine registry persistence).
-    expect(cmd).not.toMatch(
-      /setx|SetEnvironmentVariable|\[Environment\]|Machine|User/i,
-    );
-  });
-
-  it("brackets IPv6 hosts in the proxy URLs", () => {
-    expect(formatShellProxyCommand("posix", "::1", 17890)).toContain(
-      "http://[::1]:17890",
-    );
-    expect(formatShellProxyCommand("windows", "::1", 17890)).toContain(
-      "socks5://[::1]:17890",
-    );
+  it("rejects hosts that could inject shell syntax", () => {
+    for (const host of [
+      "",
+      "127.0.0.1; rm -rf ~",
+      "127.0.0.1 && touch /tmp/pwned",
+      "host$(id)",
+      "host`id`",
+      'host"x',
+      "host'x",
+      "host|cat",
+      "host\nx",
+      "host x",
+      "localhost:17890/share",
+      "a".repeat(256),
+    ]) {
+      expect(isSafeShellProxyHost(host), host).toBe(false);
+    }
+    expect(isSafeShellProxyHost("a".repeat(255))).toBe(true);
   });
 });
 
@@ -96,14 +78,21 @@ describe("resolveShellProxyEndpoint", () => {
   it("returns null without a port", () => {
     expect(resolveShellProxyEndpoint(null, { host: null, port: null })).toBeNull();
   });
-});
 
-describe("copyText", () => {
-  it("writes through the clipboard API when available", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    await expect(copyText("export http_proxy=x")).resolves.toBe(true);
-    expect(writeText).toHaveBeenCalledWith("export http_proxy=x");
-    vi.unstubAllGlobals();
+  it("returns null for a host that cannot be embedded in a shell command", () => {
+    // Allow LAN skips `mixed_listen` validation, so an arbitrary string must
+    // hide the controls rather than reach a generated command.
+    expect(
+      resolveShellProxyEndpoint(
+        { mixed_listen: "127.0.0.1; touch /tmp/pwned", mixed_port: 17890 },
+        { host: null, port: null },
+      ),
+    ).toBeNull();
+    expect(
+      resolveShellProxyEndpoint(
+        { mixed_listen: "127.0.0.1", mixed_port: 17890 },
+        { host: "127.0.0.1; touch /tmp/pwned", port: 17890 },
+      ),
+    ).toBeNull();
   });
 });

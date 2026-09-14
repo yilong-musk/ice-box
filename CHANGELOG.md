@@ -11,10 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The Home proxy-status card copies a one-line command that sends the current
   terminal session through Mixed (session env only; no global/user profile
-  changes): POSIX `export` on macOS/Linux, PowerShell `$env:` on Windows.
-  A second control opens the platform default terminal with the same
-  session-only proxy environment already set. Both actions are also on the
-  system tray menu.
+  changes): POSIX `export` (fish `set -gx`) on macOS/Linux, PowerShell `$env:`
+  on Windows. A second control opens the platform default terminal with the
+  same session-only proxy environment already set. Both actions are also on
+  the system tray menu.
 
 ### Fixed
 
@@ -22,6 +22,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (and then PowerShell). A `$env:...; ...` string must not be passed to
   `wt.exe` — Windows Terminal treats `;` as a command separator and opens
   multiple broken tabs.
+
+- The session terminal helpers check the Mixed host before it is embedded in a
+  generated `export` / `set` / AppleScript string — Allow LAN skips
+  `mixed_listen` validation — and the macOS path waits for `osascript` so a
+  denied Automation consent reports the System Settings path instead of opening
+  nothing. The bundle declares `NSAppleEventsUsageDescription` for that prompt.
+
+- The copied command is built in Rust from the same variable set a terminal
+  opened by the app receives (upper + lower case on POSIX, upper case on
+  Windows, where env names are case-insensitive), follows the login shell
+  (`export` or fish `set -gx`), and reports a clipboard failure in the Home card
+  instead of doing nothing. The macOS Terminal.app launch passes env through
+  `env`, so it works with any shell.
 
 - A failed background app-update check retries with backoff (sooner if the
   core becomes ready after the failed attempt). If the 15-minute retry still

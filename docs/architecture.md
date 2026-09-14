@@ -138,6 +138,21 @@ other than `clash_api` / `cache_file`). User-mode generation drops remote
 fetch/file surface.
 Platform privilege and ownership rules live in [tun.md](tun.md).
 
+The Home card and the tray also expose session-only terminal helpers: they set
+the Mixed env for one new process and never touch shell profiles or user
+environment. Rust owns both the command text and the clipboard, so a copied
+command cannot drift from the env a terminal opened by the app receives; the
+one-liner follows the login shell (POSIX `export`, fish `set -gx`) and the
+Terminal.app launch passes the vars through `env`, which needs no shell syntax.
+`mixed_listen` is unvalidated while Allow LAN is on, so the resolved host is
+allow-listed (hostname / IPv4 / bracketed IPv6 characters) before it is
+embedded in a generated `export` / `set` / AppleScript string, and a denied
+macOS Automation consent surfaces as an IPC error instead of a silent no-op.
+Both helpers stay available while the proxy service is stopped — the port falls
+back to the saved settings so a command can be prepared before starting it —
+and they never read or write the user's environment outside the process they
+start.
+
 App updates run in Rust and verify signed artifacts before installation.
 Installation uses the same capture/core shutdown path as Quit. Update integrity
 signing is separate from OS application signing; artifact production and

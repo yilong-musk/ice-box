@@ -18,6 +18,7 @@ const recoverTun = vi.fn();
 const installHelper = vi.fn();
 const relaunchElevatedForTun = vi.fn();
 const ensureTunElevation = vi.fn();
+const copyProxyCommand = vi.fn();
 const openProxyTerminal = vi.fn();
 const listenStateChanged = vi.fn();
 
@@ -40,6 +41,7 @@ vi.mock("../api/tauri", () => ({
     relaunchElevatedForTun: (...args: unknown[]) =>
       relaunchElevatedForTun(...args),
     ensureTunElevation: (...args: unknown[]) => ensureTunElevation(...args),
+    copyProxyCommand: (...args: unknown[]) => copyProxyCommand(...args),
     openProxyTerminal: (...args: unknown[]) => openProxyTerminal(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
     stop: vi.fn(),
@@ -1413,14 +1415,8 @@ describe("Home", () => {
     });
   });
 
-  it("copies a platform shell proxy command from the proxy-status card", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", {
-      ...navigator,
-      clipboard: { writeText },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      platform: "Win32",
-    });
+  it("copies the session proxy command through the Rust command", async () => {
+    copyProxyCommand.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -1445,16 +1441,49 @@ describe("Home", () => {
     });
     fireEvent.click(view.getByRole("button", { name: t("home.copyCliProxy") }));
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        "$env:HTTP_PROXY='http://127.0.0.1:17890'; $env:HTTPS_PROXY='http://127.0.0.1:17890'; $env:ALL_PROXY='socks5://127.0.0.1:17890'; $env:NO_PROXY='localhost,127.0.0.1,::1'",
-      );
+      expect(copyProxyCommand).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(
         view.getByRole("button", { name: t("home.copyCliProxy") }),
       ).toHaveTextContent(t("home.copyCliProxyCopied"));
     });
-    vi.unstubAllGlobals();
+  });
+
+  it("surfaces a clipboard failure from the proxy-status card", async () => {
+    copyProxyCommand.mockRejectedValue(
+      new Error("copy proxy command: no clipboard tool"),
+    );
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.copyCliProxy") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("home.copyCliProxy") }));
+    await waitFor(() => {
+      expect(view.getByText(/no clipboard tool/)).toBeInTheDocument();
+    });
+    // The card must not claim success.
+    expect(
+      view.getByRole("button", { name: t("home.copyCliProxy") }),
+    ).not.toHaveTextContent(t("home.copyCliProxyCopied"));
   });
 
   it("opens a proxy terminal from the proxy-status card", async () => {

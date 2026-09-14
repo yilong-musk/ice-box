@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS Info.plist fragment. Tauri merges this file (same directory as
+  tauri.conf.json) into the generated Info.plist.
+
+  "Open Proxy Terminal" drives Terminal.app through osascript, which raises the
+  one-time Automation consent prompt; Apple requires a usage string for Apple
+  Events. Without it the request is denied and only the error path in
+  `src/proxy_terminal.rs` can explain what happened.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>ice-box opens your terminal with this session's proxy environment set.</string>
+</dict>
+</plist>

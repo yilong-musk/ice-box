@@ -321,6 +321,7 @@ pub fn run() {
             commands::get_log_view,
             commands::get_runtime_config,
             commands::reveal_data_dir,
+            commands::copy_proxy_command,
             commands::open_proxy_terminal,
             commands::get_settings,
             commands::save_settings,
