@@ -797,7 +797,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label={t("nodes.listAria")} className="gap-0">
+              <ItemGroup aria-label={t("nodes.listAria")} className="gap-0!">
                 {visibleNodes.map((n, index) => {
                   const expanded =
                     isGroupType(n.outbound_type) &&

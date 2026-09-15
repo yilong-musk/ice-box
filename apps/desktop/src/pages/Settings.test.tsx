@@ -418,6 +418,8 @@ describe("Settings", () => {
         within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
       ).toHaveAttribute("data-state", "on");
     });
+    // The card keeps a section title next to the per-control field labels.
+    expect(view.getByText(t("settings.appearance"))).toBeInTheDocument();
     const appearance = view.getByLabelText(t("settings.theme"));
 
     fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));

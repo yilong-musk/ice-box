@@ -91,14 +91,21 @@ export function subscriptionTrafficView(
 ): SubscriptionTrafficView | null {
   const lines = providerInfo ?? [];
   const body = parseProviderTraffic(lines);
+  const bodyReported =
+    body.used !== null || body.total !== null || body.remaining !== null;
 
   const headerCounters = userinfo
     ? (userinfo.upload ?? 0) + (userinfo.download ?? 0)
     : 0;
   const headerTotal =
     userinfo && (userinfo.total ?? 0) > 0 ? (userinfo.total ?? 0) : null;
+  // A panel that reports a quota without usage counters sends `upload=0;
+  // download=0`, which is indistinguishable from a real zero; when the list
+  // entries carry amounts, derive the used side from them instead of a bare 0.
   const headerUsed =
-    headerCounters > 0 || headerTotal !== null ? headerCounters : null;
+    headerCounters > 0 || (headerTotal !== null && !bodyReported)
+      ? headerCounters
+      : null;
 
   let used = body.used ?? headerUsed;
   let total = body.total ?? headerTotal;
@@ -179,7 +186,13 @@ function parseProviderTraffic(lines: readonly string[]): ProviderTraffic {
     if (/剩余|remaining/.test(lower)) {
       traffic = { ...traffic, remaining: traffic.remaining ?? amounts[0] };
     } else if (/已用|used/.test(lower)) {
-      traffic = { ...traffic, used: traffic.used ?? amounts[0] };
+      // Some panels put both sides behind a used-style label
+      // (`Used: 11.84 GB | 150 GB`).
+      traffic = {
+        ...traffic,
+        used: traffic.used ?? amounts[0],
+        total: traffic.total ?? amounts[1] ?? null,
+      };
     } else if (amounts.length >= 2) {
       traffic = {
         ...traffic,

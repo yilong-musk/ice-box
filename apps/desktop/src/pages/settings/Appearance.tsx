@@ -11,6 +11,9 @@ import {
 import {
   Card,
   CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
 } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
@@ -52,6 +55,10 @@ export function AppearanceCard({
       size="sm"
       className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
     >
+      <CardHeader>
+        <CardTitle>{t("settings.appearance")}</CardTitle>
+        <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
+      </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
           <Field>

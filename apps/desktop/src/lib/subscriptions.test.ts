@@ -114,6 +114,32 @@ describe("subscriptionTrafficView", () => {
     );
   });
 
+  it("reads the second amount of a used-labelled entry as the total", () => {
+    const view = subscriptionTrafficView(null, ["Used: 11.84 GB | 150 GB"], now);
+    expect(view?.usage).toBe(
+      t("subs.trafficUsedTotal", {
+        used: "11.84GB",
+        total: "150GB",
+        percent: "7.89",
+      }),
+    );
+  });
+
+  it("derives usage from the entries when the header only reports a quota", () => {
+    const view = subscriptionTrafficView(
+      { upload: 0, download: 0, total: 500 * 1024 ** 3, expire: null },
+      ["剩余流量：499 GB"],
+      now,
+    );
+    expect(view?.usage).toBe(
+      t("subs.trafficUsedTotal", {
+        used: "1GB",
+        total: "500GB",
+        percent: "0.2",
+      }),
+    );
+  });
+
   it("ignores entries it cannot read", () => {
     expect(
       subscriptionTrafficView(null, ["距离下次重置剩余：19 天"], now),

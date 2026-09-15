@@ -234,6 +234,8 @@ const zh = {
   "logs.empty": "（空）",
 
   // --- settings page ---
+  "settings.appearance": "外观",
+  "settings.appearanceDesc": "主题与语言默认跟随系统。",
   "settings.theme": "主题",
   "settings.appearance.system": "跟随系统",
   "settings.appearance.light": "浅色",
@@ -640,6 +642,8 @@ const en: Record<MessageKey, string> = {
   "logs.empty": "(empty)",
 
   // --- settings page ---
+  "settings.appearance": "Appearance",
+  "settings.appearanceDesc": "Theme and language follow the system by default.",
   "settings.theme": "Theme",
   "settings.appearance.system": "System",
   "settings.appearance.light": "Light",

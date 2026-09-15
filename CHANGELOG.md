@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-15
+
 ### Added
 
 - The Subscriptions list shows each subscription's traffic and expiry as one
@@ -15,15 +17,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `subscription-userinfo` counters, which fill in values the entries leave out.
   Header counters refresh on every successful fetch, including conditional
   (304) responses that carry them; a response without the header keeps the last
-  reported values.
-
-## [0.1.10] - 2026-09-15
+  reported values. When a panel reports a quota without usage counters, the
+  usage shown is derived from the entry amounts instead of a bare `0`.
 
 ### Changed
 
 - Settings folds language into the Appearance card and reorders the page to
   Appearance, Inbound, TUN Mode, App Updates, then Data (macOS menu-bar item
   setting stays under Appearance).
+
+- The Nodes list separates rows with a divider and tighter padding, so long
+  node lists read as one list instead of a stack of blocks.
+
+### Security
+
+- Updated `rustls` to 0.23.45 for RUSTSEC-2026-0285.
 
 ## [0.1.9] - 2026-09-14
 
