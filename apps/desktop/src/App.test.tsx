@@ -220,9 +220,9 @@ describe("App", () => {
     fireEvent.click(view.getByRole("button", { name: t("app.nav.settings") }));
 
     await waitFor(() => {
-      expect(view.getByLabelText(t("settings.appearance"))).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.theme"))).toBeInTheDocument();
     });
-    const appearance = view.getByLabelText(t("settings.appearance"));
+    const appearance = view.getByLabelText(t("settings.theme"));
 
     fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.dark") }));
     expect(document.documentElement.classList.contains("dark")).toBe(true);

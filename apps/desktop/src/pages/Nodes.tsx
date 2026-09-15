@@ -22,6 +22,7 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
+  ItemGroup,
   ItemTitle,
 } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
@@ -124,6 +125,7 @@ type GroupMembersProps = {
   delays: Record<string, DelayCell>;
   onGroupSelect: (group: string, member: string) => void;
   lang: ResolvedLanguage;
+  showDivider: boolean;
 };
 
 const GroupMembers = memo(function GroupMembers({
@@ -136,6 +138,7 @@ const GroupMembers = memo(function GroupMembers({
   delays,
   onGroupSelect,
   lang,
+  showDivider,
 }: GroupMembersProps) {
   const [shown, setShown] = useState(() =>
     Math.min(MEMBER_FIRST_PAINT, members.length),
@@ -173,7 +176,10 @@ const GroupMembers = memo(function GroupMembers({
       id={groupMembersDomId(groupTag)}
       lang={lang}
       aria-label={t("nodes.membersAria", { group: groupTag })}
-      className="flex flex-col pl-6"
+      className={cn(
+        "flex flex-col pl-6",
+        showDivider && "border-b border-border",
+      )}
     >
       {members.slice(0, shown).map((member) => {
         const isExit = member === groupNow;
@@ -230,6 +236,7 @@ type NodeRowProps = {
   node: NodeInfo;
   selected: boolean;
   expanded: boolean;
+  showDivider: boolean;
   running: boolean;
   busy: boolean;
   delay: DelayCell;
@@ -245,6 +252,7 @@ const NodeRow = memo(function NodeRow({
   node,
   selected,
   expanded,
+  showDivider,
   running,
   busy,
   delay,
@@ -259,6 +267,7 @@ const NodeRow = memo(function NodeRow({
     isGroupType(node.outbound_type) && (node.group_all?.length ?? 0) > 0;
   const membersId = groupMembersDomId(node.tag);
   const typeLabel = nodeTypeLabel(node);
+  const itemDivider = showDivider || expanded;
 
   return (
     <div lang={lang}>
@@ -266,7 +275,8 @@ const NodeRow = memo(function NodeRow({
         size="sm"
         variant={selected ? "muted" : "default"}
         className={cn(
-          "box-border h-14 flex-nowrap overflow-hidden px-0",
+          "box-border flex-nowrap overflow-hidden border-x-0 border-t-0 px-0 py-1.5",
+          itemDivider ? "border-b border-border" : "border-b-0",
           expandable && "cursor-pointer",
         )}
       >
@@ -288,7 +298,7 @@ const NodeRow = memo(function NodeRow({
                 }
               }}
             >
-              <ItemContent className="min-w-0">
+              <ItemContent className="min-w-0 gap-0">
                 <ItemTitle className="w-full max-w-full" title={node.tag}>
                   <span className="inline-flex min-w-0 max-w-full items-center gap-2">
                     <ChevronRight
@@ -349,7 +359,7 @@ const NodeRow = memo(function NodeRow({
           </>
         ) : (
           <>
-            <ItemContent className="min-w-0">
+            <ItemContent className="min-w-0 gap-0">
               <ItemTitle title={node.tag}>
                 <span className="truncate">{node.tag}</span>
                 {selected ? (
@@ -393,6 +403,7 @@ const NodeRow = memo(function NodeRow({
           delays={delays}
           onGroupSelect={onGroupSelect}
           lang={lang}
+          showDivider={showDivider}
         />
       ) : null}
     </div>
@@ -786,12 +797,8 @@ export function Nodes({ onNavigate, active = true }: Props) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <div
-                role="list"
-                aria-label={t("nodes.listAria")}
-                className="flex w-full flex-col"
-              >
-                {visibleNodes.map((n) => {
+              <ItemGroup aria-label={t("nodes.listAria")} className="gap-0">
+                {visibleNodes.map((n, index) => {
                   const expanded =
                     isGroupType(n.outbound_type) &&
                     Boolean(n.group_all?.length) &&
@@ -802,6 +809,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
                       node={n}
                       selected={n.tag === selectedTag}
                       expanded={expanded}
+                      showDivider={index < visibleNodes.length - 1}
                       running={running}
                       busy={busy}
                       delay={delays[n.tag] ?? null}
@@ -814,7 +822,7 @@ export function Nodes({ onNavigate, active = true }: Props) {
                     />
                   );
                 })}
-              </div>
+              </ItemGroup>
             </ScrollArea>
           )}
         </CardContent>

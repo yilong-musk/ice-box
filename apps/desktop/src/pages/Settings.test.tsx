@@ -413,12 +413,12 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      const appearance = view.getByLabelText(t("settings.appearance"));
+      const appearance = view.getByLabelText(t("settings.theme"));
       expect(
         within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
       ).toHaveAttribute("data-state", "on");
     });
-    const appearance = view.getByLabelText(t("settings.appearance"));
+    const appearance = view.getByLabelText(t("settings.theme"));
 
     fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));
     expect(
@@ -545,7 +545,7 @@ describe("Settings", () => {
     expect(document.documentElement.lang).toBe("en");
     // Rendering stays Chinese-free: the nav/labels resolve through the
     // current language, so the settings panel shows English text.
-    expect(document.body.textContent).toContain(t("settings.appearance"));
+    expect(document.body.textContent).toContain(t("settings.theme"));
     expect(document.body.textContent).toContain(t("settings.language"));
 
     // Reset the module-level language so later tests in this file render zh.
@@ -975,7 +975,7 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByLabelText(t("settings.appearance"))).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.theme"))).toBeInTheDocument();
     });
     expect(view.queryByText(t("settings.tun"))).not.toBeInTheDocument();
     expect(
