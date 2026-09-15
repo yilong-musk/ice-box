@@ -2,6 +2,7 @@
 
 import {
   Field,
+  FieldLabel,
 } from "@/components/ui/field";
 import {
   NativeSelect,
@@ -50,16 +51,16 @@ export function AppearanceCard({
   onLanguageChange: (value: LanguagePreference) => void;
 }) {
   return (
-    <>
-      <Card
-        size="sm"
-        className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-      >
-        <CardHeader>
-          <CardTitle>{t("settings.appearance")}</CardTitle>
-          <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <Card
+      size="sm"
+      className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
+    >
+      <CardHeader>
+        <CardTitle>{t("settings.appearance")}</CardTitle>
+        <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-3">
           <ToggleGroup
             type="single"
             variant="outline"
@@ -80,19 +81,10 @@ export function AppearanceCard({
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-        </CardContent>
-      </Card>
-
-      <Card
-        size="sm"
-        className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-      >
-        <CardHeader>
-          <CardTitle>{t("settings.language")}</CardTitle>
-          <CardDescription>{t("settings.languageDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
           <Field>
+            <FieldLabel htmlFor="settings-language">
+              {t("settings.language")}
+            </FieldLabel>
             <NativeSelect
               id="settings-language"
               aria-label={t("settings.language")}
@@ -114,8 +106,8 @@ export function AppearanceCard({
               ))}
             </NativeSelect>
           </Field>
-        </CardContent>
-      </Card>
-    </>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

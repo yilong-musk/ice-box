@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-15
+
+### Changed
+
+- Settings folds language into the Appearance card and reorders the page to
+  Appearance, Inbound, TUN Mode, App Updates, then Data (macOS menu-bar item
+  setting stays under Appearance).
+
 ## [0.1.9] - 2026-09-14
 
 ### Added

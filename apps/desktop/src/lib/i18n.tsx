@@ -228,12 +228,11 @@ const zh = {
 
   // --- settings page ---
   "settings.appearance": "外观",
-  "settings.appearanceDesc": "默认跟随系统深浅色。",
+  "settings.appearanceDesc": "主题与语言；默认跟随系统。",
   "settings.appearance.system": "跟随系统",
   "settings.appearance.light": "浅色",
   "settings.appearance.dark": "深色",
   "settings.language": "语言",
-  "settings.languageDesc": "默认跟随系统语言。",
   "settings.language.system": "跟随系统",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
@@ -629,12 +628,11 @@ const en: Record<MessageKey, string> = {
 
   // --- settings page ---
   "settings.appearance": "Appearance",
-  "settings.appearanceDesc": "Follows the system by default.",
+  "settings.appearanceDesc": "Theme and language; follows the system by default.",
   "settings.appearance.system": "System",
   "settings.appearance.light": "Light",
   "settings.appearance.dark": "Dark",
   "settings.language": "Language",
-  "settings.languageDesc": "Follows the system language by default.",
   "settings.language.system": "System",
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
