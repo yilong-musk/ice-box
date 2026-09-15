@@ -6,8 +6,8 @@ use super::{
     parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
     write_subscription_error, AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate,
     HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionError, SubscriptionFormat,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, CLASH_SUPPORTED_TYPES,
-    MAX_CLASH_PROXIES, MAX_URI_LINES,
+    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionUserInfo,
+    CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -81,6 +81,7 @@ impl HttpFetcher for ConcurrencyFetcher {
                 not_modified: false,
                 etag: None,
                 last_modified: None,
+                userinfo: None,
                 content_disposition: None,
             })
     }
@@ -124,6 +125,7 @@ fn g5_2_empty_nodes_no_success_write() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -240,6 +242,7 @@ fn g5_6_update_failure_keeps_old_bytes() {
             not_modified: false,
             etag: Some("v1".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -286,6 +289,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -314,6 +318,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                         not_modified: false,
                         etag: Some("v2".into()),
                         last_modified: None,
+                        userinfo: None,
                         content_disposition: None,
                     },
                 }),
@@ -327,6 +332,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                         not_modified: true,
                         etag: None,
                         last_modified: None,
+                        userinfo: None,
                         content_disposition: None,
                     },
                 }),
@@ -408,6 +414,7 @@ fn auto_update_flag_roundtrips_through_add_and_set() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -459,6 +466,7 @@ fn auto_update_flag_survives_an_update() {
             not_modified: false,
             etag: Some("v1".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -488,6 +496,7 @@ fn update_uses_latest_metadata_after_fetch() {
             not_modified: false,
             etag: Some("v2".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -524,6 +533,7 @@ fn not_modified_refreshes_last_updated() {
             not_modified: false,
             etag: Some("v1".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -567,6 +577,131 @@ fn not_modified_refreshes_last_updated() {
 }
 
 #[test]
+fn userinfo_header_is_persisted_and_refreshed() {
+    let paths = temp_subs("userinfo");
+    let body = r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#;
+    let with_header = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: Some(SubscriptionUserInfo {
+                upload: 10,
+                download: 90,
+                total: 1000,
+                expire: Some(1_790_000_000),
+            }),
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), with_header);
+    let meta = mgr
+        .add("https://example.com/s", Some("s"), false, None)
+        .unwrap();
+    assert_eq!(meta.userinfo.unwrap().used(), 100);
+    let disk_meta: SubscriptionMeta =
+        serde_json::from_str(&fs::read_to_string(paths.meta(meta.id)).unwrap()).unwrap();
+    assert_eq!(
+        disk_meta.userinfo.unwrap().remaining(),
+        Some(900),
+        "counters must survive a reload of meta.json"
+    );
+
+    // A later fetch that omits the header keeps the last counters the provider
+    // reported instead of clearing them.
+    let without_header = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), without_header);
+    let updated = mgr.update(meta.id).unwrap();
+    assert_eq!(updated.userinfo.unwrap().total, 1000);
+
+    // A conditional (304) refresh carries no body but may refresh the counters.
+    let conditional = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: String::new(),
+            not_modified: true,
+            etag: None,
+            last_modified: None,
+            userinfo: Some(SubscriptionUserInfo {
+                upload: 20,
+                download: 180,
+                total: 1000,
+                expire: None,
+            }),
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), conditional);
+    let refreshed = mgr.update(meta.id).unwrap();
+    let info = refreshed.userinfo.unwrap();
+    assert_eq!(info.used(), 200);
+    assert_eq!(info.expire, None);
+    let persisted = load_index(&paths)
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| item.id == meta.id)
+        .unwrap();
+    assert_eq!(persisted.userinfo.unwrap().download, 180);
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn provider_info_entries_are_recorded_and_persisted() {
+    let paths = temp_subs("provider-info");
+    // Panel-style entries: the provider publishes quota and expiry as extra
+    // "proxies" whose names carry the text.
+    let body = r#"proxies:
+  - {name: "Traffic: 11.84 GB | 150 GB", server: 203.0.113.30, port: 443, type: trojan, password: "p"}
+  - {name: "Expire: 2026-09-26", server: 203.0.113.30, port: 443, type: trojan, password: "p"}
+  - {name: "🇭🇰 香港实验性 IEPL 专线 1", server: 203.0.113.31, port: 443, type: trojan, password: "p"}
+"#;
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr
+        .add("https://example.com/s", Some("s"), false, None)
+        .unwrap();
+    assert_eq!(meta.node_count, 3, "info entries stay in the node list");
+    assert_eq!(
+        meta.provider_info,
+        vec!["Traffic: 11.84 GB | 150 GB", "Expire: 2026-09-26"]
+    );
+    let disk_meta: SubscriptionMeta =
+        serde_json::from_str(&fs::read_to_string(paths.meta(meta.id)).unwrap()).unwrap();
+    assert_eq!(disk_meta.provider_info, meta.provider_info);
+    let indexed = load_index(&paths)
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|item| item.id == meta.id)
+        .unwrap();
+    assert_eq!(indexed.provider_info, meta.provider_info);
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
 fn fetch_auto_only_fetches_flagged_subscriptions() {
     let paths = temp_subs("auto-fetch");
     let ok = MockFetcher {
@@ -578,6 +713,7 @@ fn fetch_auto_only_fetches_flagged_subscriptions() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -621,6 +757,7 @@ fn g5_7_single_active_subscription_wins() {
                 not_modified: false,
                 etag: None,
                 last_modified: None,
+                userinfo: None,
                 content_disposition: None,
             }),
         };
@@ -699,6 +836,7 @@ fn g5_15_update_not_modified_keeps_cached_bytes() {
             not_modified: false,
             etag: Some("v1".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -737,6 +875,7 @@ fn g5_15_304_clears_stale_last_error() {
             not_modified: false,
             etag: Some("v1".into()),
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -786,6 +925,7 @@ fn g5_11_disk_layout_order() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: Some(r#"attachment; filename="my.json""#.into()),
         }),
     };
@@ -1033,6 +1173,7 @@ fn g5_14_rejects_internal_subscription_url() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -1170,6 +1311,7 @@ fn g5_16_uri_list_import_and_manager() {
             not_modified: false,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
         }),
     };
@@ -1244,6 +1386,7 @@ fn fetch_ids_continues_after_injected_panic() {
         not_modified: false,
         etag: None,
         last_modified: None,
+        userinfo: None,
         content_disposition: None,
     });
     let fetcher = MockFetcher {

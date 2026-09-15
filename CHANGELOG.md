@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The Subscriptions list shows each subscription's traffic and expiry as one
+  normalized line — `<used>/<total>（<percent>%）` plus a dated or long-term
+  expiry — parsed from both shapes providers publish them in: the usage /
+  expiry entries embedded in the proxy list (`Traffic: 11.84 GB | 150 GB`,
+  `剩余流量：1023.64 GB`, `套餐到期：长期有效`) and the
+  `subscription-userinfo` counters, which fill in values the entries leave out.
+  Header counters refresh on every successful fetch, including conditional
+  (304) responses that carry them; a response without the header keeps the last
+  reported values.
+
 ## [0.1.10] - 2026-09-15
 
 ### Changed

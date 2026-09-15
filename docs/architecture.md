@@ -62,6 +62,18 @@ runtime configuration remain separate. This preserves provider input and user
 intent across regeneration. Persistent writes use atomic replacement, with
 backups or journals where rollback and recovery require them.
 
+Provider-reported usage and expiry ride along with the subscription metadata
+rather than the profile, in both shapes providers use: the `subscription-userinfo`
+counters (used / quota / expiry) and the info entries panels embed in the proxy
+list (`Traffic: 11.84 GB | 150 GB`, `剩余流量：1023.64 GB`). Both are stored with
+the subscription, so quota is visible without opening the node list. Embedded
+entries are matched by label and kept verbatim as provider input; the UI parses
+their amounts and dates (and falls back to the header counters for values an
+entry leaves out) into one usage / expiry readout, because each panel words and
+scales its own entries differently. A fetch that omits the header keeps the last
+reported counters, and a conditional refresh may update them without replacing
+the cached body.
+
 The generated configuration targets the bundled core's compatibility version.
 The client owns configuration generation; sing-box never fetches subscriptions
 or interprets application preferences.

@@ -145,7 +145,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             Ok((format, profile)) => {
                 let index = load_index(&self.paths)?;
                 let make_active = index.items.iter().all(|m| !m.active);
-                let meta = meta_from_profile(
+                let mut meta = meta_from_profile(
                     id,
                     resolve_subscription_name(
                         name.as_deref(),
@@ -162,6 +162,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     auto_update,
                     auto_update_interval,
                 );
+                meta.userinfo = fetched.userinfo;
                 write_subscription_success(&self.paths, &meta, &fetched.body, &profile)?;
                 Ok(meta)
             }
@@ -219,7 +220,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 SubscriptionError::ParseFailed(format!("subscription {} not found", upd.meta.id))
             })?;
         if upd.fetched.not_modified {
-            return mark_subscription_refreshed(&self.paths, upd.meta.id);
+            return mark_subscription_refreshed(&self.paths, upd.meta.id, upd.fetched.userinfo);
         }
         match normalize_raw_body(&upd.fetched.body, self.platform) {
             Ok((format, profile)) => {
@@ -361,8 +362,13 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                         continue;
                     };
                     if upd.fetched.not_modified {
-                        let updated =
-                            mark_refreshed_in_index(&self.paths, &mut index, id).unwrap_or(current);
+                        let updated = mark_refreshed_in_index(
+                            &self.paths,
+                            &mut index,
+                            id,
+                            upd.fetched.userinfo,
+                        )
+                        .unwrap_or(current);
                         out.push((id, Ok(updated)));
                         continue;
                     }
@@ -469,6 +475,8 @@ impl MemorySubscriptionManager {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
         };

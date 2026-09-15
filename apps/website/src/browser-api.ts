@@ -18,6 +18,7 @@ import type {
   UiMessage,
 } from "../../../apps/desktop/src/api/tauri";
 import { isMessageKey, t } from "../../../apps/desktop/src/lib/i18n";
+import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
 
 export type {
   AppErrorPayload,
@@ -83,6 +84,14 @@ const nodes: NodeInfo[] = [
   { tag: "Frankfurt / edge-04", outbound_type: "hysteria2", group_now: null, group_all: null },
 ];
 
+/** Demo quota: 125 GiB of a 500 GiB plan, always 45 days from expiring. */
+const DEMO_QUOTA = {
+  upload: 4 * 1024 ** 3,
+  download: 121 * 1024 ** 3,
+  total: 500 * 1024 ** 3,
+  expire: Math.floor(Date.now() / 1000) + 45 * 24 * 3600,
+};
+
 const subscriptions: SubscriptionMeta[] = [
   {
     id: "demo-profile",
@@ -99,6 +108,13 @@ const subscriptions: SubscriptionMeta[] = [
     last_error: null,
     etag: null,
     last_modified: null,
+    // Both shapes a provider can publish usage in: the `subscription-userinfo`
+    // counters and the info entries embedded in the proxy list.
+    userinfo: { ...DEMO_QUOTA },
+    provider_info: [
+      `Traffic: ${formatQuota(DEMO_QUOTA.upload + DEMO_QUOTA.download)} | ${formatQuota(DEMO_QUOTA.total)}`,
+      `Expire: ${new Date(DEMO_QUOTA.expire * 1000).toISOString().slice(0, 10)}`,
+    ],
     auto_update: true,
     auto_update_interval: "one_hour",
   },

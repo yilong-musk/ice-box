@@ -10,6 +10,7 @@ use crate::tls_fetch::{tls_get_pinned, url_path_query};
 use crate::url::{
     addrs_are_fake_ip, pin_url_to_ip, resolve_allowed_fetch_addrs, validate_subscription_url,
 };
+use crate::userinfo::{parse_userinfo_header, SubscriptionUserInfo};
 
 /// Hard body size limit (8 MiB).
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -37,6 +38,9 @@ pub struct FetchResponse {
     pub not_modified: bool,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    /// Provider traffic counters (`subscription-userinfo`), when the response
+    /// carried them — 304 responses may refresh usage without a new body.
+    pub userinfo: Option<SubscriptionUserInfo>,
     pub content_disposition: Option<String>,
 }
 
@@ -182,6 +186,7 @@ struct HopResponse {
     status: u16,
     etag: Option<String>,
     last_modified: Option<String>,
+    userinfo: Option<SubscriptionUserInfo>,
     content_disposition: Option<String>,
     location: Option<String>,
     body: Vec<u8>,
@@ -207,6 +212,9 @@ fn hop_from_ureq(response: ureq::Response) -> Result<HopResponse, SubscriptionEr
         status,
         etag: response.header("etag").map(str::to_string),
         last_modified: response.header("last-modified").map(str::to_string),
+        userinfo: response
+            .header("subscription-userinfo")
+            .and_then(parse_userinfo_header),
         content_disposition: response.header("content-disposition").map(str::to_string),
         location: response.header("location").map(str::to_string),
         body: if is_redirect_status(status) || status == 304 {
@@ -235,6 +243,9 @@ fn hop_from_tls(
         status,
         etag: resp.header("etag").map(str::to_string),
         last_modified: resp.header("last-modified").map(str::to_string),
+        userinfo: resp
+            .header("subscription-userinfo")
+            .and_then(parse_userinfo_header),
         content_disposition: resp.header("content-disposition").map(str::to_string),
         location: resp.header("location").map(str::to_string),
         body: if is_redirect_status(status) || status == 304 {
@@ -377,6 +388,7 @@ impl HttpFetcher for DirectFetcher {
                 not_modified: true,
                 etag: hop.etag,
                 last_modified: hop.last_modified,
+                userinfo: hop.userinfo,
                 content_disposition: hop.content_disposition,
             });
         }
@@ -396,6 +408,7 @@ impl HttpFetcher for DirectFetcher {
             not_modified: false,
             etag: hop.etag,
             last_modified: hop.last_modified,
+            userinfo: hop.userinfo,
             content_disposition: hop.content_disposition,
         })
     }
@@ -459,6 +472,7 @@ impl HttpFetcher for MockFetcher {
                 not_modified: true,
                 etag: None,
                 last_modified: None,
+                userinfo: None,
                 content_disposition: None,
             }),
             MockFetchMode::Timeout => Err(SubscriptionError::FetchFailed(
@@ -531,6 +545,7 @@ mod tests {
             status: 302,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
             location: Some("http://cdn.example.com/sub".into()),
             body: Vec::new(),
@@ -542,6 +557,7 @@ mod tests {
             status: 302,
             etag: None,
             last_modified: None,
+            userinfo: None,
             content_disposition: None,
             location: Some("https://cdn.example.com/sub".into()),
             body: Vec::new(),

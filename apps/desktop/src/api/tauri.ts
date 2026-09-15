@@ -147,8 +147,21 @@ export type SubscriptionMeta = {
   last_error: UiMessage | null;
   etag: string | null;
   last_modified: string | null;
+  /** Provider traffic counters from the last successful fetch, when reported. */
+  userinfo: SubscriptionUserInfo | null;
+  /** Usage / expiry entries the provider embeds in the proxy list, verbatim. */
+  provider_info: string[];
   auto_update: boolean;
   auto_update_interval: SubscriptionAutoUpdateInterval | null;
+};
+
+export type SubscriptionUserInfo = {
+  upload: number;
+  download: number;
+  /** Total quota in bytes; `0` when the provider reports no quota. */
+  total: number;
+  /** Unix seconds until the subscription expires; absent when it has no expiry. */
+  expire?: number | null;
 };
 
 export type NodeInfo = {
