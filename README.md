@@ -47,7 +47,7 @@ Grab the installer for your platform from the [latest release](https://github.co
 
 ## Quick start
 
-1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. Turn on **Auto update** if you like.
+1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. Turn on **Auto update** if you like. Traffic and expiry a provider publishes — as list entries (`Traffic: …`) or in the `subscription-userinfo` header — are parsed into one line on the subscription: used / total with the used share, plus the expiry date or “long-term”.
 2. **Pick a mode and a node.** On **Home** choose **Rule**, **Global**, or **Direct**. On **Nodes** pick an exit and test its latency.
 3. **Start the proxy service.** Press the power button. The system proxy is applied (or the TUN adapter comes up when TUN Mode is enabled), and the traffic chart starts moving.
 

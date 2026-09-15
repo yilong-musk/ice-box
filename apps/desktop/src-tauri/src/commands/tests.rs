@@ -41,6 +41,8 @@ fn temp_state_with_node(label: &str) -> AppState {
         last_error: None,
         etag: None,
         last_modified: None,
+        userinfo: None,
+        provider_info: vec![],
         auto_update: false,
         auto_update_interval: None,
     };
@@ -115,6 +117,8 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         last_error: None,
         etag: None,
         last_modified: None,
+        userinfo: None,
+        provider_info: vec![],
         auto_update: false,
         auto_update_interval: None,
     };

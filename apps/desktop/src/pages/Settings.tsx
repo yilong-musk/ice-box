@@ -508,6 +508,38 @@ export function Settings({
             />
           )}
 
+          <PortsCard
+            form={form}
+            setForm={setForm}
+            fieldErrors={fieldErrors}
+            busy={busy}
+            loaded={loaded}
+            clearFieldError={clearFieldError}
+            setFieldErrors={setFieldErrors}
+          />
+
+          {tunUiHidden ? null : (
+            <TunCard
+              form={form}
+              status={status}
+              busy={busy}
+              loaded={loaded}
+              persistTunEnabled={persistTunEnabled}
+              flashSaved={flashSaved}
+              setError={setError}
+              onRequestHelperInstall={() => tunInstall.setOpen(true)}
+              onInstallHelper={() =>
+                void runHelperAction(() => api.installHelper(), true)
+              }
+              onUninstallHelper={() =>
+                void runHelperAction(() => api.uninstallHelper(), false, () => {
+                  if (!form.tun.enabled) return;
+                  return persistTunEnabled(false);
+                })
+              }
+            />
+          )}
+
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard
               checkAppUpdates={form.check_app_updates}
@@ -532,38 +564,6 @@ export function Settings({
               onInstall={() => void runUpdateInstall()}
             />
           </div>
-
-          {tunUiHidden ? null : (
-            <TunCard
-              form={form}
-              status={status}
-              busy={busy}
-              loaded={loaded}
-              persistTunEnabled={persistTunEnabled}
-              flashSaved={flashSaved}
-              setError={setError}
-              onRequestHelperInstall={() => tunInstall.setOpen(true)}
-              onInstallHelper={() =>
-                void runHelperAction(() => api.installHelper(), true)
-              }
-              onUninstallHelper={() =>
-                void runHelperAction(() => api.uninstallHelper(), false, () => {
-                  if (!form.tun.enabled) return;
-                  return persistTunEnabled(false);
-                })
-              }
-            />
-          )}
-
-          <PortsCard
-            form={form}
-            setForm={setForm}
-            fieldErrors={fieldErrors}
-            busy={busy}
-            loaded={loaded}
-            clearFieldError={clearFieldError}
-            setFieldErrors={setFieldErrors}
-          />
 
           <DataCard
             form={form}

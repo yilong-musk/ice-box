@@ -15,6 +15,7 @@ use ice_config::{
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
+use crate::userinfo::SubscriptionUserInfo;
 use crate::{SubscriptionIndex, SubscriptionMeta};
 
 static COMMIT_LOCK: Mutex<()> = Mutex::new(());
@@ -344,26 +345,32 @@ pub fn write_subscription_error(
     Ok(())
 }
 
-/// Backward-compatible alias for recording a successful conditional refresh.
+/// Backward-compatible alias for recording a successful conditional refresh
+/// that carried no traffic counters.
 pub fn clear_subscription_error(
     paths: &SubscriptionPaths,
     id: Uuid,
 ) -> Result<SubscriptionMeta, SubscriptionError> {
-    mark_subscription_refreshed(paths, id)
+    mark_subscription_refreshed(paths, id, None)
 }
 
 /// Record a successful conditional refresh in an in-memory index and on-disk meta.
 /// The cached subscription content is unchanged, but the refresh timestamp and error state
-/// reflect the successful HTTP response.
+/// reflect the successful HTTP response. `userinfo` replaces the stored traffic
+/// counters when the response carried the header; `None` keeps the last ones.
 pub fn mark_refreshed_in_index(
     paths: &SubscriptionPaths,
     index: &mut SubscriptionIndex,
     id: Uuid,
+    userinfo: Option<SubscriptionUserInfo>,
 ) -> Option<SubscriptionMeta> {
     let meta = index.items.iter().find(|m| m.id == id)?.clone();
     let mut updated = meta;
     updated.last_error = None;
     updated.last_updated = Some(Utc::now());
+    if userinfo.is_some() {
+        updated.userinfo = userinfo;
+    }
     if let Some(slot) = index.items.iter_mut().find(|m| m.id == id) {
         *slot = updated.clone();
     }
@@ -373,13 +380,15 @@ pub fn mark_refreshed_in_index(
     Some(updated)
 }
 
-/// Record a successful conditional refresh, updating its timestamp and clearing any error.
+/// Record a successful conditional refresh, updating its timestamp, traffic
+/// counters (when the response carried them) and clearing any error.
 pub fn mark_subscription_refreshed(
     paths: &SubscriptionPaths,
     id: Uuid,
+    userinfo: Option<SubscriptionUserInfo>,
 ) -> Result<SubscriptionMeta, SubscriptionError> {
     let mut index = load_index(paths)?;
-    let updated = mark_refreshed_in_index(paths, &mut index, id)
+    let updated = mark_refreshed_in_index(paths, &mut index, id, userinfo)
         .ok_or_else(|| SubscriptionError::ParseFailed(format!("subscription {id} not found")))?;
     save_index(paths, &index)?;
     Ok(updated)
@@ -551,6 +560,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
         };
@@ -598,6 +609,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
         };
@@ -646,6 +659,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
         };
@@ -708,6 +723,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
         };

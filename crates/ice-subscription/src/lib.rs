@@ -15,6 +15,7 @@ mod store;
 mod tls_fetch;
 mod uri;
 mod url;
+mod userinfo;
 
 /// Upper bound for simultaneous subscription network fetches.
 pub(crate) const MAX_FETCH_CONCURRENCY: usize = 8;
@@ -51,6 +52,7 @@ pub use uri::{
 pub use url::{
     redact_subscription_url_for_log, redact_subscription_url_for_ui, redact_urls_in_text,
 };
+pub use userinfo::{parse_userinfo_header, provider_info_lines, SubscriptionUserInfo};
 
 use chrono::{DateTime, Utc};
 use ice_config::{
@@ -136,6 +138,15 @@ pub struct SubscriptionMeta {
     pub etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
+    /// Provider traffic counters (`subscription-userinfo` header) as of the
+    /// last successful fetch; `None` when the provider never sent any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub userinfo: Option<SubscriptionUserInfo>,
+    /// Usage / expiry entries the provider embeds in the proxy list
+    /// (`Traffic: 11.84 GB | 150 GB`, `剩余流量：1023.64 GB`), verbatim and in
+    /// list order. Empty when the subscription carries no such entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_info: Vec<String>,
     /// Refresh this subscription on a background schedule when enabled.
     #[serde(default)]
     pub auto_update: bool,
@@ -258,6 +269,8 @@ pub(crate) fn meta_from_profile(
         last_error: None,
         etag,
         last_modified,
+        userinfo: None,
+        provider_info: provider_info_lines(&profile.nodes),
         auto_update,
         auto_update_interval,
     }
@@ -269,7 +282,7 @@ pub(crate) fn meta_from_fetched_profile(
     format: SubscriptionFormat,
     profile: &NormalizedProfile,
 ) -> SubscriptionMeta {
-    meta_from_profile(
+    let mut meta = meta_from_profile(
         current.id,
         current.name.clone(),
         current.url.clone(),
@@ -283,7 +296,11 @@ pub(crate) fn meta_from_fetched_profile(
             .or_else(|| current.last_modified.clone()),
         current.auto_update,
         current.auto_update_interval,
-    )
+    );
+    // A successful fetch that omits the header keeps the last counters the
+    // provider reported; a conditional (304) response may still refresh them.
+    meta.userinfo = fetched.userinfo.or(current.userinfo);
+    meta
 }
 
 pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, SubscriptionError> {

@@ -15,6 +15,7 @@ import {
   formatApplyWarning,
   extractUpdateResults,
   formatUpdateFailures,
+  subscriptionTrafficView,
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -323,6 +324,10 @@ export function Subscriptions() {
               <ItemGroup aria-label={t("subs.listAria")} className="gap-0">
                 {items.map((s, index) => {
                   const warnings = s.parse_warnings ?? [];
+                  const traffic = subscriptionTrafficView(
+                    s.userinfo,
+                    s.provider_info,
+                  );
                   return (
                     <div key={s.id}>
                       {index > 0 ? <ItemSeparator className="my-0" /> : null}
@@ -361,6 +366,26 @@ export function Subscriptions() {
                           <ItemDescription>
                             {subscriptionSummary(s)}
                           </ItemDescription>
+                          {traffic ? (
+                            <ItemDescription
+                              className="tabular-nums"
+                              data-testid={`sub-traffic-${s.id}`}
+                            >
+                              {traffic.usage}
+                              {traffic.usage && traffic.expiry ? " · " : null}
+                              {traffic.expiry ? (
+                                <span
+                                  className={
+                                    traffic.expired
+                                      ? "text-destructive"
+                                      : undefined
+                                  }
+                                >
+                                  {traffic.expiry}
+                                </span>
+                              ) : null}
+                            </ItemDescription>
+                          ) : null}
                           {s.last_error ? (
                             <ItemDescription className="text-destructive">
                               {formatUiMessage(s.last_error)}

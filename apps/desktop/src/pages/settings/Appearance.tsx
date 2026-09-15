@@ -2,6 +2,7 @@
 
 import {
   Field,
+  FieldLabel,
 } from "@/components/ui/field";
 import {
   NativeSelect,
@@ -50,49 +51,43 @@ export function AppearanceCard({
   onLanguageChange: (value: LanguagePreference) => void;
 }) {
   return (
-    <>
-      <Card
-        size="sm"
-        className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-      >
-        <CardHeader>
-          <CardTitle>{t("settings.appearance")}</CardTitle>
-          <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            spacing={2}
-            value={themePreference}
-            onValueChange={(value) => {
-              if (value === "system" || value === "light" || value === "dark") {
-                setThemePreference(value);
-              }
-            }}
-            className="w-full"
-            aria-label={t("settings.appearance")}
-          >
-            {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
-              <ToggleGroupItem key={value} value={value} className="flex-1">
-                {t(labelKey)}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </CardContent>
-      </Card>
-
-      <Card
-        size="sm"
-        className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-      >
-        <CardHeader>
-          <CardTitle>{t("settings.language")}</CardTitle>
-          <CardDescription>{t("settings.languageDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <Card
+      size="sm"
+      className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
+    >
+      <CardHeader>
+        <CardTitle>{t("settings.appearance")}</CardTitle>
+        <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-3">
           <Field>
+            <FieldLabel>{t("settings.theme")}</FieldLabel>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={2}
+              value={themePreference}
+              onValueChange={(value) => {
+                if (value === "system" || value === "light" || value === "dark") {
+                  setThemePreference(value);
+                }
+              }}
+              className="w-full"
+              aria-label={t("settings.theme")}
+            >
+              {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
+                <ToggleGroupItem key={value} value={value} className="flex-1">
+                  {t(labelKey)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-language">
+              {t("settings.language")}
+            </FieldLabel>
             <NativeSelect
               id="settings-language"
               aria-label={t("settings.language")}
@@ -114,8 +109,8 @@ export function AppearanceCard({
               ))}
             </NativeSelect>
           </Field>
-        </CardContent>
-      </Card>
-    </>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

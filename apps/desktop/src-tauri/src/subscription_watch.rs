@@ -195,6 +195,8 @@ mod tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
             auto_update,
             auto_update_interval: interval,
         }
