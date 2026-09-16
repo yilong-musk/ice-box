@@ -24,6 +24,10 @@ use std::path::Path;
 /// Appended to the registered command line; marks a login-item launch.
 pub const AUTOSTART_FLAG: &str = "--autostart";
 
+/// Whether this build can register an OS login item. The Settings card is
+/// hidden where it cannot, so the switch is never an error-only control.
+pub const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
 /// Whether this process was started by the login item.
 pub fn is_autostart_launch() -> bool {
     // `args_os`, not `args`: a non-Unicode argv entry makes `env::args` panic,
@@ -78,6 +82,20 @@ fn launch_agent_path(home: &Path) -> std::path::PathBuf {
         .join(format!("{LAUNCH_AGENT_LABEL}.plist"))
 }
 
+/// Directory macOS mounts a quarantined disk-image launch from, read-only and
+/// with a fresh random path per launch.
+#[cfg(any(target_os = "macos", test))]
+const APP_TRANSLOCATION_DIR: &str = "AppTranslocation";
+
+/// True when `exe` sits inside a macOS App Translocation mount. A login item
+/// registered for such a path breaks silently once that mount is gone, and the
+/// app cannot repair it from there, so the registration is refused instead.
+#[cfg(any(target_os = "macos", test))]
+fn is_translocated(exe: &Path) -> bool {
+    exe.components()
+        .any(|component| component.as_os_str() == std::ffi::OsStr::new(APP_TRANSLOCATION_DIR))
+}
+
 /// LaunchAgent that runs `exe` once per login, in the GUI session only.
 ///
 /// `KeepAlive` is false on purpose: the agent starts the app at login and then
@@ -127,6 +145,18 @@ mod imp {
     }
 
     pub fn set_enabled(exe: &Path, enabled: bool) -> Result<(), String> {
+        // Checked before anything is written: an app opened from the disk image
+        // runs from a read-only mount whose path the next launch will not have,
+        // so the entry would be dead on arrival while `settings.json` still
+        // claimed launch at login.
+        if enabled && is_translocated(exe) {
+            return Err(
+                "ice-box is running from the read-only macOS App Translocation path; \
+                 move it to /Applications (or another writable location) and turn \
+                 launch at login on again"
+                    .to_string(),
+            );
+        }
         let path = launch_agent_path(&home_dir()?);
         if !enabled {
             return match fs::remove_file(&path) {
@@ -328,5 +358,35 @@ mod tests {
         let plist = render_launch_agent(Path::new("/Applications/a&b/<c>/ice-box"));
         assert!(plist.contains("<string>/Applications/a&amp;b/&lt;c&gt;/ice-box</string>"));
         assert!(!plist.contains("a&b"));
+    }
+
+    #[test]
+    fn app_translocation_mounts_are_detected_by_path_component() {
+        assert!(is_translocated(Path::new(
+            "/private/var/folders/xy/1234567890/T/AppTranslocation/1A2B3C/d/ice-box.app/Contents/MacOS/ice-box"
+        )));
+        assert!(is_translocated(Path::new(
+            "/AppTranslocation/1A2B3C/d/ice-box"
+        )));
+        assert!(!is_translocated(Path::new(
+            "/Applications/ice-box.app/Contents/MacOS/ice-box"
+        )));
+        // A path that merely contains the word is not a translocation mount.
+        assert!(!is_translocated(Path::new(
+            "/Applications/MyAppTranslocationHolder/ice-box"
+        )));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translocated_instance_is_refused_before_the_login_item_is_written() {
+        let translocated = Path::new(
+            "/private/var/folders/xy/1234567890/T/AppTranslocation/1A2B3C/d/ice-box.app/Contents/MacOS/ice-box",
+        );
+        let err = imp::set_enabled(translocated, true).expect_err("must be refused");
+        assert!(
+            err.contains("/Applications"),
+            "the refusal must say where to install: {err}"
+        );
     }
 }

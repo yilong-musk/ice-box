@@ -187,9 +187,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(move |app| {
-            if !login_item_launch {
-                show_main_window(app.handle());
-            }
             let root = app
                 .path()
                 .app_data_dir()
@@ -200,6 +197,12 @@ pub fn run() {
             // user opened the app first) exits silently: stealing focus from
             // the desktop at login is the one thing this start must not do.
             let instance_lock = acquire_instance_lock(&paths, !login_item_launch)?;
+            // Shown only once this process owns the data dir: a second user
+            // launch leaves through `acquire_instance_lock`, and showing the
+            // window first would flash a blank one before that exit.
+            if !login_item_launch {
+                show_main_window(app.handle());
+            }
             let paths_for_focus = paths.clone();
             let shutdown_requested = Arc::new(AtomicBool::new(false));
             let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;

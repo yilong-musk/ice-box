@@ -1283,13 +1283,7 @@ pub fn sync_menu(app: &AppHandle) {
     menu.apply_view(view);
     // Cheap when settled: the prompt only touches the menu when the version
     // the window offers or the tray language moved.
-    if let Err(err) = menu.sync_update() {
-        tracing::warn!(
-            code = %err.code,
-            error = %err.message,
-            "tray update prompt sync failed"
-        );
-    }
+    sync_update_prompt(app);
     if let Some(entries) = current_subscription_entries(app) {
         if let Err(err) = menu.apply_subscriptions(app, &entries) {
             tracing::warn!(
@@ -1316,6 +1310,25 @@ pub fn sync_menu(app: &AppHandle) {
                 );
             }
         }
+    }
+}
+
+/// Bring the update prompt up to date on its own, for callers that changed
+/// something the prompt renders (the tray language) and should not wait out
+/// `SYNC_INTERVAL` for the watchdog. Cheap when settled.
+///
+/// Off-main-thread only, like [`sync_menu`]: the reconcile blocks on
+/// main-thread menu mutations.
+pub fn sync_update_prompt(app: &AppHandle) {
+    let Some(menu) = app.try_state::<TrayMenuState>() else {
+        return;
+    };
+    if let Err(err) = menu.sync_update() {
+        tracing::warn!(
+            code = %err.code,
+            error = %err.message,
+            "tray update prompt sync failed"
+        );
     }
 }
 

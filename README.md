@@ -64,7 +64,12 @@ The entry is registered per user — a LaunchAgent plist under
 `~/Library/LaunchAgents` on macOS, a `Run` value under `HKCU` on Windows — and
 re-pointed at the installed app on every launch. macOS 13 and later list it as
 a background item under **System Settings → General → Login Items**, where it
-can also be switched off; turning the ice-box toggle off removes the entry.
+can also be switched off. The in-app switch stays authoritative — while it is
+on, ice-box rewrites the OS entry on every start — so switching the item off in
+System Settings does not clear the in-app setting; turn the ice-box toggle off
+to remove the entry. Running straight from the disk image is refused with an
+explanation, because macOS runs such a copy from a path that disappears after
+the next reboot.
 
 ## TUN mode
 

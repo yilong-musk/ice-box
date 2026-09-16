@@ -195,6 +195,7 @@ export const api = {
       tun_ui_hidden: false,
       helper_installed: true,
       helper_supported: true,
+      launch_at_login_supported: true,
       helper_stale: false,
       tun_elevation_ready: true,
     };

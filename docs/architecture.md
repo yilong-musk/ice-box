@@ -106,7 +106,11 @@ the data-dir lock already held exits without raising the running session. The
 login item itself is a per-user OS entry — a LaunchAgent plist on macOS,
 `HKCU\...\Run` on Windows — owned by the shell (`autostart.rs`), rewritten to
 the running executable on every launch, and recorded in
-`settings.json` (`launch_at_login`) only after the OS write succeeded.
+`settings.json` (`launch_at_login`) only after the OS write succeeded. The
+Settings card is rendered only where the platform can register the entry
+(`launch_at_login_supported` in the status snapshot), and a macOS instance
+running from the read-only App Translocation mount is refused before anything
+is written.
 Closing the window leaves the app in the tray, whose menu mirrors the Home
 power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active

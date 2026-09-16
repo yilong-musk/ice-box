@@ -65,6 +65,7 @@ const tunStatus = {
   tun_ui_hidden: false,
   helper_installed: false,
   helper_supported: true,
+  launch_at_login_supported: true,
   helper_stale: false,
 } as const;
 

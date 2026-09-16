@@ -69,6 +69,7 @@ const tunStatus = {
   tun_ui_hidden: false,
   helper_installed: false,
   helper_supported: true,
+  launch_at_login_supported: true,
   helper_stale: false,
   tun_elevation_ready: true,
 } as const;

@@ -71,6 +71,10 @@ export type StatusResponse = {
    * (macOS only in this release). When false, the helper actions and the
    * install-before-enable guide are hidden. */
   helper_supported: boolean;
+  /** Whether this platform can register an OS login item at all (macOS and
+   * Windows). When false the Settings page hides the Startup card, so the
+   * switch never offers an action that can only fail. */
+  launch_at_login_supported: boolean;
   /** The helper's root-owned core differs from the app's bundled core (app
    * updated): only one core version may exist, so TUN stays blocked until
    * the helper is refreshed. */

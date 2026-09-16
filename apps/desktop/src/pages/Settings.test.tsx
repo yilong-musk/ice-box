@@ -106,6 +106,7 @@ const defaultStatus = {
   tun_ui_hidden: false,
   helper_installed: false,
   helper_supported: true,
+  launch_at_login_supported: true,
   helper_stale: false,
 } as const;
 
@@ -541,6 +542,22 @@ describe("Settings", () => {
     });
     // The refused write must not be reported as a saved settings change.
     expect(container.textContent).not.toContain(t("common.saved"));
+  });
+
+  it("hides the login-item card where the OS has no entry to register", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      launch_at_login_supported: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    // The language pick un-disables when settings and status are loaded.
+    const language = await view.findByLabelText(t("settings.language"));
+    await waitFor(() => expect(language).not.toBeDisabled());
+
+    expect(
+      view.queryByRole("switch", { name: t("settings.launchAtLogin") }),
+    ).toBeNull();
   });
 
   it("defaults language to the system locale and persists changes", async () => {

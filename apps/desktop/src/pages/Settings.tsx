@@ -557,12 +557,16 @@ export function Settings({
             />
           )}
 
-          <StartupCard
-            enabled={launchAtLogin}
-            busy={busy}
-            loaded={loaded}
-            onChange={(enabled) => void persistLaunchAtLogin(enabled)}
-          />
+          {/* Hidden where the OS has no login item to write (Linux): the
+              switch there can only ever fail. */}
+          {status?.launch_at_login_supported === true && (
+            <StartupCard
+              enabled={launchAtLogin}
+              busy={busy}
+              loaded={loaded}
+              onChange={(enabled) => void persistLaunchAtLogin(enabled)}
+            />
+          )}
 
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard

@@ -96,9 +96,17 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
     .await
 }
 
+/// Tray language: every label is rewritten, and the update prompt follows
+/// immediately instead of at the watchdog's next tick. Both mutate the native
+/// menu, so the work runs off the main thread like the other rebuild paths.
 #[tauri::command]
-pub fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), AppError> {
-    tray::set_language(&app, language)
+pub async fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), AppError> {
+    run_blocking("set_tray_language", move || {
+        tray::set_language(&app, language)?;
+        tray::sync_update_prompt(&app);
+        Ok(())
+    })
+    .await
 }
 
 /// Tray update prompt: the window mirrors the version the sidebar arrow offers,

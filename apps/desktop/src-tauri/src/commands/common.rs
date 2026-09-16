@@ -170,6 +170,10 @@ pub struct StatusResponse {
     /// the install-before-enable guide when this is false, and offers the
     /// one-time task setup instead.
     pub helper_supported: bool,
+    /// Whether this platform can register an OS login item at all (macOS and
+    /// Windows). The Settings page hides the Startup card when it cannot, so
+    /// the switch never offers an action that can only fail.
+    pub launch_at_login_supported: bool,
     /// The installed helper's root-owned core differs from the app's bundled
     /// core (app updated): only one core version may exist, so TUN stays
     /// blocked until the helper is refreshed.
@@ -528,6 +532,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tun_ui_hidden: capture.tun_ui_hidden,
         helper_installed: cached_helper_installed(state),
         helper_supported: cfg!(target_os = "macos"),
+        launch_at_login_supported: crate::autostart::SUPPORTED,
         helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
         tun_elevation_ready: cached_tun_task_ready(state),
     })
