@@ -99,8 +99,16 @@ mutation and restored on stop or failure.
 
 Startup reconciles leftover processes and capture state before starting the
 core. Recovery itself does not enable capture; restoring the user's saved
-service choice is a separate action. Closing the window leaves the app in the
-tray, whose menu mirrors the Home power switch (start / stop the proxy service)
+service choice is a separate action. A login-item launch (`--autostart`) is a
+startup with the window suppressed: `tauri.conf.json` creates the window
+hidden, the shell shows it only for a user launch, and a login start that finds
+the data-dir lock already held exits without raising the running session. The
+login item itself is a per-user OS entry — a LaunchAgent plist on macOS,
+`HKCU\...\Run` on Windows — owned by the shell (`autostart.rs`), rewritten to
+the running executable on every launch, and recorded in
+`settings.json` (`launch_at_login`) only after the OS write succeeded.
+Closing the window leaves the app in the tray, whose menu mirrors the Home
+power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active
 subscription, and the Nodes page for switching the active exit (one node per
 strategy group, nested one level down); all of them call the same command paths

@@ -26,7 +26,7 @@ import { useRuntimeStore } from "../lib/runtimeStore";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
-import { TrayCard } from "./settings/Tray";
+import { StartupCard } from "./settings/Startup";
 import { TunCard } from "./settings/Tun";
 import { formatUpdateError, UpdateCard } from "./settings/Update";
 import { isMacosHost } from "../lib/windowChrome";
@@ -46,6 +46,7 @@ const defaults: AppSettings = {
   check_app_updates: true,
   log_debug: false,
   tray_display_mode: "icon_and_speed",
+  launch_at_login: false,
   tun: {
     enabled: false,
     interface_name: null,
@@ -102,6 +103,10 @@ export function Settings({
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  /** Login item, held outside `form`: the switch writes the OS entry through
+   * its own path, so it must not arm the debounced autosave (which would
+   * re-apply the runtime config and flash "saved" over a refused OS write). */
+  const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const tunInstall = useTunInstallDialog(installHelperThenEnableTun);
   const { preference, setPreference } = useLanguagePreference();
   const { preference: themePreference, setPreference: setThemePreference } =
@@ -259,6 +264,7 @@ export function Settings({
         ]);
         if (!cancelled) {
           setForm(settings);
+          setLaunchAtLogin(settings.launch_at_login === true);
           setStatus(s);
           setLoaded(true);
           // settings.json is the authoritative language preference; re-apply
@@ -363,6 +369,22 @@ export function Settings({
       true,
       () => persistTunEnabled(true),
     );
+  }
+
+  /** Persist `launch_at_login` directly (bypassing the debounced auto-save,
+   * which omits the field): the backend registers the OS login item first and
+   * only then records the flag, so a refused write must roll the switch back
+   * instead of leaving the UI claiming an entry the OS does not have. */
+  async function persistLaunchAtLogin(enabled: boolean) {
+    const previous = launchAtLogin;
+    setLaunchAtLogin(enabled);
+    try {
+      await api.saveSettings({ launch_at_login: enabled });
+      flashSaved();
+    } catch (err) {
+      setLaunchAtLogin(previous);
+      setError(formatInvokeError(err));
+    }
   }
 
   function validateForm(next: AppSettings): Record<string, string> {
@@ -491,22 +513,17 @@ export function Settings({
             themePreference={themePreference}
             setThemePreference={setThemePreference}
             language={form.language}
+            trayMode={isMacosHost() ? form.tray_display_mode : null}
             busy={busy}
             loaded={loaded}
             onLanguageChange={(value) => {
               setPreference(value);
               setForm({ ...form, language: value });
             }}
+            onTrayModeChange={(value) =>
+              setForm({ ...form, tray_display_mode: value })
+            }
           />
-
-          {isMacosHost() && (
-            <TrayCard
-              mode={form.tray_display_mode}
-              busy={busy}
-              loaded={loaded}
-              onChange={(value) => setForm({ ...form, tray_display_mode: value })}
-            />
-          )}
 
           <PortsCard
             form={form}
@@ -539,6 +556,13 @@ export function Settings({
               }
             />
           )}
+
+          <StartupCard
+            enabled={launchAtLogin}
+            busy={busy}
+            loaded={loaded}
+            onChange={(enabled) => void persistLaunchAtLogin(enabled)}
+          />
 
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard

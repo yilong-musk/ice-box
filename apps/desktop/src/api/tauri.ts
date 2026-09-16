@@ -123,6 +123,11 @@ export type AppSettings = {
   log_debug: boolean;
   /** macOS menu-bar item: icon + live speed, icon only, or speed only. */
   tray_display_mode: TrayDisplayMode;
+  /**
+   * OS login item: start at login into the tray and restore the last capture
+   * state without opening the window.
+   */
+  launch_at_login: boolean;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -217,6 +222,8 @@ export type SettingsPatch = {
   check_app_updates?: boolean;
   log_debug?: boolean;
   tray_display_mode?: TrayDisplayMode;
+  /** Registered by the dedicated login-item path, not the form autosave. */
+  launch_at_login?: boolean;
 };
 
 export type AppErrorPayload = {
@@ -303,6 +310,7 @@ const ERROR_MESSAGE_KEYS = {
   "sub.not_found": "error.sub.not_found",
   "sub.io": "error.sub.io",
   "app.lock_poisoned": "error.app.lock_poisoned",
+  "app.autostart_failed": "error.app.autostart_failed",
   "tun.not_supported": "error.tun.not_supported",
   "tun.permission_required": "error.tun.permission_required",
   "tun.apply_failed": "error.tun.apply_failed",

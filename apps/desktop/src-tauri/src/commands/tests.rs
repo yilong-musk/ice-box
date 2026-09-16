@@ -866,6 +866,25 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
 }
 
 #[test]
+fn only_launch_at_login_changed_ignores_other_fields() {
+    use crate::commands::settings::only_launch_at_login_changed;
+
+    let off = AppSettings::default();
+    let on = AppSettings {
+        launch_at_login: true,
+        ..AppSettings::default()
+    };
+    assert!(only_launch_at_login_changed(&off, &on));
+    // A save that also touches anything else is a full apply, not this
+    // persist-only path.
+    let mut other = on.clone();
+    other.mixed_port = 18080;
+    assert!(!only_launch_at_login_changed(&off, &other));
+    // Unchanged login item: nothing to do.
+    assert!(!only_launch_at_login_changed(&off, &off));
+}
+
+#[test]
 fn only_tray_display_mode_changed_ignores_other_fields() {
     use crate::commands::settings::only_tray_display_mode_changed;
 

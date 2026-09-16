@@ -24,6 +24,7 @@ export const ERROR_CODES = [
   "sub.not_found",
   "sub.io",
   "app.lock_poisoned",
+  "app.autostart_failed",
   "tun.not_supported",
   "tun.permission_required",
   "tun.apply_failed",

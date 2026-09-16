@@ -13,12 +13,18 @@ const FOCUS_FILE: &str = "instance.focus";
 
 pub enum InstanceLock {
     Primary(std::fs::File),
-    /// Another instance holds the lock; focus was requested on it.
+    /// Another instance holds the lock; focus was requested on it (unless the
+    /// caller asked for a silent exit).
     Secondary,
 }
 
-/// Acquire the data-dir lock, or signal the primary instance to show its window.
-pub fn acquire_or_request_focus(paths: &AppPaths) -> Result<InstanceLock, String> {
+/// Acquire the data-dir lock, or signal the primary instance to show its
+/// window. `request_focus` is false for a login-item launch, which must leave
+/// an already-running session alone instead of raising its window.
+pub fn acquire_or_request_focus(
+    paths: &AppPaths,
+    request_focus: bool,
+) -> Result<InstanceLock, String> {
     use fs2::FileExt;
 
     paths
@@ -35,7 +41,9 @@ pub fn acquire_or_request_focus(paths: &AppPaths) -> Result<InstanceLock, String
     // The in-app UAC relaunch was removed with the scheduled-task elevation
     // (plan B): every instance takes the lock or requests focus immediately.
     if file.try_lock_exclusive().is_err() {
-        request_focus(paths.root());
+        if request_focus {
+            write_focus_request(paths.root());
+        }
         return Ok(InstanceLock::Secondary);
     }
 
@@ -46,7 +54,7 @@ pub fn acquire_or_request_focus(paths: &AppPaths) -> Result<InstanceLock, String
     Ok(InstanceLock::Primary(file))
 }
 
-fn request_focus(data_root: &Path) {
+fn write_focus_request(data_root: &Path) {
     let _ = fs::write(data_root.join(FOCUS_FILE), b"1");
 }
 
@@ -76,7 +84,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn request_focus_writes_marker_file() {
+    fn write_focus_request_writes_marker_file() {
         let dir = std::env::temp_dir().join(format!(
             "ice-box-focus-{}",
             SystemTime::now()
@@ -85,7 +93,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
-        request_focus(&dir);
+        write_focus_request(&dir);
         assert!(dir.join(FOCUS_FILE).is_file());
         let _ = fs::remove_dir_all(&dir);
     }

@@ -359,6 +359,13 @@ pub struct AppSettings {
     /// icon + readout for existing `settings.json` files.
     #[serde(default)]
     pub tray_display_mode: TrayDisplayMode,
+    /// When true, the OS login item starts the app at login. The desktop shell
+    /// owns the registration (macOS LaunchAgent plist / Windows per-user `Run`
+    /// key) and rewrites it on every launch; this flag mirrors the choice so it
+    /// survives restarts and reinstalls. Missing field → false, so existing
+    /// `settings.json` files keep starting only when opened.
+    #[serde(default)]
+    pub launch_at_login: bool,
 }
 
 fn default_auto_default_rules() -> bool {
@@ -387,6 +394,7 @@ impl Default for AppSettings {
             check_app_updates: true,
             log_debug: false,
             tray_display_mode: TrayDisplayMode::IconAndSpeed,
+            launch_at_login: false,
         }
     }
 }
@@ -489,6 +497,9 @@ impl AppSettings {
         if let Some(v) = patch.tray_display_mode {
             next.tray_display_mode = v;
         }
+        if let Some(v) = patch.launch_at_login {
+            next.launch_at_login = v;
+        }
         next
     }
 }
@@ -533,6 +544,10 @@ pub struct SettingsPatch {
     pub log_debug: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tray_display_mode: Option<TrayDisplayMode>,
+    /// Registered by the dedicated login-item path (the OS write must succeed
+    /// before the flag is recorded); omitted from the Settings form autosave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_at_login: Option<bool>,
 }
 
 /// Nested TUN patch; omitted fields keep the current `TunSettings`.

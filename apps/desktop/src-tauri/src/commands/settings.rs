@@ -44,6 +44,15 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
             persist_settings(&state.paths.settings(), &settings, host_platform())?;
             return Ok(());
         }
+        if only_launch_at_login_changed(&previous, &settings) {
+            // The OS write comes first: a refused registration (read-only
+            // LaunchAgents directory, locked registry) must not be remembered
+            // as enabled, so `settings.json` mirrors what the OS really has.
+            crate::autostart::set_enabled(settings.launch_at_login)
+                .map_err(|err| AppError::new(ErrorCode::AutostartFailed, err))?;
+            persist_settings(&state.paths.settings(), &settings, host_platform())?;
+            return Ok(());
+        }
         // Live TUN topology reconfigure (addresses / MTU / stack / …) while
         // TUN capture stays the active backend. Enabled flips never belong
         // here — they were handled above.
@@ -129,6 +138,16 @@ pub(crate) fn only_tray_display_mode_changed(previous: &AppSettings, next: &AppS
     left.tray_display_mode = TrayDisplayMode::IconAndSpeed;
     right.tray_display_mode = TrayDisplayMode::IconAndSpeed;
     left == right && previous.tray_display_mode != next.tray_display_mode
+}
+
+/// Persist-only: the login item is an OS registration the shell owns, and no
+/// part of the sing-box runtime config depends on it.
+pub(crate) fn only_launch_at_login_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.launch_at_login = false;
+    right.launch_at_login = false;
+    left == right && previous.launch_at_login != next.launch_at_login
 }
 
 pub(crate) fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {

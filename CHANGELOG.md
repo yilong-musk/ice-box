@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Launch at login.** Settings → Startup registers the OS login item and drops
+  it again: a per-user LaunchAgent plist on macOS (`SMAppService` is not
+  available to the permanently unsigned build) and a
+  `HKCU\...\CurrentVersion\Run` value on Windows, both re-pointed at the
+  installed app on every launch. A login start stays in the tray — the window is
+  created hidden and never opens — while the core starts and the last proxy
+  state (system proxy or TUN) is restored as on any other launch; a session that
+  is already running is left alone instead of being raised. The NSIS uninstaller
+  removes the Windows entry, and a refused OS write is reported and rolls the
+  switch back instead of being remembered as enabled.
+
 ## [0.1.11] - 2026-09-16
 
 ### Added

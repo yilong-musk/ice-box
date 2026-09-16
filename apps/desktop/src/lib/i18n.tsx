@@ -250,6 +250,11 @@ const zh = {
   "settings.trayIconAndSpeed": "图标 + 网速",
   "settings.trayIconOnly": "仅图标",
   "settings.traySpeedOnly": "仅网速",
+  "settings.startup": "启动",
+  "settings.startupDesc": "登录系统时如何启动 ice-box",
+  "settings.launchAtLogin": "开机自启",
+  "settings.launchAtLoginDesc":
+    "登录后在后台启动并恢复上次的代理状态；窗口不弹出，可从托盘打开",
   "settings.tun": "TUN 模式",
   "settings.tunDesc":
     "决定下次启动代理服务时走透明代理还是系统代理；切换本开关不会立即启停当前服务",
@@ -397,6 +402,7 @@ const zh = {
   "error.sub.not_found": "找不到该订阅",
   "error.sub.io": "订阅读写失败",
   "error.app.lock_poisoned": "内部状态已损坏",
+  "error.app.autostart_failed": "开机自启设置失败",
   "error.tun.not_supported": "当前平台不支持 TUN",
   "error.tun.permission_required": "需要系统权限才能启用 TUN",
   "error.tun.apply_failed": "TUN 启用失败",
@@ -658,6 +664,11 @@ const en: Record<MessageKey, string> = {
   "settings.trayIconAndSpeed": "Icon + speed",
   "settings.trayIconOnly": "Icon only",
   "settings.traySpeedOnly": "Speed only",
+  "settings.startup": "Startup",
+  "settings.startupDesc": "How ice-box starts with your login session",
+  "settings.launchAtLogin": "Launch at login",
+  "settings.launchAtLoginDesc":
+    "Start in the background after you log in and restore the last proxy state; the window stays in the tray instead of opening",
   "settings.tun": "TUN Mode",
   "settings.tunDesc":
     "Chooses transparent proxy vs the system proxy for the next time the proxy service starts. Toggling this switch does not start or stop the current service",
@@ -808,6 +819,7 @@ const en: Record<MessageKey, string> = {
   "error.sub.not_found": "Subscription not found",
   "error.sub.io": "Subscription I/O failed",
   "error.app.lock_poisoned": "Internal state is corrupted",
+  "error.app.autostart_failed": "Failed to set launch at login",
   "error.tun.not_supported": "TUN is not supported on this platform",
   "error.tun.permission_required": "System permission is required to enable TUN",
   "error.tun.apply_failed": "Failed to enable TUN",
