@@ -326,6 +326,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::set_tray_language,
+            commands::set_tray_update_available,
             commands::set_proxy_mode,
             commands::add_subscription,
             commands::remove_subscription,

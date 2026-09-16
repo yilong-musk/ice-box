@@ -183,6 +183,10 @@ and retried silently with exponential backoff (sooner if the core becomes
 Running) through one 15-minute attempt; that last failure records
 `last_check_at` and starts the same cooldown. Retries inside a round, from the
 launch or an in-session round, do not write the cooldown.
+A newer version is surfaced in two places the window keeps in step: the sidebar
+arrow beside the version label and a tray menu prompt carrying the same green
+arrow (`set_tray_update_available`). Both point at Settings → App Updates, and
+turning automatic checks off clears both.
 
 ## Further reading
 

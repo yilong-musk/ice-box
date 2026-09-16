@@ -403,6 +403,10 @@ export const api = {
     listen("window://hidden", () => handler()),
   listenWindowShown: (handler: () => void) =>
     listen("window://shown", () => handler()),
+  /** Tray update prompt clicked: open Settings → App Updates, the same
+   * destination as the sidebar arrow. */
+  listenTrayUpdateClick: (handler: () => void) =>
+    listen("app-update://open", () => handler()),
   listenTrafficSample: (
     handler: (payload: TrafficPoint) => void,
   ) =>
@@ -458,6 +462,10 @@ export const api = {
     ),
   setTrayLanguage: (language: "zh" | "en") =>
     invoke<void>("set_tray_language", { language }),
+  /** Tray update prompt: mirror the version the sidebar arrow offers, or
+   * `null` to drop the item when automatic checks are off. */
+  setTrayUpdateAvailable: (version: string | null) =>
+    invoke<void>("set_tray_update_available", { version }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
   addSubscription: (

@@ -92,6 +92,20 @@ pub fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), A
     tray::set_language(&app, language)
 }
 
+/// Tray update prompt: the window mirrors the version the sidebar arrow offers,
+/// or `None` to drop the item. Off the main thread — the menu mutation hops to
+/// the main thread, which a sync command would be blocking.
+#[tauri::command]
+pub async fn set_tray_update_available(
+    app: AppHandle,
+    version: Option<String>,
+) -> Result<(), AppError> {
+    run_blocking("set_tray_update_available", move || {
+        tray::set_update_available(&app, version)
+    })
+    .await
+}
+
 #[derive(Deserialize)]
 pub struct SetProxyModeRequest {
     /// `"rule"` | `"global"` | `"direct"`.

@@ -223,6 +223,7 @@ export const api = {
     return () => {};
   },
   async setTrayLanguage(): Promise<void> {},
+  async setTrayUpdateAvailable(): Promise<void> {},
   async listNodes(): Promise<NodeInfo[]> { await delay(); return [...nodes]; },
   async setSelectedNode(tag: string): Promise<void> { settings.selected_tag = tag; await delay(); },
   async setGroupSelection(): Promise<void> { await delay(); },
@@ -268,6 +269,9 @@ export const api = {
     return () => {};
   },
   async listenWindowShown(): Promise<() => void> {
+    return () => {};
+  },
+  async listenTrayUpdateClick(): Promise<() => void> {
     return () => {};
   },
   async listenTrafficSample(): Promise<() => void> {

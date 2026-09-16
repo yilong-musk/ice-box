@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.11] - 2026-09-16
 
+### Added
+
+- The tray menu carries the update prompt too: a `vX.Y.Z` item with the sidebar
+  arrow's green arrow appears while a newer release is on offer, and clicking it
+  opens Settings → App Updates. Turning automatic checks off clears it, like the
+  sidebar arrow.
+
 ### Changed
 
 - Automatic app-update checks run one round on every launch instead of waiting
