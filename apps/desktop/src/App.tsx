@@ -158,7 +158,7 @@ function AppShell() {
 
   useEffect(() => {
     const checker = startBackgroundAppUpdateCheck({
-      check: () => api.checkAppUpdate(true),
+      check: ({ startup }) => api.checkAppUpdate(true, startup),
       recordCooldown: () => api.recordAppUpdateCheck(),
       onResult: (result) => {
         if (result.available && result.version) {

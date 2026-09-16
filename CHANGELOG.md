@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Automatic app-update checks run one round on every launch instead of waiting
+  out the 24-hour cooldown, so restarting the app always reaches GitHub. The
+  cooldown now paces only the checks that follow while the app keeps running:
+  the next in-session round is armed 24 hours after the current one settles.
+
 ## [0.1.10] - 2026-09-15
 
 ### Added

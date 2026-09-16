@@ -12,6 +12,11 @@ export const BACKGROUND_UPDATE_RETRY_MS = [
  * can proxy GitHub instead of waiting out the current backoff. */
 export const CORE_READY_RETRY_MS = 2_000;
 
+/** In-session background checks repeat at most once per this interval, the
+ * same 24h the backend cooldown enforces. The launch round ignores both, so
+ * every app start checks once. */
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 /** Delay before the next retry, or `null` when the 15-minute retry already
  * ran and failed (start the 24h cooldown). `failureCount` is 0 after the
  * first failed attempt. */
@@ -32,18 +37,29 @@ export type BackgroundAppUpdateChecker = {
   idle: () => Promise<void>;
 };
 
+/** Which round a check belongs to. `startup` marks the first round after app
+ * start, which the backend runs even inside the 24h cooldown. */
+export type BackgroundAppUpdateRound = {
+  startup: boolean;
+};
+
 /**
- * One immediate background check, then silent retries on failure until the
- * 15-minute attempt fails (or a check succeeds). Exhaustion records the 24h
- * cooldown without surfacing an error.
+ * An immediate launch check (`startup: true`, so the 24h cooldown cannot skip
+ * it), then silent retries on failure until the 15-minute attempt fails (or a
+ * check succeeds). Each closed round arms the next in-session round
+ * `intervalMs` later, which is what limits the while-running check frequency;
+ * retries stay inside the round, so they still count as the same check.
+ * Exhaustion records the 24h cooldown without surfacing an error.
  */
 export function startBackgroundAppUpdateCheck(options: {
-  check: () => Promise<CheckAppUpdateResponse>;
+  check: (round: BackgroundAppUpdateRound) => Promise<CheckAppUpdateResponse>;
   onResult: (result: CheckAppUpdateResponse) => void;
   recordCooldown?: () => Promise<void>;
+  intervalMs?: number;
   schedule?: (fn: () => void, ms: number) => number;
   cancel?: (id: number) => void;
 }): BackgroundAppUpdateChecker {
+  const intervalMs = options.intervalMs ?? UPDATE_CHECK_INTERVAL_MS;
   const schedule =
     options.schedule ??
     ((fn, ms) => window.setTimeout(fn, ms) as unknown as number);
@@ -51,7 +67,7 @@ export function startBackgroundAppUpdateCheck(options: {
 
   let stopped = false;
   let inFlight = false;
-  let done = false;
+  let launchRound = true;
   let failures = 0;
   let timer: number | null = null;
   let coreReadyQueued = false;
@@ -65,7 +81,7 @@ export function startBackgroundAppUpdateCheck(options: {
   }
 
   function arm(ms: number) {
-    if (stopped || done) return;
+    if (stopped) return;
     clearTimer();
     timer = schedule(() => {
       timer = null;
@@ -74,36 +90,43 @@ export function startBackgroundAppUpdateCheck(options: {
   }
 
   function kick() {
-    if (stopped || done || inFlight) return;
+    if (stopped || inFlight) return;
     idle = attempt();
   }
 
-  async function finishWithCooldown() {
-    done = true;
+  /** Close the current round and arm the next in-session one. `recordCooldown`
+   * persists the exhausted-failure cooldown when the round never reached
+   * GitHub; a successful round already wrote `last_check_at` in the backend. */
+  async function closeRound(recordCooldown: boolean) {
+    launchRound = false;
+    failures = 0;
+    coreReadyQueued = false;
     clearTimer();
-    if (!options.recordCooldown) return;
-    try {
-      await options.recordCooldown();
-    } catch {
-      // Cooldown persist is best-effort; the session still stops retrying.
+    if (recordCooldown && options.recordCooldown) {
+      try {
+        await options.recordCooldown();
+      } catch {
+        // Cooldown persist is best-effort; the session keeps its own schedule.
+      }
     }
+    arm(intervalMs);
   }
 
   async function attempt() {
-    if (stopped || done || inFlight) return;
+    if (stopped || inFlight) return;
+    const startup = launchRound;
     inFlight = true;
     try {
-      const result = await options.check();
+      const result = await options.check({ startup });
       if (stopped) return;
-      done = true;
-      clearTimer();
       options.onResult(result);
+      await closeRound(false);
     } catch {
       if (stopped) return;
       failures += 1;
       const scheduled = backgroundUpdateRetryMs(failures - 1);
       if (scheduled === null) {
-        await finishWithCooldown();
+        await closeRound(true);
         return;
       }
       const delay = coreReadyQueued ? CORE_READY_RETRY_MS : scheduled;
@@ -122,7 +145,7 @@ export function startBackgroundAppUpdateCheck(options: {
       clearTimer();
     },
     notifyCoreRunning() {
-      if (stopped || done) return;
+      if (stopped) return;
       if (inFlight) {
         coreReadyQueued = true;
         return;

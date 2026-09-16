@@ -438,9 +438,11 @@ export const api = {
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
   saveSettings: (patch: SettingsPatch) =>
     invoke<void>("save_settings", { patch }),
-  checkAppUpdate: (background = false) =>
+  /** `startup` marks the launch round, which the backend runs even inside the
+   * 24h in-session cooldown so every app start checks GitHub once. */
+  checkAppUpdate: (background = false, startup = false) =>
     invoke<CheckAppUpdateResponse>("check_app_update", {
-      req: { background },
+      req: { background, startup },
     }),
   recordUpdatePrompt: () => invoke<void>("record_update_prompt"),
   /** Persist `last_check_at` after the background retry ladder is exhausted. */

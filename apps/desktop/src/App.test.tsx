@@ -326,7 +326,7 @@ describe("App", () => {
         screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeInTheDocument();
     });
-    expect(checkAppUpdate).toHaveBeenCalledWith(true);
+    expect(checkAppUpdate).toHaveBeenCalledWith(true, true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
