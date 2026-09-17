@@ -20,9 +20,10 @@ use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 /// In-session background checks repeat at most once per this interval after a
-/// successful round-trip, or after the UI exhausts its failure retries and
-/// records `last_check_at`. The launch round (`startup: true`) is exempt, so
-/// every app start reaches GitHub; in-session retries happen before that write.
+/// successful background round-trip, or after the UI exhausts its failure
+/// retries and records `last_check_at`. Manual Settings checks never write that
+/// timestamp. The launch round (`startup: true`) is exempt, so every app start
+/// reaches GitHub; in-session retries happen before that write.
 pub const CHECK_INTERVAL: Duration = Duration::hours(24);
 
 pub const ERR_UPDATE_CHECK_FAILED: ErrorCode = ErrorCode::UpdateCheckFailed;
@@ -312,26 +313,47 @@ pub async fn check_app_update(
         }
     };
 
-    disk.last_check_at = Some(now);
-    let Some(update) = found else {
-        disk.available_version = None;
-        disk.available_notes = None;
-        save_update_check_state(&paths.update_check(), &disk)?;
+    let available = found
+        .as_ref()
+        .map(|update| (update.version.clone(), update.body.clone()));
+    record_successful_check(&mut disk, now, req.background, available.clone());
+    save_update_check_state(&paths.update_check(), &disk)?;
+
+    let Some((version, notes)) = available else {
         return Ok(empty_response());
     };
 
-    let version = update.version.clone();
-    disk.available_version = Some(version.clone());
-    disk.available_notes = update.body.clone();
-    save_update_check_state(&paths.update_check(), &disk)?;
-
     Ok(CheckAppUpdateResponse {
         available: true,
-        notes: update.body,
+        notes,
         version: Some(version),
         skipped: false,
         should_prompt: false,
     })
+}
+
+/// Persist availability after a successful GitHub round-trip. Only background
+/// rounds advance `last_check_at`; manual Settings checks leave the cooldown
+/// clock alone so they cannot postpone the next in-session automatic check.
+fn record_successful_check(
+    disk: &mut UpdateCheckState,
+    now: DateTime<Utc>,
+    background: bool,
+    available: Option<(String, Option<String>)>,
+) {
+    if background {
+        disk.last_check_at = Some(now);
+    }
+    match available {
+        Some((version, notes)) => {
+            disk.available_version = Some(version);
+            disk.available_notes = notes;
+        }
+        None => {
+            disk.available_version = None;
+            disk.available_notes = None;
+        }
+    }
 }
 
 pub fn touch_last_check_at(path: &std::path::Path, now: DateTime<Utc>) -> Result<(), AppError> {
@@ -614,6 +636,47 @@ mod tests {
         assert!(check_is_due(&loaded, now + Duration::hours(25), false));
         assert!(check_is_due(&loaded, now + Duration::hours(1), true));
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn manual_check_preserves_last_check_at() {
+        let earlier = Utc::now() - Duration::hours(3);
+        let now = Utc::now();
+        let mut disk = UpdateCheckState {
+            last_check_at: Some(earlier),
+            ..UpdateCheckState::default()
+        };
+        record_successful_check(
+            &mut disk,
+            now,
+            false,
+            Some(("0.1.12".into(), Some("notes".into()))),
+        );
+        assert_eq!(
+            disk.last_check_at.map(|at| at.timestamp()),
+            Some(earlier.timestamp())
+        );
+        assert_eq!(disk.available_version.as_deref(), Some("0.1.12"));
+        assert_eq!(disk.available_notes.as_deref(), Some("notes"));
+        assert!(!check_is_due(&disk, now, false));
+    }
+
+    #[test]
+    fn background_check_advances_last_check_at() {
+        let earlier = Utc::now() - Duration::hours(25);
+        let now = Utc::now();
+        let mut disk = UpdateCheckState {
+            last_check_at: Some(earlier),
+            available_version: Some("0.1.10".into()),
+            ..UpdateCheckState::default()
+        };
+        record_successful_check(&mut disk, now, true, None);
+        assert_eq!(
+            disk.last_check_at.map(|at| at.timestamp()),
+            Some(now.timestamp())
+        );
+        assert!(disk.available_version.is_none());
+        assert!(!check_is_due(&disk, now + Duration::hours(1), false));
     }
 
     #[test]

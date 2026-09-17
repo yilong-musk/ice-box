@@ -189,12 +189,15 @@ signing is separate from OS application signing; artifact production and
 distribution policy are defined in [release-process.md](release-process.md).
 Every launch runs one background check round after the first UI frame. That
 launch round ignores the 24-hour cooldown, so restarting always reaches GitHub.
-A successful GitHub fetch starts the cooldown in `update-check.json`, which
-paces the rounds that follow while the app keeps running. A failure is logged
-and retried silently with exponential backoff (sooner if the core becomes
-Running) through one 15-minute attempt; that last failure records
-`last_check_at` and starts the same cooldown. Retries inside a round, from the
-launch or an in-session round, do not write the cooldown.
+A successful background GitHub fetch starts the cooldown in
+`update-check.json`, which paces the rounds that follow while the app keeps
+running. A manual check from Settings reaches GitHub without waiting out that
+cooldown and does not rewrite `last_check_at`, so it cannot postpone the next
+automatic round. A failure is logged and retried silently with exponential
+backoff (sooner if the core becomes Running) through one 15-minute attempt;
+that last failure records `last_check_at` and starts the same cooldown.
+Retries inside a round, from the launch or an in-session round, do not write
+the cooldown.
 A newer version is surfaced in two places the window keeps in step: the sidebar
 arrow beside the version label and a tray menu prompt carrying the same green
 arrow (`set_tray_update_available`). Both point at Settings → App Updates, and
