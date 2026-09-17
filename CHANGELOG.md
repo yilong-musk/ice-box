@@ -5,7 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.1.11] - 2026-09-16
+## [0.1.11] - 2026-09-17
 
 ### Added
 
@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out the 24-hour cooldown, so restarting the app always reaches GitHub. The
   cooldown now paces only the checks that follow while the app keeps running:
   the next in-session round is armed 24 hours after the current one settles.
+
+### Fixed
+
+- A manual Settings → App Updates check no longer rewrites `last_check_at`, so
+  it cannot postpone the next in-session automatic round. Manual checks still
+  reach GitHub immediately and refresh the available-version cache.
 
 ## [0.1.10] - 2026-09-15
 
