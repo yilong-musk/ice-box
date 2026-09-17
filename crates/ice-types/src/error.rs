@@ -54,6 +54,8 @@ pub enum ErrorCode {
     SubIo,
     #[serde(rename = "app.lock_poisoned")]
     LockPoisoned,
+    #[serde(rename = "app.autostart_failed")]
+    AutostartFailed,
     #[serde(rename = "tun.not_supported")]
     TunNotSupported,
     #[serde(rename = "tun.permission_required")]
@@ -116,6 +118,7 @@ impl ErrorCode {
         Self::SubNotFound,
         Self::SubIo,
         Self::LockPoisoned,
+        Self::AutostartFailed,
         Self::TunNotSupported,
         Self::TunPermissionRequired,
         Self::TunApplyFailed,
@@ -159,6 +162,7 @@ impl ErrorCode {
             Self::SubNotFound => "sub.not_found",
             Self::SubIo => "sub.io",
             Self::LockPoisoned => "app.lock_poisoned",
+            Self::AutostartFailed => "app.autostart_failed",
             Self::TunNotSupported => "tun.not_supported",
             Self::TunPermissionRequired => "tun.permission_required",
             Self::TunApplyFailed => "tun.apply_failed",

@@ -15,6 +15,11 @@
 !macroend
 
 !macro customUnInstall
+  ; Login item: the app writes a per-user Run value when "Launch at login" is
+  ; on (apps/desktop/src-tauri/src/autostart.rs). An upgrade re-registers it on
+  ; the next launch from settings.json, so deleting it here is safe — leaving
+  ; it pointing at a removed executable is not.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ice-box"
   ; Best-effort: delete the task from an unelevated uninstaller.
   nsExec::ExecToLog 'schtasks /Delete /TN ice-box-tun /F'
   ; Protected Program Files copies and ProgramData run dir are admin-owned.

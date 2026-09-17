@@ -9,6 +9,10 @@
 //! session-only Mixed terminal helpers (copy command / open terminal). A watchdog
 //! re-derives all of them from the runtime state, so the menu follows changes
 //! made anywhere else — window, recovery, or a manual OS edit.
+//!
+//! While an update is waiting, the window mirrors the sidebar arrow into the
+//! menu: a green-arrow prompt that opens Settings → App Updates. Native menu
+//! text cannot be coloured, so the arrow travels as the item's icon.
 
 use crate::capture::TrafficCapture;
 use crate::commands::{
@@ -29,7 +33,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
-    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    image::Image,
+    menu::{CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Wry,
 };
@@ -45,6 +50,10 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(5);
 /// Tray icon id. The macOS speed readout looks the icon up by id instead of
 /// holding a handle, so the managed menu state stays free of the platform icon.
 pub(crate) const TRAY_ID: &str = "ice-box";
+
+/// Emitted when the tray update prompt is clicked: the window opens Settings →
+/// App Updates, the same destination as the sidebar arrow.
+pub const UPDATE_PROMPT_EVENT: &str = "app-update://open";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -241,6 +250,77 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             quit: "Quit",
         },
     }
+}
+
+/// Text of the update prompt. Short on purpose: the menu is narrow, and the
+/// click already lands on Settings → App Updates.
+fn update_prompt_text(language: TrayLanguage, version: &str) -> String {
+    match language {
+        TrayLanguage::Zh => format!("有新版本 {version}"),
+        TrayLanguage::En => format!("Version {version} is available"),
+    }
+}
+
+/// Menu icon size. Win32 draws menu bitmaps at 16×16, and muda sizes the macOS
+/// `NSImage` from the pixels, so one bitmap serves both.
+const UPDATE_ARROW_SIZE: u32 = 16;
+
+/// The sidebar arrow's colour (`text-green-500` in the web UI).
+const UPDATE_ARROW_GREEN: [u8; 3] = [34, 197, 94];
+
+/// Green up-arrow on a transparent bitmap: the tray twin of the sidebar's
+/// arrow. Native menu text cannot be coloured, so this is what carries the
+/// green on both platforms.
+fn update_arrow_icon() -> Image<'static> {
+    const SAMPLES: u32 = 4;
+    let size = UPDATE_ARROW_SIZE;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let mut covered = 0;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let u = (x as f32 + (sx as f32 + 0.5) / SAMPLES as f32) / size as f32;
+                    let v = (y as f32 + (sy as f32 + 0.5) / SAMPLES as f32) / size as f32;
+                    if arrow_covers(u, v) {
+                        covered += 1;
+                    }
+                }
+            }
+            if covered == 0 {
+                continue;
+            }
+            // 4×4 supersampling: the arrow keeps a smooth edge at menu size
+            // without pulling in an image crate.
+            let alpha = (covered * 255 / (SAMPLES * SAMPLES)) as u8;
+            let offset = ((y * size + x) * 4) as usize;
+            rgba[offset..offset + 3].copy_from_slice(&UPDATE_ARROW_GREEN);
+            rgba[offset + 3] = alpha;
+        }
+    }
+    Image::new_owned(rgba, size, size)
+}
+
+/// Point test for the arrow inside a unit box: a head triangle from the apex
+/// down to the base, over a shaft that runs to the bottom edge.
+fn arrow_covers(u: f32, v: f32) -> bool {
+    const APEX_V: f32 = 0.08;
+    const BASE_V: f32 = 0.52;
+    const HEAD_HALF_WIDTH: f32 = 0.38;
+    const SHAFT_HALF_WIDTH: f32 = 0.14;
+    const SHAFT_TOP: f32 = 0.44;
+    const BOTTOM: f32 = 0.94;
+    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+        return false;
+    }
+    if (SHAFT_TOP..=BOTTOM).contains(&v) && (u - 0.5).abs() <= SHAFT_HALF_WIDTH {
+        return true;
+    }
+    if (APEX_V..=BASE_V).contains(&v) {
+        let half = HEAD_HALF_WIDTH * (v - APEX_V) / (BASE_V - APEX_V);
+        return (u - 0.5).abs() <= half;
+    }
+    false
 }
 
 /// What a node menu item does when clicked.
@@ -464,6 +544,40 @@ impl Default for TrayView {
     }
 }
 
+/// The update prompt the window reports and the label the menu carries. The
+/// pair is compared as rendered text, so a language switch re-texts the item
+/// like any other change.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct UpdatePrompt {
+    /// Version the window last reported as available, if any.
+    wanted: Option<String>,
+    /// Label attached to the menu item, if it is in the menu.
+    shown: Option<String>,
+}
+
+/// What the menu must do to move the prompt from `shown` to `wanted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePromptStep {
+    /// The menu already shows what the window asked for.
+    Settled,
+    /// Attach the item.
+    Attach,
+    /// Rewrite the label of the attached item.
+    Retext,
+    /// Detach the item.
+    Detach,
+}
+
+fn update_prompt_step(wanted: Option<&str>, shown: Option<&str>) -> UpdatePromptStep {
+    match (wanted, shown) {
+        (None, None) => UpdatePromptStep::Settled,
+        (None, Some(_)) => UpdatePromptStep::Detach,
+        (Some(wanted), Some(shown)) if wanted == shown => UpdatePromptStep::Settled,
+        (Some(_), Some(_)) => UpdatePromptStep::Retext,
+        (Some(_), None) => UpdatePromptStep::Attach,
+    }
+}
+
 struct TrayMenuState {
     service: MenuItem<Wry>,
     mode: Submenu<Wry>,
@@ -493,6 +607,15 @@ struct TrayMenuState {
     open_cli_proxy: MenuItem<Wry>,
     show: MenuItem<Wry>,
     quit: MenuItem<Wry>,
+    /// The menu itself, so the update prompt can be attached and dropped
+    /// without rebuilding the icon.
+    menu: Menu<Wry>,
+    /// Update prompt item. Kept out of the menu until a version is reported.
+    update_item: IconMenuItem<Wry>,
+    /// Locked only off the main thread, like `nodes_model`: attaching the item
+    /// blocks on main-thread menu mutations, so a main-thread caller holding
+    /// this would deadlock against the watchdog.
+    update: Mutex<UpdatePrompt>,
     language: AtomicU8,
     service_on: AtomicBool,
     /// Set for the life of one start/stop so a second click cannot queue the
@@ -623,6 +746,71 @@ impl TrayMenuState {
             .map_err(|err| tray_error("update tray subscriptions enabled", err))?;
         *applied = entries.to_vec();
         self.subs_dirty.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Record the version the window reports as available (`None` = nothing to
+    /// offer) and reconcile the menu item.
+    fn apply_update(&self, wanted: Option<String>) -> Result<(), AppError> {
+        let mut prompt = self
+            .update
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prompt.wanted = wanted;
+        self.reconcile_update(&mut prompt)
+    }
+
+    /// Retry a prompt change the Windows popup blocked, or one the window made
+    /// before the watchdog started. Only ever called off the main thread.
+    fn sync_update(&self) -> Result<(), AppError> {
+        let mut prompt = self
+            .update
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.reconcile_update(&mut prompt)
+    }
+
+    /// Attach, re-text, or drop the prompt item. A skipped change stays
+    /// pending (`wanted` and `shown` keep differing) for the next sync.
+    fn reconcile_update(&self, prompt: &mut UpdatePrompt) -> Result<(), AppError> {
+        let language = TrayLanguage::from_code(self.language.load(Ordering::SeqCst));
+        let wanted = prompt
+            .wanted
+            .as_deref()
+            .map(|version| update_prompt_text(language, version));
+        let step = update_prompt_step(wanted.as_deref(), prompt.shown.as_deref());
+        if step == UpdatePromptStep::Settled {
+            return Ok(());
+        }
+        // Win32 `TrackPopupMenu` runs its own message loop over the open menu;
+        // tearing the item down inside it can dismiss the popup. The watchdog
+        // retries once it closes, like the node submenu rebuilds.
+        if tray_popup_menu_open() {
+            return Ok(());
+        }
+        match step {
+            UpdatePromptStep::Attach | UpdatePromptStep::Retext => {
+                let Some(label) = wanted else {
+                    return Ok(());
+                };
+                self.update_item
+                    .set_text(&label)
+                    .map_err(|err| tray_error("update tray update prompt", err))?;
+                if step == UpdatePromptStep::Attach {
+                    self.menu
+                        .insert(&self.update_item, 0)
+                        .map_err(|err| tray_error("insert tray update prompt", err))?;
+                }
+                prompt.shown = Some(label);
+            }
+            UpdatePromptStep::Detach => {
+                self.menu
+                    .remove(&self.update_item)
+                    .map_err(|err| tray_error("remove tray update prompt", err))?;
+                prompt.shown = None;
+            }
+            UpdatePromptStep::Settled => {}
+        }
         Ok(())
     }
 
@@ -794,6 +982,14 @@ fn show_main_window(app: &AppHandle) {
     let _ = win.set_focus();
 }
 
+/// Tray update prompt: bring the window forward and let it open Settings → App
+/// Updates — the destination the sidebar arrow uses too, so the user lands on
+/// the same card (with the install button) either way.
+fn on_open_update(app: &AppHandle) {
+    show_main_window(app);
+    let _ = app.emit(UPDATE_PROMPT_EVENT, ());
+}
+
 pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> {
     // Windows draws the menu with `TrackPopupMenu`, which ignores the wheel: a
     // menu taller than the screen would leave the node list to the keyboard and
@@ -904,6 +1100,16 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
     )?;
     let show = MenuItem::with_id(app, "show", labels.show, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", labels.quit, true, None::<&str>)?;
+    // Out of the menu until the window reports a version: the label, and the
+    // green arrow icon that carries the sidebar's colour, are set on attach.
+    let update_item = IconMenuItem::with_id(
+        app,
+        "update",
+        "",
+        true,
+        Some(update_arrow_icon()),
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
@@ -935,6 +1141,11 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         open_cli_proxy,
         show,
         quit,
+        // A handle to the menu so the prompt can be attached and dropped
+        // without rebuilding the icon.
+        menu: menu.clone(),
+        update_item,
+        update: Mutex::new(UpdatePrompt::default()),
         language: AtomicU8::new(language.code()),
         service_on: AtomicBool::new(view.service_on),
         service_busy: AtomicBool::new(false),
@@ -965,6 +1176,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
                 "mode:direct" => switch_mode(app, ProxyMode::Direct),
                 "copy-cli-proxy" => on_copy_cli_proxy(app),
                 "open-cli-proxy" => on_open_cli_proxy(app),
+                "update" => on_open_update(app),
                 "show" => show_main_window(app),
                 "quit" => {
                     // The stop can take seconds with TUN active (teardown waits +
@@ -1069,6 +1281,9 @@ pub fn sync_menu(app: &AppHandle) {
         return;
     };
     menu.apply_view(view);
+    // Cheap when settled: the prompt only touches the menu when the version
+    // the window offers or the tray language moved.
+    sync_update_prompt(app);
     if let Some(entries) = current_subscription_entries(app) {
         if let Err(err) = menu.apply_subscriptions(app, &entries) {
             tracing::warn!(
@@ -1095,6 +1310,25 @@ pub fn sync_menu(app: &AppHandle) {
                 );
             }
         }
+    }
+}
+
+/// Bring the update prompt up to date on its own, for callers that changed
+/// something the prompt renders (the tray language) and should not wait out
+/// `SYNC_INTERVAL` for the watchdog. Cheap when settled.
+///
+/// Off-main-thread only, like [`sync_menu`]: the reconcile blocks on
+/// main-thread menu mutations.
+pub fn sync_update_prompt(app: &AppHandle) {
+    let Some(menu) = app.try_state::<TrayMenuState>() else {
+        return;
+    };
+    if let Err(err) = menu.sync_update() {
+        tracing::warn!(
+            code = %err.code,
+            error = %err.message,
+            "tray update prompt sync failed"
+        );
     }
 }
 
@@ -1317,6 +1551,22 @@ pub fn set_language(app: &AppHandle, language: TrayLanguage) -> Result<(), AppEr
     state.apply_language(language)
 }
 
+/// Show (`Some`) or drop (`None`) the menu's update prompt. The window reports
+/// what the sidebar arrow shows: the version a background check found, or
+/// nothing while automatic checks are off.
+///
+/// Off-main-thread only, like the other menu rebuilds: attaching the item
+/// blocks on main-thread menu mutations.
+pub fn set_update_available(app: &AppHandle, version: Option<String>) -> Result<(), AppError> {
+    let state = app
+        .try_state::<TrayMenuState>()
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigInvalid, "tray menu state is unavailable"))?;
+    let wanted = version
+        .map(|version| crate::app_update::normalize_version(&version).to_string())
+        .filter(|version| !version.is_empty());
+    state.apply_update(wanted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1354,6 +1604,75 @@ mod tests {
             ("Copy Proxy Command", "Open Proxy Terminal")
         );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
+    }
+
+    #[test]
+    fn update_prompt_text_names_the_version_per_language() {
+        assert_eq!(
+            update_prompt_text(TrayLanguage::Zh, "0.1.11"),
+            "有新版本 0.1.11"
+        );
+        assert_eq!(
+            update_prompt_text(TrayLanguage::En, "0.1.11"),
+            "Version 0.1.11 is available"
+        );
+    }
+
+    #[test]
+    fn update_arrow_covers_head_and_shaft_only() {
+        assert!(arrow_covers(0.5, 0.1)); // head, near the apex
+        assert!(arrow_covers(0.2, 0.45)); // head, beside the shaft
+        assert!(arrow_covers(0.5, 0.8)); // shaft
+        assert!(!arrow_covers(0.5, 0.02)); // above the apex
+        assert!(!arrow_covers(0.5, 0.99)); // below the shaft
+        assert!(!arrow_covers(0.2, 0.9)); // beside the shaft
+        assert!(!arrow_covers(0.02, 0.02)); // canvas corner
+    }
+
+    #[test]
+    fn update_arrow_icon_is_green_on_transparency() {
+        let icon = update_arrow_icon();
+        assert_eq!(
+            (icon.width(), icon.height()),
+            (UPDATE_ARROW_SIZE, UPDATE_ARROW_SIZE)
+        );
+        let rgba = icon.rgba();
+        assert_eq!(
+            rgba.len(),
+            (UPDATE_ARROW_SIZE * UPDATE_ARROW_SIZE * 4) as usize
+        );
+        let pixel = |x: u32, y: u32| {
+            let offset = ((y * UPDATE_ARROW_SIZE + x) * 4) as usize;
+            &rgba[offset..offset + 4]
+        };
+        // Outside the arrow the menu background shows through.
+        assert_eq!(pixel(0, 0)[3], 0);
+        assert_eq!(pixel(UPDATE_ARROW_SIZE - 1, 0)[3], 0);
+        // The shaft carries the sidebar arrow's green.
+        let shaft = pixel(UPDATE_ARROW_SIZE / 2, UPDATE_ARROW_SIZE - 3);
+        assert_eq!(&shaft[..3], &UPDATE_ARROW_GREEN);
+        assert_eq!(shaft[3], 255);
+    }
+
+    #[test]
+    fn update_prompt_step_tracks_attach_retext_and_detach() {
+        assert_eq!(update_prompt_step(None, None), UpdatePromptStep::Settled);
+        assert_eq!(
+            update_prompt_step(Some("a"), Some("a")),
+            UpdatePromptStep::Settled
+        );
+        assert_eq!(
+            update_prompt_step(Some("a"), None),
+            UpdatePromptStep::Attach
+        );
+        assert_eq!(
+            update_prompt_step(Some("a"), Some("b")),
+            UpdatePromptStep::Retext
+        );
+        assert_eq!(
+            update_prompt_step(None, Some("a")),
+            UpdatePromptStep::Detach
+        );
     }
 
     #[test]

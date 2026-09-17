@@ -99,8 +99,20 @@ mutation and restored on stop or failure.
 
 Startup reconciles leftover processes and capture state before starting the
 core. Recovery itself does not enable capture; restoring the user's saved
-service choice is a separate action. Closing the window leaves the app in the
-tray, whose menu mirrors the Home power switch (start / stop the proxy service)
+service choice is a separate action. A login-item launch (`--autostart`) is a
+startup with the window suppressed: `tauri.conf.json` creates the window
+hidden, the shell shows it only for a user launch, and a login start that finds
+the data-dir lock already held exits without raising the running session. The
+login item itself is a per-user OS entry — a LaunchAgent plist on macOS,
+`HKCU\...\Run` on Windows — owned by the shell (`autostart.rs`), rewritten to
+the running executable on every launch, and recorded in
+`settings.json` (`launch_at_login`) only after the OS write succeeded. The
+Settings card is rendered only where the platform can register the entry
+(`launch_at_login_supported` in the status snapshot), and a macOS instance
+running from the read-only App Translocation mount is refused before anything
+is written.
+Closing the window leaves the app in the tray, whose menu mirrors the Home
+power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active
 subscription, and the Nodes page for switching the active exit (one node per
 strategy group, nested one level down); all of them call the same command paths
@@ -175,12 +187,21 @@ App updates run in Rust and verify signed artifacts before installation.
 Installation uses the same capture/core shutdown path as Quit. Update integrity
 signing is separate from OS application signing; artifact production and
 distribution policy are defined in [release-process.md](release-process.md).
-Background checks run after the first UI frame. A successful GitHub fetch
-starts a 24-hour cooldown in `update-check.json`. A failure is logged and
-retried silently with exponential backoff (sooner if the core becomes Running)
-through one 15-minute attempt; that last failure records `last_check_at` and
-starts the same 24-hour cooldown. In-session retries before exhaustion do not
-write the cooldown.
+Every launch runs one background check round after the first UI frame. That
+launch round ignores the 24-hour cooldown, so restarting always reaches GitHub.
+A successful background GitHub fetch starts the cooldown in
+`update-check.json`, which paces the rounds that follow while the app keeps
+running. A manual check from Settings reaches GitHub without waiting out that
+cooldown and does not rewrite `last_check_at`, so it cannot postpone the next
+automatic round. A failure is logged and retried silently with exponential
+backoff (sooner if the core becomes Running) through one 15-minute attempt;
+that last failure records `last_check_at` and starts the same cooldown.
+Retries inside a round, from the launch or an in-session round, do not write
+the cooldown.
+A newer version is surfaced in two places the window keeps in step: the sidebar
+arrow beside the version label and a tray menu prompt carrying the same green
+arrow (`set_tray_update_available`). Both point at Settings → App Updates, and
+turning automatic checks off clears both.
 
 ## Further reading
 

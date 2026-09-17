@@ -106,6 +106,7 @@ const defaultStatus = {
   tun_ui_hidden: false,
   helper_installed: false,
   helper_supported: true,
+  launch_at_login_supported: true,
   helper_stale: false,
 } as const;
 
@@ -131,6 +132,7 @@ describe("Settings", () => {
       check_app_updates: true,
       log_debug: false,
       tray_display_mode: "icon_and_speed",
+      launch_at_login: false,
       tun: tunSettings,
     });
     getStatus.mockResolvedValue({ ...defaultStatus });
@@ -478,6 +480,84 @@ describe("Settings", () => {
         ),
       { timeout: 2000 },
     );
+  });
+
+  it("orders the settings cards", async () => {
+    hostState.macos = true;
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() =>
+      expect(view.getByLabelText(t("settings.tray"))).toBeInTheDocument(),
+    );
+
+    const titles = Array.from(
+      view
+        .getByTestId("settings-stack")
+        .querySelectorAll("[data-slot='card-title']"),
+    ).map((node) => node.textContent);
+
+    expect(titles).toEqual([
+      t("settings.appearance"),
+      t("settings.inbound"),
+      t("settings.tun"),
+      t("settings.startup"),
+      t("settings.update"),
+      t("settings.data"),
+    ]);
+  });
+
+  it("persists the login item through its own save path", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    const toggle = await view.findByRole("switch", {
+      name: t("settings.launchAtLogin"),
+    });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith({ launch_at_login: true });
+      expect(toggle).toHaveAttribute("data-state", "checked");
+    });
+  });
+
+  it("rolls the login-item switch back when the OS write is refused", async () => {
+    saveSettings.mockRejectedValueOnce(
+      "app.autostart_failed: write ~/Library/LaunchAgents/com.yilong-musk.icebox.plist: permission denied",
+    );
+    const { container } = render(<Settings />);
+    const view = within(container);
+    const toggle = await view.findByRole("switch", {
+      name: t("settings.launchAtLogin"),
+    });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith({ launch_at_login: true });
+      expect(toggle).toHaveAttribute("data-state", "unchecked");
+      expect(container.textContent).toContain("app.autostart_failed");
+    });
+    // The refused write must not be reported as a saved settings change.
+    expect(container.textContent).not.toContain(t("common.saved"));
+  });
+
+  it("hides the login-item card where the OS has no entry to register", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      launch_at_login_supported: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    // The language pick un-disables when settings and status are loaded.
+    const language = await view.findByLabelText(t("settings.language"));
+    await waitFor(() => expect(language).not.toBeDisabled());
+
+    expect(
+      view.queryByRole("switch", { name: t("settings.launchAtLogin") }),
+    ).toBeNull();
   });
 
   it("defaults language to the system locale and persists changes", async () => {

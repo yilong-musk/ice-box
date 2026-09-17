@@ -348,6 +348,35 @@ mod tests {
     }
 
     #[test]
+    fn launch_at_login_defaults_to_off_for_legacy_files_and_survives_a_patch() {
+        let path = temp_settings_path("legacy-launch-at-login");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let loaded = load_settings(&path).expect("legacy json without launch_at_login");
+        assert!(
+            !loaded.launch_at_login,
+            "missing flag must mean off: an existing install has no login item registered"
+        );
+
+        let patched = loaded.apply_patch(&SettingsPatch {
+            launch_at_login: Some(true),
+            ..SettingsPatch::default()
+        });
+        assert!(patched.launch_at_login);
+        assert_eq!(patched.mixed_port, loaded.mixed_port);
+        save_settings(&path, &patched).expect("save");
+        assert!(load_settings(&path).expect("reload").launch_at_login);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn tray_display_mode_defaults_to_icon_and_speed_for_legacy_files() {
         let path = temp_settings_path("legacy-tray-display");
         let json = r#"{

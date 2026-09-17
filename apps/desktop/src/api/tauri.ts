@@ -71,6 +71,10 @@ export type StatusResponse = {
    * (macOS only in this release). When false, the helper actions and the
    * install-before-enable guide are hidden. */
   helper_supported: boolean;
+  /** Whether this platform can register an OS login item at all (macOS and
+   * Windows). When false the Settings page hides the Startup card, so the
+   * switch never offers an action that can only fail. */
+  launch_at_login_supported: boolean;
   /** The helper's root-owned core differs from the app's bundled core (app
    * updated): only one core version may exist, so TUN stays blocked until
    * the helper is refreshed. */
@@ -123,6 +127,11 @@ export type AppSettings = {
   log_debug: boolean;
   /** macOS menu-bar item: icon + live speed, icon only, or speed only. */
   tray_display_mode: TrayDisplayMode;
+  /**
+   * OS login item: start at login into the tray and restore the last capture
+   * state without opening the window.
+   */
+  launch_at_login: boolean;
 };
 
 export type SubscriptionAutoUpdateInterval =
@@ -217,6 +226,8 @@ export type SettingsPatch = {
   check_app_updates?: boolean;
   log_debug?: boolean;
   tray_display_mode?: TrayDisplayMode;
+  /** Registered by the dedicated login-item path, not the form autosave. */
+  launch_at_login?: boolean;
 };
 
 export type AppErrorPayload = {
@@ -303,6 +314,7 @@ const ERROR_MESSAGE_KEYS = {
   "sub.not_found": "error.sub.not_found",
   "sub.io": "error.sub.io",
   "app.lock_poisoned": "error.app.lock_poisoned",
+  "app.autostart_failed": "error.app.autostart_failed",
   "tun.not_supported": "error.tun.not_supported",
   "tun.permission_required": "error.tun.permission_required",
   "tun.apply_failed": "error.tun.apply_failed",
@@ -403,6 +415,10 @@ export const api = {
     listen("window://hidden", () => handler()),
   listenWindowShown: (handler: () => void) =>
     listen("window://shown", () => handler()),
+  /** Tray update prompt clicked: open Settings → App Updates, the same
+   * destination as the sidebar arrow. */
+  listenTrayUpdateClick: (handler: () => void) =>
+    listen("app-update://open", () => handler()),
   listenTrafficSample: (
     handler: (payload: TrafficPoint) => void,
   ) =>
@@ -438,9 +454,11 @@ export const api = {
   restoreLaunchProxy: () => invoke<void>("restore_launch_proxy"),
   saveSettings: (patch: SettingsPatch) =>
     invoke<void>("save_settings", { patch }),
-  checkAppUpdate: (background = false) =>
+  /** `startup` marks the launch round, which the backend runs even inside the
+   * 24h in-session cooldown so every app start checks GitHub once. */
+  checkAppUpdate: (background = false, startup = false) =>
     invoke<CheckAppUpdateResponse>("check_app_update", {
-      req: { background },
+      req: { background, startup },
     }),
   recordUpdatePrompt: () => invoke<void>("record_update_prompt"),
   /** Persist `last_check_at` after the background retry ladder is exhausted. */
@@ -456,6 +474,10 @@ export const api = {
     ),
   setTrayLanguage: (language: "zh" | "en") =>
     invoke<void>("set_tray_language", { language }),
+  /** Tray update prompt: mirror the version the sidebar arrow offers, or
+   * `null` to drop the item when automatic checks are off. */
+  setTrayUpdateAvailable: (version: string | null) =>
+    invoke<void>("set_tray_update_available", { version }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
   addSubscription: (

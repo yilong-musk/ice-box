@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { APP_VERSION } from "./lib/appVersion";
@@ -12,6 +19,8 @@ const getSettings = vi.fn();
 const saveSettings = vi.fn();
 const listNodes = vi.fn();
 const setTrayLanguage = vi.fn();
+const setTrayUpdateAvailable = vi.fn();
+const listenTrayUpdateClick = vi.fn();
 const restoreLaunchProxy = vi.fn();
 const checkAppUpdate = vi.fn();
 const installAppUpdate = vi.fn();
@@ -56,6 +65,7 @@ const tunStatus = {
   tun_ui_hidden: false,
   helper_installed: false,
   helper_supported: true,
+  launch_at_login_supported: true,
   helper_stale: false,
 } as const;
 
@@ -88,6 +98,10 @@ vi.mock("./api/tauri", () => ({
     listenStateChanged: vi.fn().mockResolvedValue(() => {}),
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     setTrayLanguage: (...args: unknown[]) => setTrayLanguage(...args),
+    setTrayUpdateAvailable: (...args: unknown[]) =>
+      setTrayUpdateAvailable(...args),
+    listenTrayUpdateClick: (...args: unknown[]) =>
+      listenTrayUpdateClick(...args),
     getTrafficSnapshot: vi
       .fn()
       .mockResolvedValue({ points: [], latest: null, peak: null }),
@@ -113,6 +127,8 @@ describe("App", () => {
     getSettings.mockResolvedValue(defaultSettings);
     restoreLaunchProxy.mockResolvedValue(undefined);
     setTrayLanguage.mockResolvedValue(undefined);
+    setTrayUpdateAvailable.mockResolvedValue(undefined);
+    listenTrayUpdateClick.mockResolvedValue(() => {});
     listNodes.mockResolvedValue([]);
     checkAppUpdate.mockResolvedValue({
       available: false,
@@ -326,7 +342,7 @@ describe("App", () => {
         screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeInTheDocument();
     });
-    expect(checkAppUpdate).toHaveBeenCalledWith(true);
+    expect(checkAppUpdate).toHaveBeenCalledWith(true, true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
@@ -335,6 +351,52 @@ describe("App", () => {
       expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeEnabled();
     });
     expect(screen.getByText(t("settings.updateAvailable", { version: "0.1.6" }))).toBeInTheDocument();
+  });
+
+  it("mirrors the available version into the tray menu prompt", async () => {
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(setTrayUpdateAvailable).toHaveBeenCalledWith("0.1.6");
+    });
+  });
+
+  it("drops the tray menu prompt when no update is on offer", async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(setTrayUpdateAvailable).toHaveBeenCalledWith(null);
+    });
+  });
+
+  it("opens App Updates when the tray menu prompt is clicked", async () => {
+    let trayClick: (() => void) | null = null;
+    listenTrayUpdateClick.mockImplementation((handler: () => void) => {
+      trayClick = handler;
+      return Promise.resolve(() => {});
+    });
+    checkAppUpdate.mockResolvedValue({
+      available: true,
+      version: "0.1.6",
+      notes: "fixes",
+      skipped: false,
+      should_prompt: false,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(trayClick).not.toBeNull();
+    });
+    act(() => trayClick?.());
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: t("settings.updateInstall") }),
+      ).toBeEnabled();
+    });
   });
 
   it("hides the sidebar upgrade icon when automatic checks are turned off", async () => {
@@ -364,6 +426,7 @@ describe("App", () => {
         screen.queryByRole("button", { name: t("app.updateAvailableAria", { version: "0.1.6" }) }),
       ).toBeNull();
     });
+    expect(setTrayUpdateAvailable).toHaveBeenLastCalledWith(null);
     expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
   });
 });

@@ -44,6 +44,15 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
             persist_settings(&state.paths.settings(), &settings, host_platform())?;
             return Ok(());
         }
+        if only_launch_at_login_changed(&previous, &settings) {
+            // The OS write comes first: a refused registration (read-only
+            // LaunchAgents directory, locked registry) must not be remembered
+            // as enabled, so `settings.json` mirrors what the OS really has.
+            crate::autostart::set_enabled(settings.launch_at_login)
+                .map_err(|err| AppError::new(ErrorCode::AutostartFailed, err))?;
+            persist_settings(&state.paths.settings(), &settings, host_platform())?;
+            return Ok(());
+        }
         // Live TUN topology reconfigure (addresses / MTU / stack / …) while
         // TUN capture stays the active backend. Enabled flips never belong
         // here — they were handled above.
@@ -87,9 +96,31 @@ pub async fn save_settings(app: AppHandle, patch: SettingsPatch) -> Result<(), A
     .await
 }
 
+/// Tray language: every label is rewritten, and the update prompt follows
+/// immediately instead of at the watchdog's next tick. Both mutate the native
+/// menu, so the work runs off the main thread like the other rebuild paths.
 #[tauri::command]
-pub fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), AppError> {
-    tray::set_language(&app, language)
+pub async fn set_tray_language(app: AppHandle, language: TrayLanguage) -> Result<(), AppError> {
+    run_blocking("set_tray_language", move || {
+        tray::set_language(&app, language)?;
+        tray::sync_update_prompt(&app);
+        Ok(())
+    })
+    .await
+}
+
+/// Tray update prompt: the window mirrors the version the sidebar arrow offers,
+/// or `None` to drop the item. Off the main thread — the menu mutation hops to
+/// the main thread, which a sync command would be blocking.
+#[tauri::command]
+pub async fn set_tray_update_available(
+    app: AppHandle,
+    version: Option<String>,
+) -> Result<(), AppError> {
+    run_blocking("set_tray_update_available", move || {
+        tray::set_update_available(&app, version)
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -115,6 +146,16 @@ pub(crate) fn only_tray_display_mode_changed(previous: &AppSettings, next: &AppS
     left.tray_display_mode = TrayDisplayMode::IconAndSpeed;
     right.tray_display_mode = TrayDisplayMode::IconAndSpeed;
     left == right && previous.tray_display_mode != next.tray_display_mode
+}
+
+/// Persist-only: the login item is an OS registration the shell owns, and no
+/// part of the sing-box runtime config depends on it.
+pub(crate) fn only_launch_at_login_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.launch_at_login = false;
+    right.launch_at_login = false;
+    left == right && previous.launch_at_login != next.launch_at_login
 }
 
 pub(crate) fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {

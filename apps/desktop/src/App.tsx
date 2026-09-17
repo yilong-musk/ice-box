@@ -158,7 +158,7 @@ function AppShell() {
 
   useEffect(() => {
     const checker = startBackgroundAppUpdateCheck({
-      check: () => api.checkAppUpdate(true),
+      check: ({ startup }) => api.checkAppUpdate(true, startup),
       recordCooldown: () => api.recordAppUpdateCheck(),
       onResult: (result) => {
         if (result.available && result.version) {
@@ -178,6 +178,43 @@ function AppShell() {
       updateCheckerRef.current?.notifyCoreRunning();
     }
   }, [status?.core.status]);
+
+  // Tray prompt mirrors the sidebar arrow: the same version while automatic
+  // checks are on, and nothing once the switch turns them off (Settings clears
+  // `availableUpdate` through `publishSidebarUpdate`).
+  useEffect(() => {
+    if (typeof api.setTrayUpdateAvailable !== "function") return;
+    const version =
+      availableUpdate?.available && availableUpdate.version
+        ? availableUpdate.version
+        : null;
+    void api.setTrayUpdateAvailable(version).catch(() => {
+      // The tray is best-effort: the sidebar arrow still shows the update.
+    });
+  }, [availableUpdate]);
+
+  // Tray prompt → Settings → App Updates, the same landing spot as the arrow.
+  useEffect(() => {
+    if (typeof api.listenTrayUpdateClick !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenTrayUpdateClick(() => {
+        selectTab("settings");
+        setFocusUpdateNonce((n) => n + 1);
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        // Without the listener the tray item still opens the window.
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

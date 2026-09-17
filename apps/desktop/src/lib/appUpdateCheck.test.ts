@@ -5,6 +5,7 @@ import type { CheckAppUpdateResponse } from "../api/tauri";
 import {
   BACKGROUND_UPDATE_RETRY_MS,
   CORE_READY_RETRY_MS,
+  UPDATE_CHECK_INTERVAL_MS,
   backgroundUpdateRetryMs,
   startBackgroundAppUpdateCheck,
 } from "./appUpdateCheck";
@@ -49,7 +50,7 @@ describe("backgroundUpdateRetryMs", () => {
 });
 
 describe("startBackgroundAppUpdateCheck", () => {
-  it("stops after a successful check and does not retry", async () => {
+  it("runs the launch check immediately and schedules the next round in 24h", async () => {
     const scheduled: Array<{ fn: () => void; ms: number }> = [];
     const check = vi.fn().mockResolvedValue(empty);
     const onResult = vi.fn();
@@ -64,8 +65,59 @@ describe("startBackgroundAppUpdateCheck", () => {
     });
     await checker.idle();
     expect(check).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledWith({ startup: true });
     expect(onResult).toHaveBeenCalledWith(empty);
-    expect(scheduled).toEqual([]);
+    expect(scheduled).toEqual([
+      { fn: expect.any(Function), ms: UPDATE_CHECK_INTERVAL_MS },
+    ]);
+    checker.stop();
+  });
+
+  it("checks again once the in-session interval elapses", async () => {
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const check = vi.fn().mockResolvedValue(empty);
+    const onResult = vi.fn();
+    const checker = startBackgroundAppUpdateCheck({
+      check,
+      onResult,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return scheduled.length;
+      },
+      cancel: () => {
+        scheduled.length = 0;
+      },
+    });
+    await checker.idle();
+    expect(last(scheduled)?.ms).toBe(UPDATE_CHECK_INTERVAL_MS);
+    last(scheduled)?.fn();
+    await checker.idle();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(check).toHaveBeenNthCalledWith(2, { startup: false });
+    expect(last(scheduled)?.ms).toBe(UPDATE_CHECK_INTERVAL_MS);
+    checker.stop();
+  });
+
+  it("honors a custom in-session interval", async () => {
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const check = vi.fn().mockResolvedValue(empty);
+    const checker = startBackgroundAppUpdateCheck({
+      check,
+      onResult: () => {},
+      intervalMs: 60_000,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return scheduled.length;
+      },
+      cancel: () => {
+        scheduled.length = 0;
+      },
+    });
+    await checker.idle();
+    expect(last(scheduled)?.ms).toBe(60_000);
+    last(scheduled)?.fn();
+    await checker.idle();
+    expect(check).toHaveBeenNthCalledWith(2, { startup: false });
     checker.stop();
   });
 
@@ -89,11 +141,14 @@ describe("startBackgroundAppUpdateCheck", () => {
     });
     await checker.idle();
     expect(onResult).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledWith({ startup: true });
     expect(scheduled).toEqual([{ fn: expect.any(Function), ms: 10_000 }]);
     scheduled[0].fn();
     await checker.idle();
     expect(check).toHaveBeenCalledTimes(2);
+    expect(check).toHaveBeenNthCalledWith(2, { startup: true });
     expect(onResult).toHaveBeenCalledWith(available);
+    expect(last(scheduled)?.ms).toBe(UPDATE_CHECK_INTERVAL_MS);
     checker.stop();
   });
 
@@ -175,9 +230,17 @@ describe("startBackgroundAppUpdateCheck", () => {
     expect(check).toHaveBeenCalledTimes(1 + BACKGROUND_UPDATE_RETRY_MS.length);
     expect(recordCooldown).toHaveBeenCalledTimes(1);
     expect(onResult).not.toHaveBeenCalled();
+    expect(last(scheduled)?.ms).toBe(UPDATE_CHECK_INTERVAL_MS);
     const armed = scheduled.length;
     checker.notifyCoreRunning();
     expect(scheduled.length).toBe(armed);
+    last(scheduled)?.fn();
+    await checker.idle();
+    expect(check).toHaveBeenCalledTimes(2 + BACKGROUND_UPDATE_RETRY_MS.length);
+    expect(check).toHaveBeenNthCalledWith(
+      BACKGROUND_UPDATE_RETRY_MS.length + 2,
+      { startup: false },
+    );
     checker.stop();
   });
 

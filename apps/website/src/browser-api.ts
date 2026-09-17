@@ -58,6 +58,7 @@ const settings: AppSettings = {
   auto_set_system_proxy: true,
   proxy_service_enabled: false,
   tray_display_mode: "icon_and_speed",
+  launch_at_login: false,
   allow_lan: false,
   proxy_mode: "rule",
   auto_default_rules: true,
@@ -194,6 +195,7 @@ export const api = {
       tun_ui_hidden: false,
       helper_installed: true,
       helper_supported: true,
+      launch_at_login_supported: true,
       helper_stale: false,
       tun_elevation_ready: true,
     };
@@ -223,6 +225,7 @@ export const api = {
     return () => {};
   },
   async setTrayLanguage(): Promise<void> {},
+  async setTrayUpdateAvailable(): Promise<void> {},
   async listNodes(): Promise<NodeInfo[]> { await delay(); return [...nodes]; },
   async setSelectedNode(tag: string): Promise<void> { settings.selected_tag = tag; await delay(); },
   async setGroupSelection(): Promise<void> { await delay(); },
@@ -268,6 +271,9 @@ export const api = {
     return () => {};
   },
   async listenWindowShown(): Promise<() => void> {
+    return () => {};
+  },
+  async listenTrayUpdateClick(): Promise<() => void> {
     return () => {};
   },
   async listenTrafficSample(): Promise<() => void> {

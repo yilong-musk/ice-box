@@ -5,6 +5,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-17
+
+### Added
+
+- **Launch at login.** Settings → Startup registers the OS login item and drops
+  it again: a per-user LaunchAgent plist on macOS (`SMAppService` is not
+  available to the permanently unsigned build) and a
+  `HKCU\...\CurrentVersion\Run` value on Windows, both re-pointed at the
+  installed app on every launch. A login start stays in the tray — the window is
+  created hidden and never opens — while the core starts and the last proxy
+  state (system proxy or TUN) is restored as on any other launch; a session that
+  is already running is left alone instead of being raised. The Startup card
+  only appears where the platform can register the entry. The NSIS uninstaller
+  removes the Windows entry, an instance opened straight from the disk image
+  (macOS App Translocation) is refused instead of being remembered as enabled,
+  and a refused OS write is reported and rolls the switch back instead of being
+  remembered as enabled.
+
+- The tray menu carries the update prompt too: a `vX.Y.Z` item with the sidebar
+  arrow's green arrow appears while a newer release is on offer, and clicking it
+  opens Settings → App Updates. Turning automatic checks off clears it, like the
+  sidebar arrow.
+
+### Changed
+
+- Automatic app-update checks run one round on every launch instead of waiting
+  out the 24-hour cooldown, so restarting the app always reaches GitHub. The
+  cooldown now paces only the checks that follow while the app keeps running:
+  the next in-session round is armed 24 hours after the current one settles.
+
+### Fixed
+
+- A manual Settings → App Updates check no longer rewrites `last_check_at`, so
+  it cannot postpone the next in-session automatic round. Manual checks still
+  reach GitHub immediately and refresh the available-version cache.
+
 ## [0.1.10] - 2026-09-15
 
 ### Added

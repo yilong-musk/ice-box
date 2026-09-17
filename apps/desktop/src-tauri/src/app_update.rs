@@ -19,9 +19,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
-/// Background GitHub checks at most once per this interval after a successful
-/// round-trip, or after the UI exhausts its failure retries and records
-/// `last_check_at`. In-session retries happen before that write.
+/// In-session background checks repeat at most once per this interval after a
+/// successful background round-trip, or after the UI exhausts its failure
+/// retries and records `last_check_at`. Manual Settings checks never write that
+/// timestamp. The launch round (`startup: true`) is exempt, so every app start
+/// reaches GitHub; in-session retries happen before that write.
 pub const CHECK_INTERVAL: Duration = Duration::hours(24);
 
 pub const ERR_UPDATE_CHECK_FAILED: ErrorCode = ErrorCode::UpdateCheckFailed;
@@ -58,6 +60,10 @@ pub struct UpdateCheckState {
 pub struct CheckAppUpdateRequest {
     #[serde(default)]
     pub background: bool,
+    /// Launch round: the first check after app start. Exempt from the 24h
+    /// cooldown. In-session rounds leave it false and wait out the cooldown.
+    #[serde(default)]
+    pub startup: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,10 +97,10 @@ fn empty_response() -> CheckAppUpdateResponse {
     }
 }
 
-/// Last GitHub result, used when a background check is still inside the 24h window.
-/// Cached `available_version` is only surfaced when it is strictly newer than
-/// the running build so a post-install launch does not re-offer the version
-/// already installed.
+/// Last GitHub result, used when an in-session background check is still
+/// inside the 24h cooldown. Cached `available_version` is only surfaced when it
+/// is strictly newer than the running build so a post-install launch does not
+/// re-offer the version already installed.
 pub fn cached_check_response(
     state: &UpdateCheckState,
     installed_version: &str,
@@ -168,7 +174,12 @@ pub fn save_update_check_state(
     })
 }
 
-pub fn check_is_due(state: &UpdateCheckState, now: DateTime<Utc>) -> bool {
+/// True when a background check may reach GitHub. The launch round always may;
+/// in-session rounds wait out `CHECK_INTERVAL` from `last_check_at`.
+pub fn check_is_due(state: &UpdateCheckState, now: DateTime<Utc>, startup: bool) -> bool {
+    if startup {
+        return true;
+    }
     match state.last_check_at {
         None => true,
         Some(at) => now >= at + CHECK_INTERVAL,
@@ -272,7 +283,7 @@ pub async fn check_app_update(
     }
 
     let now = Utc::now();
-    if req.background && !check_is_due(&disk, now) {
+    if req.background && !check_is_due(&disk, now, req.startup) {
         return Ok(cached_check_response(&disk, installed));
     }
 
@@ -302,26 +313,47 @@ pub async fn check_app_update(
         }
     };
 
-    disk.last_check_at = Some(now);
-    let Some(update) = found else {
-        disk.available_version = None;
-        disk.available_notes = None;
-        save_update_check_state(&paths.update_check(), &disk)?;
+    let available = found
+        .as_ref()
+        .map(|update| (update.version.clone(), update.body.clone()));
+    record_successful_check(&mut disk, now, req.background, available.clone());
+    save_update_check_state(&paths.update_check(), &disk)?;
+
+    let Some((version, notes)) = available else {
         return Ok(empty_response());
     };
 
-    let version = update.version.clone();
-    disk.available_version = Some(version.clone());
-    disk.available_notes = update.body.clone();
-    save_update_check_state(&paths.update_check(), &disk)?;
-
     Ok(CheckAppUpdateResponse {
         available: true,
-        notes: update.body,
+        notes,
         version: Some(version),
         skipped: false,
         should_prompt: false,
     })
+}
+
+/// Persist availability after a successful GitHub round-trip. Only background
+/// rounds advance `last_check_at`; manual Settings checks leave the cooldown
+/// clock alone so they cannot postpone the next in-session automatic check.
+fn record_successful_check(
+    disk: &mut UpdateCheckState,
+    now: DateTime<Utc>,
+    background: bool,
+    available: Option<(String, Option<String>)>,
+) {
+    if background {
+        disk.last_check_at = Some(now);
+    }
+    match available {
+        Some((version, notes)) => {
+            disk.available_version = Some(version);
+            disk.available_notes = notes;
+        }
+        None => {
+            disk.available_version = None;
+            disk.available_notes = None;
+        }
+    }
 }
 
 pub fn touch_last_check_at(path: &std::path::Path, now: DateTime<Utc>) -> Result<(), AppError> {
@@ -339,7 +371,8 @@ pub async fn record_update_prompt(app: AppHandle) -> Result<(), AppError> {
 }
 
 /// Persist `last_check_at` after the background retry ladder is exhausted so
-/// the 24h cooldown applies even when GitHub was never reached.
+/// the in-session 24h cooldown applies even when GitHub was never reached.
+/// The next launch still performs its own check round.
 #[tauri::command]
 pub async fn record_app_update_check(app: AppHandle) -> Result<(), AppError> {
     let paths = app.state::<AppState>().paths.clone();
@@ -507,17 +540,44 @@ mod tests {
     #[test]
     fn check_is_due_matches_24h() {
         let now = Utc::now();
-        assert!(check_is_due(&UpdateCheckState::default(), now));
+        assert!(check_is_due(&UpdateCheckState::default(), now, false));
         let recent = UpdateCheckState {
             last_check_at: Some(now - Duration::hours(1)),
             ..UpdateCheckState::default()
         };
-        assert!(!check_is_due(&recent, now));
+        assert!(!check_is_due(&recent, now, false));
         let old = UpdateCheckState {
             last_check_at: Some(now - Duration::hours(25)),
             ..UpdateCheckState::default()
         };
-        assert!(check_is_due(&old, now));
+        assert!(check_is_due(&old, now, false));
+    }
+
+    #[test]
+    fn startup_check_ignores_the_cooldown() {
+        let now = Utc::now();
+        let recent = UpdateCheckState {
+            last_check_at: Some(now),
+            ..UpdateCheckState::default()
+        };
+        assert!(!check_is_due(&recent, now, false));
+        assert!(check_is_due(&recent, now, true));
+        assert!(check_is_due(&recent, now + Duration::minutes(1), true));
+    }
+
+    #[test]
+    fn check_request_defaults_to_an_in_session_round() {
+        let launch: CheckAppUpdateRequest =
+            serde_json::from_str(r#"{"background":true,"startup":true}"#).unwrap();
+        assert!(launch.background);
+        assert!(launch.startup);
+        let in_session: CheckAppUpdateRequest =
+            serde_json::from_str(r#"{"background":true}"#).unwrap();
+        assert!(in_session.background);
+        assert!(!in_session.startup);
+        let manual: CheckAppUpdateRequest = serde_json::from_str("{}").unwrap();
+        assert!(!manual.background);
+        assert!(!manual.startup);
     }
 
     #[test]
@@ -572,9 +632,51 @@ mod tests {
             Some(now.timestamp())
         );
         assert_eq!(loaded.available_version.as_deref(), Some("0.1.8"));
-        assert!(!check_is_due(&loaded, now + Duration::hours(1)));
-        assert!(check_is_due(&loaded, now + Duration::hours(25)));
+        assert!(!check_is_due(&loaded, now + Duration::hours(1), false));
+        assert!(check_is_due(&loaded, now + Duration::hours(25), false));
+        assert!(check_is_due(&loaded, now + Duration::hours(1), true));
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn manual_check_preserves_last_check_at() {
+        let earlier = Utc::now() - Duration::hours(3);
+        let now = Utc::now();
+        let mut disk = UpdateCheckState {
+            last_check_at: Some(earlier),
+            ..UpdateCheckState::default()
+        };
+        record_successful_check(
+            &mut disk,
+            now,
+            false,
+            Some(("0.1.12".into(), Some("notes".into()))),
+        );
+        assert_eq!(
+            disk.last_check_at.map(|at| at.timestamp()),
+            Some(earlier.timestamp())
+        );
+        assert_eq!(disk.available_version.as_deref(), Some("0.1.12"));
+        assert_eq!(disk.available_notes.as_deref(), Some("notes"));
+        assert!(!check_is_due(&disk, now, false));
+    }
+
+    #[test]
+    fn background_check_advances_last_check_at() {
+        let earlier = Utc::now() - Duration::hours(25);
+        let now = Utc::now();
+        let mut disk = UpdateCheckState {
+            last_check_at: Some(earlier),
+            available_version: Some("0.1.10".into()),
+            ..UpdateCheckState::default()
+        };
+        record_successful_check(&mut disk, now, true, None);
+        assert_eq!(
+            disk.last_check_at.map(|at| at.timestamp()),
+            Some(now.timestamp())
+        );
+        assert!(disk.available_version.is_none());
+        assert!(!check_is_due(&disk, now + Duration::hours(1), false));
     }
 
     #[test]

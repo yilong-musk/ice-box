@@ -2,6 +2,7 @@
 
 mod acceptance;
 mod app_update;
+mod autostart;
 mod capture;
 mod commands;
 mod core_snapshot;
@@ -137,10 +138,22 @@ pub struct AppState {
     pub launch_proxy_restore_attempted: Arc<AtomicBool>,
 }
 
-fn acquire_instance_lock(paths: &AppPaths) -> Result<std::fs::File, String> {
-    match instance::acquire_or_request_focus(paths)? {
+fn acquire_instance_lock(paths: &AppPaths, request_focus: bool) -> Result<std::fs::File, String> {
+    match instance::acquire_or_request_focus(paths, request_focus)? {
         instance::InstanceLock::Primary(file) => Ok(file),
         instance::InstanceLock::Secondary => std::process::exit(0),
+    }
+}
+
+/// Show the main window on a user launch.
+///
+/// `tauri.conf.json` creates the window hidden so a login-item start
+/// ([`autostart::AUTOSTART_FLAG`]) cannot flash a window at the desktop before
+/// the shell decides to stay in the tray.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -168,18 +181,28 @@ fn bootstrap_data_dir(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_hook();
+    let login_item_launch = autostart::is_autostart_launch();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
             let root = app
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("resolve app_data_dir: {e}"))?;
             let paths = AppPaths::new(root);
             let _ = PANIC_LOG_PATH.set(paths.app_log());
-            let instance_lock = acquire_instance_lock(&paths)?;
+            // A login-item launch that finds a session already running (the
+            // user opened the app first) exits silently: stealing focus from
+            // the desktop at login is the one thing this start must not do.
+            let instance_lock = acquire_instance_lock(&paths, !login_item_launch)?;
+            // Shown only once this process owns the data dir: a second user
+            // launch leaves through `acquire_instance_lock`, and showing the
+            // window first would flash a blank one before that exit.
+            if !login_item_launch {
+                show_main_window(app.handle());
+            }
             let paths_for_focus = paths.clone();
             let shutdown_requested = Arc::new(AtomicBool::new(false));
             let core = bootstrap_data_dir(&paths, shutdown_requested.clone())?;
@@ -278,6 +301,25 @@ pub fn run() {
             if orch_rx.recv().is_err() {
                 tracing::warn!("startup worker exited before acquiring orchestrate lock");
             }
+            // Reconcile the OS login item with `settings.json` on every launch.
+            // On: the entry stores an absolute path and the app moves between
+            // installs (DMG → /Applications, NSIS upgrades), so it is rewritten
+            // to this executable. Off: a leftover entry (a reset settings file,
+            // a hand-edited flag) is dropped instead of starting the app at the
+            // next login. Best-effort — the Settings switch is where a failed
+            // write is reported; `settings.json` stays authoritative.
+            let login_item = current_settings(&app.state::<AppState>().paths)
+                .map(|settings| settings.launch_at_login)
+                .unwrap_or(false);
+            std::thread::spawn(move || {
+                if let Err(err) = autostart::set_enabled(login_item) {
+                    if login_item {
+                        tracing::warn!(error = %err, "failed to refresh the login item");
+                    } else {
+                        tracing::debug!(error = %err, "no login item to clear");
+                    }
+                }
+            });
             instance::spawn_focus_watchdog(app.handle().clone(), paths_for_focus);
             let tray_language = {
                 let state = app.state::<AppState>();
@@ -326,6 +368,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::set_tray_language,
+            commands::set_tray_update_available,
             commands::set_proxy_mode,
             commands::add_subscription,
             commands::remove_subscription,

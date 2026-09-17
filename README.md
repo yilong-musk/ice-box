@@ -53,6 +53,24 @@ Grab the installer for your platform from the [latest release](https://github.co
 
 No subscription yet? ice-box starts in direct-only mode, so the core, the capture, and the UI can be explored before anything is imported.
 
+## Launch at login
+
+Turn on **Settings → Startup → Launch at login** to have the system start
+ice-box after you log in. A login start stays in the tray: the window never
+opens, the core starts as usual, and the last proxy state (system proxy or TUN)
+is restored, so the proxy is up without touching anything.
+
+The entry is registered per user — a LaunchAgent plist under
+`~/Library/LaunchAgents` on macOS, a `Run` value under `HKCU` on Windows — and
+re-pointed at the installed app on every launch. macOS 13 and later list it as
+a background item under **System Settings → General → Login Items**, where it
+can also be switched off. The in-app switch stays authoritative — while it is
+on, ice-box rewrites the OS entry on every start — so switching the item off in
+System Settings does not clear the in-app setting; turn the ice-box toggle off
+to remove the entry. Running straight from the disk image is refused with an
+explanation, because macOS runs such a copy from a path that disappears after
+the next reboot.
+
 ## TUN mode
 
 TUN captures traffic at the network layer, covering apps that never read the system proxy. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations.
