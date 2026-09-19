@@ -9,48 +9,32 @@
  * the theme module's pattern: localStorage cache for an instant boot apply,
  * plus an app-level custom event for cross-component sync. The Settings page
  * additionally persists `language` in `settings.json` (authoritative) and
- * re-applies it whenever settings are (re)loaded.
+ * re-applies it whenever settings are (re)loaded. The storage key and the
+ * resolution helpers themselves live in `./language`, shared with the website.
  */
 
 import { useEffect, useState } from "react";
+import {
+  isLanguagePreference,
+  readLanguagePreference,
+  resolveLanguage,
+  LANGUAGE_STORAGE_KEY,
+  type LanguagePreference,
+  type ResolvedLanguage,
+} from "./language";
 
-export type LanguagePreference = "system" | "zh" | "en";
-export type ResolvedLanguage = "zh" | "en";
+// Re-exported so every existing `lib/i18n` import keeps working.
+export {
+  LANGUAGE_STORAGE_KEY,
+  isLanguagePreference,
+  readLanguagePreference,
+  resolveLanguage,
+  systemLanguage,
+} from "./language";
+export type { LanguagePreference, ResolvedLanguage } from "./language";
 
-export const LANGUAGE_STORAGE_KEY = "ice-box.language";
 export const LANGUAGE_CHANGE_EVENT = "ice-box-language";
 
-export function isLanguagePreference(
-  value: unknown,
-): value is LanguagePreference {
-  return value === "system" || value === "zh" || value === "en";
-}
-
-export function readLanguagePreference(): LanguagePreference {
-  try {
-    const raw = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    if (isLanguagePreference(raw)) return raw;
-  } catch {
-    // Private mode / blocked storage: stay on the default.
-  }
-  return "system";
-}
-
-/** Closest supported language for the current system locale. */
-export function systemLanguage(): ResolvedLanguage {
-  const lang = (typeof navigator.language === "string"
-    ? navigator.language
-    : "en"
-  ).toLowerCase();
-  return lang.startsWith("zh") ? "zh" : "en";
-}
-
-export function resolveLanguage(
-  preference: LanguagePreference,
-): ResolvedLanguage {
-  if (preference === "system") return systemLanguage();
-  return preference;
-}
 
 /** The zh dictionary is the source of truth for message keys. */
 const zh = {
