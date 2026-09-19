@@ -50,6 +50,7 @@
     },
     "macOS": {
       "entitlements": "entitlements/ice-box.entitlements",
+      "signingIdentity": "-",
       "minimumSystemVersion": "12.0"
     }
   },
