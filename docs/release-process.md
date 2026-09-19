@@ -87,7 +87,8 @@ bash scripts/release-notes.sh v0.1.2
 bash scripts/gate-local.sh
 ```
 
-Commit the updated `docs/images/home.png` and `docs/images/home.version` with the release.
+Commit the updated `docs/images/home.png`, `docs/images/home.zh-CN.png`, and
+`docs/images/home.version` with the release.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,

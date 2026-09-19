@@ -25,7 +25,7 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/home.png" alt="ice-box 主页：代理状态、模式切换、出口节点和实时流量图" width="880">
+  <img src="docs/images/home.zh-CN.png" alt="ice-box 主页：代理状态、模式切换、出口节点和实时流量图" width="880">
 </a>
 
 <sub>安装前想先看看？<a href="https://yilong-musk.github.io/ice-box/">在线演示</a>在浏览器中运行真实的桌面端界面，后端为模拟数据。</sub>

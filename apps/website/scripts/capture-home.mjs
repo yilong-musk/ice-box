@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
- * Capture the Live Demo Home view into docs/images/home.png.
- * Matches the GitHub Pages iframe (1180x690), without the marketing window bar.
+ * Capture the Live Demo Home view into docs/images/home.png (en) and
+ * docs/images/home.zh-CN.png (zh), without the marketing window bar.
+ * Matches the GitHub Pages iframe (1180x690).
  *
  * Usage:
  *   bash scripts/capture-demo-home.sh
@@ -18,12 +19,32 @@ const VIEWPORT = { width: 1180, height: 690 };
 const SCALE = 2;
 const PREVIEW_PORT = 4175;
 
+/** One capture per README language; the parameters are identical otherwise. */
+const TARGETS = [
+  {
+    language: "en",
+    locale: "en-US",
+    // Power button label (`home.power.stop`) proving the UI language.
+    stopLabel: "Stop Proxy Service",
+    screenshot: "docs/images/home.png",
+  },
+  {
+    language: "zh",
+    locale: "zh-CN",
+    stopLabel: "停止代理服务",
+    screenshot: "docs/images/home.zh-CN.png",
+  },
+];
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const websiteDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(websiteDir, "../..");
-const outFile = path.join(repoRoot, "docs/images/home.png");
 const versionFile = path.join(repoRoot, "docs/images/home.version");
 const desktopPackageJson = path.join(repoRoot, "apps/desktop/package.json");
+
+function screenshotPath(target) {
+  return path.join(repoRoot, target.screenshot);
+}
 
 function appVersion() {
   return JSON.parse(fs.readFileSync(desktopPackageJson, "utf8")).version;
@@ -78,42 +99,97 @@ async function ensureBuild() {
   });
 }
 
-async function capture(baseUrl) {
-  const browser = await chromium.launch({ headless: true });
+/**
+ * Wait until the power button shows the target language.
+ *
+ * `addInitScript` stores the preference before boot, but the demo reconciles
+ * it with the mocked settings file (`language: "en"` in browser-api.ts) right
+ * after the app mounts, which overwrites a stored "zh". Re-apply the target
+ * through the app's own language event (`LANGUAGE_CHANGE_EVENT` in
+ * apps/desktop/src/lib/i18n.tsx) on every poll: the listener mounts with the
+ * app shell, so an early dispatch is simply repeated until it sticks.
+ */
+async function waitForLanguage(page, target) {
+  await page.waitForFunction(
+    ({ language, label }) => {
+      const shown = Array.from(document.querySelectorAll("button")).some(
+        (button) => button.getAttribute("aria-label") === label,
+      );
+      if (shown) return true;
+      window.localStorage.setItem("ice-box.language", language);
+      window.dispatchEvent(new CustomEvent("ice-box-language", { detail: language }));
+      return false;
+    },
+    { language: target.language, label: target.stopLabel },
+    { timeout: 30_000, polling: 100 },
+  );
+}
+
+async function capture(browser, baseUrl, target) {
   const context = await browser.newContext({
     viewport: VIEWPORT,
     deviceScaleFactor: SCALE,
     colorScheme: "dark",
-    locale: "en-US",
+    locale: target.locale,
     timezoneId: "UTC",
   });
-  await context.addInitScript(() => {
-    window.localStorage.setItem("ice-box.theme", "dark");
-    window.localStorage.setItem("ice-box.language", "en");
-  });
-  const page = await context.newPage();
-  await page.goto(`${baseUrl}/demo.html?capture=1`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.getByRole("button", { name: "Stop Proxy Service" }).waitFor({ timeout: 30_000 });
-  await page.evaluate(() => window.dispatchEvent(new Event("resize")));
-  await page.waitForFunction(() => {
-    const el = document.querySelector(".recharts-wrapper");
-    return el && el.getBoundingClientRect().height >= 240;
-  }, { timeout: 15_000 });
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  fs.mkdirSync(path.dirname(outFile), { recursive: true });
-  await page.screenshot({ path: outFile, type: "png" });
-  const version = appVersion();
-  fs.writeFileSync(versionFile, `${version}\n`);
-  await browser.close();
-  return version;
+  try {
+    await context.addInitScript((language) => {
+      window.localStorage.setItem("ice-box.theme", "dark");
+      window.localStorage.setItem("ice-box.language", language);
+    }, target.language);
+    const page = await context.newPage();
+    await page.goto(`${baseUrl}/demo.html?capture=1`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    // Mount signal: the shell renders the power button in either language.
+    await page
+      .getByRole("button", { name: /Stop Proxy Service|停止代理服务/ })
+      .waitFor({ timeout: 30_000 });
+    await waitForLanguage(page, target);
+    await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+    await page.waitForFunction(() => {
+      const el = document.querySelector(".recharts-wrapper");
+      return el && el.getBoundingClientRect().height >= 240;
+    }, { timeout: 15_000 });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return await page.screenshot({ type: "png" });
+  } finally {
+    await context.close();
+  }
 }
 
 await ensureBuild();
 const preview = startPreview();
 try {
   await waitForOutput(preview, /Local:/, 30_000);
-  const version = await capture(`http://127.0.0.1:${PREVIEW_PORT}`);
-  console.log(`Wrote ${path.relative(repoRoot, outFile)} (${version})`);
+  const baseUrl = `http://127.0.0.1:${PREVIEW_PORT}`;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    // Capture both languages first and only then write the files, so a
+    // failure in either capture leaves the previous set untouched.
+    const shots = [];
+    for (const target of TARGETS) {
+      try {
+        shots.push({ target, png: await capture(browser, baseUrl, target) });
+      } catch (error) {
+        throw new Error(
+          `[${target.language}] ${target.screenshot}: ${error instanceof Error ? error.message : error}`,
+          { cause: error },
+        );
+      }
+    }
+    const version = appVersion();
+    for (const { target, png } of shots) {
+      const outFile = screenshotPath(target);
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      fs.writeFileSync(outFile, png);
+    }
+    fs.writeFileSync(versionFile, `${version}\n`);
+    for (const { target } of shots) {
+      console.log(`Wrote ${target.screenshot} (${version})`);
+    }
+  } finally {
+    await browser.close();
+  }
 } finally {
   preview.kill("SIGTERM");
 }
