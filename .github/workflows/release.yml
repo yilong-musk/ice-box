@@ -70,6 +70,12 @@ jobs:
           test -x "$APP/Contents/Resources/ice-helper"
           echo "helper embedded: $APP/Contents/Resources/ice-helper"
 
+      - name: Verify app bundle code signature (R3)
+        run: |
+          APP=$(find target/release/bundle/macos -name '*.app' -maxdepth 1 | head -n 1)
+          test -n "$APP"
+          bash scripts/verify-macos-code-sign.sh "$APP"
+
       - name: Verify updater artifacts (macOS)
         run: |
           shopt -s nullglob

@@ -5,6 +5,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-19
+
+### Added
+
+- The website and the embedded Live Demo are bilingual (English / Chinese).
+  Both default to the system language (`zh*` → Chinese, otherwise English), the
+  top bar switches between the two, a manual pick is remembered in the shared
+  `ice-box.language` key, and the landing page and the demo stay in sync in
+  both directions without a reload. The language primitives moved to
+  `apps/desktop/src/lib/language.ts` (re-exported by `lib/i18n`).
+
+- Bilingual README screenshots: the capture pipeline now produces
+  `docs/images/home.png` (en) and `docs/images/home.zh-CN.png` (zh-CN) in one
+  run, and `README.zh-CN.md` shows the Chinese screenshot.
+
+### Fixed
+
+- macOS first launch after a browser download no longer reports the app as
+  "damaged" with no way forward: the bundle now ships with a complete ad-hoc
+  signature (`signingIdentity: "-"`), so Gatekeeper downgrades to the standard
+  "unidentified developer" prompt, which the user can override (System
+  Settings → Privacy & Security → Open Anyway on macOS 15+, right-click → Open
+  on older versions, or `xattr -dr com.apple.quarantine`). No Developer ID
+  certificate and no notarization, unchanged; the README and release docs now
+  describe the ad-hoc reality.
+
 ## [0.1.11] - 2026-09-17
 
 ### Added

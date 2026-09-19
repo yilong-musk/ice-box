@@ -12,11 +12,16 @@ arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`) and the Windows NSIS `.exe`
 (plus `.exe.sig`), synthesizes `latest.json`, and publishes a GitHub Release with
 the artifacts and compliance notices.
 
-macOS releases are permanently unsigned at the Apple / Gatekeeper layer
-(documented product decision). TUN elevation is documented in
-[`tun.md`](tun.md#macos-elevation).
-Gatekeeper warnings are expected for published artifacts. In-app updates use a
-separate **minisign** key for integrity; that is not Developer ID signing.
+macOS releases are ad-hoc signed at the bundle level (documented product
+decision: no Developer ID certificate, no notarization). TUN elevation is
+documented in [`tun.md`](tun.md#macos-elevation).
+First launch still shows an "unidentified developer" Gatekeeper prompt, which
+users can override (System Settings → Privacy & Security → Open Anyway on
+macOS 15+; right-click → Open on older versions).
+CI (`ci.yml` / `release.yml`) asserts the bundle signature with
+`scripts/verify-macos-code-sign.sh`, so a signing regression cannot ship.
+In-app updates use a separate **minisign** key for integrity; that is not
+Developer ID signing.
 
 ## Version sources
 
@@ -87,7 +92,8 @@ bash scripts/release-notes.sh v0.1.2
 bash scripts/gate-local.sh
 ```
 
-Commit the updated `docs/images/home.png` and `docs/images/home.version` with the release.
+Commit the updated `docs/images/home.png`, `docs/images/home.zh-CN.png`, and
+`docs/images/home.version` with the release.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,
@@ -182,12 +188,16 @@ on GitHub-hosted runners (warning only). Fixed by `@v7`; do not downgrade.
 
 ## Distribution constraints
 
-The macOS release is intentionally unsigned: Developer ID signing,
-notarization, and stapling are not part of the product. TUN elevation and the
-helper installation gate exception are maintained in
-[`tun.md`](tun.md#macos-elevation). Published `.app`/`.dmg` artifacts
-are unsigned and may trigger Gatekeeper warnings; users must right-click → Open (or use
-`xattr -dr com.apple.quarantine`) on first launch.
+The macOS release is ad-hoc signed: Developer ID signing, notarization, and
+stapling are not part of the product (documented product decision). TUN
+elevation and the helper installation gate exception are maintained in
+[`tun.md`](tun.md#macos-elevation). The `.app` inside the published `.dmg`
+carries the complete ad-hoc signature, asserted by CI through
+`scripts/verify-macos-code-sign.sh`; the DMG container itself is not signed,
+which is expected for the ad-hoc identity. First launch still shows an
+"unidentified developer" Gatekeeper prompt; users allow it via System
+Settings → Privacy & Security → Open Anyway (macOS 15+), right-click → Open
+(older versions), or `xattr -dr com.apple.quarantine`.
 
 In-app updates after 0.1.5 do not change that decision: they only check minisign
 signatures. Windows NSIS installers remain without Authenticode.

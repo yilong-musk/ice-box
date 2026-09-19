@@ -6,8 +6,9 @@
   The app stays unelevated; it only talks to the privileged helper over a
   Unix socket, and elevates the helper install through the system
   authorization dialog (AuthorizationServices, `crates/ice-elevate`). No
-  sandbox / helper-registration entitlement is required: the release is
-  permanently unsigned, so SMAppService is intentionally not used.
+  sandbox / helper-registration entitlement is required: the release has no
+  Developer ID certificate and is not notarized (ad-hoc signed only), so
+  SMAppService is intentionally not used.
 -->
 <plist version="1.0">
 <dict/>
