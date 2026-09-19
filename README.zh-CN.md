@@ -40,7 +40,7 @@
 
 | 平台 | 安装包 | 首次启动 |
 |---|---|---|
-| **macOS**（Apple Silicon） | `ice-box_<version>_aarch64.dmg` | 应用未签名。右键 **ice-box.app** 选择 **打开**，或执行 `xattr -dr com.apple.quarantine /Applications/ice-box.app`。 |
+| **macOS**（Apple Silicon） | `ice-box_<version>_aarch64.dmg` | 应用仅有 ad-hoc 签名（无 Developer ID、未公证），首次打开会被 Gatekeeper 拦截并提示「身份不明的开发者」。macOS 15 及以上：在 **系统设置 → 隐私与安全性** 中点「仍要打开」；较早版本：右键 **ice-box.app** 选择 **打开**。也可执行 `xattr -dr com.apple.quarantine /Applications/ice-box.app`。 |
 | **Windows**（x64） | `ice-box_<version>_x64-setup.exe` | 按用户安装的 NSIS 安装包，无需管理员权限。安装包没有 Authenticode 签名，SmartScreen 可能会要求确认。 |
 
 **更新。** 从 0.1.5 起，ice-box 会在后台检查 GitHub Releases（可在设置中关闭），并在 **设置 → 应用更新** 中安装经签名校验的更新。0.1.5 之前的版本需要先手动升级一次。

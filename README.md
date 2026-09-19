@@ -40,7 +40,7 @@ Grab the installer for your platform from the [latest release](https://github.co
 
 | Platform | Installer | First launch |
 |---|---|---|
-| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | The app is unsigned. Right-click **ice-box.app** and choose **Open**, or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
+| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. On macOS 15+ allow it in **System Settings → Privacy & Security → Open Anyway**; on older versions right-click **ice-box.app** and choose **Open**. Or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
 | **Windows** (x64) | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. The installer carries no Authenticode signature, so SmartScreen may ask you to confirm. |
 
 **Updating.** Starting with 0.1.5, ice-box checks GitHub Releases in the background (toggle in Settings) and installs signature-verified updates from **Settings → App Updates**. Installations older than 0.1.5 need one manual upgrade first.

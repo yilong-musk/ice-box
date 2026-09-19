@@ -90,7 +90,9 @@ the fd) so a pre-planted symlink in the user data dir cannot redirect the
 privileged write. Elevated DNS operations validate arguments before touching the OS.
 Missing or stale helpers require setup; they never trigger silent elevation.
 
-The helper is intentionally unsigned. Manual install/uninstall scripts are
+The helper carries no Developer ID signature: it keeps its toolchain (linker)
+ad-hoc signature, ships inside the app bundle (`Contents/Resources`), and is
+covered by the bundle-level ad-hoc seal. Manual install/uninstall scripts are
 under `scripts/`; the developer sudo runner is test-only. The clean-machine
 install gate is waived; helper install/enable/disable/uninstall remains covered
 by the manual acceptance script in [testing.md](testing.md#live-tests).
