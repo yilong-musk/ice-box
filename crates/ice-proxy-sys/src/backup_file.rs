@@ -220,7 +220,10 @@ pub(crate) fn proxy_backup_matches_endpoints(
     }
     match (&expected.socks_host, expected.socks_port) {
         (Some(host), Some(port)) => proxy_endpoint_matches(backup.socks.as_deref(), host, port),
-        _ => true,
+        // No expected SOCKS means the apply did not publish one. A leftover
+        // `socks=` (older Windows applies) must not count as still live, or
+        // Chromium keeps sending wss:// through SOCKS4.
+        _ => backup.socks.is_none(),
     }
 }
 
@@ -696,6 +699,15 @@ mod tests {
         assert!(
             !proxy_backup_matches_endpoints(&backup, &still_expects_socks),
             "endpoints that expect SOCKS must not match an HTTP-only snapshot"
+        );
+
+        let leftover_socks = ProxyBackup {
+            socks: Some("127.0.0.1:17890".into()),
+            ..backup
+        };
+        assert!(
+            !proxy_backup_matches_endpoints(&leftover_socks, &endpoints),
+            "HTTP-only endpoints must not treat a leftover socks= entry as live"
         );
     }
 
