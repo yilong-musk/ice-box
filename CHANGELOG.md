@@ -5,6 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-09-21
+
+### Fixed
+
+- Windows system proxy no longer writes a bare `socks=` entry into the WinInet
+  `ProxyServer` value. Chromium parses such an entry as SOCKSv4 and prefers it
+  for `ws://` / `wss://` connections (RFC 6455 §4.1.3), which resolves the
+  target on the client; under a polluted resolver Discord's gateway WebSocket
+  hung while the HTTPS document still loaded. WebSockets now tunnel through
+  HTTP CONNECT and resolve on the proxy side, and live-applied checks treat a
+  leftover `socks=` as out of sync so re-enabling the system proxy clears the
+  old Chromium-breaking form.
+
+- Corrupt `proxy-backup.json` recovery now reclaims a live system proxy left
+  behind by an older install that still carries the legacy `socks=` entry
+  (restore-to-defaults runs instead of leaving the entry in place).
+
 ## [0.1.12] - 2026-09-19
 
 ### Added
