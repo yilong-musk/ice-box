@@ -795,7 +795,10 @@ mod tests {
             !proxy_backup_matches_endpoints_lenient(&foreign_socks, &endpoints),
             "a socks= pointing elsewhere must fail closed"
         );
-        assert!(!proxy_backup_matches_endpoints_lenient(&ProxyBackup::default(), &endpoints));
+        assert!(!proxy_backup_matches_endpoints_lenient(
+            &ProxyBackup::default(),
+            &endpoints
+        ));
     }
 
     #[test]
