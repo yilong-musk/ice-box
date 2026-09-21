@@ -185,14 +185,19 @@ pub fn endpoints_from_settings(settings: &AppSettings) -> ProxyEndpoints {
     } else {
         settings.mixed_listen.clone()
     };
+    // macOS sets a real SOCKS service, so the live check must verify it.
+    // Windows must not: WinInet `socks=` is parsed as SOCKS4 and preferred for
+    // `wss://`, which resolves Discord's gateway on the client. The mixed port
+    // still accepts SOCKS from apps that configure it directly.
+    #[cfg(windows)]
+    let (socks_host, socks_port) = (None, None);
+    #[cfg(not(windows))]
+    let (socks_host, socks_port) = (Some(host.clone()), Some(settings.mixed_port));
     ProxyEndpoints {
-        http_host: host.clone(),
+        http_host: host,
         http_port: settings.mixed_port,
-        // Windows WinInet stores SOCKS in the multi-protocol ProxyServer string
-        // (`socks=host:port`); macOS sets a real SOCKS service. Both expose it here
-        // so `is_proxy_live_applied` can verify the apply.
-        socks_host: Some(host),
-        socks_port: Some(settings.mixed_port),
+        socks_host,
+        socks_port,
     }
 }
 

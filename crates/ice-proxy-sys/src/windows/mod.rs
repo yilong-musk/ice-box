@@ -13,9 +13,10 @@
 //! Temp-hive unit tests still read/write `ProxyEnable` / `ProxyServer` /
 //! `ProxyOverride` because they cannot call live WinInet.
 //!
-//! WinInet has no separate SOCKS checkbox; apply writes a multi-protocol
-//! `ProxyServer` (`http=…;https=…;socks=…`) so clients that read `socks=` can
-//! follow mixed. WinHTTP stays on a plain `host:port` (HTTP proxy only).
+//! WinInet has no separate SOCKS checkbox. Apply writes only `http=` and
+//! `https=` (WinHTTP stays on a plain `host:port`). A bare `socks=` entry is
+//! parsed by Chromium as SOCKS4 and preferred for `wss://`, which resolves the
+//! target on the client and breaks WebSocket apps such as Discord.
 
 mod connections;
 mod wide;
@@ -152,14 +153,19 @@ fn snapshot_live() -> Result<LiveSnapshot, ProxySysError> {
     })
 }
 
-/// WinInet `ProxyServer` multi-protocol form used by Clash / v2rayN-style clients.
+/// WinInet `ProxyServer` for HTTP and HTTPS only.
+///
+/// `socks=` is omitted on purpose. Chromium treats a scheme-less `socks=host:port`
+/// as SOCKS4 and, per RFC 6455, prefers that "other proxies" list over the HTTPS
+/// proxy for `ws://` / `wss://`. SOCKS4 resolves the target on the client. System
+/// proxy mode does not hijack DNS, so a polluted resolver black-holes Discord's
+/// gateway WebSocket while the HTTPS document still loads through `https=`.
+/// Without `socks=`, Chromium tunnels WebSocket with HTTP CONNECT and sends the
+/// hostname to the mixed inbound. SOCKS endpoints are ignored; callers that need
+/// SOCKS connect to the mixed port directly.
 fn format_wininet_proxy_server(endpoints: &ProxyEndpoints) -> String {
     let http = format!("{}:{}", endpoints.http_host, endpoints.http_port);
-    let socks = match (&endpoints.socks_host, endpoints.socks_port) {
-        (Some(host), Some(port)) => format!("{host}:{port}"),
-        _ => http.clone(),
-    };
-    format!("http={http};https={http};socks={socks}")
+    format!("http={http};https={http}")
 }
 
 /// Plain host:port for WinHTTP (HTTP proxy; does not consume WinInet `socks=`).
@@ -574,10 +580,13 @@ mod tests {
         assert!(mid.enabled);
         assert_eq!(mid.http.as_deref(), Some("127.0.0.1:17890"));
         assert_eq!(mid.https.as_deref(), Some("127.0.0.1:17890"));
-        assert_eq!(mid.socks.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(
+            mid.socks, None,
+            "WinInet ProxyServer must not publish socks= (Chromium would use SOCKS4 for wss://)"
+        );
         assert_eq!(
             mid.extra["proxy_server"].as_str(),
-            Some("http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890")
+            Some("http=127.0.0.1:17890;https=127.0.0.1:17890")
         );
         let override_list = mid.extra["proxy_override"]
             .as_str()
@@ -832,11 +841,18 @@ mod tests {
             socks_port: Some(17890),
         };
         let raw = format_wininet_proxy_server(&endpoints);
-        assert_eq!(
-            raw,
-            "http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890"
-        );
+        assert_eq!(raw, "http=127.0.0.1:17890;https=127.0.0.1:17890");
         let (http, https, socks) = parse_wininet_proxy_server(&raw);
+        assert_eq!(http.as_deref(), Some("127.0.0.1:17890"));
+        assert_eq!(https.as_deref(), Some("127.0.0.1:17890"));
+        assert!(socks.is_none());
+    }
+
+    #[test]
+    fn parse_legacy_socks_entry_still_roundtrips_for_restore() {
+        let (http, https, socks) = parse_wininet_proxy_server(
+            "http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890",
+        );
         assert_eq!(http.as_deref(), Some("127.0.0.1:17890"));
         assert_eq!(https.as_deref(), Some("127.0.0.1:17890"));
         assert_eq!(socks.as_deref(), Some("127.0.0.1:17890"));
@@ -851,18 +867,30 @@ mod tests {
     }
 
     #[test]
-    fn format_wininet_falls_back_to_http_when_socks_missing() {
-        let endpoints = ProxyEndpoints {
+    fn format_wininet_omits_socks_even_when_endpoints_include_it() {
+        let with_socks = ProxyEndpoints {
             http_host: "127.0.0.1".into(),
             http_port: 17890,
+            socks_host: Some("127.0.0.1".into()),
+            socks_port: Some(17890),
+        };
+        let without_socks = ProxyEndpoints {
             socks_host: None,
             socks_port: None,
+            ..with_socks.clone()
         };
         assert_eq!(
-            format_wininet_proxy_server(&endpoints),
-            "http=127.0.0.1:17890;https=127.0.0.1:17890;socks=127.0.0.1:17890"
+            format_wininet_proxy_server(&with_socks),
+            "http=127.0.0.1:17890;https=127.0.0.1:17890"
         );
-        assert_eq!(format_winhttp_proxy_server(&endpoints), "127.0.0.1:17890");
+        assert_eq!(
+            format_wininet_proxy_server(&without_socks),
+            format_wininet_proxy_server(&with_socks)
+        );
+        assert_eq!(
+            format_winhttp_proxy_server(&without_socks),
+            "127.0.0.1:17890"
+        );
     }
 
     #[test]

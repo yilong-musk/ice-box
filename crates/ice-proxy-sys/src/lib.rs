@@ -245,9 +245,8 @@ mod live_tests {
             mid.http
         );
         assert_eq!(
-            mid.socks.as_deref(),
-            Some("127.0.0.1:17890"),
-            "WinInet multi-protocol ProxyServer must expose socks="
+            mid.socks, None,
+            "WinInet ProxyServer must not publish socks= (Chromium would use SOCKS4 for wss://)"
         );
         assert!(
             mid.extra["proxy_override"]

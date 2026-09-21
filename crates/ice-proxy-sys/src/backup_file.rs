@@ -220,7 +220,39 @@ pub(crate) fn proxy_backup_matches_endpoints(
     }
     match (&expected.socks_host, expected.socks_port) {
         (Some(host), Some(port)) => proxy_endpoint_matches(backup.socks.as_deref(), host, port),
-        _ => true,
+        // No expected SOCKS means the apply did not publish one. A leftover
+        // `socks=` (older Windows applies) must not count as still live, or
+        // Chromium keeps sending wss:// through SOCKS4.
+        _ => backup.socks.is_none(),
+    }
+}
+
+/// Lenient ownership probe for corrupt-backup recovery.
+///
+/// Unlike [`proxy_backup_matches_endpoints`], a leftover `socks=` entry is
+/// tolerated when it still points at our mixed endpoint: newer Windows
+/// applies no longer publish one, but a corrupt backup with an older-format
+/// live state must still be reclaimed (and cleared) instead of being left
+/// behind. A `socks=` pointing elsewhere still fails closed.
+fn proxy_backup_matches_endpoints_lenient(backup: &ProxyBackup, expected: &ProxyEndpoints) -> bool {
+    if !backup.enabled {
+        return false;
+    }
+    if !proxy_endpoint_matches(
+        backup.http.as_deref(),
+        &expected.http_host,
+        expected.http_port,
+    ) {
+        return false;
+    }
+    if let Some(https) = backup.https.as_deref() {
+        if !proxy_endpoint_matches(Some(https), &expected.http_host, expected.http_port) {
+            return false;
+        }
+    }
+    match backup.socks.as_deref() {
+        None => true,
+        Some(socks) => proxy_endpoint_matches(Some(socks), &expected.http_host, expected.http_port),
     }
 }
 
@@ -302,7 +334,7 @@ fn recover_unknown_backup(
 ) -> Result<RecoverOutcome, ProxySysError> {
     let current = proxy.backup()?;
     let ours = match endpoints {
-        Some(ep) => current.enabled && proxy_backup_matches_endpoints(&current, ep),
+        Some(ep) => current.enabled && proxy_backup_matches_endpoints_lenient(&current, ep),
         None => false,
     };
     if !ours {
@@ -697,6 +729,76 @@ mod tests {
             !proxy_backup_matches_endpoints(&backup, &still_expects_socks),
             "endpoints that expect SOCKS must not match an HTTP-only snapshot"
         );
+
+        let leftover_socks = ProxyBackup {
+            socks: Some("127.0.0.1:17890".into()),
+            ..backup
+        };
+        assert!(
+            !proxy_backup_matches_endpoints(&leftover_socks, &endpoints),
+            "HTTP-only endpoints must not treat a leftover socks= entry as live"
+        );
+    }
+
+    /// Recovery probe: an older-format leftover `socks=` that still routes
+    /// through our mixed endpoint must be reclaimed, while the strict live
+    /// check keeps reporting it as unsynced.
+    #[test]
+    fn lenient_probe_reclaims_legacy_socks_leftover() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        let legacy = ProxyBackup {
+            enabled: true,
+            http: Some("127.0.0.1:17890".into()),
+            https: Some("127.0.0.1:17890".into()),
+            socks: Some("127.0.0.1:17890".into()),
+            extra: serde_json::json!({}),
+        };
+        assert!(
+            proxy_backup_matches_endpoints_lenient(&legacy, &endpoints),
+            "legacy leftover socks= still routes through us and must be reclaimed"
+        );
+        assert!(
+            !proxy_backup_matches_endpoints(&legacy, &endpoints),
+            "live check stays strict: a leftover socks= is not a sync"
+        );
+
+        let current = ProxyBackup {
+            socks: None,
+            ..legacy
+        };
+        assert!(proxy_backup_matches_endpoints_lenient(&current, &endpoints));
+    }
+
+    /// Recovery probe stays fail-closed: a `socks=` pointing elsewhere (or a
+    /// disabled snapshot) is never treated as ours.
+    #[test]
+    fn lenient_probe_fails_closed_on_foreign_socks_and_disabled() {
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        let foreign_socks = ProxyBackup {
+            enabled: true,
+            http: Some("127.0.0.1:17890".into()),
+            https: Some("127.0.0.1:17890".into()),
+            socks: Some("10.0.0.1:1080".into()),
+            extra: serde_json::json!({}),
+        };
+        assert!(
+            !proxy_backup_matches_endpoints_lenient(&foreign_socks, &endpoints),
+            "a socks= pointing elsewhere must fail closed"
+        );
+        assert!(!proxy_backup_matches_endpoints_lenient(
+            &ProxyBackup::default(),
+            &endpoints
+        ));
     }
 
     #[test]
@@ -806,6 +908,104 @@ mod tests {
         let did = recover_if_applied_hinted(&path, &proxy, Some(&endpoints)).expect("recover");
         assert_eq!(did, RecoverOutcome::RestoredFromCorrupt);
         assert_eq!(proxy.restore_calls.get(), 1);
+        assert_eq!(disk_proxy_state(&path), DiskProxyState::NotApplied);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Corrupt backup + older-format live state (leftover `socks=`) under a
+    /// current-config endpoint set (no SOCKS): the live check reports "not
+    /// applied", yet crash recovery must still reclaim and clear the state.
+    #[test]
+    fn corrupt_backup_with_legacy_socks_leftover_is_reclaimed() {
+        let path = temp_backup_path("corrupt-legacy-socks");
+        fs::write(&path, b"{\"applied\":true").expect("truncate json");
+        assert_eq!(disk_proxy_state(&path), DiskProxyState::Unknown);
+
+        struct LiveProxy {
+            restore_calls: Cell<usize>,
+        }
+        impl SystemProxy for LiveProxy {
+            fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+                Ok(ProxyBackup {
+                    enabled: true,
+                    http: Some("127.0.0.1:17890".into()),
+                    https: Some("127.0.0.1:17890".into()),
+                    socks: Some("127.0.0.1:17890".into()),
+                    extra: serde_json::json!({}),
+                })
+            }
+            fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+                Ok(())
+            }
+            fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+                self.restore_calls.set(self.restore_calls.get() + 1);
+                Ok(())
+            }
+        }
+
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        let proxy = LiveProxy {
+            restore_calls: Cell::new(0),
+        };
+        assert!(
+            !is_proxy_live_applied(&proxy, &path, &endpoints),
+            "live check stays strict about a leftover socks="
+        );
+        let did = recover_if_applied_hinted(&path, &proxy, Some(&endpoints)).expect("recover");
+        assert_eq!(did, RecoverOutcome::RestoredFromCorrupt);
+        assert_eq!(proxy.restore_calls.get(), 1);
+        assert_eq!(disk_proxy_state(&path), DiskProxyState::NotApplied);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Same corrupt backup with a live proxy pointing elsewhere: recovery
+    /// must leave the foreign state untouched (fail closed).
+    #[test]
+    fn corrupt_backup_with_foreign_proxy_is_not_reclaimed() {
+        let path = temp_backup_path("corrupt-foreign-proxy");
+        fs::write(&path, b"{\"applied\":true").expect("truncate json");
+
+        struct LiveProxy {
+            restore_calls: Cell<usize>,
+        }
+        impl SystemProxy for LiveProxy {
+            fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+                Ok(ProxyBackup {
+                    enabled: true,
+                    http: Some("10.0.0.1:3128".into()),
+                    https: None,
+                    socks: None,
+                    extra: serde_json::json!({}),
+                })
+            }
+            fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+                Ok(())
+            }
+            fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+                self.restore_calls.set(self.restore_calls.get() + 1);
+                Ok(())
+            }
+        }
+
+        let endpoints = ProxyEndpoints {
+            http_host: "127.0.0.1".into(),
+            http_port: 17890,
+            socks_host: None,
+            socks_port: None,
+        };
+        let proxy = LiveProxy {
+            restore_calls: Cell::new(0),
+        };
+        let did = recover_if_applied_hinted(&path, &proxy, Some(&endpoints)).expect("recover");
+        assert_eq!(did, RecoverOutcome::None);
+        assert_eq!(proxy.restore_calls.get(), 0);
         assert_eq!(disk_proxy_state(&path), DiskProxyState::NotApplied);
 
         let _ = fs::remove_dir_all(path.parent().unwrap());
