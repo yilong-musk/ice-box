@@ -40,9 +40,21 @@ export type TunStatus =
   | "error"
   | "recovery_required";
 
+/** Per-process RSS for the Home memory row (plan v0.1.14 §9). Only the core
+ * and the app's main process are measured — WebView helpers and the
+ * privileged helper daemon are out of scope. `null` parts are unreadable
+ * (e.g. a privileged macOS core, D9a); `total_bytes` sums what was read. */
+export type MemoryUsage = {
+  app_bytes: number | null;
+  core_bytes: number | null;
+  total_bytes: number;
+};
+
 export type StatusResponse = {
   core: CoreState;
   subscription_count: number;
+  /** Process RSS for the Home memory row (core + app main process). */
+  memory: MemoryUsage;
   proxy_recovery_warning: UiMessage[] | null;
   system_proxy_applied: boolean | null;
   /** On-disk applied flag; drives「停止代理服务」when OS proxy was changed externally. */

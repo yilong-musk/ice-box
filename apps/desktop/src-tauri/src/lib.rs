@@ -12,6 +12,7 @@ mod instance;
 mod log_tail;
 mod log_view;
 mod orchestrate;
+mod proc_memory;
 mod proxy_terminal;
 mod runtime;
 mod shutdown;

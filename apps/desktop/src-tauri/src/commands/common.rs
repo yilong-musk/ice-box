@@ -20,8 +20,8 @@ pub(crate) use ice_config::{
     SettingsPatch, TrayDisplayMode, UiMessage,
 };
 pub(crate) use ice_core::{
-    proxy_delay, proxy_groups, select_group, select_outbound, CoreState, CoreStatus,
-    HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
+    pid_is_alive, proxy_delay, proxy_groups, read_pid, select_group, select_outbound, CoreState,
+    CoreStatus, HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
 };
 pub(crate) use ice_engine::{
     active_subscription, host_platform, list_profile_outbounds, load_index,
@@ -134,10 +134,30 @@ pub(crate) async fn run_blocking<T: Send + 'static>(
         .map_err(blocking_join_err(context))?
 }
 
+/// Process RSS figures for the Home memory row (plan v0.1.14 §9, D5–D9a).
+///
+/// Only the core (sing-box) and the app's main process are measured; WebView
+/// helpers and the privileged helper daemon are out of scope by design.
+#[derive(Serialize)]
+pub struct MemoryUsage {
+    /// App main process RSS; `None` when it cannot be read.
+    pub app_bytes: Option<u64>,
+    /// Core RSS; `None` while the core is not running, its pid is not
+    /// readable, or the process cannot be queried. A privileged macOS core
+    /// (helper / TUN) is unreadable by design and is never probed with
+    /// elevation (D9a): the UI then shows the app-only figure and says so.
+    pub core_bytes: Option<u64>,
+    /// Sum of the readable parts; `0` when nothing could be read (the UI shows
+    /// `—` rather than a fake number).
+    pub total_bytes: u64,
+}
+
 #[derive(Serialize)]
 pub struct StatusResponse {
     pub core: CoreState,
     pub subscription_count: usize,
+    /// Process RSS for the Home memory row (plan v0.1.14 §9).
+    pub memory: MemoryUsage,
     pub proxy_recovery_warning: Vec<UiMessage>,
     /// Live OS match when the platform backend is available and core is running.
     pub system_proxy_applied: Option<bool>,
@@ -490,6 +510,34 @@ pub(crate) fn broadcast_state_change(app: &AppHandle) {
     tray::sync_menu(app);
 }
 
+/// RSS of the app process plus the running core, when readable.
+///
+/// Two lightweight syscalls per status poll (every 2s), so no caching is
+/// needed.
+fn memory_usage(state: &AppState) -> MemoryUsage {
+    let app_bytes = crate::proc_memory::resident_bytes(std::process::id()).ok();
+    let core_bytes = core_memory_bytes(state);
+    let total_bytes = app_bytes.unwrap_or(0) + core_bytes.unwrap_or(0);
+    MemoryUsage {
+        app_bytes,
+        core_bytes,
+        total_bytes,
+    }
+}
+
+/// Core RSS: only while the core is running and its pid file holds a live pid.
+/// Everything else (not running, unreadable pid, unreadable process) is `None`.
+fn core_memory_bytes(state: &AppState) -> Option<u64> {
+    if state.core_snapshot.load().state.status != CoreStatus::Running {
+        return None;
+    }
+    let pid = read_pid(&state.paths.pid()).ok().flatten()?;
+    if !pid_is_alive(pid) {
+        return None;
+    }
+    crate::proc_memory::resident_bytes(pid).ok()
+}
+
 pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
     // ORCH-1: never take `state.core`. Unexpected-exit reaping lives on the
     // watchdog (`reconcile_unexpected_core_exit`); status reads the snapshot.
@@ -517,6 +565,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
     Ok(StatusResponse {
         core: core_state,
         subscription_count: count,
+        memory: memory_usage(state),
         proxy_recovery_warning,
         system_proxy_applied,
         system_proxy_recorded,
