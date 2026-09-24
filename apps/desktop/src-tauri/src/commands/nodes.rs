@@ -886,6 +886,17 @@ pub struct DelayTestResponse {
     pub delay_ms: u32,
 }
 
+/// One delay probe against the running core: `GET /proxies/{tag}/delay` with
+/// the standard connectivity-check URL and a 5s timeout, exactly what the Nodes
+/// page asks for. Shared by the `test_node_delay` command and the tray runner.
+pub(crate) fn probe_node_delay(state: &AppState, tag: &str) -> Result<u32, AppError> {
+    require_known_node_tag(state, tag)?;
+    let settings = current_settings(&state.paths)?;
+    require_running_core(state)?;
+    let endpoints = clash_endpoints(&state.paths, &settings)?;
+    proxy_delay(&endpoints, tag, 5000, DELAY_TEST_URL).map_err(AppError::from)
+}
+
 #[tauri::command]
 pub async fn test_node_delay(
     app: AppHandle,
@@ -893,12 +904,7 @@ pub async fn test_node_delay(
 ) -> Result<DelayTestResponse, AppError> {
     run_blocking("test_node_delay", move || {
         let state = app.state::<AppState>();
-        require_known_node_tag(&state, &req.tag)?;
-        let settings = current_settings(&state.paths)?;
-        require_running_core(&state)?;
-        let endpoints = clash_endpoints(&state.paths, &settings)?;
-        let delay_ms =
-            proxy_delay(&endpoints, &req.tag, 5000, DELAY_TEST_URL).map_err(AppError::from)?;
+        let delay_ms = probe_node_delay(state.inner(), &req.tag)?;
         Ok(DelayTestResponse {
             tag: req.tag,
             delay_ms,

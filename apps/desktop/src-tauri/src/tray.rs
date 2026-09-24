@@ -23,6 +23,8 @@ use crate::commands::{
 };
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
+#[cfg(any(target_os = "macos", test))]
+use crate::tray_delay::{DelayOutcome, DelayScope, DelayView};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
 use ice_core::CoreStatus;
@@ -206,6 +208,16 @@ struct TrayLabels {
     open_cli_proxy: &'static str,
     show: &'static str,
     quit: &'static str,
+    /// Delay test button of the top node page: probes each group's current
+    /// exit (a flat profile: every node).
+    delay_current: &'static str,
+    /// Delay test button of a group page: probes the group's members.
+    delay_group: &'static str,
+    /// Template of the button of the page whose test is in flight; the two
+    /// `{}` are the probe in flight and the total.
+    delay_progress: &'static str,
+    /// Suffix of a row whose probe failed.
+    delay_failed: &'static str,
 }
 
 impl TrayLabels {
@@ -216,6 +228,14 @@ impl TrayLabels {
         } else {
             self.service_start
         }
+    }
+
+    /// Text of the button whose page has a test in flight: `测速中 3/8`.
+    #[cfg(any(target_os = "macos", test))]
+    fn delay_progress_text(self, index: usize, total: usize) -> String {
+        self.delay_progress
+            .replacen("{}", &index.to_string(), 1)
+            .replacen("{}", &total.to_string(), 1)
     }
 }
 
@@ -234,6 +254,10 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "打开代理终端",
             show: "显示",
             quit: "退出",
+            delay_current: "测速：当前出口",
+            delay_group: "测速本组",
+            delay_progress: "测速中 {}/{}",
+            delay_failed: "失败",
         },
         TrayLanguage::En => TrayLabels {
             service_start: "Start Proxy Service",
@@ -248,6 +272,10 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "Open Proxy Terminal",
             show: "Show",
             quit: "Quit",
+            delay_current: "Test Delay: Current Exits",
+            delay_group: "Test Delay: This Group",
+            delay_progress: "Testing {}/{}",
+            delay_failed: "Failed",
         },
     }
 }
@@ -346,6 +374,16 @@ impl NodeAction {
             }
         }
     }
+
+    /// The tag the row stands for: the node it picks, or the member it switches
+    /// its group to. What the delay decoration looks the newest result up by.
+    #[cfg(any(target_os = "macos", test))]
+    fn tag(&self) -> &str {
+        match self {
+            Self::SelectNode(tag) => tag,
+            Self::SelectMember { member, .. } => member,
+        }
+    }
 }
 
 /// Decode an id built by [`NodeAction::menu_id`]. `None` for every other menu id
@@ -377,16 +415,67 @@ struct NodeMenuItem {
 /// A strategy group: its members sit one level down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NodeMenuGroup {
+    /// Tag of the group itself; the group page's test button names it.
+    #[cfg(any(target_os = "macos", test))]
+    tag: String,
     label: String,
+    /// Live member the group exits through, when it has one. The group label
+    /// carries that member's delay result.
+    #[cfg(any(target_os = "macos", test))]
+    now: Option<String>,
+    /// Delay test button at the top of the group page (macOS-only feature).
+    #[cfg(any(target_os = "macos", test))]
+    delay: Option<DelayButton>,
     members: Vec<NodeMenuItem>,
+}
+
+impl NodeMenuGroup {
+    fn new(tag: &str, now: Option<&str>, members: Vec<NodeMenuItem>) -> Self {
+        Self {
+            label: group_label(tag, now),
+            #[cfg(any(target_os = "macos", test))]
+            tag: tag.to_string(),
+            #[cfg(any(target_os = "macos", test))]
+            now: now.map(str::to_string),
+            #[cfg(any(target_os = "macos", test))]
+            delay: None,
+            members,
+        }
+    }
 }
 
 /// Node submenu body. Derived from the active profile and the live selections;
 /// the submenu is rebuilt only when this value changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NodeMenuEntry {
+    /// Page-level delay test button (macOS-only feature).
+    #[cfg(any(target_os = "macos", test))]
+    Delay(DelayButton),
     Item(NodeMenuItem),
     Group(NodeMenuGroup),
+}
+
+/// One page's delay test button, as the menu should draw it now.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DelayButton {
+    label: String,
+    enabled: bool,
+    scope: DelayScope,
+}
+
+/// A rendered page button: the item, and the separator under it.
+#[cfg(any(target_os = "macos", test))]
+struct DelayRows {
+    button: MenuItem<Wry>,
+    separator: PredefinedMenuItem<Wry>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DelayRows {
+    fn refs(&self) -> [&dyn IsMenuItem<Wry>; 2] {
+        [&self.button, &self.separator]
+    }
 }
 
 /// Group types whose members can be switched. Mirrors the Nodes page: the other
@@ -427,9 +516,10 @@ fn node_menu_entries(nodes: &[NodeInfo], selected: &str) -> Vec<NodeMenuEntry> {
             }
             let selectable = group.outbound_type == SELECTABLE_GROUP_TYPE;
             let now = group.group_now.as_deref().filter(|now| !now.is_empty());
-            Some(NodeMenuEntry::Group(NodeMenuGroup {
-                label: group_label(&group.tag, now),
-                members: members
+            Some(NodeMenuEntry::Group(NodeMenuGroup::new(
+                &group.tag,
+                now,
+                members
                     .iter()
                     .map(|member| NodeMenuItem {
                         label: member.clone(),
@@ -441,7 +531,7 @@ fn node_menu_entries(nodes: &[NodeInfo], selected: &str) -> Vec<NodeMenuEntry> {
                         },
                     })
                     .collect(),
-            }))
+            )))
         })
         .collect()
 }
@@ -885,7 +975,8 @@ fn clear_node_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
 }
 
 /// Build and attach the node submenu body: check items at this level and one
-/// submenu per strategy group.
+/// submenu per strategy group. A page's delay test button (macOS-only feature)
+/// sits above a separator, with the rows under it.
 fn append_node_entries(
     app: &AppHandle,
     parent: &Submenu<Wry>,
@@ -893,6 +984,15 @@ fn append_node_entries(
 ) -> Result<(), AppError> {
     for (index, entry) in entries.iter().enumerate() {
         match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(button) => {
+                let rows = delay_rows(app, button)?;
+                for row in rows.refs() {
+                    parent
+                        .append(row)
+                        .map_err(|err| tray_error("append tray delay button", err))?;
+                }
+            }
             NodeMenuEntry::Item(item) => {
                 parent
                     .append(&node_check_item(app, item)?)
@@ -904,16 +1004,24 @@ fn append_node_entries(
                     .iter()
                     .map(|member| node_check_item(app, member))
                     .collect::<Result<Vec<_>, AppError>>()?;
-                let member_refs: Vec<&dyn IsMenuItem<Wry>> = members
-                    .iter()
-                    .map(|member| member as &dyn IsMenuItem<Wry>)
-                    .collect();
+                #[cfg(any(target_os = "macos", test))]
+                let delay = group
+                    .delay
+                    .as_ref()
+                    .map(|button| delay_rows(app, button))
+                    .transpose()?;
+                let mut rows: Vec<&dyn IsMenuItem<Wry>> = Vec::new();
+                #[cfg(any(target_os = "macos", test))]
+                if let Some(delay) = &delay {
+                    rows.extend(delay.refs());
+                }
+                rows.extend(members.iter().map(|member| member as &dyn IsMenuItem<Wry>));
                 let submenu = Submenu::with_id_and_items(
                     app,
                     serde_json::json!(["group", index]).to_string(),
                     menu_text(&group.label),
                     true,
-                    &member_refs,
+                    &rows,
                 )
                 .map_err(|err| tray_error("create tray node group", err))?;
                 parent
@@ -923,6 +1031,25 @@ fn append_node_entries(
         }
     }
     Ok(())
+}
+
+/// Render a page's delay test button and the separator under it.
+#[cfg(any(target_os = "macos", test))]
+fn delay_rows(app: &AppHandle, button: &DelayButton) -> Result<DelayRows, AppError> {
+    let item = MenuItem::with_id(
+        app,
+        button.scope.menu_id(),
+        menu_text(&button.label),
+        button.enabled,
+        None::<&str>,
+    )
+    .map_err(|err| tray_error("create tray delay button", err))?;
+    let separator = PredefinedMenuItem::separator(app)
+        .map_err(|err| tray_error("create tray delay separator", err))?;
+    Ok(DelayRows {
+        button: item,
+        separator,
+    })
 }
 
 fn node_check_item(app: &AppHandle, item: &NodeMenuItem) -> Result<CheckMenuItem<Wry>, AppError> {
@@ -1161,6 +1288,11 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         .show_menu_on_left_click(!cfg!(target_os = "windows"))
         .on_menu_event(|app, event| {
             let id = event.id.as_ref();
+            #[cfg(target_os = "macos")]
+            if let Some(scope) = DelayScope::from_menu_id(id) {
+                crate::tray_delay::start(app, scope);
+                return;
+            }
             if let Some(action) = node_action_from_menu_id(id) {
                 switch_node(app, action);
                 return;
@@ -1209,6 +1341,8 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
     }
 
     let _tray = builder.build(app)?;
+    #[cfg(target_os = "macos")]
+    crate::tray_delay::install_menu_watch(&_tray);
     Ok(())
 }
 
@@ -1238,7 +1372,122 @@ fn current_node_entries(app: &AppHandle) -> Option<Vec<NodeMenuEntry>> {
     let settings = current_settings(&state.paths).ok()?;
     let nodes = collect_nodes(state.inner()).ok()?;
     let selected = resolve_selected_tag(&nodes, settings.selected_tag.as_deref());
-    Some(node_menu_entries(&nodes, &selected))
+    let entries = node_menu_entries(&nodes, &selected);
+    #[cfg(any(target_os = "macos", test))]
+    let entries = decorate_delay(entries, &current_labels(app), &nodes);
+    Some(entries)
+}
+
+/// Labels for the menu being built: the tray's live language, or the settings'
+/// preference while the tray state does not exist yet (menu seeding).
+#[cfg(any(target_os = "macos", test))]
+fn current_labels(app: &AppHandle) -> TrayLabels {
+    if let Some(state) = app.try_state::<TrayMenuState>() {
+        return state.labels();
+    }
+    let language = app
+        .try_state::<AppState>()
+        .and_then(|state| current_settings(&state.paths).ok())
+        .map(|settings| TrayLanguage::from(settings.language))
+        .unwrap_or(TrayLanguage::En);
+    labels(language)
+}
+
+/// Apply the newest delay test to the derived node body: every page gets its
+/// test button, and every row the result of the exit node it stands for.
+///
+/// The button of the page whose test is in flight shows its progress; while any
+/// test runs, every button is disabled. Nothing to decorate (and no buttons)
+/// while there are no rows — the top page only carries a button when it has
+/// nodes.
+#[cfg(any(target_os = "macos", test))]
+fn decorate_delay(
+    mut entries: Vec<NodeMenuEntry>,
+    labels: &TrayLabels,
+    nodes: &[NodeInfo],
+) -> Vec<NodeMenuEntry> {
+    apply_delay(
+        &mut entries,
+        labels,
+        nodes,
+        &crate::tray_delay::current_view(),
+    );
+    entries
+}
+
+/// The pure half of [`decorate_delay`]: what `view` does to the derived body.
+#[cfg(any(target_os = "macos", test))]
+fn apply_delay(
+    entries: &mut Vec<NodeMenuEntry>,
+    labels: &TrayLabels,
+    nodes: &[NodeInfo],
+    view: &DelayView,
+) {
+    for entry in entries.iter_mut() {
+        match entry {
+            NodeMenuEntry::Delay(_) => {}
+            NodeMenuEntry::Item(item) => {
+                item.label
+                    .push_str(&delay_suffix(view, labels, nodes, item.action.tag()));
+            }
+            NodeMenuEntry::Group(group) => {
+                // The label carries the group's live exit, so it carries that
+                // exit's result too.
+                if let Some(now) = group.now.as_deref() {
+                    group
+                        .label
+                        .push_str(&delay_suffix(view, labels, nodes, now));
+                }
+                for member in group.members.iter_mut() {
+                    member
+                        .label
+                        .push_str(&delay_suffix(view, labels, nodes, member.action.tag()));
+                }
+                group.delay = Some(delay_button(
+                    view,
+                    labels,
+                    DelayScope::Group(group.tag.clone()),
+                ));
+            }
+        }
+    }
+    if !entries.is_empty() {
+        let button = delay_button(view, labels, DelayScope::Top);
+        entries.insert(0, NodeMenuEntry::Delay(button));
+    }
+}
+
+/// One page's button: the progress label while its own test runs, the plain
+/// label otherwise, and disabled while any test runs.
+#[cfg(any(target_os = "macos", test))]
+fn delay_button(view: &DelayView, labels: &TrayLabels, scope: DelayScope) -> DelayButton {
+    let label = match view.progress(&scope) {
+        Some((index, total)) => labels.delay_progress_text(index, total),
+        None => match scope {
+            DelayScope::Top => labels.delay_current.to_string(),
+            DelayScope::Group(_) => labels.delay_group.to_string(),
+        },
+    };
+    DelayButton {
+        label,
+        enabled: view.idle(),
+        scope,
+    }
+}
+
+/// Suffix a row carries for the newest test: nothing when the exit node behind
+/// `tag` was not probed, else `…`, the measured delay, or the failure text.
+#[cfg(any(target_os = "macos", test))]
+fn delay_suffix(view: &DelayView, labels: &TrayLabels, nodes: &[NodeInfo], tag: &str) -> String {
+    let Some(exit) = crate::tray_delay::resolve_exit_tag(nodes, tag) else {
+        return String::new();
+    };
+    match view.outcome(&exit) {
+        None => String::new(),
+        Some(DelayOutcome::Testing) => " · …".to_string(),
+        Some(DelayOutcome::Done(delay_ms)) => format!(" · {delay_ms} ms"),
+        Some(DelayOutcome::Failed) => format!(" · {}", labels.delay_failed),
+    }
 }
 
 /// Derive the subscription submenu body from the stored index. `None` while the
@@ -1588,6 +1837,16 @@ mod tests {
             ("复制代理命令", "打开代理终端")
         );
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
+        assert_eq!(
+            (
+                zh.delay_current,
+                zh.delay_group,
+                zh.delay_progress,
+                zh.delay_failed
+            ),
+            ("测速：当前出口", "测速本组", "测速中 {}/{}", "失败")
+        );
+        assert_eq!(zh.delay_progress_text(3, 8), "测速中 3/8");
 
         let en = labels(TrayLanguage::En);
         assert_eq!(en.service(false), "Start Proxy Service");
@@ -1604,6 +1863,21 @@ mod tests {
             ("Copy Proxy Command", "Open Proxy Terminal")
         );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
+        assert_eq!(
+            (
+                en.delay_current,
+                en.delay_group,
+                en.delay_progress,
+                en.delay_failed
+            ),
+            (
+                "Test Delay: Current Exits",
+                "Test Delay: This Group",
+                "Testing {}/{}",
+                "Failed"
+            )
+        );
+        assert_eq!(en.delay_progress_text(3, 8), "Testing 3/8");
     }
 
     #[test]
@@ -1905,5 +2179,169 @@ mod tests {
         assert!(!skip_live_node_rebuild(true, true));
         assert!(!skip_live_node_rebuild(false, false));
         assert!(!skip_live_node_rebuild(true, false));
+    }
+
+    /// A delay view with a run and the outcomes of a finished or running test.
+    fn delay_view(
+        run: Option<(DelayScope, usize, usize)>,
+        outcomes: &[(&str, DelayOutcome)],
+    ) -> DelayView {
+        DelayView {
+            run,
+            outcomes: outcomes
+                .iter()
+                .map(|(tag, outcome)| (tag.to_string(), *outcome))
+                .collect(),
+        }
+    }
+
+    fn delay_button_of(entry: &NodeMenuEntry) -> &DelayButton {
+        match entry {
+            NodeMenuEntry::Delay(button) => button,
+            other => panic!("expected a delay button, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delay_decoration_puts_a_button_on_every_page() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(
+            &mut entries,
+            &labels(TrayLanguage::Zh),
+            &nodes,
+            &delay_view(None, &[]),
+        );
+
+        // Top page: the button above the group, labels untouched while idle.
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "测速：当前出口");
+        assert!(top.enabled);
+        assert_eq!(top.scope, DelayScope::Top);
+        let group = group(&entries[1]);
+        assert_eq!(group.label, "节点选择 → 日本 02");
+        let page = group.delay.as_ref().expect("group page button");
+        assert_eq!(page.label, "测速本组");
+        assert!(page.enabled);
+        assert_eq!(page.scope, DelayScope::Group("节点选择".into()));
+    }
+
+    #[test]
+    fn delay_decoration_appends_the_newest_result_to_its_rows() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(
+            Some((DelayScope::Top, 2, 2)),
+            &[
+                ("香港 01", DelayOutcome::Done(45)),
+                ("日本 02", DelayOutcome::Testing),
+            ],
+        );
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut entries, &labels(TrayLanguage::Zh), &nodes, &view);
+
+        // The button of the page under test shows the progress, disabled…
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "测速中 2/2");
+        assert!(!top.enabled);
+        // …the group label mirrors the result of the member it exits through…
+        let group = group(&entries[1]);
+        assert_eq!(group.label, "节点选择 → 日本 02 · …");
+        let page = group.delay.as_ref().expect("group page button");
+        assert_eq!(page.label, "测速本组");
+        assert!(!page.enabled);
+        // …and every member carries its own result.
+        assert_eq!(group.members[0].label, "香港 01 · 45 ms");
+        assert_eq!(group.members[1].label, "日本 02 · …");
+    }
+
+    #[test]
+    fn delay_decoration_names_a_failed_probe_per_language() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(
+            Some((DelayScope::Group("节点选择".into()), 1, 2)),
+            &[
+                ("香港 01", DelayOutcome::Failed),
+                ("日本 02", DelayOutcome::Testing),
+            ],
+        );
+        for (language, failed, group_label) in [
+            (TrayLanguage::Zh, "香港 01 · 失败", "节点选择 → 日本 02 · …"),
+            (
+                TrayLanguage::En,
+                "香港 01 · Failed",
+                "节点选择 → 日本 02 · …",
+            ),
+        ] {
+            let mut entries = node_menu_entries(&nodes, "香港 01");
+            apply_delay(&mut entries, &labels(language), &nodes, &view);
+            let group = group(&entries[1]);
+            assert_eq!(group.members[0].label, failed);
+            assert_eq!(group.label, group_label);
+            // A run on another page leaves the top button disabled with its
+            // plain label.
+            let top = delay_button_of(&entries[0]);
+            assert_eq!(top.label, labels(language).delay_current);
+            assert!(!top.enabled);
+            // The group page's own button carries the progress.
+            let page = group.delay.as_ref().expect("group page button");
+            assert_eq!(page.label, labels(language).delay_progress_text(1, 2));
+        }
+    }
+
+    #[test]
+    fn a_flat_profile_gets_the_top_button_above_its_nodes() {
+        let nodes = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(None, &[("香港 01", DelayOutcome::Done(12))]);
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut entries, &labels(TrayLanguage::En), &nodes, &view);
+        assert_eq!(entries.len(), 3);
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "Test Delay: Current Exits");
+        assert!(top.enabled);
+        assert_eq!(item(&entries[1]).label, "香港 01 · 12 ms");
+        // A node the newest test did not probe keeps its bare label.
+        assert_eq!(item(&entries[2]).label, "日本 02");
+    }
+
+    #[test]
+    fn a_page_without_rows_gets_no_button() {
+        let mut entries: Vec<NodeMenuEntry> = Vec::new();
+        apply_delay(
+            &mut entries,
+            &labels(TrayLanguage::Zh),
+            &[],
+            &delay_view(None, &[]),
+        );
+        assert!(entries.is_empty());
     }
 }

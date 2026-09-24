@@ -17,6 +17,13 @@ mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
+/// Tray delay test. A macOS-only feature: the macOS build compiles it, and so
+/// do the test builds of every host, so its platform-neutral model logic keeps
+/// host-side unit coverage. The Windows and Linux release builds do not include
+/// it and their tray keeps its old shape; the runner and the menu-close watch
+/// inside it are macOS-gated.
+#[cfg(any(target_os = "macos", test))]
+mod tray_delay;
 #[cfg(target_os = "macos")]
 mod tray_speed;
 #[cfg(target_os = "windows")]
