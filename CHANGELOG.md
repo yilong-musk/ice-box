@@ -14,7 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resolve along their current selection (recursively), leaves are probed
   directly — deduplicated and in order, and streams results back into the menu
   labels as ` · 45 ms` / ` · 失败` suffixes, with group rows mirroring their
-  current member. Closing the menu cancels the run. Windows keeps its existing
+  current member and the suffix colour graded like the Nodes page (green under
+  300 ms, orange under 1 s, red from 1 s; failures red). The click that starts
+  a test reopens the menu, so the progress and the results land where the user
+  is looking; closing the menu cancels the run. Windows keeps its existing
   tray menu (the feature is gated to macOS for this release).
 
 - hysteria2 `mport` (port hopping) support in share-link imports: `mport=a-b`

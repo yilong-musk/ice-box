@@ -59,10 +59,17 @@ windows-sys = { version = "0.59", features = [
 # resolves to, so no extra code enters the app.
 block2 = "0.6"
 objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "CFRunLoop",
+    "CFString",
+] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "block2",
+    "NSAttributedString",
     "NSButton",
     "NSColor",
     "NSControl",
@@ -88,6 +95,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSNotification",
     "NSObject",
     "NSOperation",
+    "NSRange",
     "NSString",
     "block2",
     "objc2-core-foundation",

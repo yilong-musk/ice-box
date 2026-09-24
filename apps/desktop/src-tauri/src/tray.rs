@@ -24,11 +24,19 @@ use crate::commands::{
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 #[cfg(any(target_os = "macos", test))]
-use crate::tray_delay::{DelayOutcome, DelayScope, DelayView};
+use crate::tray_delay::{delay_tone, DelayOutcome, DelayScope, DelayTone, DelayView};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
 use ice_core::CoreStatus;
 use ice_engine::{read_index, set_active, SubscriptionMeta, SubscriptionPaths};
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::AllocAnyThread;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSColor, NSForegroundColorAttributeName, NSMenu, NSMenuItem};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSMutableAttributedString, NSRange, NSString};
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -806,6 +814,10 @@ impl TrayMenuState {
             .map_err(|err| tray_error("update tray nodes enabled", err))?;
         *applied = entries.to_vec();
         self.nodes_dirty.store(false, Ordering::SeqCst);
+        // The rebuild dropped the coloured result suffixes with the old rows;
+        // put the new ones back (`colorize_delay_results`).
+        #[cfg(target_os = "macos")]
+        colorize_delay_results(app, &self.labels());
         Ok(())
     }
 
@@ -1475,6 +1487,15 @@ fn delay_button(view: &DelayView, labels: &TrayLabels, scope: DelayScope) -> Del
     }
 }
 
+/// Separator between a row's name and the delay result appended to it. The
+/// colouring side matches this exact text, so the two sides cannot drift.
+#[cfg(any(target_os = "macos", test))]
+const SUFFIX_SEPARATOR: &str = " · ";
+
+/// Unit of a measured delay, as the suffix prints it.
+#[cfg(any(target_os = "macos", test))]
+const DELAY_UNIT: &str = " ms";
+
 /// Suffix a row carries for the newest test: nothing when the exit node behind
 /// `tag` was not probed, else `…`, the measured delay, or the failure text.
 #[cfg(any(target_os = "macos", test))]
@@ -1484,9 +1505,137 @@ fn delay_suffix(view: &DelayView, labels: &TrayLabels, nodes: &[NodeInfo], tag: 
     };
     match view.outcome(&exit) {
         None => String::new(),
-        Some(DelayOutcome::Testing) => " · …".to_string(),
-        Some(DelayOutcome::Done(delay_ms)) => format!(" · {delay_ms} ms"),
-        Some(DelayOutcome::Failed) => format!(" · {}", labels.delay_failed),
+        Some(DelayOutcome::Testing) => format!("{SUFFIX_SEPARATOR}…"),
+        Some(DelayOutcome::Done(delay_ms)) => format!("{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+        Some(DelayOutcome::Failed) => format!("{SUFFIX_SEPARATOR}{}", labels.delay_failed),
+    }
+}
+
+/// The delay result a menu title carries: the colour band it asks for, and the
+/// byte offset its suffix starts at. `None` for a title without a finished
+/// result — a bare row, the `…` of a probe in flight, or anything else.
+///
+/// The title is what the menu shows rather than the model behind it: every
+/// finished row prints exactly what [`delay_suffix`] appended, and no other
+/// item in the tray menu ends in ` · <digits> ms` or ` · <failed>`.
+#[cfg(any(target_os = "macos", test))]
+fn delay_suffix_color(title: &str, labels: &TrayLabels) -> Option<(usize, DelayTone)> {
+    let start = title.rfind(SUFFIX_SEPARATOR)?;
+    let suffix = &title[start + SUFFIX_SEPARATOR.len()..];
+    // The failure text is a label, not a number: compare the whole suffix.
+    if suffix == labels.delay_failed {
+        return Some((start, DelayTone::Bad));
+    }
+    let digits = suffix.strip_suffix(DELAY_UNIT)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((start, delay_tone(digits.parse().ok()?)))
+}
+
+/// `start..` of `title` as the pair AppKit counts in: an `NSRange` holds UTF-16
+/// code units, so a node name holding multi-byte characters would misplace the
+/// colour if the range were counted in Rust bytes.
+#[cfg(any(target_os = "macos", test))]
+fn suffix_units(title: &str, start: usize) -> (usize, usize) {
+    let location = title[..start].encode_utf16().count();
+    let length = title[start..].encode_utf16().count();
+    (location, length)
+}
+
+/// Colour the delay results of the tray menu after a node rebuild.
+///
+/// The rebuild is what needs this: muda drops the submenu's rows and builds new
+/// ones, and a fresh item carries no attributed title, so every rebuild colours
+/// its own rows — the menu that is open during a run is refreshed at most once
+/// a second, and each refresh colours the results that have landed.
+///
+/// Off-main-thread only, like the rebuild itself: the walk hops to the main
+/// thread and blocks until it is done, so no rebuild interleaves with it.
+#[cfg(target_os = "macos")]
+fn colorize_delay_results(app: &AppHandle, labels: &TrayLabels) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let labels = *labels;
+    let result = tray.with_inner_tray_icon(move |tray| {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return false;
+        };
+        let Some(status_item) = tray.ns_status_item() else {
+            return false;
+        };
+        let Some(menu) = status_item.menu(mtm) else {
+            return false;
+        };
+        colorize_menu(&menu, labels);
+        true
+    });
+    match result {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!("tray delay colours: tray menu not found"),
+        Err(err) => tracing::warn!(error = %err, "tray delay colours: menu walk failed"),
+    }
+}
+
+/// Colour the finished-result suffix of every row of `menu`, the submenus (the
+/// node groups) included: a group's own title carries the result of the member
+/// it exits through, and its members carry their own.
+#[cfg(target_os = "macos")]
+fn colorize_menu(menu: &NSMenu, labels: TrayLabels) {
+    let items = menu.itemArray();
+    for index in 0..items.count() {
+        let item = items.objectAtIndex(index);
+        let title = item.title().to_string();
+        if let Some((start, tone)) = delay_suffix_color(&title, &labels) {
+            colorize_row(&item, &title, start, tone);
+        }
+        if let Some(submenu) = item.submenu() {
+            colorize_menu(&submenu, labels);
+        }
+    }
+}
+
+/// Rewrite `item`'s title with `tone` on the suffix that starts at byte
+/// `start`, and leave the rest of the row alone.
+///
+/// The attributed title carries that one attribute on that one range: AppKit
+/// draws the ranges without a colour in the menu's own text colour, so the
+/// name reads the same as before in either appearance, and a highlighted row
+/// still inverts it (an explicit colour would stick through the highlight).
+/// No font attribute, either: the menu's own font is what an untouched row
+/// gets, and setting one risks the baseline shift attributed titles are known
+/// for.
+#[cfg(target_os = "macos")]
+fn colorize_row(item: &NSMenuItem, title: &str, start: usize, tone: DelayTone) {
+    let (location, length) = suffix_units(title, start);
+    let text = NSString::from_str(title);
+    let attributed =
+        NSMutableAttributedString::initWithString(NSMutableAttributedString::alloc(), &text);
+    // SAFETY: the attribute name is AppKit's own, the value is the `NSColor`
+    // AppKit documents for it, and the range lies inside the string.
+    unsafe {
+        attributed.addAttribute_value_range(
+            NSForegroundColorAttributeName,
+            &tone_color(tone),
+            NSRange::new(location, length),
+        );
+    }
+    item.setAttributedTitle(Some(&attributed));
+}
+
+/// Menu text colour for a result band. All three are dynamic system colours,
+/// so they stay legible when the menu flips between the light and the dark
+/// appearance.
+#[cfg(target_os = "macos")]
+fn tone_color(tone: DelayTone) -> Retained<NSColor> {
+    match tone {
+        // The Nodes page's green / yellow / red in system colours; the system
+        // orange stands in for the system yellow, which barely reads against
+        // the light menu background.
+        DelayTone::Ok => NSColor::systemGreenColor(),
+        DelayTone::Warn => NSColor::systemOrangeColor(),
+        DelayTone::Bad => NSColor::systemRedColor(),
     }
 }
 
@@ -2313,6 +2462,85 @@ mod tests {
             let page = group.delay.as_ref().expect("group page button");
             assert_eq!(page.label, labels(language).delay_progress_text(1, 2));
         }
+    }
+
+    #[test]
+    fn delay_suffix_color_locates_the_finished_results() {
+        let zh = labels(TrayLanguage::Zh);
+        let name = "香港 01";
+        // Every band, on a plain row and on a group row that carries the
+        // result of the member it exits through.
+        for (delay_ms, tone) in [
+            (45, DelayTone::Ok),
+            (299, DelayTone::Ok),
+            (300, DelayTone::Warn),
+            (999, DelayTone::Warn),
+            (1000, DelayTone::Bad),
+        ] {
+            for title in [
+                format!("{name}{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+                format!("节点选择 → 日本 02{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+            ] {
+                let start = title.rfind(SUFFIX_SEPARATOR).expect("separator");
+                assert_eq!(
+                    delay_suffix_color(&title, &zh),
+                    Some((start, tone)),
+                    "{title}"
+                );
+            }
+        }
+        // The suffix is what is coloured, separator included: a name that held
+        // the separator itself keeps its own bytes untouched.
+        let title = format!("A{SUFFIX_SEPARATOR}B{SUFFIX_SEPARATOR}45{DELAY_UNIT}");
+        let (start, tone) = delay_suffix_color(&title, &zh).expect("finished result");
+        assert_eq!(tone, DelayTone::Ok);
+        assert_eq!(&title[start..], format!("{SUFFIX_SEPARATOR}45{DELAY_UNIT}"));
+    }
+
+    #[test]
+    fn delay_suffix_color_keeps_to_finished_results() {
+        let zh = labels(TrayLanguage::Zh);
+        let en = labels(TrayLanguage::En);
+        // A probe in flight prints `…`, and a row the test never reached is
+        // bare: neither asks for a colour.
+        assert_eq!(
+            delay_suffix_color(&format!("香港 01{SUFFIX_SEPARATOR}…"), &zh),
+            None
+        );
+        assert_eq!(delay_suffix_color("香港 01", &zh), None);
+        // A failure is coloured per the menu's own language…
+        for language in [TrayLanguage::Zh, TrayLanguage::En] {
+            let labels = labels(language);
+            let title = format!("香港 01{SUFFIX_SEPARATOR}{}", labels.delay_failed);
+            assert_eq!(
+                delay_suffix_color(&title, &labels),
+                Some(("香港 01".len(), DelayTone::Bad)),
+                "{title}"
+            );
+        }
+        // …and another language's label is not this menu's.
+        assert_eq!(
+            delay_suffix_color(
+                &format!("香港 01{SUFFIX_SEPARATOR}{}", en.delay_failed),
+                &zh
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn suffix_units_count_utf16_code_units_not_bytes() {
+        // 日 and 本 are three bytes each, the emoji four — and two UTF-16 units.
+        let title = format!("日本😀{SUFFIX_SEPARATOR}45{DELAY_UNIT}");
+        let start = title.rfind(SUFFIX_SEPARATOR).expect("separator");
+        assert_eq!(start, 10);
+        assert_eq!(
+            delay_suffix_color(&title, &labels(TrayLanguage::Zh)),
+            Some((10, DelayTone::Ok))
+        );
+        // What AppKit needs: the location in UTF-16 units, the suffix's own
+        // length in the same units.
+        assert_eq!(suffix_units(&title, start), (4, 8));
     }
 
     #[test]
