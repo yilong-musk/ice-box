@@ -376,15 +376,17 @@ pub(crate) fn install_menu_watch(tray: &tauri::tray::TrayIcon<tauri::Wry>) {
         let center = objc2_foundation::NSNotificationCenter::defaultCenter();
         // The observer's `object` filter: this menu, and no other.
         let object: &objc2::runtime::AnyObject = &menu;
-        for (name, handler) in [
+        // SAFETY: AppKit declares the notification names as constant statics;
+        // reading them neither mutates nor races with anything.
+        let (begin, end) = unsafe {
             (
                 objc2_app_kit::NSMenuDidBeginTrackingNotification,
-                on_menu_opened as fn(),
-            ),
-            (
                 objc2_app_kit::NSMenuDidEndTrackingNotification,
-                on_menu_closed as fn(),
-            ),
+            )
+        };
+        for (name, handler) in [
+            (begin, on_menu_opened as fn()),
+            (end, on_menu_closed as fn()),
         ] {
             let block: block2::RcBlock<
                 dyn Fn(std::ptr::NonNull<objc2_foundation::NSNotification>),
