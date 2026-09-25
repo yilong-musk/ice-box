@@ -1166,19 +1166,20 @@ fn retitle_node_rows(parent: &Submenu<Wry>, entries: &[NodeMenuEntry]) -> Result
                 if members.len() != group_row_count(group) {
                     return Ok(false);
                 }
-                let mut member_index = 0usize;
+                // The group's own button (and the separator under it) sits
+                // above its members on the pages that have one; the walk steps
+                // over both to reach them.
                 #[cfg(any(target_os = "macos", test))]
                 if let Some(button) = &group.delay {
-                    if let Some(MenuItemKind::MenuItem(row)) = members.get(member_index) {
+                    if let Some(MenuItemKind::MenuItem(row)) = members.first() {
                         retitle_delay_row(row, button)?;
                     }
-                    member_index += DELAY_BUTTON_ROWS;
                 }
-                for member in &group.members {
-                    if let Some(MenuItemKind::Check(row)) = members.get(member_index) {
+                let button_rows = group_delay_rows(group);
+                for (offset, member) in group.members.iter().enumerate() {
+                    if let Some(MenuItemKind::Check(row)) = members.get(button_rows + offset) {
                         retitle_node_item(row, member)?;
                     }
-                    member_index += 1;
                 }
                 index += 1;
             }
@@ -1203,12 +1204,24 @@ fn node_row_count(entries: &[NodeMenuEntry]) -> usize {
 /// How many rows one group page puts inside its own submenu: its members, and
 /// the group's own delay button with its separator where that page has one.
 fn group_row_count(group: &NodeMenuGroup) -> usize {
-    let members = group.members.len();
-    #[cfg(any(target_os = "macos", test))]
+    group.members.len() + group_delay_rows(group)
+}
+
+/// How many rows a group page puts above its members: the group's own delay
+/// button and its separator, on the pages that have a button.
+#[cfg(any(target_os = "macos", test))]
+fn group_delay_rows(group: &NodeMenuGroup) -> usize {
     if group.delay.is_some() {
-        return members + DELAY_BUTTON_ROWS;
+        DELAY_BUTTON_ROWS
+    } else {
+        0
     }
-    members
+}
+
+/// Nothing sits above the members where the platform has no delay button.
+#[cfg(not(any(target_os = "macos", test)))]
+fn group_delay_rows(_group: &NodeMenuGroup) -> usize {
+    0
 }
 
 /// Rewrite one node row: its text, whether it takes a click, and its check
