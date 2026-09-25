@@ -53,26 +53,23 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The menu-bar readout: `with_inner_tray_icon` reaches the status item's button
-# so the icon and the two-line speed label can be composed into the item's image
-# (see `tray_speed.rs`). Versions match what `tauri`'s own macOS stack already
-# resolves to, so no extra code enters the app.
+# The AppKit work the tray does itself: `with_inner_tray_icon` reaches the
+# status item's button (the menu-bar readout, `tray_speed.rs`) and its menu
+# (the delay buttons' own views, `tray_delay_view.rs`), and the tray colours
+# its delay results in place (`tray.rs`). Versions match what `tauri`'s own
+# macOS stack already resolves to, so no extra code enters the app.
 block2 = "0.6"
 objc2 = "0.6"
-objc2-core-foundation = { version = "0.3", default-features = false, features = [
-    "std",
-    "block2",
-    "CFRunLoop",
-    "CFString",
-] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "block2",
     "NSAttributedString",
+    "NSBezierPath",
     "NSButton",
     "NSColor",
     "NSControl",
+    "NSEvent",
     "NSFont",
     "NSFontDescriptor",
     "NSImage",
@@ -83,6 +80,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSStatusItem",
     "NSText",
     "NSStringDrawing",
+    "NSTrackingArea",
     "NSView",
     "NSWindow",
 ] }

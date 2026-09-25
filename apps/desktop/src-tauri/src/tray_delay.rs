@@ -15,16 +15,15 @@
 //! re-derived at most once a second while they do, and once more when the run
 //! ends.
 //!
-//! A run is cancelled by closing the tray menu. The click that starts a test
-//! closes the menu too, so the cancel is armed only once the menu has been seen
-//! open again — `NSMenuDidBeginTrackingNotification` — and fires on the next
-//! close (`NSMenuDidEndTrackingNotification`), between two probes.
+//! A run is cancelled by closing the tray menu: the button lives in the menu,
+//! so the menu is open when a run starts, and the next close — the user
+//! dismissing the menu — is the cancel, fired between two probes.
 //!
-//! The same click also closes the menu, which AppKit does not let a menu item
-//! prevent. A run that has probes to run therefore reopens the menu itself as
-//! soon as the click's tracking ends (`request_reopen`), so the progress and
-//! the results land where the user is looking; a run with nothing to probe
-//! leaves the menu closed.
+//! The button is a custom view on its menu item (`tray_delay_view`), which is
+//! what keeps that starting click from closing the menu: picking a plain item
+//! would end the tracking, and with it the run the click had just started.
+//! AppKit gives no menu item a way to prevent that, so the row handles its own
+//! mouse events instead.
 
 use crate::commands::NodeInfo;
 use std::collections::{BTreeMap, HashSet};
@@ -34,8 +33,6 @@ use std::sync::Mutex;
 use crate::commands::{collect_nodes, probe_node_delay};
 #[cfg(target_os = "macos")]
 use crate::AppState;
-#[cfg(target_os = "macos")]
-use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop, CFType};
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
@@ -54,28 +51,14 @@ pub(crate) enum DelayScope {
 }
 
 impl DelayScope {
-    /// Menu id carrying the scope, in the same JSON-array form as the node
-    /// actions, so tags holding any separator stay unambiguous.
+    /// Menu id of the page's button, in the same JSON-array form as the node
+    /// actions, so a tag holding any separator stays one id. The button starts
+    /// its run from its own view rather than from a menu event, so nothing
+    /// decodes the id at run time; it names the row for muda and for logs.
     pub(crate) fn menu_id(&self) -> String {
         match self {
             Self::Top => serde_json::json!(["delay", "top"]).to_string(),
             Self::Group(tag) => serde_json::json!(["delay", "group", tag]).to_string(),
-        }
-    }
-
-    /// Decode an id built by [`Self::menu_id`]. `None` for every other menu id
-    /// (service switch, mode group, node items, subscription items, …).
-    pub(crate) fn from_menu_id(id: &str) -> Option<Self> {
-        if !id.starts_with('[') {
-            return None;
-        }
-        let parts: Vec<String> = serde_json::from_str(id).ok()?;
-        match parts.as_slice() {
-            [kind, page] if kind == "delay" && page == "top" => Some(Self::Top),
-            [kind, page, tag] if kind == "delay" && page == "group" => {
-                Some(Self::Group(tag.clone()))
-            }
-            _ => None,
         }
     }
 }
@@ -175,9 +158,9 @@ impl DelayState {
         }
     }
 
-    /// Start a run over `tags`, marking every one of them `Testing` so a
-    /// reopened menu shows what is still to come. Results of tags the run does
-    /// not touch stay, like the results table on the Nodes page.
+    /// Start a run over `tags`, marking every one of them `Testing` so the open
+    /// menu shows what is still to come. Results of tags the run does not touch
+    /// stay, like the results table on the Nodes page.
     fn begin(&mut self, scope: DelayScope, tags: Vec<String>) {
         for tag in &tags {
             self.outcomes.insert(tag.clone(), DelayOutcome::Testing);
@@ -297,27 +280,16 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Set when the tray menu opens. Reset when a test starts, so the close that
-/// follows the start click — the menu was already open when it was clicked — is
-/// not read as a cancel.
+/// Whether the tray menu is open right now: set when its tracking begins,
+/// cleared when it ends. A mirror, not a state of the run — the close that
+/// finds a run active while the menu was open is the cancel, whether it came
+/// long after the start or right away.
 #[cfg(target_os = "macos")]
 static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 
 /// Set by a close of the tray menu after a test start; consumed between probes.
 #[cfg(target_os = "macos")]
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-/// Set while the tray menu is being tracked — its begin-tracking notification
-/// through its end-tracking one. The reopen request reads it to tell whether
-/// the start click's own tracking is still going.
-#[cfg(target_os = "macos")]
-static MENU_TRACKING: AtomicBool = AtomicBool::new(false);
-
-/// Set when a reopen request ran while the menu was still tracking: its close
-/// handler consumes the request and makes the click instead, so the reopen
-/// lands whether or not the tracking had ended by then.
-#[cfg(target_os = "macos")]
-static REOPEN_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Tray「测速」: probe the page's exit nodes in order and refresh the menu as
 /// results land. Off the main thread like the other tray actions.
@@ -328,11 +300,6 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
         return;
     }
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-    // The menu is open right now (the click came from it); the close that
-    // follows this call is the start click's own and must not cancel the test.
-    MENU_OPENED.store(false, Ordering::SeqCst);
-    // Last run's reopen is either done or moot; this run asks for its own.
-    REOPEN_PENDING.store(false, Ordering::SeqCst);
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || run(app, scope));
 }
@@ -359,12 +326,9 @@ fn run(app: AppHandle, scope: DelayScope) {
         return;
     }
     lock_state().begin(scope, tags.clone());
-    // Show `…` and the progress right away, so the menu the reopen brings back
-    // is not still showing the idle labels.
+    // Show `…` and the progress right away: the menu is open (the click came
+    // from it) and must not still show the idle labels.
     crate::tray::sync_menu(&app);
-    // The click that started this run closed the menu; bring it back so the
-    // user watches the results land. A run with no probes never gets here.
-    request_reopen(&app);
     let mut last_refresh = Instant::now();
     for (index, tag) in tags.iter().enumerate() {
         // A close of the menu cancels between probes; the probe in flight runs
@@ -392,105 +356,14 @@ fn run(app: AppHandle, scope: DelayScope) {
     }
     lock_state().finish(CANCEL_REQUESTED.load(Ordering::SeqCst));
     RUN_ACTIVE.store(false, Ordering::SeqCst);
-    MENU_OPENED.store(false, Ordering::SeqCst);
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     // Final refresh, always: the buttons must go back to their labels and the
     // last results must reach the menu.
     crate::tray::sync_menu(&app);
 }
 
-/// Ask for the tray menu to be brought back now that the run is under way.
-#[cfg(target_os = "macos")]
-fn request_reopen(app: &AppHandle) {
-    // The request reads `MENU_TRACKING` and may arm `REOPEN_PENDING`, both
-    // shared with the close handler, so it is decided on the main thread,
-    // where the two are serialized. The task only checks and queues — it never
-    // blocks, so tao's event callback stays free.
-    let app = app.clone();
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || reopen_when_closed(&handle));
-}
-
-/// Make the reopen request from the main thread: queue the click, or — when
-/// the start click's own tracking is still going — hand it to the close
-/// handler, which makes the click once the menu has closed.
-#[cfg(target_os = "macos")]
-fn reopen_when_closed(app: &AppHandle) {
-    if MENU_TRACKING.load(Ordering::SeqCst) {
-        REOPEN_PENDING.store(true, Ordering::SeqCst);
-        return;
-    }
-    post_reopen_click(app);
-}
-
-/// Queue the reopen click as a run-loop block in the main run loop's default
-/// mode. Menu tracking runs the run loop in the event-tracking mode, so a
-/// default-mode block cannot land while the start click's menu is still up —
-/// it runs at the first default-mode pass, right after that menu has closed.
-///
-/// A `run_on_main_thread` task would land there too, but it runs inside tao's
-/// event callback, and the menu it opens would hold that callback for as long
-/// as the menu is up: every later main-thread task — the per-second menu
-/// refresh included — would queue behind it instead of streaming the results
-/// into the open menu.
-#[cfg(target_os = "macos")]
-fn post_reopen_click(app: &AppHandle) {
-    let app = app.clone();
-    let block = block2::RcBlock::new(move || {
-        if MENU_TRACKING.load(Ordering::SeqCst) {
-            // A menu is open after all. The block is only ever queued when one
-            // is not, so this is a safety net: let the close handler click.
-            REOPEN_PENDING.store(true, Ordering::SeqCst);
-            return;
-        }
-        click_status_item(&app);
-    });
-    let Some(run_loop) = CFRunLoop::main() else {
-        return;
-    };
-    // SAFETY: `kCFRunLoopDefaultMode` is Core Foundation's own mode constant,
-    // and the run loop retains the block until it runs it.
-    unsafe {
-        let mode: Option<&CFType> = kCFRunLoopDefaultMode.map(|mode| mode.as_ref());
-        run_loop.perform_block(mode, Some(&block));
-    }
-    run_loop.wake_up();
-}
-
-/// Click the tray status item the way a real click does: the status item's own
-/// action opens its menu (`tray-icon` shows the menu the same way).
-#[cfg(target_os = "macos")]
-fn click_status_item(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(crate::tray::TRAY_ID) else {
-        return;
-    };
-    // `with_inner_tray_icon` hops to the main thread; the run-loop block is
-    // already there, so it runs inline and keeps the block's own context.
-    let result = tray.with_inner_tray_icon(|tray| {
-        let Some(mtm) = objc2::MainThreadMarker::new() else {
-            return false;
-        };
-        let Some(status_item) = tray.ns_status_item() else {
-            return false;
-        };
-        let Some(button) = status_item.button(mtm) else {
-            return false;
-        };
-        // SAFETY: a status item click only opens its menu; `None` is `nil`,
-        // the sender a programme (`performClick:`) may leave out.
-        unsafe { button.performClick(None) };
-        true
-    });
-    match result {
-        Ok(true) => {}
-        Ok(false) => tracing::warn!("tray delay: tray menu not found, menu not reopened"),
-        Err(err) => tracing::warn!(error = %err, "tray delay: reopening the menu failed"),
-    }
-}
-
-/// Observe the tray menu's tracking: remember that it opened, cancel the test
-/// in flight when it closes again, and reopen the menu for a run that asked
-/// for it (`REOPEN_PENDING`).
+/// Observe the tray menu's tracking: remember that it opened, and cancel the
+/// test in flight when it closes again.
 ///
 /// AppKit posts `NSMenuDid{Begin,End}TrackingNotification` on the default
 /// notification center with the menu as the notification object, so an
@@ -563,20 +436,14 @@ pub(crate) fn install_menu_watch(tray: &tauri::tray::TrayIcon<tauri::Wry>) {
 #[cfg(target_os = "macos")]
 fn on_menu_opened(_app: &AppHandle) {
     MENU_OPENED.store(true, Ordering::SeqCst);
-    MENU_TRACKING.store(true, Ordering::SeqCst);
 }
 
 #[cfg(target_os = "macos")]
-fn on_menu_closed(app: &AppHandle) {
-    MENU_TRACKING.store(false, Ordering::SeqCst);
+fn on_menu_closed(_app: &AppHandle) {
     if RUN_ACTIVE.load(Ordering::SeqCst) && MENU_OPENED.load(Ordering::SeqCst) {
         CANCEL_REQUESTED.store(true, Ordering::SeqCst);
     }
-    // A run asked for the menu back while this tracking was still going: the
-    // click belongs after the close, which is now.
-    if REOPEN_PENDING.swap(false, Ordering::SeqCst) {
-        post_reopen_click(app);
-    }
+    MENU_OPENED.store(false, Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -695,25 +562,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_ids_round_trip_for_awkward_tags() {
-        for scope in [
-            DelayScope::Top,
-            DelayScope::Group("组:1 | A&B [2]".to_string()),
-        ] {
-            assert_eq!(DelayScope::from_menu_id(&scope.menu_id()), Some(scope));
-        }
-        // Every other id space stays its own.
-        for id in [
-            "service",
-            "show",
-            "[\"node\",\"香港 01\"]",
-            "[\"sub\",\"11111111-1111-4111-8111-111111111111\"]",
-            "[\"delay\"]",
-            "[\"delay\",\"group\"]",
-            "[\"delay\",\"top\",\"extra\"]",
-        ] {
-            assert_eq!(DelayScope::from_menu_id(id), None, "{id}");
-        }
+    fn scope_ids_name_the_page_they_stand_for() {
+        // The row's menu id, in the same JSON-array form as the node actions,
+        // so a tag holding any separator stays one id. The button starts its
+        // run from its own view rather than from a menu event, so the id is
+        // no longer decoded at run time — only written.
+        assert_eq!(DelayScope::Top.menu_id(), "[\"delay\",\"top\"]");
+        assert_eq!(
+            DelayScope::Group("组:1 | A&B [2]".to_string()).menu_id(),
+            "[\"delay\",\"group\",\"组:1 | A&B [2]\"]"
+        );
     }
 
     #[test]

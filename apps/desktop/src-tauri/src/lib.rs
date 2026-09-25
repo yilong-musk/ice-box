@@ -25,6 +25,10 @@ mod tray;
 /// inside it are macOS-gated.
 #[cfg(any(target_os = "macos", test))]
 mod tray_delay;
+/// The delay test button's own view (macOS-only): the row handles its mouse
+/// events itself, so a click on it leaves the menu open for the running test.
+#[cfg(target_os = "macos")]
+mod tray_delay_view;
 #[cfg(target_os = "macos")]
 mod tray_speed;
 #[cfg(target_os = "windows")]

@@ -814,10 +814,15 @@ impl TrayMenuState {
             .map_err(|err| tray_error("update tray nodes enabled", err))?;
         *applied = entries.to_vec();
         self.nodes_dirty.store(false, Ordering::SeqCst);
-        // The rebuild dropped the coloured result suffixes with the old rows;
-        // put the new ones back (`colorize_delay_results`).
+        // The rebuild dropped the coloured result suffixes and the delay
+        // buttons' custom views with the old rows; put both back on the new
+        // ones (`colorize_delay_results`, `attach_delay_buttons`).
         #[cfg(target_os = "macos")]
-        colorize_delay_results(app, &self.labels());
+        {
+            let labels = self.labels();
+            colorize_delay_results(app, &labels);
+            attach_delay_buttons(app, entries, &labels);
+        }
         Ok(())
     }
 
@@ -1200,6 +1205,12 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             }
         }
     };
+    // The delay buttons' views hang off the status item's menu, which exists
+    // only once the icon is built at the end of this function: the model is
+    // kept aside for that first attach instead of read back under a lock the
+    // main thread must not take.
+    #[cfg(target_os = "macos")]
+    let seeded_node_model = node_model.clone();
     // Same seeding rule as the node submenu above: `apply_subscriptions` takes a
     // lock the main thread must never hold while the watchdog rebuilds.
     let sub_entries = current_subscription_entries(app).unwrap_or_default();
@@ -1300,11 +1311,6 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         .show_menu_on_left_click(!cfg!(target_os = "windows"))
         .on_menu_event(|app, event| {
             let id = event.id.as_ref();
-            #[cfg(target_os = "macos")]
-            if let Some(scope) = DelayScope::from_menu_id(id) {
-                crate::tray_delay::start(app, scope);
-                return;
-            }
             if let Some(action) = node_action_from_menu_id(id) {
                 switch_node(app, action);
                 return;
@@ -1354,7 +1360,10 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
 
     let _tray = builder.build(app)?;
     #[cfg(target_os = "macos")]
-    crate::tray_delay::install_menu_watch(&_tray);
+    {
+        crate::tray_delay::install_menu_watch(&_tray);
+        attach_delay_buttons(app, &seeded_node_model, &labels);
+    }
     Ok(())
 }
 
@@ -1637,6 +1646,209 @@ fn tone_color(tone: DelayTone) -> Retained<NSColor> {
         DelayTone::Warn => NSColor::systemOrangeColor(),
         DelayTone::Bad => NSColor::systemRedColor(),
     }
+}
+
+/// Attach the delay buttons' custom views to the rows of the tray menu.
+///
+/// A click that picks a normal menu item closes the menu, and a close is how a
+/// running delay test is cancelled (`tray_delay`): the click that starts a run
+/// must not also end it. An item carrying a `view` takes the click itself and
+/// the menu never selects it — but a rebuild drops the item and its view
+/// together, so every rebuild attaches the views to its own fresh rows.
+///
+/// The walk goes over the menu rather than over the model: the model reached
+/// the menu through muda, which keeps no handle on the native item a view
+/// could be put on, while the menu itself is reachable through the status item.
+/// Rows are found by position — the page button is the first row of the node
+/// submenu, a group's button the first row of the group submenu — and a row is
+/// only attached when its title still has the shape of the button it stands
+/// for, so a menu built by another layout keeps its plain rows instead of
+/// getting a view with the wrong scope. A group button's scope comes from the
+/// model entry in the matching position: the menu and the model are laid out
+/// by the same walk ([`append_node_entries`]), and a mismatch in their counts
+/// skips the group buttons.
+///
+/// Off-main-thread only, like [`colorize_delay_results`]: the walk hops to the
+/// main thread and blocks until it is done.
+#[cfg(target_os = "macos")]
+fn attach_delay_buttons(app: &AppHandle, entries: &[NodeMenuEntry], labels: &TrayLabels) {
+    // The buttons are the ones the model carries: the top page's, then one per
+    // group page, in the order `append_node_entries` lays them out. A body
+    // without one (an empty page, a failed derivation) has nothing to attach.
+    if !matches!(entries.first(), Some(NodeMenuEntry::Delay(_))) {
+        return;
+    }
+    let expected = 1 + entries
+        .iter()
+        .filter(|entry| matches!(entry, NodeMenuEntry::Group(_)))
+        .count();
+    let scopes: Vec<DelayScope> = std::iter::once(DelayScope::Top)
+        .chain(entries.iter().filter_map(|entry| match entry {
+            NodeMenuEntry::Group(group) => Some(DelayScope::Group(group.tag.clone())),
+            _ => None,
+        }))
+        .collect();
+    let labels = *labels;
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let app = app.clone();
+    let attached = tray.with_inner_tray_icon(move |tray| {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let status_item = tray.ns_status_item()?;
+        let menu = status_item.menu(mtm)?;
+        Some(attach_delay_rows(&app, &menu, &scopes, &labels))
+    });
+    match attached {
+        Ok(Some(attached)) if attached < expected => tracing::warn!(
+            attached,
+            expected,
+            "tray delay buttons: rows did not match the node model"
+        ),
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::warn!("tray delay buttons: tray menu not found"),
+        Err(err) => tracing::warn!(error = %err, "tray delay buttons: menu walk failed"),
+    }
+}
+
+/// The menu half of [`attach_delay_buttons`]: the page button of the node
+/// submenu, then the button of every group submenu under it. Returns how many
+/// rows were given a view.
+#[cfg(target_os = "macos")]
+fn attach_delay_rows(
+    app: &AppHandle,
+    menu: &NSMenu,
+    scopes: &[DelayScope],
+    labels: &TrayLabels,
+) -> usize {
+    let Some(nodes) = submenu_titled(menu, labels.nodes) else {
+        return 0;
+    };
+    let rows = nodes.itemArray();
+    let mut attached = 0;
+    // The node submenu opens with the page's own button, then its separator
+    // and the rows below it (`append_node_entries`).
+    if let Some(scope) = scopes.first() {
+        if rows.count() > 0 {
+            let row = rows.objectAtIndex(0);
+            if attach_delay_row(app, &row, scope, labels) {
+                attached += 1;
+            }
+        }
+    }
+    // A group's page button opens the group's submenu, and the model lists the
+    // groups in the same order: pair them off position by position.
+    let groups: Vec<Retained<NSMenuItem>> = (1..rows.count())
+        .map(|index| rows.objectAtIndex(index))
+        .filter(|row| row.submenu().is_some())
+        .collect();
+    let group_scopes: Vec<&DelayScope> = scopes.iter().skip(1).collect();
+    if groups.len() != group_scopes.len() {
+        tracing::warn!(
+            menu = groups.len(),
+            model = group_scopes.len(),
+            "tray delay buttons: group pages do not match the node model"
+        );
+    }
+    for (row, scope) in groups.iter().zip(group_scopes) {
+        let Some(submenu) = row.submenu() else {
+            continue;
+        };
+        let buttons = submenu.itemArray();
+        if buttons.count() == 0 {
+            continue;
+        }
+        let button = buttons.objectAtIndex(0);
+        if attach_delay_row(app, &button, scope, labels) {
+            attached += 1;
+        }
+    }
+    attached
+}
+
+/// Put the row's custom view on it, if the row still has the shape of the
+/// button `scope` stands for.
+///
+/// The row's own action is dropped with the view: on a plain item it fires on
+/// keyboard activation, which also closes the menu, and that close would
+/// cancel the run the action had just started. With a view attached the click
+/// is the way a run starts, and a click on it leaves the menu open.
+#[cfg(target_os = "macos")]
+fn attach_delay_row(
+    app: &AppHandle,
+    row: &NSMenuItem,
+    scope: &DelayScope,
+    labels: &TrayLabels,
+) -> bool {
+    let title = row.title().to_string();
+    if !delay_button_title_matches(&title, scope, labels) {
+        tracing::warn!(%title, "tray delay buttons: unexpected button row, left alone");
+        return false;
+    }
+    // SAFETY: dropping the action and the target of this item's own native
+    // menu item; AppKit keeps the item in its menu either way.
+    unsafe {
+        row.setAction(None);
+        row.setTarget(None);
+    }
+    let Some(view) =
+        crate::tray_delay_view::delay_button_view(app, &title, row.isEnabled(), scope.clone())
+    else {
+        return false;
+    };
+    row.setView(Some(&view));
+    true
+}
+
+/// The submenu a top-level item carries under `title` — the node submenu,
+/// looked up the way the walk knows it: by the label the menu shows.
+#[cfg(target_os = "macos")]
+fn submenu_titled(menu: &NSMenu, title: &str) -> Option<Retained<NSMenu>> {
+    let items = menu.itemArray();
+    (0..items.count())
+        .map(|index| items.objectAtIndex(index))
+        .find(|item| item.title().to_string() == title)
+        .and_then(|item| item.submenu())
+}
+
+/// Whether `title` has the shape of `scope`'s button: the page's own label, or
+/// a progress text while a test is in flight (the page under test shows the
+/// progress, the other pages keep their label).
+///
+/// `title` is the row's title as muda wrote it to the item — the label with
+/// its mnemonics resolved (`menu_text`) — which is the label itself here: none
+/// of the button labels carries an `&`.
+#[cfg(any(target_os = "macos", test))]
+fn delay_button_title_matches(title: &str, scope: &DelayScope, labels: &TrayLabels) -> bool {
+    let plain = match scope {
+        DelayScope::Top => labels.delay_current,
+        DelayScope::Group(_) => labels.delay_group,
+    };
+    title == plain || delay_progress_shaped(title, labels)
+}
+
+/// Whether `title` is the progress text of `labels.delay_progress` — `测速中
+/// 3/8` — told by shape: the template's own text around its two `{}`, and a
+/// number in each of their places.
+#[cfg(any(target_os = "macos", test))]
+fn delay_progress_shaped(title: &str, labels: &TrayLabels) -> bool {
+    let Some((prefix, rest)) = labels.delay_progress.split_once("{}") else {
+        return false;
+    };
+    let Some((separator, suffix)) = rest.split_once("{}") else {
+        return false;
+    };
+    let Some(numbers) = title
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    let Some((index, total)) = numbers.split_once(separator) else {
+        return false;
+    };
+    let is_number = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    is_number(index) && is_number(total)
 }
 
 /// Derive the subscription submenu body from the stored index. `None` while the
@@ -2571,5 +2783,31 @@ mod tests {
             &delay_view(None, &[]),
         );
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn delay_button_titles_are_recognised_by_shape() {
+        let zh = labels(TrayLanguage::Zh);
+        let top = DelayScope::Top;
+        let group = DelayScope::Group("节点选择".to_string());
+        // The plain labels of both page kinds, and the progress text a run
+        // prints on the page it is testing…
+        assert!(delay_button_title_matches("测速：当前出口", &top, &zh));
+        assert!(delay_button_title_matches("测速本组", &group, &zh));
+        assert!(delay_button_title_matches("测速中 3/8", &top, &zh));
+        assert!(delay_button_title_matches("测速中 12/100", &group, &zh));
+        // …and nothing else: a row, the other page's label, a half-written
+        // progress text, or another language's label.
+        assert!(!delay_button_title_matches("香港 01", &top, &zh));
+        assert!(!delay_button_title_matches("测速本组", &top, &zh));
+        assert!(!delay_button_title_matches("测速：当前出口", &group, &zh));
+        assert!(!delay_button_title_matches("测速中 3/", &top, &zh));
+        assert!(!delay_button_title_matches("测速中 /8", &top, &zh));
+        assert!(!delay_button_title_matches("测速中 3/x", &group, &zh));
+        assert!(!delay_button_title_matches("Testing 3/8", &top, &zh));
+
+        let en = labels(TrayLanguage::En);
+        assert!(delay_button_title_matches("Testing 3/8", &top, &en));
+        assert!(delay_button_title_matches("Testing 3/8", &group, &en));
     }
 }

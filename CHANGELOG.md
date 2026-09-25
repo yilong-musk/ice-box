@@ -16,8 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   labels as ` · 45 ms` / ` · 失败` suffixes, with group rows mirroring their
   current member and the suffix colour graded like the Nodes page (green under
   300 ms, orange under 1 s, red from 1 s; failures red). The click that starts
-  a test reopens the menu, so the progress and the results land where the user
-  is looking; closing the menu cancels the run. Windows keeps its existing
+  a test leaves the menu open, so the progress and the results land where the
+  user is looking; closing the menu cancels the run. Windows keeps its existing
   tray menu (the feature is gated to macOS for this release).
 
 - hysteria2 `mport` (port hopping) support in share-link imports: `mport=a-b`
