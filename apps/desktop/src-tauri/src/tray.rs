@@ -44,7 +44,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{
+        CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem,
+        Submenu,
+    },
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Wry,
 };
@@ -472,6 +475,11 @@ struct DelayButton {
     scope: DelayScope,
 }
 
+/// Rows one page's delay button brings with it: the item itself, and the
+/// separator under it.
+#[cfg(any(target_os = "macos", test))]
+const DELAY_BUTTON_ROWS: usize = 2;
+
 /// A rendered page button: the item, and the separator under it.
 #[cfg(any(target_os = "macos", test))]
 struct DelayRows {
@@ -803,6 +811,24 @@ impl TrayMenuState {
         if !dirty && applied.as_slice() == entries {
             return Ok(());
         }
+        // Rows that are already on the submenu are retitled in place. A
+        // rebuild drops every row and re-creates it, and an open tray menu
+        // does not survive that: the delay test streams its progress into the
+        // menu the click came from, and a closed menu is both a cancel and an
+        // end to what the test is showing. A run only retitles the rows it
+        // touches, so those updates come through here; a model that lists
+        // different rows (another profile, another node) is rebuilt as before.
+        if same_node_rows(&applied, entries) && retitle_node_rows(&self.nodes, entries)? {
+            *applied = entries.to_vec();
+            self.nodes_dirty.store(false, Ordering::SeqCst);
+            #[cfg(target_os = "macos")]
+            {
+                let labels = self.labels();
+                colorize_delay_results(app, &labels);
+                attach_delay_buttons(app, entries, &labels);
+            }
+            return Ok(());
+        }
         clear_node_children(&self.nodes)?;
         if let Err(err) = append_node_entries(app, &self.nodes, entries) {
             // Leave the model as it was, so the next sync retries the rebuild.
@@ -1048,6 +1074,164 @@ fn append_node_entries(
         }
     }
     Ok(())
+}
+
+/// Whether every entry of `entries` stands for the same row as the entry in
+/// its place in `applied`: same kind, same node, same group members. Labels and
+/// click states are what a retitle rewrites, so they are not part of a row's
+/// identity.
+fn same_node_rows(applied: &[NodeMenuEntry], entries: &[NodeMenuEntry]) -> bool {
+    applied.len() == entries.len()
+        && applied
+            .iter()
+            .zip(entries)
+            .all(|(applied, entry)| same_row_shape(applied, entry))
+}
+
+/// One entry of [`same_node_rows`] against the one that stands in its place.
+fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
+    match (applied, entry) {
+        #[cfg(any(target_os = "macos", test))]
+        (NodeMenuEntry::Delay(_), NodeMenuEntry::Delay(_)) => true,
+        (NodeMenuEntry::Item(applied), NodeMenuEntry::Item(entry)) => {
+            applied.action.menu_id() == entry.action.menu_id()
+        }
+        (NodeMenuEntry::Group(applied), NodeMenuEntry::Group(entry)) => {
+            // A group page is the tag it stands for plus the members it lists;
+            // its label carries the live exit and moves with it.
+            #[cfg(any(target_os = "macos", test))]
+            let same_identity =
+                applied.tag == entry.tag && applied.delay.is_some() == entry.delay.is_some();
+            #[cfg(not(any(target_os = "macos", test)))]
+            let same_identity = true;
+            same_identity
+                && applied.members.len() == entry.members.len()
+                && applied
+                    .members
+                    .iter()
+                    .zip(&entry.members)
+                    .all(|(applied, entry)| applied.action.menu_id() == entry.action.menu_id())
+        }
+        _ => false,
+    }
+}
+
+/// Rewrite the node submenu's rows from `entries` without touching the rows
+/// themselves: the same items, with the labels and states the model now
+/// carries. See [`TrayMenuState::apply_nodes`] for why an update the menu is
+/// open on must come through here rather than through a rebuild.
+///
+/// The walk addresses the rows the way [`append_node_entries`] lays them out —
+/// the page button and its separator, one check row per item, one submenu per
+/// group with the group's own button and members inside — so the two must stay
+/// in step. `false` comes back when the submenu does not hold exactly those
+/// rows — a rebuild that failed part-way, say — and the caller rebuilds after
+/// all, rather than retitling rows that stand for something else.
+fn retitle_node_rows(parent: &Submenu<Wry>, entries: &[NodeMenuEntry]) -> Result<bool, AppError> {
+    let rows = parent
+        .items()
+        .map_err(|err| tray_error("read tray node rows", err))?;
+    if rows.len() != node_row_count(entries) {
+        return Ok(false);
+    }
+    let mut index = 0usize;
+    for entry in entries {
+        match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(button) => {
+                if let Some(MenuItemKind::MenuItem(row)) = rows.get(index) {
+                    retitle_delay_row(row, button)?;
+                }
+                // The separator under the button carries nothing of its own,
+                // so the walk steps over it.
+                index += DELAY_BUTTON_ROWS;
+            }
+            NodeMenuEntry::Item(item) => {
+                if let Some(MenuItemKind::Check(row)) = rows.get(index) {
+                    retitle_node_item(row, item)?;
+                }
+                index += 1;
+            }
+            NodeMenuEntry::Group(group) => {
+                let Some(MenuItemKind::Submenu(submenu)) = rows.get(index) else {
+                    index += 1;
+                    continue;
+                };
+                submenu
+                    .set_text(menu_text(&group.label))
+                    .map_err(|err| tray_error("retitle tray node group", err))?;
+                let members = submenu
+                    .items()
+                    .map_err(|err| tray_error("read tray node group rows", err))?;
+                if members.len() != group_row_count(group) {
+                    return Ok(false);
+                }
+                let mut member_index = 0usize;
+                #[cfg(any(target_os = "macos", test))]
+                if let Some(button) = &group.delay {
+                    if let Some(MenuItemKind::MenuItem(row)) = members.get(member_index) {
+                        retitle_delay_row(row, button)?;
+                    }
+                    member_index += DELAY_BUTTON_ROWS;
+                }
+                for member in &group.members {
+                    if let Some(MenuItemKind::Check(row)) = members.get(member_index) {
+                        retitle_node_item(row, member)?;
+                    }
+                    member_index += 1;
+                }
+                index += 1;
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// How many rows `entries` puts at the top level of the node submenu: one per
+/// entry, except a page's delay button, which brings its separator along.
+fn node_row_count(entries: &[NodeMenuEntry]) -> usize {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(_) => DELAY_BUTTON_ROWS,
+            NodeMenuEntry::Item(_) | NodeMenuEntry::Group(_) => 1,
+        })
+        .sum()
+}
+
+/// How many rows one group page puts inside its own submenu: its members, and
+/// the group's own delay button with its separator where that page has one.
+fn group_row_count(group: &NodeMenuGroup) -> usize {
+    let members = group.members.len();
+    #[cfg(any(target_os = "macos", test))]
+    if group.delay.is_some() {
+        return members + DELAY_BUTTON_ROWS;
+    }
+    members
+}
+
+/// Rewrite one node row: its text, whether it takes a click, and its check
+/// mark (the platform toggles that one itself on a click, so the model's value
+/// is re-asserted).
+fn retitle_node_item(row: &CheckMenuItem<Wry>, item: &NodeMenuItem) -> Result<(), AppError> {
+    row.set_text(menu_text(&item.label))
+        .map_err(|err| tray_error("retitle tray node item", err))?;
+    row.set_enabled(item.enabled)
+        .map_err(|err| tray_error("retitle tray node item enabled", err))?;
+    row.set_checked(item.checked)
+        .map_err(|err| tray_error("retitle tray node item checked", err))
+}
+
+/// Rewrite one page's delay button. The view on the row draws the label, so
+/// the text here is what the menu item carries for the platform (and what a
+/// screen reader reads); the view itself is re-attached after the walk.
+#[cfg(any(target_os = "macos", test))]
+fn retitle_delay_row(row: &MenuItem<Wry>, button: &DelayButton) -> Result<(), AppError> {
+    row.set_text(menu_text(&button.label))
+        .map_err(|err| tray_error("retitle tray delay button", err))?;
+    row.set_enabled(button.enabled)
+        .map_err(|err| tray_error("retitle tray delay button enabled", err))
 }
 
 /// Render a page's delay test button and the separator under it.
@@ -1790,6 +1974,14 @@ fn attach_delay_row(
     unsafe {
         row.setAction(None);
         row.setTarget(None);
+    }
+    // A row that already carries one of our views is retitled through it: the
+    // refresh then leaves the item — and the subview inside it — as the open
+    // menu laid it out, and only the text it draws moves.
+    if let Some(view) = row.view() {
+        if crate::tray_delay_view::retitle_button_view(view, &title, row.isEnabled()) {
+            return true;
+        }
     }
     let Some(view) =
         crate::tray_delay_view::delay_button_view(app, &title, row.isEnabled(), scope.clone())
@@ -2809,5 +3001,88 @@ mod tests {
         let en = labels(TrayLanguage::En);
         assert!(delay_button_title_matches("Testing 3/8", &top, &en));
         assert!(delay_button_title_matches("Testing 3/8", &group, &en));
+    }
+
+    #[test]
+    fn a_retitle_keeps_the_rows_it_rewrites() {
+        let zh = labels(TrayLanguage::Zh);
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut idle = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut idle, &zh, &nodes, &delay_view(None, &[]));
+
+        // A run writes progress and results into the rows already on the menu…
+        let mut running = node_menu_entries(&nodes, "香港 01");
+        apply_delay(
+            &mut running,
+            &zh,
+            &nodes,
+            &delay_view(
+                Some((DelayScope::Top, 1, 2)),
+                &[("香港 01", DelayOutcome::Done(42))],
+            ),
+        );
+        assert_ne!(idle, running, "the run moves the labels");
+        assert!(same_node_rows(&idle, &running));
+
+        // …and a pick moves the check mark on the same rows.
+        let flat = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut before = node_menu_entries(&flat, "香港 01");
+        apply_delay(&mut before, &zh, &flat, &delay_view(None, &[]));
+        let mut picked = node_menu_entries(&flat, "日本 02");
+        apply_delay(&mut picked, &zh, &flat, &delay_view(None, &[]));
+        assert_ne!(before, picked, "the pick moves the check mark");
+        assert!(same_node_rows(&before, &picked));
+    }
+
+    #[test]
+    fn a_different_node_list_is_not_a_retitle() {
+        let zh = labels(TrayLanguage::Zh);
+        let nodes = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut listed = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut listed, &zh, &nodes, &delay_view(None, &[]));
+
+        // A node left the profile: the model no longer has a row for the one
+        // the submenu still holds.
+        let fewer = vec![node("香港 01", "socks", None, None)];
+        let mut shortened = node_menu_entries(&fewer, "香港 01");
+        apply_delay(&mut shortened, &zh, &fewer, &delay_view(None, &[]));
+        assert!(!same_node_rows(&listed, &shortened));
+
+        // A group lost a member: its page is not the page on the menu either.
+        let wide = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut grouped = node_menu_entries(&wide, "香港 01");
+        apply_delay(&mut grouped, &zh, &wide, &delay_view(None, &[]));
+        let narrow = vec![
+            node("节点选择", "selector", Some("香港 01"), Some(&["香港 01"])),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut thinned = node_menu_entries(&narrow, "香港 01");
+        apply_delay(&mut thinned, &zh, &narrow, &delay_view(None, &[]));
+        assert!(!same_node_rows(&grouped, &thinned));
     }
 }

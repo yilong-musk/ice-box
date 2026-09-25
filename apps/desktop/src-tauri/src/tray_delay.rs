@@ -17,7 +17,9 @@
 //!
 //! A run is cancelled by closing the tray menu: the button lives in the menu,
 //! so the menu is open when a run starts, and the next close — the user
-//! dismissing the menu — is the cancel, fired between two probes.
+//! dismissing the menu — is the cancel, fired between two probes. A close that
+//! the start click itself brings is not a dismissal; see
+//! [`START_CLOSE_GRACE`].
 //!
 //! The button is a custom view on its menu item (`tray_delay_view`), which is
 //! what keeps that starting click from closing the menu: picking a plain item
@@ -282,14 +284,28 @@ static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the tray menu is open right now: set when its tracking begins,
 /// cleared when it ends. A mirror, not a state of the run — the close that
-/// finds a run active while the menu was open is the cancel, whether it came
-/// long after the start or right away.
+/// finds a run active while the menu was open is the cancel, as long as it is
+/// not the close the start click itself can bring ([`START_CLOSE_GRACE`]).
 #[cfg(target_os = "macos")]
 static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 
 /// Set by a close of the tray menu after a test start; consumed between probes.
 #[cfg(target_os = "macos")]
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// How long after a start click a close of the tray menu still counts as part
+/// of that click. Closing the menu is the cancel gesture, but a close that the
+/// start click itself brings — the menu's tracking ending on the release, on a
+/// platform that does that even with the row's view on it — must not cancel
+/// the run the click just started.
+#[cfg(target_os = "macos")]
+const START_CLOSE_GRACE: Duration = Duration::from_millis(500);
+
+/// When the run in flight started, for [`START_CLOSE_GRACE`]. Written by
+/// [`start`] on the thread that takes the click, read by the menu watcher on
+/// the main thread, so it is a plain mutex rather than an atomic.
+#[cfg(target_os = "macos")]
+static STARTED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Tray「测速」: probe the page's exit nodes in order and refresh the menu as
 /// results land. Off the main thread like the other tray actions.
@@ -300,6 +316,10 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
         return;
     }
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    *STARTED_AT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
+    tracing::info!(scope = ?scope, "tray delay: run requested");
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || run(app, scope));
 }
@@ -325,6 +345,7 @@ fn run(app: AppHandle, scope: DelayScope) {
         RUN_ACTIVE.store(false, Ordering::SeqCst);
         return;
     }
+    tracing::info!(scope = ?scope, probes = tags.len(), "tray delay: run started");
     lock_state().begin(scope, tags.clone());
     // Show `…` and the progress right away: the menu is open (the click came
     // from it) and must not still show the idle labels.
@@ -354,9 +375,11 @@ fn run(app: AppHandle, scope: DelayScope) {
             last_refresh = Instant::now();
         }
     }
-    lock_state().finish(CANCEL_REQUESTED.load(Ordering::SeqCst));
+    let cancelled = CANCEL_REQUESTED.load(Ordering::SeqCst);
+    lock_state().finish(cancelled);
     RUN_ACTIVE.store(false, Ordering::SeqCst);
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    tracing::info!(cancelled, probes = tags.len(), "tray delay: run finished");
     // Final refresh, always: the buttons must go back to their labels and the
     // last results must reach the menu.
     crate::tray::sync_menu(&app);
@@ -440,10 +463,27 @@ fn on_menu_opened(_app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn on_menu_closed(_app: &AppHandle) {
-    if RUN_ACTIVE.load(Ordering::SeqCst) && MENU_OPENED.load(Ordering::SeqCst) {
-        CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    let was_open = MENU_OPENED.swap(false, Ordering::SeqCst);
+    if !was_open || !RUN_ACTIVE.load(Ordering::SeqCst) {
+        return;
     }
-    MENU_OPENED.store(false, Ordering::SeqCst);
+    // The click that starts a run can bring a close of its own; that one is
+    // the click, not the user dismissing the menu, so the run outlives it.
+    if started_within(START_CLOSE_GRACE) {
+        tracing::info!("tray delay: menu closed with the start click; run kept");
+        return;
+    }
+    tracing::info!("tray delay: menu closed; cancelling the run");
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Whether the run in flight started less than `window` ago.
+#[cfg(target_os = "macos")]
+fn started_within(window: Duration) -> bool {
+    let started = STARTED_AT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    matches!(*started, Some(started) if started.elapsed() < window)
 }
 
 #[cfg(test)]
