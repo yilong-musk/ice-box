@@ -40,10 +40,12 @@ export type TunStatus =
   | "error"
   | "recovery_required";
 
-/** Per-process RSS for the Home memory row (plan v0.1.14 §9). Only the core
- * and the app's main process are measured — WebView helpers and the
- * privileged helper daemon are out of scope. `null` parts are unreadable
- * (e.g. a privileged macOS core, D9a); `total_bytes` sums what was read. */
+/** Per-process memory figure for the Home memory row (plan v0.1.14 §9): the
+ * physical footprint on macOS (Activity Monitor's "Memory" column) and the
+ * private working set on Windows. Only the core and the app's main process are
+ * measured — WebView helpers and the privileged helper daemon are out of
+ * scope. `null` parts are unreadable (e.g. a privileged macOS core, D9a);
+ * `total_bytes` sums what was read. */
 export type MemoryUsage = {
   app_bytes: number | null;
   core_bytes: number | null;
@@ -53,7 +55,7 @@ export type MemoryUsage = {
 export type StatusResponse = {
   core: CoreState;
   subscription_count: number;
-  /** Process RSS for the Home memory row (core + app main process). */
+  /** Process memory for the Home memory row (core + app main process). */
   memory: MemoryUsage;
   proxy_recovery_warning: UiMessage[] | null;
   system_proxy_applied: boolean | null;

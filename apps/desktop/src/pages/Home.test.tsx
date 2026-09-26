@@ -72,7 +72,7 @@ const tunStatus = {
   launch_at_login_supported: true,
   helper_stale: false,
   tun_elevation_ready: true,
-  // App-only RSS by default: the core is stopped in most fixtures.
+  // App-only figure by default: the core is stopped in most fixtures.
   memory: {
     app_bytes: 38 * 1024 * 1024,
     core_bytes: null,
@@ -198,7 +198,7 @@ describe("Home", () => {
     expect(view.queryByRole("button", { name: t("nodes.batchTest") })).toBeNull();
   });
 
-  it("shows the core + app RSS with the breakdown tooltip", async () => {
+  it("shows the core + app memory figure with the breakdown tooltip", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -911,7 +911,7 @@ describe("Home", () => {
       }),
     );
     expect(view.getByText(t("home.info.memory"))).toBeInTheDocument();
-    // Row 2 shows the RSS figure; the capture state moved to the power
+    // Row 2 shows the memory figure; the capture state moved to the power
     // subtitle asserted above (plan v0.1.14 §9).
     expect(view.getByTestId("home-info-memory")).toHaveTextContent("38 MB");
   });

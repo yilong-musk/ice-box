@@ -539,9 +539,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const emptyDescription = running
     ? t("home.empty.runningDesc")
     : t("home.empty.idleDesc");
-  // Row 2「内存」(plan v0.1.14 §9): core + app main-process RSS. The capture
-  // state that used to live here stays visible in the power subtitle and the
-  // warnings above.
+  // Row 2「内存」(plan v0.1.14 §9): core + app main-process memory — the
+  // physical footprint on macOS, the private working set on Windows. The
+  // capture state that used to live here stays visible in the power subtitle
+  // and the warnings above.
   const memory = status?.memory;
   const memoryToneValue = memoryToneFor(memory);
   const memoryTip = memory

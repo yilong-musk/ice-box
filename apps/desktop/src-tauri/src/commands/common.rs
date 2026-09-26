@@ -134,15 +134,15 @@ pub(crate) async fn run_blocking<T: Send + 'static>(
         .map_err(blocking_join_err(context))?
 }
 
-/// Process RSS figures for the Home memory row (plan v0.1.14 §9, D5–D9a).
+/// Process memory figures for the Home memory row (plan v0.1.14 §9, D5–D9a).
 ///
 /// Only the core (sing-box) and the app's main process are measured; WebView
 /// helpers and the privileged helper daemon are out of scope by design.
 #[derive(Serialize)]
 pub struct MemoryUsage {
-    /// App main process RSS; `None` when it cannot be read.
+    /// App main process memory; `None` when it cannot be read.
     pub app_bytes: Option<u64>,
-    /// Core RSS; `None` while the core is not running, its pid is not
+    /// Core memory; `None` while the core is not running, its pid is not
     /// readable, or the process cannot be queried. A privileged macOS core
     /// (helper / TUN) is unreadable by design and is never probed with
     /// elevation (D9a): the UI then shows the app-only figure and says so.
@@ -156,7 +156,7 @@ pub struct MemoryUsage {
 pub struct StatusResponse {
     pub core: CoreState,
     pub subscription_count: usize,
-    /// Process RSS for the Home memory row (plan v0.1.14 §9).
+    /// Process memory for the Home memory row (plan v0.1.14 §9).
     pub memory: MemoryUsage,
     pub proxy_recovery_warning: Vec<UiMessage>,
     /// Live OS match when the platform backend is available and core is running.
@@ -510,12 +510,11 @@ pub(crate) fn broadcast_state_change(app: &AppHandle) {
     tray::sync_menu(app);
 }
 
-/// RSS of the app process plus the running core, when readable.
+/// Memory of the app process plus the running core, when readable.
 ///
-/// Two lightweight syscalls per status poll (every 2s), so no caching is
-/// needed.
+/// Two lightweight syscalls per status poll, so no caching is needed.
 fn memory_usage(state: &AppState) -> MemoryUsage {
-    let app_bytes = crate::proc_memory::resident_bytes(std::process::id()).ok();
+    let app_bytes = crate::proc_memory::process_memory_bytes(std::process::id()).ok();
     let core_bytes = core_memory_bytes(state);
     let total_bytes = app_bytes.unwrap_or(0) + core_bytes.unwrap_or(0);
     MemoryUsage {
@@ -525,8 +524,9 @@ fn memory_usage(state: &AppState) -> MemoryUsage {
     }
 }
 
-/// Core RSS: only while the core is running and its pid file holds a live pid.
-/// Everything else (not running, unreadable pid, unreadable process) is `None`.
+/// Core memory: only while the core is running and its pid file holds a live
+/// pid. Everything else (not running, unreadable pid, unreadable process) is
+/// `None`.
 fn core_memory_bytes(state: &AppState) -> Option<u64> {
     if state.core_snapshot.load().state.status != CoreStatus::Running {
         return None;
@@ -535,7 +535,7 @@ fn core_memory_bytes(state: &AppState) -> Option<u64> {
     if !pid_is_alive(pid) {
         return None;
     }
-    crate::proc_memory::resident_bytes(pid).ok()
+    crate::proc_memory::process_memory_bytes(pid).ok()
 }
 
 pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {

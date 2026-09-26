@@ -329,8 +329,11 @@ fn collect_status_snapshots_stopped_core() {
 fn collect_status_reports_app_memory_and_skips_a_stopped_core() {
     let state = temp_state_with_node("memory-stopped");
     let status = collect_status(&state).expect("status");
-    let app = status.memory.app_bytes.expect("app rss must be readable");
-    assert!(app > 0, "app rss must be positive, got {app}");
+    let app = status
+        .memory
+        .app_bytes
+        .expect("app memory must be readable");
+    assert!(app > 0, "app memory must be positive, got {app}");
     assert_eq!(status.memory.core_bytes, None);
     assert_eq!(status.memory.total_bytes, app);
     let _ = fs::remove_dir_all(state.paths.root());
@@ -339,20 +342,20 @@ fn collect_status_reports_app_memory_and_skips_a_stopped_core() {
 #[test]
 fn collect_status_reads_core_memory_from_a_live_pid() {
     let state = temp_state_with_node("memory-running");
-    // The test process stands in for the core: a live pid whose RSS is
-    // readable without elevation.
+    // The test process stands in for the core: a live pid whose memory figure
+    // is readable without elevation.
     ice_core::write_pid(&state.paths.pid(), std::process::id()).expect("pid file");
     let mut core = state.core_snapshot.load().state.clone();
     core.status = ice_core::CoreStatus::Running;
     state.core_snapshot.publish(core);
 
     let status = collect_status(&state).expect("status");
-    let core_bytes = status.memory.core_bytes.expect("core rss");
+    let core_bytes = status.memory.core_bytes.expect("core memory");
     assert!(
         core_bytes > 0,
-        "core rss must be positive, got {core_bytes}"
+        "core memory must be positive, got {core_bytes}"
     );
-    let app = status.memory.app_bytes.expect("app rss");
+    let app = status.memory.app_bytes.expect("app memory");
     assert_eq!(status.memory.total_bytes, app + core_bytes);
     let _ = fs::remove_dir_all(state.paths.root());
 }

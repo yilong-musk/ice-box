@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Home memory row now reports only each process's own pages on both
+  platforms. macOS reads the physical footprint (`ri_phys_footprint`, the value
+  behind Activity Monitor's "Memory" column) instead of RSS, which counted
+  resident shared framework pages and read roughly twice as high for the same
+  app + core pair. Windows reads the private working set
+  (`PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize`) and falls back to the
+  total working set on builds that predate that counter. The per-process
+  tooltip and the color bands are unchanged, and a privileged core still
+  degrades to the app-only figure instead of being probed with elevation.
+
 ## [0.1.14] - 2026-09-24
 
 ### Added
