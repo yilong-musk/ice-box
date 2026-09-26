@@ -529,6 +529,107 @@ fn dns_block_present() {
 }
 
 #[test]
+fn windows_resolver_keeps_a_direct_final_tag() {
+    // The minimal block: the `final` server is an IP-hosted DoT anchor.
+    let dns = json!({
+        "servers": [
+            { "type": "tls", "tag": "dns-remote-0", "server": "223.5.5.5", "server_port": 853 },
+            { "type": "tls", "tag": "dns-remote-1", "server": "119.29.29.29", "server_port": 853 },
+        ],
+        "final": "dns-remote-0",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&dns).as_deref(),
+        Some("dns-remote-0")
+    );
+
+    // An explicit `detour: direct` dials directly too.
+    let explicit_direct = json!({
+        "servers": [
+            { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "detour": "direct" },
+            { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+        ],
+        "final": "cn-dns",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&explicit_direct).as_deref(),
+        Some("cn-dns")
+    );
+
+    // A `final` tag matching no server keeps the tag; the builder replaces
+    // such blocks via `dns_block_is_usable` before this runs.
+    let dangling_final = json!({
+        "servers": [{ "type": "tls", "tag": "cn-dns", "server": "223.5.5.5" }],
+        "final": "missing",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&dangling_final).as_deref(),
+        Some("missing")
+    );
+}
+
+#[test]
+fn windows_resolver_skips_a_detoured_final_tag() {
+    // The injected uri_list block: `final` is the proxy-detoured `remote-dns`,
+    // so the route default must move to the directly-dialable `cn-dns`.
+    let dns = json!({
+        "servers": [
+            { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
+            {
+                "type": "https",
+                "tag": "remote-dns",
+                "server": "1.1.1.1",
+                "server_port": 443,
+                "path": "/dns-query",
+                "detour": "proxy",
+            },
+        ],
+        "final": "remote-dns",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&dns).as_deref(),
+        Some("cn-dns")
+    );
+
+    // Untagged servers are never picked, even when they dial directly.
+    let untagged_first = json!({
+        "servers": [
+            { "type": "tls", "server": "223.5.5.5", "server_port": 853 },
+            { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
+            { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+        ],
+        "final": "remote-dns",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&untagged_first).as_deref(),
+        Some("cn-dns")
+    );
+}
+
+#[test]
+fn windows_resolver_falls_back_when_every_server_is_detoured() {
+    let dns = json!({
+        "servers": [
+            { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "detour": "proxy" },
+            { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+        ],
+        "final": "remote-dns",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&dns).as_deref(),
+        Some("remote-dns")
+    );
+}
+
+#[test]
+fn windows_resolver_is_none_without_a_final_tag() {
+    let dns = json!({
+        "servers": [{ "type": "tls", "tag": "cn-dns", "server": "223.5.5.5" }],
+    });
+    assert_eq!(windows_default_domain_resolver(&dns), None);
+}
+
+#[test]
 fn disabled_rules_dropped_and_custom_rules_prepended() {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     profile.route.rules = vec![

@@ -108,6 +108,15 @@ pub fn parse_hysteria2(rest: &str) -> Result<Value, SkipReason> {
             .insert("password".into(), json!(password));
     }
 
+    // `mport=60000-65530` requests port hopping. sing-box takes the ranges as
+    // `server_ports` (which must be `:`-separated) and ignores `server_port`
+    // while it is set; `hop_interval` stays unset (sing-quic defaults to 30s).
+    if let Some(ports) = query_get(&params, "mport").and_then(parse_mport) {
+        out.as_object_mut()
+            .unwrap()
+            .insert("server_ports".into(), json!(ports));
+    }
+
     let obfs = query_get(&params, "obfs").unwrap_or("");
     let obfs_password = query_get(&params, "obfs-password")
         .or_else(|| query_get(&params, "obfs_password"))
@@ -153,6 +162,32 @@ fn mbps_value(params: &[(String, String)], key: &str) -> Option<u64> {
         .parse::<f64>()
         .ok()
         .map(|v| v as u64)
+}
+
+/// Parse an `mport` value (`a-b[,c-d...]`, each port in `1..=65535`) into
+/// sing-box `server_ports` entries. sing-box accepts only `:`-separated
+/// ranges, so the share-link `-` form must be converted. A malformed or
+/// out-of-range segment discards the whole parameter (the caller then keeps
+/// the fixed `server_port`).
+fn parse_mport(value: &str) -> Option<Vec<String>> {
+    let mut ports = Vec::new();
+    for segment in value.split(',') {
+        let (start, end) = segment.split_once('-')?;
+        let (start, end) = (parse_port(start)?, parse_port(end)?);
+        if start == 0 || start > end {
+            return None;
+        }
+        ports.push(format!("{start}:{end}"));
+    }
+    Some(ports)
+}
+
+/// Decimal port in `1..=65535`; signs, whitespace and empty parts are rejected.
+fn parse_port(value: &str) -> Option<u16> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
 }
 
 fn kbps_value(params: &[(String, String)], key: &str) -> Option<u64> {
@@ -225,6 +260,56 @@ mod tests {
         let out = parse_hysteria2("example.com:443").unwrap();
         assert!(out.get("password").is_none());
         assert_eq!(out["tls"]["enabled"], true);
+    }
+
+    #[test]
+    fn hysteria2_mport_single_range_becomes_server_ports() {
+        let out = parse_hysteria2("pass@example.com:60000?mport=60000-65530").unwrap();
+        // The fixed port is kept and hop_interval stays unset (30s default).
+        assert_eq!(out["server_port"], 60000);
+        assert!(out.get("hop_interval").is_none());
+        assert_eq!(out["server_ports"], json!(["60000:65530"]));
+    }
+
+    #[test]
+    fn hysteria2_mport_multiple_ranges_and_bounds() {
+        let out = parse_hysteria2("pass@example.com:60000?mport=60000-65530,1-1,1-65535").unwrap();
+        assert_eq!(
+            out["server_ports"],
+            json!(["60000:65530", "1:1", "1:65535"])
+        );
+    }
+
+    #[test]
+    fn hysteria2_mport_invalid_is_ignored() {
+        for bad in [
+            "60000",         // no range separator
+            "60000-",        // missing end
+            "-65530",        // missing start
+            "0-100",         // port 0
+            "100-50",        // reversed range
+            "1-70000",       // end out of range
+            "65536-65536",   // start out of range
+            "abc-def",       // not numeric
+            "+1-2",          // signed
+            "1 - 2",         // whitespace
+            "60000-65530,",  // empty segment
+            "60000-65530-1", // extra separator
+            "60000:65530",   // ':' is not the share-link form
+        ] {
+            let out = parse_hysteria2(&format!("pass@example.com:60000?mport={bad}")).unwrap();
+            assert!(
+                out.get("server_ports").is_none(),
+                "mport {bad:?} must be ignored"
+            );
+            assert_eq!(out["server_port"], 60000, "fixed port kept for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn hysteria2_without_mport_has_no_server_ports() {
+        let out = parse_hysteria2("pass@example.com:443").unwrap();
+        assert!(out.get("server_ports").is_none());
     }
 
     #[test]

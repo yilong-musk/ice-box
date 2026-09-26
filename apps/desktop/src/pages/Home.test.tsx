@@ -72,6 +72,12 @@ const tunStatus = {
   launch_at_login_supported: true,
   helper_stale: false,
   tun_elevation_ready: true,
+  // App-only figure by default: the core is stopped in most fixtures.
+  memory: {
+    app_bytes: 38 * 1024 * 1024,
+    core_bytes: null,
+    total_bytes: 38 * 1024 * 1024,
+  },
 } as const;
 
 const tunSettings = {
@@ -190,6 +196,176 @@ describe("Home", () => {
       within(statusCard).getByRole("button", { name: t("home.power.stop") }),
     ).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("nodes.batchTest") })).toBeNull();
+  });
+
+  it("shows the core + app memory figure with the breakdown tooltip", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      memory: {
+        app_bytes: 38 * 1024 * 1024,
+        core_bytes: 14 * 1024 * 1024,
+        total_bytes: 52 * 1024 * 1024,
+      },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-info-memory")).toHaveTextContent("52 MB");
+    });
+    const row = view.getByTestId("home-info-memory");
+    expect(row.className).toContain("text-ok");
+    expect(row).toHaveAttribute(
+      "title",
+      t("home.memory.tooltip", { core: "14 MB", app: "38 MB" }),
+    );
+  });
+
+  it.each([
+    { mb: 59, toneClass: "text-ok" },
+    { mb: 60, toneClass: "text-warn" },
+    { mb: 99, toneClass: "text-warn" },
+    { mb: 100, toneClass: "text-destructive" },
+  ])(
+    "bands the displayed $mb MB memory value as $toneClass",
+    async ({ mb, toneClass }) => {
+      getStatus.mockResolvedValue({
+        core: {
+          status: "running",
+          message: null,
+          inbound_host: "127.0.0.1",
+          inbound_port: 17890,
+        },
+        subscription_count: 1,
+        proxy_recovery_warning: null,
+        system_proxy_applied: true,
+        system_proxy_recorded: true,
+        system_proxy_available: true,
+        ...tunStatus,
+        memory: {
+          app_bytes: mb * 1024 * 1024,
+          core_bytes: null,
+          total_bytes: mb * 1024 * 1024,
+        },
+      });
+
+      const { container } = render(<Home />);
+      const view = within(container);
+
+      await waitFor(() => {
+        expect(view.getByTestId("home-info-memory")).toHaveTextContent(`${mb} MB`);
+      });
+      expect(view.getByTestId("home-info-memory").className).toContain(toneClass);
+    },
+  );
+
+  it("falls back to the app-only figure when the core is unreadable", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      // D9a: a privileged macOS core cannot be read — show the app figure and
+      // say the core is not included.
+      memory: {
+        app_bytes: 41 * 1024 * 1024,
+        core_bytes: null,
+        total_bytes: 41 * 1024 * 1024,
+      },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-info-memory")).toHaveTextContent("41 MB");
+    });
+    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+      "title",
+      t("home.memory.tooltipUnreadable", { app: "41 MB" }),
+    );
+  });
+
+  it("notes a stopped core instead of an unreadable one", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "stopped",
+        message: null,
+        inbound_host: null,
+        inbound_port: null,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+      ...tunStatus,
+      memory: {
+        app_bytes: 41 * 1024 * 1024,
+        core_bytes: null,
+        total_bytes: 41 * 1024 * 1024,
+      },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-info-memory")).toHaveTextContent("41 MB");
+    });
+    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+      "title",
+      t("home.memory.tooltipAppOnly", { app: "41 MB" }),
+    );
+  });
+
+  it("shows a dash when no process memory could be read", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      memory: { app_bytes: null, core_bytes: null, total_bytes: 0 },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-info-memory")).toHaveTextContent(t("common.dash"));
+    });
+    const row = view.getByTestId("home-info-memory");
+    expect(row.className).not.toContain("text-ok");
+    expect(row.className).not.toContain("text-warn");
+    expect(row.className).not.toContain("text-destructive");
   });
 
   it("re-reads status and settings after an out-of-window state change", async () => {
@@ -734,14 +910,10 @@ describe("Home", () => {
         iface: t("common.withIface", { iface: "utun42" }),
       }),
     );
-    expect(view.getByText(t("home.info.capture"))).toBeInTheDocument();
-    expect(
-      view.getByText(
-        t("home.capture.tun", {
-          iface: t("common.withIface", { iface: "utun42" }),
-        }),
-      ),
-    ).toBeInTheDocument();
+    expect(view.getByText(t("home.info.memory"))).toBeInTheDocument();
+    // Row 2 shows the memory figure; the capture state moved to the power
+    // subtitle asserted above (plan v0.1.14 §9).
+    expect(view.getByTestId("home-info-memory")).toHaveTextContent("38 MB");
   });
 
   it("shows TUN-configured subtitle when service is off", async () => {

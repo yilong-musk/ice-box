@@ -16,6 +16,12 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
+import {
+  formatMemory,
+  formatMemoryPart,
+  memoryLabel,
+  memoryToneFor,
+} from "../lib/memory";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import {
   nodesEqual,
@@ -533,23 +539,49 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const emptyDescription = running
     ? t("home.empty.runningDesc")
     : t("home.empty.idleDesc");
-  const captureLabel =
-    status?.traffic_capture === "tun"
-      ? t("home.capture.tun", {
-          iface: status.tun_interface
-            ? t("common.withIface", { iface: status.tun_interface })
-            : "",
+  // Row 2「内存」(plan v0.1.14 §9): core + app main-process memory — the
+  // physical footprint on macOS, the private working set on Windows. The
+  // capture state that used to live here stays visible in the power subtitle
+  // and the warnings above.
+  const memory = status?.memory;
+  const memoryToneValue = memoryToneFor(memory);
+  const memoryTip = memory
+    ? memory.core_bytes != null
+      ? t("home.memory.tooltip", {
+          core: formatMemory(memory.core_bytes),
+          app: formatMemoryPart(memory.app_bytes),
         })
-      : status?.traffic_capture === "system_proxy"
-        ? t("home.capture.systemProxy")
-        : t("home.capture.none");
-  const infoRows: { label: string; value: string; valueClassName?: string }[] = [
+      : running
+        ? t("home.memory.tooltipUnreadable", {
+            app: formatMemoryPart(memory.app_bytes),
+          })
+        : t("home.memory.tooltipAppOnly", {
+            app: formatMemoryPart(memory.app_bytes),
+          })
+    : undefined;
+  const infoRows: {
+    label: string;
+    value: string;
+    valueClassName?: string;
+    title?: string;
+    testId?: string;
+  }[] = [
     {
       label: t("home.info.core"),
       value: formatCoreStatus(core?.status),
       valueClassName: `status status-${core?.status ?? "unknown"}`,
     },
-    { label: t("home.info.capture"), value: captureLabel },
+    {
+      label: t("home.info.memory"),
+      value: memoryLabel(memory),
+      title: memoryTip,
+      testId: "home-info-memory",
+      valueClassName: cn(
+        memoryToneValue === "ok" && "text-ok",
+        memoryToneValue === "warn" && "text-warn",
+        memoryToneValue === "bad" && "text-destructive",
+      ),
+    },
     { label: t("home.info.outbound"), value: outboundLabel },
     {
       label: t("home.info.inbound"),
@@ -817,7 +849,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   {index > 0 ? <ItemSeparator className="my-0" /> : null}
                   <Item size="xs" className="justify-between px-0">
                     <ItemDescription>{row.label}</ItemDescription>
-                    <ItemTitle className={row.valueClassName} title={row.value}>
+                    <ItemTitle
+                      className={row.valueClassName}
+                      title={row.title ?? row.value}
+                      data-testid={row.testId}
+                    >
                       {row.value}
                     </ItemTitle>
                   </Item>

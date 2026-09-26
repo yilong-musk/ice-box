@@ -184,6 +184,19 @@ export const api = {
       system_proxy_applied: running,
       system_proxy_recorded: running,
       system_proxy_available: true,
+      // Green-band demo figure (plan v0.1.14 §9): the Live Demo and its
+      // screenshots must show a real number, never `—`.
+      memory: running
+        ? {
+            app_bytes: 38 * 1024 * 1024,
+            core_bytes: 14 * 1024 * 1024,
+            total_bytes: 52 * 1024 * 1024,
+          }
+        : {
+            app_bytes: 38 * 1024 * 1024,
+            core_bytes: null,
+            total_bytes: 38 * 1024 * 1024,
+          },
       traffic_capture: running ? "system_proxy" : "inactive",
       configured_tun: settings.tun.enabled,
       tun_status: settings.tun.enabled ? "enabled" : "disabled",

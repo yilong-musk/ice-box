@@ -5,6 +5,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The macOS tray menu's delay test buttons now all read "延迟测试" / "Test
+  Delay": the top page of a node list and every group page used to carry
+  different wording ("测速：当前出口" / "测速本组" and "Test Delay: Current
+  Exits" / "Test Delay: This Group"). The progress text a run prints keeps the
+  same wording ("延迟测试中 3/8" / "Testing 3/8").
+
+### Fixed
+
+- The macOS tray menu's node delay test no longer shows the results of the
+  previous test after the menu is closed and opened again: dismissing the menu
+  drops every ` · 45 ms` / ` · 失败` suffix *and* the attributed title that
+  carried its colour — retitling a row goes through `setTitle`, which leaves
+  the attributed title in place and AppKit keeps drawing that one, so the
+  results stayed on screen even after they were let go. The reopened menu now
+  starts from the plain labels. A run that the close cancels still stops
+  between probes (the probe in flight keeps its page reading as busy until it
+  returns), and a close that the start click itself brings leaves the running
+  test alone.
+
+- The Home memory row now reports only each process's own pages on both
+  platforms. macOS reads the physical footprint (`ri_phys_footprint`, the value
+  behind Activity Monitor's "Memory" column) instead of RSS, which counted
+  resident shared framework pages and read roughly twice as high for the same
+  app + core pair. Windows reads the private working set
+  (`PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize`) and falls back to the
+  total working set on builds that predate that counter. The per-process
+  tooltip and the color bands are unchanged, and a privileged core still
+  degrades to the app-only figure instead of being probed with elevation.
+
+## [0.1.14] - 2026-09-24
+
+### Added
+
+- macOS tray menu node delay test: every node list page now has a delay action
+  at the top. It probes each item's real outbound node — strategy groups
+  resolve along their current selection (recursively), leaves are probed
+  directly — deduplicated and in order, and streams results back into the menu
+  labels as ` · 45 ms` / ` · 失败` suffixes, with group rows mirroring their
+  current member and the suffix colour graded like the Nodes page (green under
+  300 ms, orange under 1 s, red from 1 s; failures red). The click that starts
+  a test leaves the menu open, so the progress and the results land where the
+  user is looking; closing the menu cancels the run. Windows keeps its existing
+  tray menu (the feature is gated to macOS for this release).
+
+- hysteria2 `mport` (port hopping) support in share-link imports: `mport=a-b`
+  ranges (comma separated, several allowed) become `server_ports`, matching
+  how these nodes connect in other clients; malformed ranges are ignored and
+  the fixed `server_port` is kept, so the node still connects on its base port.
+
+### Changed
+
+- The Home info panel's second row is now "内存 / Memory" instead of the
+  capture state: the resident memory of the core (sing-box) plus the app's
+  main process, in whole MB, color graded (<60 MB green, 60–99 MB yellow,
+  ≥100 MB red), with a per-process tooltip. On macOS a privileged core
+  (helper / TUN) cannot be read without elevation, so the row deliberately
+  shows the app alone and notes that the core is not included.
+
+### Fixed
+
+- Windows: `route.default_domain_resolver` no longer points at the proxied
+  `remote-dns` final tag. For subscriptions without their own DNS the route
+  resolver now targets the direct resolver (`cn-dns`), which stops the loop
+  where resolving a node's domain required the proxy that itself needed the
+  domain resolved (`DNS query loopback in transport[remote-dns]`), leaving the
+  machine without working name resolution. `dns.final` and traffic routing are
+  unchanged; macOS and self-contained subscriptions were never affected.
+
 ## [0.1.13] - 2026-09-21
 
 ### Fixed

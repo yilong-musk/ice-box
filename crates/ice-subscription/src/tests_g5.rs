@@ -1290,7 +1290,20 @@ fn g5_16_uri_list_import_and_manager() {
         .get("pcs")
         .is_none());
 
-    // hysteria2 node: password is userinfo; pinSHA256/mport dropped, obfs kept.
+    // hysteria2 node with mport: the port range becomes sing-box
+    // `server_ports` (`:`-separated) while the fixed port is kept.
+    let hy2_mport = profile
+        .nodes
+        .iter()
+        .find(|n| n.tag == "香港机场05|BGP|新加坡")
+        .expect("hy2 mport node");
+    assert_eq!(hy2_mport.outbound["server_port"], 60000);
+    assert_eq!(
+        hy2_mport.outbound["server_ports"],
+        serde_json::json!(["60000:65530"])
+    );
+
+    // hysteria2 node: password is userinfo; pinSHA256 dropped, obfs kept.
     let hy2 = profile
         .nodes
         .iter()
