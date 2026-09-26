@@ -5,7 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The macOS tray menu's delay test buttons now all read "延迟测试" / "Test
+  Delay": the top page of a node list and every group page used to carry
+  different wording ("测速：当前出口" / "测速本组" and "Test Delay: Current
+  Exits" / "Test Delay: This Group"). The progress text a run prints keeps the
+  same wording ("延迟测试中 3/8" / "Testing 3/8").
+
 ### Fixed
+
+- The macOS tray menu's node delay test no longer shows the results of the
+  previous test after the menu is closed and opened again: dismissing the menu
+  drops every ` · 45 ms` / ` · 失败` suffix *and* the attributed title that
+  carried its colour — retitling a row goes through `setTitle`, which leaves
+  the attributed title in place and AppKit keeps drawing that one, so the
+  results stayed on screen even after they were let go. The reopened menu now
+  starts from the plain labels. A run that the close cancels still stops
+  between probes (the probe in flight keeps its page reading as busy until it
+  returns), and a close that the start click itself brings leaves the running
+  test alone.
 
 - The Home memory row now reports only each process's own pages on both
   platforms. macOS reads the physical footprint (`ri_phys_footprint`, the value

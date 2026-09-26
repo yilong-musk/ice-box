@@ -219,11 +219,10 @@ struct TrayLabels {
     open_cli_proxy: &'static str,
     show: &'static str,
     quit: &'static str,
-    /// Delay test button of the top node page: probes each group's current
-    /// exit (a flat profile: every node).
-    delay_current: &'static str,
-    /// Delay test button of a group page: probes the group's members.
-    delay_group: &'static str,
+    /// Delay test button of a node page: the top page (each group's current
+    /// exit, or every node on a flat profile) and a group page (the group's
+    /// members) carry the same label.
+    delay_test: &'static str,
     /// Template of the button of the page whose test is in flight; the two
     /// `{}` are the probe in flight and the total.
     delay_progress: &'static str,
@@ -241,7 +240,7 @@ impl TrayLabels {
         }
     }
 
-    /// Text of the button whose page has a test in flight: `测速中 3/8`.
+    /// Text of the button whose page has a test in flight: `延迟测试中 3/8`.
     #[cfg(any(target_os = "macos", test))]
     fn delay_progress_text(self, index: usize, total: usize) -> String {
         self.delay_progress
@@ -265,9 +264,8 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "打开代理终端",
             show: "显示",
             quit: "退出",
-            delay_current: "测速：当前出口",
-            delay_group: "测速本组",
-            delay_progress: "测速中 {}/{}",
+            delay_test: "延迟测试",
+            delay_progress: "延迟测试中 {}/{}",
             delay_failed: "失败",
         },
         TrayLanguage::En => TrayLabels {
@@ -283,8 +281,7 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "Open Proxy Terminal",
             show: "Show",
             quit: "Quit",
-            delay_current: "Test Delay: Current Exits",
-            delay_group: "Test Delay: This Group",
+            delay_test: "Test Delay",
             delay_progress: "Testing {}/{}",
             delay_failed: "Failed",
         },
@@ -1121,6 +1118,11 @@ fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
 /// carries. See [`TrayMenuState::apply_nodes`] for why an update the menu is
 /// open on must come through here rather than through a rebuild.
 ///
+/// A rewritten row keeps whatever delay colour it carried: `setTitle` (what
+/// [`retitle_node_item`] calls) does not touch an attributed title. The caller
+/// re-derives the colours after the walk, which also drops the attribute of a
+/// row whose result is gone.
+///
 /// The walk addresses the rows the way [`append_node_entries`] lays them out —
 /// the page button and its separator, one check row per item, one submenu per
 /// group with the group's own button and members inside — so the two must stay
@@ -1681,10 +1683,7 @@ fn apply_delay(
 fn delay_button(view: &DelayView, labels: &TrayLabels, scope: DelayScope) -> DelayButton {
     let label = match view.progress(&scope) {
         Some((index, total)) => labels.delay_progress_text(index, total),
-        None => match scope {
-            DelayScope::Top => labels.delay_current.to_string(),
-            DelayScope::Group(_) => labels.delay_group.to_string(),
-        },
+        None => labels.delay_test.to_string(),
     };
     DelayButton {
         label,
@@ -1787,14 +1786,23 @@ fn colorize_delay_results(app: &AppHandle, labels: &TrayLabels) {
 /// Colour the finished-result suffix of every row of `menu`, the submenus (the
 /// node groups) included: a group's own title carries the result of the member
 /// it exits through, and its members carry their own.
+///
+/// The walk uncolours as well: retitling a row goes through `setTitle` (muda's
+/// `set_text`), which leaves an `attributedTitle` an earlier pass set in place
+/// — and AppKit draws that one — so a row whose finished result is gone (the
+/// menu closed and dropped it, or a new run replaced it with `…`) would keep
+/// showing the old text and colour. Letting the attribute go with the result
+/// is what keeps the drawn row and the model behind it the same.
 #[cfg(target_os = "macos")]
 fn colorize_menu(menu: &NSMenu, labels: TrayLabels) {
     let items = menu.itemArray();
     for index in 0..items.count() {
         let item = items.objectAtIndex(index);
         let title = item.title().to_string();
-        if let Some((start, tone)) = delay_suffix_color(&title, &labels) {
-            colorize_row(&item, &title, start, tone);
+        match delay_suffix_color(&title, &labels) {
+            Some((start, tone)) => colorize_row(&item, &title, start, tone),
+            None if item.attributedTitle().is_some() => item.setAttributedTitle(None),
+            None => {}
         }
         if let Some(submenu) = item.submenu() {
             colorize_menu(&submenu, labels);
@@ -1963,8 +1971,8 @@ fn attach_delay_rows(
     attached
 }
 
-/// Put the row's custom view on it, if the row still has the shape of the
-/// button `scope` stands for.
+/// Put the row's custom view on it, if the row still has the shape of a delay
+/// button; `scope` is what the run it starts will probe.
 ///
 /// The row's own action is dropped with the view: on a plain item it fires on
 /// keyboard activation, which also closes the menu, and that close would
@@ -1978,7 +1986,7 @@ fn attach_delay_row(
     labels: &TrayLabels,
 ) -> bool {
     let title = row.title().to_string();
-    if !delay_button_title_matches(&title, scope, labels) {
+    if !delay_button_title_matches(&title, labels) {
         tracing::warn!(%title, "tray delay buttons: unexpected button row, left alone");
         return false;
     }
@@ -2016,24 +2024,24 @@ fn submenu_titled(menu: &NSMenu, title: &str) -> Option<Retained<NSMenu>> {
         .and_then(|item| item.submenu())
 }
 
-/// Whether `title` has the shape of `scope`'s button: the page's own label, or
-/// a progress text while a test is in flight (the page under test shows the
+/// Whether `title` has the shape of a delay button: the page's own label, or a
+/// progress text while a test is in flight (the page under test shows the
 /// progress, the other pages keep their label).
 ///
 /// `title` is the row's title as muda wrote it to the item — the label with
 /// its mnemonics resolved (`menu_text`) — which is the label itself here: none
 /// of the button labels carries an `&`.
+///
+/// Every page carries the same label, so the title alone cannot tell a page's
+/// button from another's; the caller knows which page the row it walks belongs
+/// to.
 #[cfg(any(target_os = "macos", test))]
-fn delay_button_title_matches(title: &str, scope: &DelayScope, labels: &TrayLabels) -> bool {
-    let plain = match scope {
-        DelayScope::Top => labels.delay_current,
-        DelayScope::Group(_) => labels.delay_group,
-    };
-    title == plain || delay_progress_shaped(title, labels)
+fn delay_button_title_matches(title: &str, labels: &TrayLabels) -> bool {
+    title == labels.delay_test || delay_progress_shaped(title, labels)
 }
 
-/// Whether `title` is the progress text of `labels.delay_progress` — `测速中
-/// 3/8` — told by shape: the template's own text around its two `{}`, and a
+/// Whether `title` is the progress text of `labels.delay_progress` — `延迟测试
+/// 中 3/8` — told by shape: the template's own text around its two `{}`, and a
 /// number in each of their places.
 #[cfg(any(target_os = "macos", test))]
 fn delay_progress_shaped(title: &str, labels: &TrayLabels) -> bool {
@@ -2404,15 +2412,10 @@ mod tests {
         );
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
         assert_eq!(
-            (
-                zh.delay_current,
-                zh.delay_group,
-                zh.delay_progress,
-                zh.delay_failed
-            ),
-            ("测速：当前出口", "测速本组", "测速中 {}/{}", "失败")
+            (zh.delay_test, zh.delay_progress, zh.delay_failed),
+            ("延迟测试", "延迟测试中 {}/{}", "失败")
         );
-        assert_eq!(zh.delay_progress_text(3, 8), "测速中 3/8");
+        assert_eq!(zh.delay_progress_text(3, 8), "延迟测试中 3/8");
 
         let en = labels(TrayLanguage::En);
         assert_eq!(en.service(false), "Start Proxy Service");
@@ -2430,18 +2433,8 @@ mod tests {
         );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
         assert_eq!(
-            (
-                en.delay_current,
-                en.delay_group,
-                en.delay_progress,
-                en.delay_failed
-            ),
-            (
-                "Test Delay: Current Exits",
-                "Test Delay: This Group",
-                "Testing {}/{}",
-                "Failed"
-            )
+            (en.delay_test, en.delay_progress, en.delay_failed),
+            ("Test Delay", "Testing {}/{}", "Failed")
         );
         assert_eq!(en.delay_progress_text(3, 8), "Testing 3/8");
     }
@@ -2790,13 +2783,13 @@ mod tests {
 
         // Top page: the button above the group, labels untouched while idle.
         let top = delay_button_of(&entries[0]);
-        assert_eq!(top.label, "测速：当前出口");
+        assert_eq!(top.label, "延迟测试");
         assert!(top.enabled);
         assert_eq!(top.scope, DelayScope::Top);
         let group = group(&entries[1]);
         assert_eq!(group.label, "节点选择 → 日本 02");
         let page = group.delay.as_ref().expect("group page button");
-        assert_eq!(page.label, "测速本组");
+        assert_eq!(page.label, "延迟测试");
         assert!(page.enabled);
         assert_eq!(page.scope, DelayScope::Group("节点选择".into()));
     }
@@ -2825,13 +2818,13 @@ mod tests {
 
         // The button of the page under test shows the progress, disabled…
         let top = delay_button_of(&entries[0]);
-        assert_eq!(top.label, "测速中 2/2");
+        assert_eq!(top.label, "延迟测试中 2/2");
         assert!(!top.enabled);
         // …the group label mirrors the result of the member it exits through…
         let group = group(&entries[1]);
         assert_eq!(group.label, "节点选择 → 日本 02 · …");
         let page = group.delay.as_ref().expect("group page button");
-        assert_eq!(page.label, "测速本组");
+        assert_eq!(page.label, "延迟测试");
         assert!(!page.enabled);
         // …and every member carries its own result.
         assert_eq!(group.members[0].label, "香港 01 · 45 ms");
@@ -2873,7 +2866,7 @@ mod tests {
             // A run on another page leaves the top button disabled with its
             // plain label.
             let top = delay_button_of(&entries[0]);
-            assert_eq!(top.label, labels(language).delay_current);
+            assert_eq!(top.label, labels(language).delay_test);
             assert!(!top.enabled);
             // The group page's own button carries the progress.
             let page = group.delay.as_ref().expect("group page button");
@@ -2971,7 +2964,7 @@ mod tests {
         apply_delay(&mut entries, &labels(TrayLanguage::En), &nodes, &view);
         assert_eq!(entries.len(), 3);
         let top = delay_button_of(&entries[0]);
-        assert_eq!(top.label, "Test Delay: Current Exits");
+        assert_eq!(top.label, "Test Delay");
         assert!(top.enabled);
         assert_eq!(item(&entries[1]).label, "香港 01 · 12 ms");
         // A node the newest test did not probe keeps its bare label.
@@ -2993,27 +2986,24 @@ mod tests {
     #[test]
     fn delay_button_titles_are_recognised_by_shape() {
         let zh = labels(TrayLanguage::Zh);
-        let top = DelayScope::Top;
-        let group = DelayScope::Group("节点选择".to_string());
-        // The plain labels of both page kinds, and the progress text a run
+        // The plain label both page kinds carry, and the progress text a run
         // prints on the page it is testing…
-        assert!(delay_button_title_matches("测速：当前出口", &top, &zh));
-        assert!(delay_button_title_matches("测速本组", &group, &zh));
-        assert!(delay_button_title_matches("测速中 3/8", &top, &zh));
-        assert!(delay_button_title_matches("测速中 12/100", &group, &zh));
-        // …and nothing else: a row, the other page's label, a half-written
-        // progress text, or another language's label.
-        assert!(!delay_button_title_matches("香港 01", &top, &zh));
-        assert!(!delay_button_title_matches("测速本组", &top, &zh));
-        assert!(!delay_button_title_matches("测速：当前出口", &group, &zh));
-        assert!(!delay_button_title_matches("测速中 3/", &top, &zh));
-        assert!(!delay_button_title_matches("测速中 /8", &top, &zh));
-        assert!(!delay_button_title_matches("测速中 3/x", &group, &zh));
-        assert!(!delay_button_title_matches("Testing 3/8", &top, &zh));
+        assert!(delay_button_title_matches("延迟测试", &zh));
+        assert!(delay_button_title_matches("延迟测试中 3/8", &zh));
+        assert!(delay_button_title_matches("延迟测试中 12/100", &zh));
+        // …and nothing else: a row, a half-written progress text, another
+        // language's label, or a leftover of the old wording.
+        assert!(!delay_button_title_matches("香港 01", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 3/", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 /8", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 3/x", &zh));
+        assert!(!delay_button_title_matches("测试中 3/8", &zh));
+        assert!(!delay_button_title_matches("测速：当前出口", &zh));
+        assert!(!delay_button_title_matches("Testing 3/8", &zh));
 
         let en = labels(TrayLanguage::En);
-        assert!(delay_button_title_matches("Testing 3/8", &top, &en));
-        assert!(delay_button_title_matches("Testing 3/8", &group, &en));
+        assert!(delay_button_title_matches("Test Delay", &en));
+        assert!(delay_button_title_matches("Testing 3/8", &en));
     }
 
     #[test]

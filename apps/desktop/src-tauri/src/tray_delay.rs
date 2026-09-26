@@ -21,6 +21,10 @@
 //! the start click itself brings is not a dismissal; see
 //! [`START_CLOSE_GRACE`].
 //!
+//! A dismissal also lets the results go: the menu shows the last test until it
+//! is closed, and reopening it starts from the default labels instead of
+//! yesterday's numbers ([`DelayState::drop_results`]).
+//!
 //! The button is a custom view on its menu item (`tray_delay_view`), which is
 //! what keeps that starting click from closing the menu: picking a plain item
 //! would end the tracking, and with it the run the click had just started.
@@ -143,6 +147,10 @@ struct RunState {
 struct DelayState {
     outcomes: BTreeMap<String, DelayOutcome>,
     run: Option<RunState>,
+    /// Set while a run the menu closed on winds down: its results were let go
+    /// with the menu, so the probe still in flight records nothing when it
+    /// lands.
+    abandoned: bool,
 }
 
 impl DelayState {
@@ -164,6 +172,7 @@ impl DelayState {
     /// menu shows what is still to come. Results of tags the run does not touch
     /// stay, like the results table on the Nodes page.
     fn begin(&mut self, scope: DelayScope, tags: Vec<String>) {
+        self.abandoned = false;
         for tag in &tags {
             self.outcomes.insert(tag.clone(), DelayOutcome::Testing);
         }
@@ -174,25 +183,36 @@ impl DelayState {
         });
     }
 
-    /// Record the probe of `tags[index]` and move the progress on.
+    /// Record the probe of `tags[index]` and move the progress on. A run the
+    /// menu closed on records nothing: its results were let go with the menu.
     fn advance(&mut self, index: usize, tag: &str, outcome: DelayOutcome) {
+        if self.abandoned {
+            return;
+        }
         self.outcomes.insert(tag.to_string(), outcome);
         if let Some(run) = self.run.as_mut() {
             run.next = index + 1;
         }
     }
 
-    /// End the run. A cancelled run drops the `Testing` markers of the probes
-    /// it never reached: those tags were not tested, so they show no result.
-    fn finish(&mut self, cancelled: bool) {
-        let Some(run) = self.run.take() else {
-            return;
-        };
-        if cancelled {
-            for tag in run.tags.iter().skip(run.next) {
-                self.outcomes.remove(tag);
-            }
-        }
+    /// End the run and keep what it measured.
+    fn finish(&mut self) {
+        self.run = None;
+    }
+
+    /// Let go of every measured result: the tray menu closed, so the next open
+    /// starts from the default labels rather than the last test's numbers. A
+    /// run still in flight is abandoned with them — it records nothing more —
+    /// while its marker stays until [`Self::finish`], so its page keeps
+    /// reading as busy until the probe in flight has landed.
+    ///
+    /// `true` when there was something to let go of, so the caller only
+    /// refreshes the menu when the rows it shows moved.
+    fn drop_results(&mut self) -> bool {
+        self.abandoned = true;
+        let had_results = !self.outcomes.is_empty();
+        self.outcomes.clear();
+        had_results
     }
 }
 
@@ -200,6 +220,7 @@ impl DelayState {
 static STATE: Mutex<DelayState> = Mutex::new(DelayState {
     outcomes: BTreeMap::new(),
     run: None,
+    abandoned: false,
 });
 
 fn lock_state() -> std::sync::MutexGuard<'static, DelayState> {
@@ -307,8 +328,8 @@ const START_CLOSE_GRACE: Duration = Duration::from_millis(500);
 #[cfg(target_os = "macos")]
 static STARTED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Tray「测速」: probe the page's exit nodes in order and refresh the menu as
-/// results land. Off the main thread like the other tray actions.
+/// Tray「延迟测试」: probe the page's exit nodes in order and refresh the menu
+/// as results land. Off the main thread like the other tray actions.
 #[cfg(target_os = "macos")]
 pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
     // Claim the run before spawning: two clicks must not queue two tests.
@@ -376,12 +397,12 @@ fn run(app: AppHandle, scope: DelayScope) {
         }
     }
     let cancelled = CANCEL_REQUESTED.load(Ordering::SeqCst);
-    lock_state().finish(cancelled);
+    lock_state().finish();
     RUN_ACTIVE.store(false, Ordering::SeqCst);
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     tracing::info!(cancelled, probes = tags.len(), "tray delay: run finished");
     // Final refresh, always: the buttons must go back to their labels and the
-    // last results must reach the menu.
+    // results a live menu still holds must reach it.
     crate::tray::sync_menu(&app);
 }
 
@@ -432,8 +453,10 @@ pub(crate) fn install_menu_watch(tray: &tauri::tray::TrayIcon<tauri::Wry>) {
             // SAFETY: `name` is AppKit's own constant, `object` is the tray
             // menu the notification is posted for, and `None` for the queue
             // delivers the block on the posting thread — the main thread, where
-            // menu tracking runs, so the handler only touches atomics. The
-            // block is copied by the center and stays valid for the process.
+            // menu tracking runs, so the handler stays off the menu and off
+            // anything that waits for it (atomics, and the delay state behind
+            // its own short-lived lock). The block is copied by the center and
+            // stays valid for the process.
             unsafe {
                 let observer = center.addObserverForName_object_queue_usingBlock(
                     Some(name),
@@ -462,19 +485,31 @@ fn on_menu_opened(_app: &AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
-fn on_menu_closed(_app: &AppHandle) {
+fn on_menu_closed(app: &AppHandle) {
     let was_open = MENU_OPENED.swap(false, Ordering::SeqCst);
-    if !was_open || !RUN_ACTIVE.load(Ordering::SeqCst) {
+    if !was_open {
         return;
     }
-    // The click that starts a run can bring a close of its own; that one is
-    // the click, not the user dismissing the menu, so the run outlives it.
-    if started_within(START_CLOSE_GRACE) {
-        tracing::info!("tray delay: menu closed with the start click; run kept");
+    if RUN_ACTIVE.load(Ordering::SeqCst) {
+        // The click that starts a run can bring a close of its own; that one is
+        // the click, not the user dismissing the menu, so the run outlives it.
+        if started_within(START_CLOSE_GRACE) {
+            tracing::info!("tray delay: menu closed with the start click; run kept");
+            return;
+        }
+        tracing::info!("tray delay: menu closed; cancelling the run");
+        CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    }
+    // The menu is gone, and its results with it: reopening starts from the
+    // default labels. A run still winding down records nothing after this, and
+    // the refresh below takes the suffixes off the closed menu before it is
+    // opened again.
+    if !lock_state().drop_results() {
         return;
     }
-    tracing::info!("tray delay: menu closed; cancelling the run");
-    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    tracing::info!("tray delay: menu closed; results dropped");
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::tray::sync_menu(&app));
 }
 
 /// Whether the run in flight started less than `window` ago.
@@ -641,7 +676,7 @@ mod tests {
         assert_eq!(view.outcome("B"), Some(DelayOutcome::Testing));
 
         state.advance(1, "B", DelayOutcome::Failed);
-        state.finish(false);
+        state.finish();
         let view = state.view();
         assert!(view.idle());
         assert_eq!(view.progress(&DelayScope::Top), None);
@@ -650,19 +685,57 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_run_drops_the_probes_it_never_reached() {
+    fn closing_the_menu_drops_every_result() {
         let mut state = DelayState::default();
         state.begin(
             DelayScope::Group("G".to_string()),
             vec!["A".to_string(), "B".to_string(), "C".to_string()],
         );
         state.advance(0, "A", DelayOutcome::Done(30));
-        state.finish(true);
+        assert!(state.drop_results());
+        // Nothing left to drop: the closed menu is already default.
+        assert!(!state.drop_results());
+        state.finish();
         let view = state.view();
         assert!(view.idle());
-        assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(30)));
+        assert_eq!(view.outcome("A"), None);
         assert_eq!(view.outcome("B"), None);
         assert_eq!(view.outcome("C"), None);
+    }
+
+    #[test]
+    fn the_probe_in_flight_records_nothing_after_the_close() {
+        // The menu can close while a probe is between its start and its result;
+        // that result belongs to a menu that no longer exists.
+        let mut state = DelayState::default();
+        state.begin(DelayScope::Top, vec!["A".to_string(), "B".to_string()]);
+        assert!(state.drop_results());
+        state.advance(0, "A", DelayOutcome::Done(45));
+        // The page still reads as busy until the probe returns…
+        let view = state.view();
+        assert!(!view.idle());
+        assert_eq!(view.progress(&DelayScope::Top), Some((1, 2)));
+        assert_eq!(view.outcome("A"), None);
+        // …and the run ends without a result.
+        state.finish();
+        let view = state.view();
+        assert!(view.idle());
+        assert_eq!(view.outcome("A"), None);
+    }
+
+    #[test]
+    fn a_run_after_the_close_records_its_results_again() {
+        let mut state = DelayState::default();
+        state.begin(DelayScope::Top, vec!["A".to_string()]);
+        state.advance(0, "A", DelayOutcome::Done(45));
+        state.finish();
+        state.drop_results();
+
+        state.begin(DelayScope::Top, vec!["A".to_string()]);
+        state.advance(0, "A", DelayOutcome::Done(12));
+        state.finish();
+        let view = state.view();
+        assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(12)));
     }
 
     #[test]
@@ -683,10 +756,12 @@ mod tests {
 
     #[test]
     fn a_new_run_keeps_the_results_of_tags_it_does_not_probe() {
+        // Within one open menu: closing it is what drops the results, so a
+        // second test on another page still shows what the first one measured.
         let mut state = DelayState::default();
         state.begin(DelayScope::Top, vec!["A".to_string()]);
         state.advance(0, "A", DelayOutcome::Done(10));
-        state.finish(false);
+        state.finish();
         state.begin(DelayScope::Group("G".to_string()), vec!["B".to_string()]);
         let view = state.view();
         assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(10)));
