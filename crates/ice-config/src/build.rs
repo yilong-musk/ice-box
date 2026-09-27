@@ -173,6 +173,83 @@ fn dns_final_tag(dns: &Value) -> Option<String> {
         .map(|tag| tag.to_string())
 }
 
+/// Whether the DNS server carries `tag`.
+fn dns_server_has_tag(server: &Value, tag: &str) -> bool {
+    server.get("tag").and_then(Value::as_str) == Some(tag)
+}
+
+/// Whether the DNS server is dialed through a proxy outbound: any `detour`
+/// other than `direct` (a missing `detour` dials directly).
+fn dns_server_has_proxy_dependency(server: &Value) -> bool {
+    match server.get("detour") {
+        None => false,
+        Some(detour) => detour.as_str() != Some("direct"),
+    }
+}
+
+/// Whether the DNS server answers arbitrary names from an upstream resolver.
+///
+/// The other allowed types answer from somewhere else — `local` (the OS
+/// resolver, which on Windows re-enters the TUN), `fakeip` (synthetic
+/// addresses) and `rcode` (a fixed error) — so none of them can resolve a
+/// node's server domain as `route.default_domain_resolver`.
+fn dns_server_resolves_upstream(server: &Value) -> bool {
+    matches!(
+        server.get("type").and_then(Value::as_str),
+        Some("tls" | "https" | "h3" | "tcp" | "udp" | "quic")
+    )
+}
+
+/// The Windows `route.default_domain_resolver` tag.
+///
+/// Windows has no `local` DNS server, so domain addresses in the config — the
+/// node server domains above all — are resolved through a tagged DNS server.
+/// That resolver must not depend on a proxy outbound: resolving a server
+/// domain through a proxied upstream loops (the proxy dial needs that domain
+/// resolved first) and sing-box reports
+/// `DNS query loopback in transport[<tag>]`.
+///
+/// Returns the `final` tag when its server dials directly — the status quo —
+/// otherwise the first tagged server that both dials directly and resolves
+/// upstream names (the injected block's `cn-dns`). A directly-dialable server
+/// of a type that cannot resolve them is skipped rather than handed the node's
+/// server domain: the fallback exists to keep the resolution working, and
+/// `local` / `fakeip` / `rcode` would not. When no such server exists the
+/// resolver is not emitted at all, with a warning: the route default would
+/// fall into the `final` tag, the loop this function exists to keep out, so
+/// the key stays unset and sing-box keeps its own resolution. `None` when the
+/// block has no `final` tag either.
+fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
+    let final_tag = dns_final_tag(dns)?;
+    let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
+        return Some(final_tag);
+    };
+    let final_server = servers.iter().find(|s| dns_server_has_tag(s, &final_tag));
+    // A `final` tag matching no server (a degenerate block; `dns_block_is_usable`
+    // replaces those before this runs) keeps the pre-fix behaviour.
+    let final_is_direct = match final_server {
+        None => true,
+        Some(server) => !dns_server_has_proxy_dependency(server),
+    };
+    if final_is_direct {
+        return Some(final_tag);
+    }
+    let direct_tag = servers.iter().find_map(|s| {
+        let tag = s.get("tag").and_then(Value::as_str)?;
+        (dns_server_resolves_upstream(s) && !dns_server_has_proxy_dependency(s)).then_some(tag)
+    });
+    match direct_tag {
+        Some(tag) => Some(tag.to_string()),
+        None => {
+            tracing::warn!(
+                final_tag = %final_tag,
+                "no directly-dialable upstream DNS server; the Windows resolver stays unset"
+            );
+            None
+        }
+    }
+}
+
 fn dns_block_is_usable(dns: &Value) -> bool {
     let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
         return false;
@@ -428,14 +505,17 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // macOS: a `local` DNS server (always present for the minimal block, and
     // ensured by the clash parser for domain nameservers / fake-ip filters)
     // backs the OS resolver. Windows: `local` re-enters the TUN, so the route
-    // default points at the DNS `final` tag — guaranteed TCP-capable by the
-    // Windows emission (no UDP upstreams, no fakeip).
+    // default points at a directly-dialable DNS server instead — the `final`
+    // tag when it is not detoured, else the first directly-dialable tagged
+    // server — and stays unset when every server is detoured. A proxy-detoured
+    // resolver (the injected `remote-dns`) would loop: the proxy dial itself
+    // needs the node's server domain resolved first.
     if input.platform.is_windows() {
-        if let Some(final_tag) = dns_final_tag(&dns) {
+        if let Some(resolver) = windows_default_domain_resolver(&dns) {
             route
                 .as_object_mut()
                 .unwrap()
-                .insert("default_domain_resolver".into(), json!(final_tag));
+                .insert("default_domain_resolver".into(), json!(resolver));
         }
     } else if dns_has_local_server(&dns) {
         route

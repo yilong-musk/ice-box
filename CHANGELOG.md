@@ -5,6 +5,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-09-27
+
+### Added
+
+- macOS tray menu node delay test: every node list page has a delay action at
+  the top, all of them reading "延迟测试" / "Test Delay". It probes each item's
+  real outbound node — strategy groups resolve along their current selection
+  (recursively), leaves are probed directly — deduplicated and in page order,
+  and streams results back into the menu labels as ` · 45 ms` / ` · 失败`
+  suffixes, with group rows mirroring their current member and the suffix
+  colour graded like the Nodes page (green under 300 ms, orange under 1 s, red
+  from 1 s; failures red). The click that starts a test leaves the menu open —
+  a delay row marks every press it handles, which tells the close AppKit ends
+  for that press from a dismissal — so the progress and the results land where
+  the user is looking, and a click on a disabled row (a button while a test
+  runs) is taken the same way instead of closing the menu under the running
+  test. Closing the menu cancels the run and drops its results, the ` · 45 ms`
+  suffixes and the coloured attributed titles that carry them alike, so
+  reopening starts from the plain labels. Windows keeps its existing tray menu
+  (the feature is gated to macOS for this release).
+
+- hysteria2 port hopping in share-link imports: the authority's official
+  hopping list (`host:123,5000-6000`) is no longer skipped as a bad port, and
+  `mport` takes the same grammar — single ports and mixed, comma-separated
+  lists like `123,5000-6000`, not just `a-b` ranges whose every segment carried
+  a `-`. Both become sing-box `server_ports` (`a:b` entries, a single port as
+  the one-port range `a:a`) while `server_port` keeps the first port, matching
+  how these nodes connect in other clients. A malformed or out-of-range part
+  still discards the whole list: `mport` keeps the fixed port, while a bad
+  authority port skips the link as it always has.
+
+### Changed
+
+- The Home info panel's second row is now "内存 / Memory" instead of the
+  capture state: the memory of the core (sing-box) plus the app's main
+  process, in whole MB, color graded (<60 MB green, 60–99 MB yellow, ≥100 MB
+  red), with a per-process tooltip. Both platforms report each process's own
+  pages: the physical footprint on macOS (the value behind Activity Monitor's
+  "Memory" column, not RSS, which counted resident shared framework pages and
+  read roughly twice as high) and the private working set on Windows, with the
+  total working set as a fallback on builds that predate that counter. The
+  label sums the rounded per-process figures the tooltip prints, so the
+  breakdown adds up to the figure shown, and the colour band follows that same
+  value. On macOS a privileged core (helper / TUN) cannot be read without
+  elevation, so the row deliberately shows the app alone and notes that the
+  core is not included.
+
+- Every node delay test now probes several nodes at once instead of one after
+  another: the Nodes page's batch and expanded-group tests and the macOS tray
+  menu's per-page test keep four probes in flight (`DELAY_TEST_CONCURRENCY` in
+  `Nodes.tsx`, `MAX_PROBES_IN_FLIGHT` in `tray_delay.rs`), while a test of a
+  single node stays a single probe. Both surfaces claim the list in page order
+  and record each result as it lands, so a long list or group finishes in a
+  fraction of the time; cancelling still drops every result still in flight,
+  and closing the tray menu still stops a run from claiming further probes
+  while the ones in flight land.
+
+### Fixed
+
+- Windows: `route.default_domain_resolver` no longer points at the proxied
+  `remote-dns` final tag. For subscriptions without their own DNS the route
+  resolver now targets the first directly-dialable upstream resolver
+  (`cn-dns`), which stops the loop where resolving a node's domain required
+  the proxy that itself needed the domain resolved (`DNS query loopback in
+  transport[remote-dns]`), leaving the machine without working name
+  resolution. The fallback never picks a directly-dialable `local` / `fakeip`
+  / `rcode` server, which cannot resolve upstream names, and when every server
+  is detoured (or none can resolve them) the route key stays unset — with a
+  warning — so sing-box keeps its own resolution. `dns.final` and traffic
+  routing are unchanged; macOS is untouched.
+
 ## [0.1.13] - 2026-09-21
 
 ### Fixed

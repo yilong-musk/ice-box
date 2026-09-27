@@ -12,11 +12,23 @@ mod instance;
 mod log_tail;
 mod log_view;
 mod orchestrate;
+mod proc_memory;
 mod proxy_terminal;
 mod runtime;
 mod shutdown;
 mod subscription_watch;
 mod tray;
+/// Tray delay test. A macOS-only feature: the macOS build compiles it, and so
+/// do the test builds of every host, so its platform-neutral model logic keeps
+/// host-side unit coverage. The Windows and Linux release builds do not include
+/// it and their tray keeps its old shape; the runner and the menu-close watch
+/// inside it are macOS-gated.
+#[cfg(any(target_os = "macos", test))]
+mod tray_delay;
+/// The delay test button's own view (macOS-only): the row handles its mouse
+/// events itself, so a click on it leaves the menu open for the running test.
+#[cfg(target_os = "macos")]
+mod tray_delay_view;
 #[cfg(target_os = "macos")]
 mod tray_speed;
 #[cfg(target_os = "windows")]

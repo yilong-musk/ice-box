@@ -23,10 +23,20 @@ use crate::commands::{
 };
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
+#[cfg(any(target_os = "macos", test))]
+use crate::tray_delay::{delay_tone, DelayOutcome, DelayScope, DelayTone, DelayView};
 use crate::AppState;
 use ice_config::{AppError, ErrorCode, LanguagePreference, ProxyMode};
 use ice_core::CoreStatus;
 use ice_engine::{read_index, set_active, SubscriptionMeta, SubscriptionPaths};
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::AllocAnyThread;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSColor, NSForegroundColorAttributeName, NSMenu, NSMenuItem};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSMutableAttributedString, NSRange, NSString};
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -34,7 +44,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{
+        CheckMenuItem, IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem,
+        Submenu,
+    },
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Wry,
 };
@@ -206,6 +219,15 @@ struct TrayLabels {
     open_cli_proxy: &'static str,
     show: &'static str,
     quit: &'static str,
+    /// Delay test button of a node page: the top page (each group's current
+    /// exit, or every node on a flat profile) and a group page (the group's
+    /// members) carry the same label.
+    delay_test: &'static str,
+    /// Template of the button of the page whose test is in flight; the two
+    /// `{}` are the probe in flight and the total.
+    delay_progress: &'static str,
+    /// Suffix of a row whose probe failed.
+    delay_failed: &'static str,
 }
 
 impl TrayLabels {
@@ -216,6 +238,14 @@ impl TrayLabels {
         } else {
             self.service_start
         }
+    }
+
+    /// Text of the button whose page has a test in flight: `延迟测试中 3/8`.
+    #[cfg(any(target_os = "macos", test))]
+    fn delay_progress_text(self, index: usize, total: usize) -> String {
+        self.delay_progress
+            .replacen("{}", &index.to_string(), 1)
+            .replacen("{}", &total.to_string(), 1)
     }
 }
 
@@ -234,6 +264,9 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "打开代理终端",
             show: "显示",
             quit: "退出",
+            delay_test: "延迟测试",
+            delay_progress: "延迟测试中 {}/{}",
+            delay_failed: "失败",
         },
         TrayLanguage::En => TrayLabels {
             service_start: "Start Proxy Service",
@@ -248,6 +281,9 @@ fn labels(language: TrayLanguage) -> TrayLabels {
             open_cli_proxy: "Open Proxy Terminal",
             show: "Show",
             quit: "Quit",
+            delay_test: "Test Delay",
+            delay_progress: "Testing {}/{}",
+            delay_failed: "Failed",
         },
     }
 }
@@ -346,6 +382,16 @@ impl NodeAction {
             }
         }
     }
+
+    /// The tag the row stands for: the node it picks, or the member it switches
+    /// its group to. What the delay decoration looks the newest result up by.
+    #[cfg(any(target_os = "macos", test))]
+    fn tag(&self) -> &str {
+        match self {
+            Self::SelectNode(tag) => tag,
+            Self::SelectMember { member, .. } => member,
+        }
+    }
 }
 
 /// Decode an id built by [`NodeAction::menu_id`]. `None` for every other menu id
@@ -377,16 +423,72 @@ struct NodeMenuItem {
 /// A strategy group: its members sit one level down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NodeMenuGroup {
+    /// Tag of the group itself; the group page's test button names it.
+    #[cfg(any(target_os = "macos", test))]
+    tag: String,
     label: String,
+    /// Live member the group exits through, when it has one. The group label
+    /// carries that member's delay result.
+    #[cfg(any(target_os = "macos", test))]
+    now: Option<String>,
+    /// Delay test button at the top of the group page (macOS-only feature).
+    #[cfg(any(target_os = "macos", test))]
+    delay: Option<DelayButton>,
     members: Vec<NodeMenuItem>,
+}
+
+impl NodeMenuGroup {
+    fn new(tag: &str, now: Option<&str>, members: Vec<NodeMenuItem>) -> Self {
+        Self {
+            label: group_label(tag, now),
+            #[cfg(any(target_os = "macos", test))]
+            tag: tag.to_string(),
+            #[cfg(any(target_os = "macos", test))]
+            now: now.map(str::to_string),
+            #[cfg(any(target_os = "macos", test))]
+            delay: None,
+            members,
+        }
+    }
 }
 
 /// Node submenu body. Derived from the active profile and the live selections;
 /// the submenu is rebuilt only when this value changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NodeMenuEntry {
+    /// Page-level delay test button (macOS-only feature).
+    #[cfg(any(target_os = "macos", test))]
+    Delay(DelayButton),
     Item(NodeMenuItem),
     Group(NodeMenuGroup),
+}
+
+/// One page's delay test button, as the menu should draw it now.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DelayButton {
+    label: String,
+    enabled: bool,
+    scope: DelayScope,
+}
+
+/// Rows one page's delay button brings with it: the item itself, and the
+/// separator under it.
+#[cfg(any(target_os = "macos", test))]
+const DELAY_BUTTON_ROWS: usize = 2;
+
+/// A rendered page button: the item, and the separator under it.
+#[cfg(any(target_os = "macos", test))]
+struct DelayRows {
+    button: MenuItem<Wry>,
+    separator: PredefinedMenuItem<Wry>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DelayRows {
+    fn refs(&self) -> [&dyn IsMenuItem<Wry>; 2] {
+        [&self.button, &self.separator]
+    }
 }
 
 /// Group types whose members can be switched. Mirrors the Nodes page: the other
@@ -427,9 +529,10 @@ fn node_menu_entries(nodes: &[NodeInfo], selected: &str) -> Vec<NodeMenuEntry> {
             }
             let selectable = group.outbound_type == SELECTABLE_GROUP_TYPE;
             let now = group.group_now.as_deref().filter(|now| !now.is_empty());
-            Some(NodeMenuEntry::Group(NodeMenuGroup {
-                label: group_label(&group.tag, now),
-                members: members
+            Some(NodeMenuEntry::Group(NodeMenuGroup::new(
+                &group.tag,
+                now,
+                members
                     .iter()
                     .map(|member| NodeMenuItem {
                         label: member.clone(),
@@ -441,7 +544,7 @@ fn node_menu_entries(nodes: &[NodeInfo], selected: &str) -> Vec<NodeMenuEntry> {
                         },
                     })
                     .collect(),
-            }))
+            )))
         })
         .collect()
 }
@@ -705,6 +808,24 @@ impl TrayMenuState {
         if !dirty && applied.as_slice() == entries {
             return Ok(());
         }
+        // Rows that are already on the submenu are retitled in place. A
+        // rebuild drops every row and re-creates it, and an open tray menu
+        // does not survive that: the delay test streams its progress into the
+        // menu the click came from, and a closed menu is both a cancel and an
+        // end to what the test is showing. A run only retitles the rows it
+        // touches, so those updates come through here; a model that lists
+        // different rows (another profile, another node) is rebuilt as before.
+        if same_node_rows(&applied, entries) && retitle_node_rows(&self.nodes, entries)? {
+            *applied = entries.to_vec();
+            self.nodes_dirty.store(false, Ordering::SeqCst);
+            #[cfg(target_os = "macos")]
+            {
+                let labels = self.labels();
+                colorize_delay_results(app, &labels);
+                attach_delay_buttons(app, entries, &labels);
+            }
+            return Ok(());
+        }
         clear_node_children(&self.nodes)?;
         if let Err(err) = append_node_entries(app, &self.nodes, entries) {
             // Leave the model as it was, so the next sync retries the rebuild.
@@ -716,6 +837,15 @@ impl TrayMenuState {
             .map_err(|err| tray_error("update tray nodes enabled", err))?;
         *applied = entries.to_vec();
         self.nodes_dirty.store(false, Ordering::SeqCst);
+        // The rebuild dropped the coloured result suffixes and the delay
+        // buttons' custom views with the old rows; put both back on the new
+        // ones (`colorize_delay_results`, `attach_delay_buttons`).
+        #[cfg(target_os = "macos")]
+        {
+            let labels = self.labels();
+            colorize_delay_results(app, &labels);
+            attach_delay_buttons(app, entries, &labels);
+        }
         Ok(())
     }
 
@@ -885,7 +1015,8 @@ fn clear_node_children(parent: &Submenu<Wry>) -> Result<(), AppError> {
 }
 
 /// Build and attach the node submenu body: check items at this level and one
-/// submenu per strategy group.
+/// submenu per strategy group. A page's delay test button (macOS-only feature)
+/// sits above a separator, with the rows under it.
 fn append_node_entries(
     app: &AppHandle,
     parent: &Submenu<Wry>,
@@ -893,6 +1024,15 @@ fn append_node_entries(
 ) -> Result<(), AppError> {
     for (index, entry) in entries.iter().enumerate() {
         match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(button) => {
+                let rows = delay_rows(app, button)?;
+                for row in rows.refs() {
+                    parent
+                        .append(row)
+                        .map_err(|err| tray_error("append tray delay button", err))?;
+                }
+            }
             NodeMenuEntry::Item(item) => {
                 parent
                     .append(&node_check_item(app, item)?)
@@ -904,16 +1044,24 @@ fn append_node_entries(
                     .iter()
                     .map(|member| node_check_item(app, member))
                     .collect::<Result<Vec<_>, AppError>>()?;
-                let member_refs: Vec<&dyn IsMenuItem<Wry>> = members
-                    .iter()
-                    .map(|member| member as &dyn IsMenuItem<Wry>)
-                    .collect();
+                #[cfg(any(target_os = "macos", test))]
+                let delay = group
+                    .delay
+                    .as_ref()
+                    .map(|button| delay_rows(app, button))
+                    .transpose()?;
+                let mut rows: Vec<&dyn IsMenuItem<Wry>> = Vec::new();
+                #[cfg(any(target_os = "macos", test))]
+                if let Some(delay) = &delay {
+                    rows.extend(delay.refs());
+                }
+                rows.extend(members.iter().map(|member| member as &dyn IsMenuItem<Wry>));
                 let submenu = Submenu::with_id_and_items(
                     app,
                     serde_json::json!(["group", index]).to_string(),
                     menu_text(&group.label),
                     true,
-                    &member_refs,
+                    &rows,
                 )
                 .map_err(|err| tray_error("create tray node group", err))?;
                 parent
@@ -923,6 +1071,201 @@ fn append_node_entries(
         }
     }
     Ok(())
+}
+
+/// Whether every entry of `entries` stands for the same row as the entry in
+/// its place in `applied`: same kind, same node, same group members. Labels and
+/// click states are what a retitle rewrites, so they are not part of a row's
+/// identity.
+fn same_node_rows(applied: &[NodeMenuEntry], entries: &[NodeMenuEntry]) -> bool {
+    applied.len() == entries.len()
+        && applied
+            .iter()
+            .zip(entries)
+            .all(|(applied, entry)| same_row_shape(applied, entry))
+}
+
+/// One entry of [`same_node_rows`] against the one that stands in its place.
+fn same_row_shape(applied: &NodeMenuEntry, entry: &NodeMenuEntry) -> bool {
+    match (applied, entry) {
+        #[cfg(any(target_os = "macos", test))]
+        (NodeMenuEntry::Delay(_), NodeMenuEntry::Delay(_)) => true,
+        (NodeMenuEntry::Item(applied), NodeMenuEntry::Item(entry)) => {
+            applied.action.menu_id() == entry.action.menu_id()
+        }
+        (NodeMenuEntry::Group(applied), NodeMenuEntry::Group(entry)) => {
+            // A group page is the tag it stands for plus the members it lists;
+            // its label carries the live exit and moves with it.
+            #[cfg(any(target_os = "macos", test))]
+            let same_identity =
+                applied.tag == entry.tag && applied.delay.is_some() == entry.delay.is_some();
+            #[cfg(not(any(target_os = "macos", test)))]
+            let same_identity = true;
+            same_identity
+                && applied.members.len() == entry.members.len()
+                && applied
+                    .members
+                    .iter()
+                    .zip(&entry.members)
+                    .all(|(applied, entry)| applied.action.menu_id() == entry.action.menu_id())
+        }
+        _ => false,
+    }
+}
+
+/// Rewrite the node submenu's rows from `entries` without touching the rows
+/// themselves: the same items, with the labels and states the model now
+/// carries. See [`TrayMenuState::apply_nodes`] for why an update the menu is
+/// open on must come through here rather than through a rebuild.
+///
+/// A rewritten row keeps whatever delay colour it carried: `setTitle` (what
+/// [`retitle_node_item`] calls) does not touch an attributed title. The caller
+/// re-derives the colours after the walk, which also drops the attribute of a
+/// row whose result is gone.
+///
+/// The walk addresses the rows the way [`append_node_entries`] lays them out —
+/// the page button and its separator, one check row per item, one submenu per
+/// group with the group's own button and members inside — so the two must stay
+/// in step. `false` comes back when the submenu does not hold exactly those
+/// rows — a rebuild that failed part-way, say — and the caller rebuilds after
+/// all, rather than retitling rows that stand for something else.
+fn retitle_node_rows(parent: &Submenu<Wry>, entries: &[NodeMenuEntry]) -> Result<bool, AppError> {
+    let rows = parent
+        .items()
+        .map_err(|err| tray_error("read tray node rows", err))?;
+    if rows.len() != node_row_count(entries) {
+        return Ok(false);
+    }
+    let mut index = 0usize;
+    for entry in entries {
+        match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(button) => {
+                if let Some(MenuItemKind::MenuItem(row)) = rows.get(index) {
+                    retitle_delay_row(row, button)?;
+                }
+                // The separator under the button carries nothing of its own,
+                // so the walk steps over it.
+                index += DELAY_BUTTON_ROWS;
+            }
+            NodeMenuEntry::Item(item) => {
+                if let Some(MenuItemKind::Check(row)) = rows.get(index) {
+                    retitle_node_item(row, item)?;
+                }
+                index += 1;
+            }
+            NodeMenuEntry::Group(group) => {
+                let Some(MenuItemKind::Submenu(submenu)) = rows.get(index) else {
+                    index += 1;
+                    continue;
+                };
+                submenu
+                    .set_text(menu_text(&group.label))
+                    .map_err(|err| tray_error("retitle tray node group", err))?;
+                let members = submenu
+                    .items()
+                    .map_err(|err| tray_error("read tray node group rows", err))?;
+                if members.len() != group_row_count(group) {
+                    return Ok(false);
+                }
+                // The group's own button (and the separator under it) sits
+                // above its members on the pages that have one; the walk steps
+                // over both to reach them.
+                #[cfg(any(target_os = "macos", test))]
+                if let Some(button) = &group.delay {
+                    if let Some(MenuItemKind::MenuItem(row)) = members.first() {
+                        retitle_delay_row(row, button)?;
+                    }
+                }
+                let button_rows = group_delay_rows(group);
+                for (offset, member) in group.members.iter().enumerate() {
+                    if let Some(MenuItemKind::Check(row)) = members.get(button_rows + offset) {
+                        retitle_node_item(row, member)?;
+                    }
+                }
+                index += 1;
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// How many rows `entries` puts at the top level of the node submenu: one per
+/// entry, except a page's delay button, which brings its separator along.
+fn node_row_count(entries: &[NodeMenuEntry]) -> usize {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            #[cfg(any(target_os = "macos", test))]
+            NodeMenuEntry::Delay(_) => DELAY_BUTTON_ROWS,
+            NodeMenuEntry::Item(_) | NodeMenuEntry::Group(_) => 1,
+        })
+        .sum()
+}
+
+/// How many rows one group page puts inside its own submenu: its members, and
+/// the group's own delay button with its separator where that page has one.
+fn group_row_count(group: &NodeMenuGroup) -> usize {
+    group.members.len() + group_delay_rows(group)
+}
+
+/// How many rows a group page puts above its members: the group's own delay
+/// button and its separator, on the pages that have a button.
+#[cfg(any(target_os = "macos", test))]
+fn group_delay_rows(group: &NodeMenuGroup) -> usize {
+    if group.delay.is_some() {
+        DELAY_BUTTON_ROWS
+    } else {
+        0
+    }
+}
+
+/// Nothing sits above the members where the platform has no delay button.
+#[cfg(not(any(target_os = "macos", test)))]
+fn group_delay_rows(_group: &NodeMenuGroup) -> usize {
+    0
+}
+
+/// Rewrite one node row: its text, whether it takes a click, and its check
+/// mark (the platform toggles that one itself on a click, so the model's value
+/// is re-asserted).
+fn retitle_node_item(row: &CheckMenuItem<Wry>, item: &NodeMenuItem) -> Result<(), AppError> {
+    row.set_text(menu_text(&item.label))
+        .map_err(|err| tray_error("retitle tray node item", err))?;
+    row.set_enabled(item.enabled)
+        .map_err(|err| tray_error("retitle tray node item enabled", err))?;
+    row.set_checked(item.checked)
+        .map_err(|err| tray_error("retitle tray node item checked", err))
+}
+
+/// Rewrite one page's delay button. The view on the row draws the label, so
+/// the text here is what the menu item carries for the platform (and what a
+/// screen reader reads); the view itself is re-attached after the walk.
+#[cfg(any(target_os = "macos", test))]
+fn retitle_delay_row(row: &MenuItem<Wry>, button: &DelayButton) -> Result<(), AppError> {
+    row.set_text(menu_text(&button.label))
+        .map_err(|err| tray_error("retitle tray delay button", err))?;
+    row.set_enabled(button.enabled)
+        .map_err(|err| tray_error("retitle tray delay button enabled", err))
+}
+
+/// Render a page's delay test button and the separator under it.
+#[cfg(any(target_os = "macos", test))]
+fn delay_rows(app: &AppHandle, button: &DelayButton) -> Result<DelayRows, AppError> {
+    let item = MenuItem::with_id(
+        app,
+        button.scope.menu_id(),
+        menu_text(&button.label),
+        button.enabled,
+        None::<&str>,
+    )
+    .map_err(|err| tray_error("create tray delay button", err))?;
+    let separator = PredefinedMenuItem::separator(app)
+        .map_err(|err| tray_error("create tray delay separator", err))?;
+    Ok(DelayRows {
+        button: item,
+        separator,
+    })
 }
 
 fn node_check_item(app: &AppHandle, item: &NodeMenuItem) -> Result<CheckMenuItem<Wry>, AppError> {
@@ -1061,6 +1404,12 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             }
         }
     };
+    // The delay buttons' views hang off the status item's menu, which exists
+    // only once the icon is built at the end of this function: the model is
+    // kept aside for that first attach instead of read back under a lock the
+    // main thread must not take.
+    #[cfg(target_os = "macos")]
+    let seeded_node_model = node_model.clone();
     // Same seeding rule as the node submenu above: `apply_subscriptions` takes a
     // lock the main thread must never hold while the watchdog rebuilds.
     let sub_entries = current_subscription_entries(app).unwrap_or_default();
@@ -1209,6 +1558,11 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
     }
 
     let _tray = builder.build(app)?;
+    #[cfg(target_os = "macos")]
+    {
+        crate::tray_delay::install_menu_watch(&_tray);
+        attach_delay_buttons(app, &seeded_node_model, &labels);
+    }
     Ok(())
 }
 
@@ -1238,7 +1592,476 @@ fn current_node_entries(app: &AppHandle) -> Option<Vec<NodeMenuEntry>> {
     let settings = current_settings(&state.paths).ok()?;
     let nodes = collect_nodes(state.inner()).ok()?;
     let selected = resolve_selected_tag(&nodes, settings.selected_tag.as_deref());
-    Some(node_menu_entries(&nodes, &selected))
+    let entries = node_menu_entries(&nodes, &selected);
+    #[cfg(any(target_os = "macos", test))]
+    let entries = decorate_delay(entries, &current_labels(app), &nodes);
+    Some(entries)
+}
+
+/// Labels for the menu being built: the tray's live language, or the settings'
+/// preference while the tray state does not exist yet (menu seeding).
+#[cfg(any(target_os = "macos", test))]
+fn current_labels(app: &AppHandle) -> TrayLabels {
+    if let Some(state) = app.try_state::<TrayMenuState>() {
+        return state.labels();
+    }
+    let language = app
+        .try_state::<AppState>()
+        .and_then(|state| current_settings(&state.paths).ok())
+        .map(|settings| TrayLanguage::from(settings.language))
+        .unwrap_or(TrayLanguage::En);
+    labels(language)
+}
+
+/// Apply the newest delay test to the derived node body: every page gets its
+/// test button, and every row the result of the exit node it stands for.
+///
+/// The button of the page whose test is in flight shows its progress; while any
+/// test runs, every button is disabled. Nothing to decorate (and no buttons)
+/// while there are no rows — the top page only carries a button when it has
+/// nodes.
+#[cfg(any(target_os = "macos", test))]
+fn decorate_delay(
+    mut entries: Vec<NodeMenuEntry>,
+    labels: &TrayLabels,
+    nodes: &[NodeInfo],
+) -> Vec<NodeMenuEntry> {
+    apply_delay(
+        &mut entries,
+        labels,
+        nodes,
+        &crate::tray_delay::current_view(),
+    );
+    entries
+}
+
+/// The pure half of [`decorate_delay`]: what `view` does to the derived body.
+#[cfg(any(target_os = "macos", test))]
+fn apply_delay(
+    entries: &mut Vec<NodeMenuEntry>,
+    labels: &TrayLabels,
+    nodes: &[NodeInfo],
+    view: &DelayView,
+) {
+    for entry in entries.iter_mut() {
+        match entry {
+            NodeMenuEntry::Delay(_) => {}
+            NodeMenuEntry::Item(item) => {
+                item.label
+                    .push_str(&delay_suffix(view, labels, nodes, item.action.tag()));
+            }
+            NodeMenuEntry::Group(group) => {
+                // The label carries the group's live exit, so it carries that
+                // exit's result too.
+                if let Some(now) = group.now.as_deref() {
+                    group
+                        .label
+                        .push_str(&delay_suffix(view, labels, nodes, now));
+                }
+                for member in group.members.iter_mut() {
+                    member
+                        .label
+                        .push_str(&delay_suffix(view, labels, nodes, member.action.tag()));
+                }
+                group.delay = Some(delay_button(
+                    view,
+                    labels,
+                    DelayScope::Group(group.tag.clone()),
+                ));
+            }
+        }
+    }
+    if !entries.is_empty() {
+        let button = delay_button(view, labels, DelayScope::Top);
+        entries.insert(0, NodeMenuEntry::Delay(button));
+    }
+}
+
+/// One page's button: the progress label while its own test runs, the plain
+/// label otherwise, and disabled while any test runs.
+#[cfg(any(target_os = "macos", test))]
+fn delay_button(view: &DelayView, labels: &TrayLabels, scope: DelayScope) -> DelayButton {
+    let label = match view.progress(&scope) {
+        Some((index, total)) => labels.delay_progress_text(index, total),
+        None => labels.delay_test.to_string(),
+    };
+    DelayButton {
+        label,
+        enabled: view.idle(),
+        scope,
+    }
+}
+
+/// Separator between a row's name and the delay result appended to it. The
+/// colouring side matches this exact text, so the two sides cannot drift.
+#[cfg(any(target_os = "macos", test))]
+const SUFFIX_SEPARATOR: &str = " · ";
+
+/// Unit of a measured delay, as the suffix prints it.
+#[cfg(any(target_os = "macos", test))]
+const DELAY_UNIT: &str = " ms";
+
+/// Suffix a row carries for the newest test: nothing when the exit node behind
+/// `tag` was not probed, else `…`, the measured delay, or the failure text.
+#[cfg(any(target_os = "macos", test))]
+fn delay_suffix(view: &DelayView, labels: &TrayLabels, nodes: &[NodeInfo], tag: &str) -> String {
+    let Some(exit) = crate::tray_delay::resolve_exit_tag(nodes, tag) else {
+        return String::new();
+    };
+    match view.outcome(&exit) {
+        None => String::new(),
+        Some(DelayOutcome::Testing) => format!("{SUFFIX_SEPARATOR}…"),
+        Some(DelayOutcome::Done(delay_ms)) => format!("{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+        Some(DelayOutcome::Failed) => format!("{SUFFIX_SEPARATOR}{}", labels.delay_failed),
+    }
+}
+
+/// The delay result a menu title carries: the colour band it asks for, and the
+/// byte offset its suffix starts at. `None` for a title without a finished
+/// result — a bare row, the `…` of a probe in flight, or anything else.
+///
+/// The title is what the menu shows rather than the model behind it: every
+/// finished row prints exactly what [`delay_suffix`] appended, and no other
+/// item in the tray menu ends in ` · <digits> ms` or ` · <failed>`.
+#[cfg(any(target_os = "macos", test))]
+fn delay_suffix_color(title: &str, labels: &TrayLabels) -> Option<(usize, DelayTone)> {
+    let start = title.rfind(SUFFIX_SEPARATOR)?;
+    let suffix = &title[start + SUFFIX_SEPARATOR.len()..];
+    // The failure text is a label, not a number: compare the whole suffix.
+    if suffix == labels.delay_failed {
+        return Some((start, DelayTone::Bad));
+    }
+    let digits = suffix.strip_suffix(DELAY_UNIT)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((start, delay_tone(digits.parse().ok()?)))
+}
+
+/// `start..` of `title` as the pair AppKit counts in: an `NSRange` holds UTF-16
+/// code units, so a node name holding multi-byte characters would misplace the
+/// colour if the range were counted in Rust bytes.
+#[cfg(any(target_os = "macos", test))]
+fn suffix_units(title: &str, start: usize) -> (usize, usize) {
+    let location = title[..start].encode_utf16().count();
+    let length = title[start..].encode_utf16().count();
+    (location, length)
+}
+
+/// Colour the delay results of the tray menu after a node rebuild.
+///
+/// The rebuild is what needs this: muda drops the submenu's rows and builds new
+/// ones, and a fresh item carries no attributed title, so every rebuild colours
+/// its own rows — the menu that is open during a run is refreshed at most once
+/// a second, and each refresh colours the results that have landed.
+///
+/// Off-main-thread only, like the rebuild itself: the walk hops to the main
+/// thread and blocks until it is done, so no rebuild interleaves with it.
+#[cfg(target_os = "macos")]
+fn colorize_delay_results(app: &AppHandle, labels: &TrayLabels) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let labels = *labels;
+    let result = tray.with_inner_tray_icon(move |tray| {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return false;
+        };
+        let Some(status_item) = tray.ns_status_item() else {
+            return false;
+        };
+        let Some(menu) = status_item.menu(mtm) else {
+            return false;
+        };
+        colorize_menu(&menu, labels);
+        true
+    });
+    match result {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!("tray delay colours: tray menu not found"),
+        Err(err) => tracing::warn!(error = %err, "tray delay colours: menu walk failed"),
+    }
+}
+
+/// Colour the finished-result suffix of every row of `menu`, the submenus (the
+/// node groups) included: a group's own title carries the result of the member
+/// it exits through, and its members carry their own.
+///
+/// The walk uncolours as well: retitling a row goes through `setTitle` (muda's
+/// `set_text`), which leaves an `attributedTitle` an earlier pass set in place
+/// — and AppKit draws that one — so a row whose finished result is gone (the
+/// menu closed and dropped it, or a new run replaced it with `…`) would keep
+/// showing the old text and colour. Letting the attribute go with the result
+/// is what keeps the drawn row and the model behind it the same.
+#[cfg(target_os = "macos")]
+fn colorize_menu(menu: &NSMenu, labels: TrayLabels) {
+    let items = menu.itemArray();
+    for index in 0..items.count() {
+        let item = items.objectAtIndex(index);
+        let title = item.title().to_string();
+        match delay_suffix_color(&title, &labels) {
+            Some((start, tone)) => colorize_row(&item, &title, start, tone),
+            None if item.attributedTitle().is_some() => item.setAttributedTitle(None),
+            None => {}
+        }
+        if let Some(submenu) = item.submenu() {
+            colorize_menu(&submenu, labels);
+        }
+    }
+}
+
+/// Rewrite `item`'s title with `tone` on the suffix that starts at byte
+/// `start`, and leave the rest of the row alone.
+///
+/// The attributed title carries that one attribute on that one range: AppKit
+/// draws the ranges without a colour in the menu's own text colour, so the
+/// name reads the same as before in either appearance, and a highlighted row
+/// still inverts it (an explicit colour would stick through the highlight).
+/// No font attribute, either: the menu's own font is what an untouched row
+/// gets, and setting one risks the baseline shift attributed titles are known
+/// for.
+#[cfg(target_os = "macos")]
+fn colorize_row(item: &NSMenuItem, title: &str, start: usize, tone: DelayTone) {
+    let (location, length) = suffix_units(title, start);
+    let text = NSString::from_str(title);
+    let attributed =
+        NSMutableAttributedString::initWithString(NSMutableAttributedString::alloc(), &text);
+    // SAFETY: the attribute name is AppKit's own, the value is the `NSColor`
+    // AppKit documents for it, and the range lies inside the string.
+    unsafe {
+        attributed.addAttribute_value_range(
+            NSForegroundColorAttributeName,
+            &tone_color(tone),
+            NSRange::new(location, length),
+        );
+    }
+    item.setAttributedTitle(Some(&attributed));
+}
+
+/// Menu text colour for a result band. All three are dynamic system colours,
+/// so they stay legible when the menu flips between the light and the dark
+/// appearance.
+#[cfg(target_os = "macos")]
+fn tone_color(tone: DelayTone) -> Retained<NSColor> {
+    match tone {
+        // The Nodes page's green / yellow / red in system colours; the system
+        // orange stands in for the system yellow, which barely reads against
+        // the light menu background.
+        DelayTone::Ok => NSColor::systemGreenColor(),
+        DelayTone::Warn => NSColor::systemOrangeColor(),
+        DelayTone::Bad => NSColor::systemRedColor(),
+    }
+}
+
+/// Attach the delay buttons' custom views to the rows of the tray menu.
+///
+/// A click that picks a normal menu item closes the menu, and a close is how a
+/// running delay test is cancelled (`tray_delay`): the click that starts a run
+/// must not also end it. An item carrying a `view` takes the click itself and
+/// the menu never selects it — but a rebuild drops the item and its view
+/// together, so every rebuild attaches the views to its own fresh rows.
+///
+/// The walk goes over the menu rather than over the model: the model reached
+/// the menu through muda, which keeps no handle on the native item a view
+/// could be put on, while the menu itself is reachable through the status item.
+/// Rows are found by position — the page button is the first row of the node
+/// submenu, a group's button the first row of the group submenu — and a row is
+/// only attached when its title still has the shape of the button it stands
+/// for, so a menu built by another layout keeps its plain rows instead of
+/// getting a view with the wrong scope. A group button's scope comes from the
+/// model entry in the matching position: the menu and the model are laid out
+/// by the same walk ([`append_node_entries`]), and a mismatch in their counts
+/// skips the group buttons.
+///
+/// Off-main-thread only, like [`colorize_delay_results`]: the walk hops to the
+/// main thread and blocks until it is done.
+#[cfg(target_os = "macos")]
+fn attach_delay_buttons(app: &AppHandle, entries: &[NodeMenuEntry], labels: &TrayLabels) {
+    // The buttons are the ones the model carries: the top page's, then one per
+    // group page, in the order `append_node_entries` lays them out. A body
+    // without one (an empty page, a failed derivation) has nothing to attach.
+    if !matches!(entries.first(), Some(NodeMenuEntry::Delay(_))) {
+        return;
+    }
+    let expected = 1 + entries
+        .iter()
+        .filter(|entry| matches!(entry, NodeMenuEntry::Group(_)))
+        .count();
+    let scopes: Vec<DelayScope> = std::iter::once(DelayScope::Top)
+        .chain(entries.iter().filter_map(|entry| match entry {
+            NodeMenuEntry::Group(group) => Some(DelayScope::Group(group.tag.clone())),
+            _ => None,
+        }))
+        .collect();
+    let labels = *labels;
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let app = app.clone();
+    let attached = tray.with_inner_tray_icon(move |tray| {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let status_item = tray.ns_status_item()?;
+        let menu = status_item.menu(mtm)?;
+        Some(attach_delay_rows(&app, &menu, &scopes, &labels))
+    });
+    match attached {
+        Ok(Some(attached)) if attached < expected => tracing::warn!(
+            attached,
+            expected,
+            "tray delay buttons: rows did not match the node model"
+        ),
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::warn!("tray delay buttons: tray menu not found"),
+        Err(err) => tracing::warn!(error = %err, "tray delay buttons: menu walk failed"),
+    }
+}
+
+/// The menu half of [`attach_delay_buttons`]: the page button of the node
+/// submenu, then the button of every group submenu under it. Returns how many
+/// rows were given a view.
+#[cfg(target_os = "macos")]
+fn attach_delay_rows(
+    app: &AppHandle,
+    menu: &NSMenu,
+    scopes: &[DelayScope],
+    labels: &TrayLabels,
+) -> usize {
+    let Some(nodes) = submenu_titled(menu, labels.nodes) else {
+        return 0;
+    };
+    let rows = nodes.itemArray();
+    let mut attached = 0;
+    // The node submenu opens with the page's own button, then its separator
+    // and the rows below it (`append_node_entries`).
+    if let Some(scope) = scopes.first() {
+        if rows.count() > 0 {
+            let row = rows.objectAtIndex(0);
+            if attach_delay_row(app, &row, scope, labels) {
+                attached += 1;
+            }
+        }
+    }
+    // A group's page button opens the group's submenu, and the model lists the
+    // groups in the same order: pair them off position by position.
+    let groups: Vec<Retained<NSMenuItem>> = (1..rows.count())
+        .map(|index| rows.objectAtIndex(index))
+        .filter(|row| row.submenu().is_some())
+        .collect();
+    let group_scopes: Vec<&DelayScope> = scopes.iter().skip(1).collect();
+    if groups.len() != group_scopes.len() {
+        tracing::warn!(
+            menu = groups.len(),
+            model = group_scopes.len(),
+            "tray delay buttons: group pages do not match the node model"
+        );
+    }
+    for (row, scope) in groups.iter().zip(group_scopes) {
+        let Some(submenu) = row.submenu() else {
+            continue;
+        };
+        let buttons = submenu.itemArray();
+        if buttons.count() == 0 {
+            continue;
+        }
+        let button = buttons.objectAtIndex(0);
+        if attach_delay_row(app, &button, scope, labels) {
+            attached += 1;
+        }
+    }
+    attached
+}
+
+/// Put the row's custom view on it, if the row still has the shape of a delay
+/// button; `scope` is what the run it starts will probe.
+///
+/// The row's own action is dropped with the view: on a plain item it fires on
+/// keyboard activation, which also closes the menu, and that close would
+/// cancel the run the action had just started. With a view attached the click
+/// is the way a run starts, and a click on it leaves the menu open.
+#[cfg(target_os = "macos")]
+fn attach_delay_row(
+    app: &AppHandle,
+    row: &NSMenuItem,
+    scope: &DelayScope,
+    labels: &TrayLabels,
+) -> bool {
+    let title = row.title().to_string();
+    if !delay_button_title_matches(&title, labels) {
+        tracing::warn!(%title, "tray delay buttons: unexpected button row, left alone");
+        return false;
+    }
+    // SAFETY: dropping the action and the target of this item's own native
+    // menu item; AppKit keeps the item in its menu either way.
+    unsafe {
+        row.setAction(None);
+        row.setTarget(None);
+    }
+    // A row that already carries one of our views is retitled through it: the
+    // refresh then leaves the item — and the subview inside it — as the open
+    // menu laid it out, and only the text it draws moves.
+    if let Some(view) = row.view() {
+        if crate::tray_delay_view::retitle_button_view(view, &title, row.isEnabled()) {
+            return true;
+        }
+    }
+    let Some(view) =
+        crate::tray_delay_view::delay_button_view(app, &title, row.isEnabled(), scope.clone())
+    else {
+        return false;
+    };
+    row.setView(Some(&view));
+    true
+}
+
+/// The submenu a top-level item carries under `title` — the node submenu,
+/// looked up the way the walk knows it: by the label the menu shows.
+#[cfg(target_os = "macos")]
+fn submenu_titled(menu: &NSMenu, title: &str) -> Option<Retained<NSMenu>> {
+    let items = menu.itemArray();
+    (0..items.count())
+        .map(|index| items.objectAtIndex(index))
+        .find(|item| item.title().to_string() == title)
+        .and_then(|item| item.submenu())
+}
+
+/// Whether `title` has the shape of a delay button: the page's own label, or a
+/// progress text while a test is in flight (the page under test shows the
+/// progress, the other pages keep their label).
+///
+/// `title` is the row's title as muda wrote it to the item — the label with
+/// its mnemonics resolved (`menu_text`) — which is the label itself here: none
+/// of the button labels carries an `&`.
+///
+/// Every page carries the same label, so the title alone cannot tell a page's
+/// button from another's; the caller knows which page the row it walks belongs
+/// to.
+#[cfg(any(target_os = "macos", test))]
+fn delay_button_title_matches(title: &str, labels: &TrayLabels) -> bool {
+    title == labels.delay_test || delay_progress_shaped(title, labels)
+}
+
+/// Whether `title` is the progress text of `labels.delay_progress` — `延迟测试
+/// 中 3/8` — told by shape: the template's own text around its two `{}`, and a
+/// number in each of their places.
+#[cfg(any(target_os = "macos", test))]
+fn delay_progress_shaped(title: &str, labels: &TrayLabels) -> bool {
+    let Some((prefix, rest)) = labels.delay_progress.split_once("{}") else {
+        return false;
+    };
+    let Some((separator, suffix)) = rest.split_once("{}") else {
+        return false;
+    };
+    let Some(numbers) = title
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    let Some((index, total)) = numbers.split_once(separator) else {
+        return false;
+    };
+    let is_number = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    is_number(index) && is_number(total)
 }
 
 /// Derive the subscription submenu body from the stored index. `None` while the
@@ -1588,6 +2411,11 @@ mod tests {
             ("复制代理命令", "打开代理终端")
         );
         assert_eq!((zh.show, zh.quit), ("显示", "退出"));
+        assert_eq!(
+            (zh.delay_test, zh.delay_progress, zh.delay_failed),
+            ("延迟测试", "延迟测试中 {}/{}", "失败")
+        );
+        assert_eq!(zh.delay_progress_text(3, 8), "延迟测试中 3/8");
 
         let en = labels(TrayLanguage::En);
         assert_eq!(en.service(false), "Start Proxy Service");
@@ -1604,6 +2432,11 @@ mod tests {
             ("Copy Proxy Command", "Open Proxy Terminal")
         );
         assert_eq!((en.show, en.quit), ("Show", "Quit"));
+        assert_eq!(
+            (en.delay_test, en.delay_progress, en.delay_failed),
+            ("Test Delay", "Testing {}/{}", "Failed")
+        );
+        assert_eq!(en.delay_progress_text(3, 8), "Testing 3/8");
     }
 
     #[test]
@@ -1905,5 +2738,354 @@ mod tests {
         assert!(!skip_live_node_rebuild(true, true));
         assert!(!skip_live_node_rebuild(false, false));
         assert!(!skip_live_node_rebuild(true, false));
+    }
+
+    /// A delay view with a run and the outcomes of a finished or running test.
+    fn delay_view(
+        run: Option<(DelayScope, usize, usize)>,
+        outcomes: &[(&str, DelayOutcome)],
+    ) -> DelayView {
+        DelayView {
+            run,
+            outcomes: outcomes
+                .iter()
+                .map(|(tag, outcome)| (tag.to_string(), *outcome))
+                .collect(),
+        }
+    }
+
+    fn delay_button_of(entry: &NodeMenuEntry) -> &DelayButton {
+        match entry {
+            NodeMenuEntry::Delay(button) => button,
+            other => panic!("expected a delay button, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delay_decoration_puts_a_button_on_every_page() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(
+            &mut entries,
+            &labels(TrayLanguage::Zh),
+            &nodes,
+            &delay_view(None, &[]),
+        );
+
+        // Top page: the button above the group, labels untouched while idle.
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "延迟测试");
+        assert!(top.enabled);
+        assert_eq!(top.scope, DelayScope::Top);
+        let group = group(&entries[1]);
+        assert_eq!(group.label, "节点选择 → 日本 02");
+        let page = group.delay.as_ref().expect("group page button");
+        assert_eq!(page.label, "延迟测试");
+        assert!(page.enabled);
+        assert_eq!(page.scope, DelayScope::Group("节点选择".into()));
+    }
+
+    #[test]
+    fn delay_decoration_appends_the_newest_result_to_its_rows() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(
+            Some((DelayScope::Top, 2, 2)),
+            &[
+                ("香港 01", DelayOutcome::Done(45)),
+                ("日本 02", DelayOutcome::Testing),
+            ],
+        );
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut entries, &labels(TrayLanguage::Zh), &nodes, &view);
+
+        // The button of the page under test shows the progress, disabled…
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "延迟测试中 2/2");
+        assert!(!top.enabled);
+        // …the group label mirrors the result of the member it exits through…
+        let group = group(&entries[1]);
+        assert_eq!(group.label, "节点选择 → 日本 02 · …");
+        let page = group.delay.as_ref().expect("group page button");
+        assert_eq!(page.label, "延迟测试");
+        assert!(!page.enabled);
+        // …and every member carries its own result.
+        assert_eq!(group.members[0].label, "香港 01 · 45 ms");
+        assert_eq!(group.members[1].label, "日本 02 · …");
+    }
+
+    #[test]
+    fn delay_decoration_names_a_failed_probe_per_language() {
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(
+            Some((DelayScope::Group("节点选择".into()), 1, 2)),
+            &[
+                ("香港 01", DelayOutcome::Failed),
+                ("日本 02", DelayOutcome::Testing),
+            ],
+        );
+        for (language, failed, group_label) in [
+            (TrayLanguage::Zh, "香港 01 · 失败", "节点选择 → 日本 02 · …"),
+            (
+                TrayLanguage::En,
+                "香港 01 · Failed",
+                "节点选择 → 日本 02 · …",
+            ),
+        ] {
+            let mut entries = node_menu_entries(&nodes, "香港 01");
+            apply_delay(&mut entries, &labels(language), &nodes, &view);
+            let group = group(&entries[1]);
+            assert_eq!(group.members[0].label, failed);
+            assert_eq!(group.label, group_label);
+            // A run on another page leaves the top button disabled with its
+            // plain label.
+            let top = delay_button_of(&entries[0]);
+            assert_eq!(top.label, labels(language).delay_test);
+            assert!(!top.enabled);
+            // The group page's own button carries the progress.
+            let page = group.delay.as_ref().expect("group page button");
+            assert_eq!(page.label, labels(language).delay_progress_text(1, 2));
+        }
+    }
+
+    #[test]
+    fn delay_suffix_color_locates_the_finished_results() {
+        let zh = labels(TrayLanguage::Zh);
+        let name = "香港 01";
+        // Every band, on a plain row and on a group row that carries the
+        // result of the member it exits through.
+        for (delay_ms, tone) in [
+            (45, DelayTone::Ok),
+            (299, DelayTone::Ok),
+            (300, DelayTone::Warn),
+            (999, DelayTone::Warn),
+            (1000, DelayTone::Bad),
+        ] {
+            for title in [
+                format!("{name}{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+                format!("节点选择 → 日本 02{SUFFIX_SEPARATOR}{delay_ms}{DELAY_UNIT}"),
+            ] {
+                let start = title.rfind(SUFFIX_SEPARATOR).expect("separator");
+                assert_eq!(
+                    delay_suffix_color(&title, &zh),
+                    Some((start, tone)),
+                    "{title}"
+                );
+            }
+        }
+        // The suffix is what is coloured, separator included: a name that held
+        // the separator itself keeps its own bytes untouched.
+        let title = format!("A{SUFFIX_SEPARATOR}B{SUFFIX_SEPARATOR}45{DELAY_UNIT}");
+        let (start, tone) = delay_suffix_color(&title, &zh).expect("finished result");
+        assert_eq!(tone, DelayTone::Ok);
+        assert_eq!(&title[start..], format!("{SUFFIX_SEPARATOR}45{DELAY_UNIT}"));
+    }
+
+    #[test]
+    fn delay_suffix_color_keeps_to_finished_results() {
+        let zh = labels(TrayLanguage::Zh);
+        let en = labels(TrayLanguage::En);
+        // A probe in flight prints `…`, and a row the test never reached is
+        // bare: neither asks for a colour.
+        assert_eq!(
+            delay_suffix_color(&format!("香港 01{SUFFIX_SEPARATOR}…"), &zh),
+            None
+        );
+        assert_eq!(delay_suffix_color("香港 01", &zh), None);
+        // A failure is coloured per the menu's own language…
+        for language in [TrayLanguage::Zh, TrayLanguage::En] {
+            let labels = labels(language);
+            let title = format!("香港 01{SUFFIX_SEPARATOR}{}", labels.delay_failed);
+            assert_eq!(
+                delay_suffix_color(&title, &labels),
+                Some(("香港 01".len(), DelayTone::Bad)),
+                "{title}"
+            );
+        }
+        // …and another language's label is not this menu's.
+        assert_eq!(
+            delay_suffix_color(
+                &format!("香港 01{SUFFIX_SEPARATOR}{}", en.delay_failed),
+                &zh
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn suffix_units_count_utf16_code_units_not_bytes() {
+        // 日 and 本 are three bytes each, the emoji four — and two UTF-16 units.
+        let title = format!("日本😀{SUFFIX_SEPARATOR}45{DELAY_UNIT}");
+        let start = title.rfind(SUFFIX_SEPARATOR).expect("separator");
+        assert_eq!(start, 10);
+        assert_eq!(
+            delay_suffix_color(&title, &labels(TrayLanguage::Zh)),
+            Some((10, DelayTone::Ok))
+        );
+        // What AppKit needs: the location in UTF-16 units, the suffix's own
+        // length in the same units.
+        assert_eq!(suffix_units(&title, start), (4, 8));
+    }
+
+    #[test]
+    fn a_flat_profile_gets_the_top_button_above_its_nodes() {
+        let nodes = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let view = delay_view(None, &[("香港 01", DelayOutcome::Done(12))]);
+        let mut entries = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut entries, &labels(TrayLanguage::En), &nodes, &view);
+        assert_eq!(entries.len(), 3);
+        let top = delay_button_of(&entries[0]);
+        assert_eq!(top.label, "Test Delay");
+        assert!(top.enabled);
+        assert_eq!(item(&entries[1]).label, "香港 01 · 12 ms");
+        // A node the newest test did not probe keeps its bare label.
+        assert_eq!(item(&entries[2]).label, "日本 02");
+    }
+
+    #[test]
+    fn a_page_without_rows_gets_no_button() {
+        let mut entries: Vec<NodeMenuEntry> = Vec::new();
+        apply_delay(
+            &mut entries,
+            &labels(TrayLanguage::Zh),
+            &[],
+            &delay_view(None, &[]),
+        );
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn delay_button_titles_are_recognised_by_shape() {
+        let zh = labels(TrayLanguage::Zh);
+        // The plain label both page kinds carry, and the progress text a run
+        // prints on the page it is testing…
+        assert!(delay_button_title_matches("延迟测试", &zh));
+        assert!(delay_button_title_matches("延迟测试中 3/8", &zh));
+        assert!(delay_button_title_matches("延迟测试中 12/100", &zh));
+        // …and nothing else: a row, a half-written progress text, another
+        // language's label, or a leftover of the old wording.
+        assert!(!delay_button_title_matches("香港 01", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 3/", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 /8", &zh));
+        assert!(!delay_button_title_matches("延迟测试中 3/x", &zh));
+        assert!(!delay_button_title_matches("测试中 3/8", &zh));
+        assert!(!delay_button_title_matches("测速：当前出口", &zh));
+        assert!(!delay_button_title_matches("Testing 3/8", &zh));
+
+        let en = labels(TrayLanguage::En);
+        assert!(delay_button_title_matches("Test Delay", &en));
+        assert!(delay_button_title_matches("Testing 3/8", &en));
+    }
+
+    #[test]
+    fn a_retitle_keeps_the_rows_it_rewrites() {
+        let zh = labels(TrayLanguage::Zh);
+        let nodes = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut idle = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut idle, &zh, &nodes, &delay_view(None, &[]));
+
+        // A run writes progress and results into the rows already on the menu…
+        let mut running = node_menu_entries(&nodes, "香港 01");
+        apply_delay(
+            &mut running,
+            &zh,
+            &nodes,
+            &delay_view(
+                Some((DelayScope::Top, 1, 2)),
+                &[("香港 01", DelayOutcome::Done(42))],
+            ),
+        );
+        assert_ne!(idle, running, "the run moves the labels");
+        assert!(same_node_rows(&idle, &running));
+
+        // …and a pick moves the check mark on the same rows.
+        let flat = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut before = node_menu_entries(&flat, "香港 01");
+        apply_delay(&mut before, &zh, &flat, &delay_view(None, &[]));
+        let mut picked = node_menu_entries(&flat, "日本 02");
+        apply_delay(&mut picked, &zh, &flat, &delay_view(None, &[]));
+        assert_ne!(before, picked, "the pick moves the check mark");
+        assert!(same_node_rows(&before, &picked));
+    }
+
+    #[test]
+    fn a_different_node_list_is_not_a_retitle() {
+        let zh = labels(TrayLanguage::Zh);
+        let nodes = vec![
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut listed = node_menu_entries(&nodes, "香港 01");
+        apply_delay(&mut listed, &zh, &nodes, &delay_view(None, &[]));
+
+        // A node left the profile: the model no longer has a row for the one
+        // the submenu still holds.
+        let fewer = vec![node("香港 01", "socks", None, None)];
+        let mut shortened = node_menu_entries(&fewer, "香港 01");
+        apply_delay(&mut shortened, &zh, &fewer, &delay_view(None, &[]));
+        assert!(!same_node_rows(&listed, &shortened));
+
+        // A group lost a member: its page is not the page on the menu either.
+        let wide = vec![
+            node(
+                "节点选择",
+                "selector",
+                Some("日本 02"),
+                Some(&["香港 01", "日本 02"]),
+            ),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut grouped = node_menu_entries(&wide, "香港 01");
+        apply_delay(&mut grouped, &zh, &wide, &delay_view(None, &[]));
+        let narrow = vec![
+            node("节点选择", "selector", Some("香港 01"), Some(&["香港 01"])),
+            node("香港 01", "socks", None, None),
+            node("日本 02", "vmess", None, None),
+        ];
+        let mut thinned = node_menu_entries(&narrow, "香港 01");
+        apply_delay(&mut thinned, &zh, &narrow, &delay_view(None, &[]));
+        assert!(!same_node_rows(&grouped, &thinned));
     }
 }

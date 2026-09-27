@@ -261,6 +261,37 @@ proxies:
     }
 
     #[test]
+    fn uri_list_windows_pipeline_moves_the_resolver_off_the_proxy_dns() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(
+            manifest
+                .join("../..")
+                .join("configs/examples/subscription-uri-list.txt"),
+        )
+        .expect("fixture");
+        let geoip_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let json = subscription_to_config(
+            &raw,
+            LocalTemplate::default(),
+            Some(geoip_dir),
+            CaptureIntent::Diagnostic,
+            HostPlatform::Windows,
+        )
+        .expect("pipeline");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        // `dns.final` keeps the anti-pollution `remote-dns`; only the route
+        // default moves to the directly-dialable `cn-dns` — resolving a node's
+        // server domain through the proxy would loop the proxy dial.
+        assert_eq!(value["dns"]["final"], "remote-dns");
+        assert_eq!(value["route"]["default_domain_resolver"], "cn-dns");
+        let servers = value["dns"]["servers"].as_array().expect("dns servers");
+        assert!(servers.iter().any(|s| s["tag"] == "cn-dns"));
+        assert!(servers
+            .iter()
+            .any(|s| { s["tag"] == "remote-dns" && s["detour"] == "proxy" }));
+    }
+
+    #[test]
     fn subscription_to_config_honors_tun_intent() {
         let json = subscription_to_config(
             CLASH_FIXTURE,

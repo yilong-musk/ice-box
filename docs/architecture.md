@@ -116,7 +116,12 @@ power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active
 subscription, and the Nodes page for switching the active exit (one node per
 strategy group, nested one level down); all of them call the same command paths
-the window does. On macOS the icon also carries a live traffic readout next to
+the window does. The Nodes menu on macOS also carries a delay test per page
+(`tray_delay.rs`): the top page probes every strategy group's current exit, a
+group page probes its members, the measured delay lands in the row labels, and
+closing the menu cancels a run that is still in flight and drops the results
+with it, so reopening the menu shows the plain labels rather than the last
+test's numbers. On macOS the icon also carries a live traffic readout next to
 it, re-derived once a second from the same `/traffic` stream the Home chart
 reads. The readout is drawn in a tabular-figure font inside one cell measured
 from the widest unit, with the number right-aligned by figure spaces rather than

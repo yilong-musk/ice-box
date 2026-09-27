@@ -287,8 +287,11 @@ pub(crate) fn query_bool(params: &[(String, String)], key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `host:port` from the authority part; `host` may be bracketed IPv6.
-pub(crate) fn split_host_port(authority: &str) -> Result<(String, u16), SkipReason> {
+/// `host` and raw port text from the authority part; `host` may be bracketed
+/// IPv6 and the port defaults to `443`. The port text is only split off here,
+/// never validated: callers choose the grammar they accept
+/// ([`split_host_port`], [`split_host_port_list`]).
+fn split_host_and_port_spec(authority: &str) -> Result<(String, &str), SkipReason> {
     let trimmed = authority.trim();
     let base = match trimmed.split_once('?') {
         Some((a, _)) => a,
@@ -317,14 +320,86 @@ pub(crate) fn split_host_port(authority: &str) -> Result<(String, u16), SkipReas
     if host.is_empty() {
         return Err(SkipReason::Incomplete("missing server address".into()));
     }
-    let port: u16 = port
+    Ok((host.to_string(), port))
+}
+
+/// `host:port` from the authority part; `host` may be bracketed IPv6.
+pub(crate) fn split_host_port(authority: &str) -> Result<(String, u16), SkipReason> {
+    let (host, port) = split_host_and_port_spec(authority)?;
+    let port_number: u16 = port
         .trim()
         .parse()
         .map_err(|_| SkipReason::Incomplete(format!("invalid port {port}")))?;
-    if port == 0 {
+    if port_number == 0 {
         return Err(SkipReason::Incomplete(format!("invalid port {port}")));
     }
-    Ok((host.to_string(), port))
+    Ok((host, port_number))
+}
+
+/// One entry of a share-link port list: an inclusive range of ports, with
+/// `start == end` standing for a single port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PortRange {
+    pub(crate) start: u16,
+    pub(crate) end: u16,
+}
+
+impl PortRange {
+    /// The sing-box spelling of this entry in `server_ports`: `a:b`. sing-box
+    /// takes no bare port there (`bad port range: 7000`), so a single port is
+    /// written as the one-port range `a:a`.
+    pub(crate) fn server_ports_entry(self) -> String {
+        format!("{}:{}", self.start, self.end)
+    }
+}
+
+/// Parse a share-link port list: comma-separated single ports and `a-b`
+/// ranges, the form the official Hysteria client writes in the authority of
+/// its share links (`host:123,5000-6000`) and in the `mport` parameter. Every
+/// part must be a decimal port in `1..=65535` and a range must be ordered; a
+/// malformed part discards the whole list rather than skipping just that
+/// part, because a half-parsed list would hop over ports the link never asked
+/// for.
+pub(crate) fn parse_port_list(value: &str) -> Option<Vec<PortRange>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let mut ports = Vec::new();
+    for segment in value.split(',') {
+        let (start, end) = match segment.split_once('-') {
+            Some((start, end)) => (port_number(start)?, port_number(end)?),
+            None => {
+                let port = port_number(segment)?;
+                (port, port)
+            }
+        };
+        if start > end {
+            return None;
+        }
+        ports.push(PortRange { start, end });
+    }
+    Some(ports)
+}
+
+/// Decimal port in `1..=65535`; signs, whitespace and empty parts are rejected.
+fn port_number(value: &str) -> Option<u16> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port: u16 = value.parse().ok()?;
+    (port > 0).then_some(port)
+}
+
+/// `host:ports` from the authority part of a link whose port may be a hopping
+/// list (`host:123,5000-6000`); a bare host reads as port 443.
+pub(crate) fn split_host_port_list(
+    authority: &str,
+) -> Result<(String, Vec<PortRange>), SkipReason> {
+    let (host, spec) = split_host_and_port_spec(authority)?;
+    let ports = parse_port_list(spec)
+        .ok_or_else(|| SkipReason::Incomplete(format!("invalid port {spec}")))?;
+    Ok((host, ports))
 }
 
 /// Extract the `userinfo@` part and the authority; userinfo is percent-decoded.
@@ -381,6 +456,61 @@ mod tests {
         );
         assert!(split_host_port("example.com:0").is_err());
         assert!(split_host_port("").is_err());
+    }
+
+    #[test]
+    fn port_lists_take_single_ports_and_ranges() {
+        let single = PortRange {
+            start: 443,
+            end: 443,
+        };
+        let range = PortRange {
+            start: 5000,
+            end: 6000,
+        };
+        assert_eq!(parse_port_list("443"), Some(vec![single]));
+        assert_eq!(parse_port_list("443,5000-6000"), Some(vec![single, range]));
+        assert_eq!(parse_port_list("5000-6000"), Some(vec![range]));
+        assert_eq!(
+            parse_port_list("1-1"),
+            Some(vec![PortRange { start: 1, end: 1 }])
+        );
+        assert_eq!(parse_port_list(" 1:1 "), None);
+        for bad in [
+            "", "0", "0-100", "100-50", "1-70000", "65536", "abc", "+1", "1 - 2", "1,", ",1",
+            "1-2-3", "1:2",
+        ] {
+            assert_eq!(parse_port_list(bad), None, "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn authority_port_lists_split_off_the_host() {
+        let single = |port| PortRange {
+            start: port,
+            end: port,
+        };
+        let (host, ports) = split_host_port_list("example.com:123,5000-6000").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(
+            ports,
+            vec![
+                single(123),
+                PortRange {
+                    start: 5000,
+                    end: 6000
+                },
+            ]
+        );
+        let (host, ports) = split_host_port_list("[2001:db8::1]:443?x=1").unwrap();
+        assert_eq!(host, "2001:db8::1");
+        assert_eq!(ports, vec![single(443)]);
+        let (host, ports) = split_host_port_list("example.com").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(ports, vec![single(443)]);
+        assert!(split_host_port_list("example.com:100-50").is_err());
+        assert!(split_host_port_list("example.com:0").is_err());
+        assert!(split_host_port_list("").is_err());
     }
 
     #[test]

@@ -289,7 +289,8 @@ describe("Subscriptions", () => {
     const otherId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
     listSubscriptions.mockResolvedValue([
       sampleMeta({
-        provider_info: ["Traffic: 11.84 GB | 150 GB", "Expire: 2026-09-26"],
+        // A date far enough out that "not expired" cannot age into a failure.
+        provider_info: ["Traffic: 11.84 GB | 150 GB", "Expire: 2099-01-01"],
       }),
       sampleMeta({ id: otherId, name: "sub-b", active: false }),
     ]);
@@ -304,7 +305,7 @@ describe("Subscriptions", () => {
       total: "150GB",
       percent: "7.89",
     });
-    const expiry = t("subs.trafficExpire", { date: "2026-09-26" });
+    const expiry = t("subs.trafficExpire", { date: "2099-01-01" });
     // Both values share one line: usage then the expiry.
     expect(view.getByText(usage, { exact: false }).textContent).toBe(
       `${usage} · ${expiry}`,
