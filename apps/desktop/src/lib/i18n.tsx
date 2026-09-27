@@ -77,9 +77,6 @@ const zh = {
   "home.empty.idleTitle": "还没有可用节点",
   "home.empty.idleDesc":
     "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。",
-  "home.capture.tun": "TUN{iface}",
-  "home.capture.systemProxy": "系统代理",
-  "home.capture.none": "未接管",
   "home.info.core": "内核",
   "home.info.memory": "内存",
   "home.info.outbound": "当前出站",
@@ -492,9 +489,6 @@ const en: Record<MessageKey, string> = {
   "home.empty.idleTitle": "No nodes yet",
   "home.empty.idleDesc":
     "No subscriptions imported. The app starts the core (direct-only) automatically; capture traffic with the big button above (system proxy or TUN), or import a subscription first.",
-  "home.capture.tun": "TUN{iface}",
-  "home.capture.systemProxy": "System Proxy",
-  "home.capture.none": "Not captured",
   "home.info.core": "Core",
   "home.info.memory": "Memory",
   "home.info.outbound": "Outbound",

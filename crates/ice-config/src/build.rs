@@ -187,6 +187,19 @@ fn dns_server_has_proxy_dependency(server: &Value) -> bool {
     }
 }
 
+/// Whether the DNS server answers arbitrary names from an upstream resolver.
+///
+/// The other allowed types answer from somewhere else — `local` (the OS
+/// resolver, which on Windows re-enters the TUN), `fakeip` (synthetic
+/// addresses) and `rcode` (a fixed error) — so none of them can resolve a
+/// node's server domain as `route.default_domain_resolver`.
+fn dns_server_resolves_upstream(server: &Value) -> bool {
+    matches!(
+        server.get("type").and_then(Value::as_str),
+        Some("tls" | "https" | "h3" | "tcp" | "udp" | "quic")
+    )
+}
+
 /// The Windows `route.default_domain_resolver` tag.
 ///
 /// Windows has no `local` DNS server, so domain addresses in the config — the
@@ -197,11 +210,15 @@ fn dns_server_has_proxy_dependency(server: &Value) -> bool {
 /// `DNS query loopback in transport[<tag>]`.
 ///
 /// Returns the `final` tag when its server dials directly — the status quo —
-/// otherwise the first directly-dialable tagged server (the injected block's
-/// `cn-dns`). When every server is detoured no resolver is emitted at all,
-/// with a warning: the route default would fall into the `final` tag, the loop
-/// this function exists to keep out, so the key stays unset and sing-box keeps
-/// its own resolution. `None` when the block has no `final` tag either.
+/// otherwise the first tagged server that both dials directly and resolves
+/// upstream names (the injected block's `cn-dns`). A directly-dialable server
+/// of a type that cannot resolve them is skipped rather than handed the node's
+/// server domain: the fallback exists to keep the resolution working, and
+/// `local` / `fakeip` / `rcode` would not. When no such server exists the
+/// resolver is not emitted at all, with a warning: the route default would
+/// fall into the `final` tag, the loop this function exists to keep out, so
+/// the key stays unset and sing-box keeps its own resolution. `None` when the
+/// block has no `final` tag either.
 fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
     let final_tag = dns_final_tag(dns)?;
     let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
@@ -219,14 +236,14 @@ fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
     }
     let direct_tag = servers.iter().find_map(|s| {
         let tag = s.get("tag").and_then(Value::as_str)?;
-        (!dns_server_has_proxy_dependency(s)).then_some(tag)
+        (dns_server_resolves_upstream(s) && !dns_server_has_proxy_dependency(s)).then_some(tag)
     });
     match direct_tag {
         Some(tag) => Some(tag.to_string()),
         None => {
             tracing::warn!(
                 final_tag = %final_tag,
-                "every DNS server is detoured; the Windows resolver stays unset"
+                "no directly-dialable upstream DNS server; the Windows resolver stays unset"
             );
             None
         }

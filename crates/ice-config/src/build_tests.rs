@@ -607,6 +607,43 @@ fn windows_resolver_skips_a_detoured_final_tag() {
 }
 
 #[test]
+fn windows_resolver_skips_direct_servers_that_cannot_resolve_upstreams() {
+    // `local` / `fakeip` / `rcode` dial directly but answer from the OS, a
+    // synthetic pool, or a fixed error: none of them can resolve a node's
+    // server domain, so the fallback walks past them to a real upstream.
+    let dns = json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "rcode", "tag": "rcode" },
+            { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 853 },
+            { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+        ],
+        "final": "remote-dns",
+    });
+    assert_eq!(
+        windows_default_domain_resolver(&dns).as_deref(),
+        Some("cn-dns")
+    );
+}
+
+#[test]
+fn windows_resolver_stays_unset_without_a_direct_upstream_resolver() {
+    // The only direct servers cannot resolve upstream names and every real
+    // resolver is detoured: the key stays unset instead of pointing at one of
+    // them.
+    let dns = json!({
+        "servers": [
+            { "type": "rcode", "tag": "rcode" },
+            { "type": "local", "tag": "local" },
+            { "type": "https", "tag": "remote-dns", "server": "1.1.1.1", "detour": "proxy" },
+        ],
+        "final": "remote-dns",
+    });
+    assert_eq!(windows_default_domain_resolver(&dns), None);
+}
+
+#[test]
 fn windows_resolver_stays_unset_when_every_server_is_detoured() {
     // A detoured resolver is the DNS loop itself (the proxy dial needs the
     // node's server domain resolved first), so there is no fallback: the

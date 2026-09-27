@@ -184,8 +184,8 @@ export const api = {
       system_proxy_applied: running,
       system_proxy_recorded: running,
       system_proxy_available: true,
-      // Green-band demo figure (plan v0.1.14 §9): the Live Demo and its
-      // screenshots must show a real number, never `—`.
+      // Green-band demo figure: the Live Demo and its screenshots must show a
+      // real number, never `—`.
       memory: running
         ? {
             app_bytes: 38 * 1024 * 1024,

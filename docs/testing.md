@@ -42,10 +42,15 @@ host and stop the app first. Core/TUN tests require the bundled binary
 | Windows TUN (G9.14) | `bash scripts/run-acceptance-windows-tun.sh` | Elevated Bash shell and MSVC toolchain |
 | System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS/Windows host |
 | HTTPS fetch | `cargo test -p ice-subscription --lib https_fetch_succeeds -- --ignored` | Network access |
+| macOS tray delay test | manual: click 「延迟测试」 / "Test Delay" on the top page and on a group page, then dismiss the menu mid-run | Real Mac with the app running; the menu must stay open with results streaming into the rows, and a dismissal must cancel the run and clear the results |
 
 The helper script covers G9.13 and uninstalls the helper afterwards; G9.15 needs
 a separately installed helper. Its data directory defaults to the installed
-app's directory and can be set with `ICE_BOX_TUN_LIVE_DATA_DIR`.
+app's directory and can be set with `ICE_BOX_TUN_LIVE_DATA_DIR`. The tray row is
+manual: the menu's AppKit tracking has no headless coverage, so run it by hand
+when touching `tray.rs` / `tray_delay*`, and check the close that a start click
+brings still leaves the menu open while Esc or a click away cancels (Windows and
+Linux keep the plain tray menu).
 
 For ordinary live core acceptance, use a serial run with the privileged TUN
 cases excluded:

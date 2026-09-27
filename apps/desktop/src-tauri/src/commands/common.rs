@@ -134,7 +134,7 @@ pub(crate) async fn run_blocking<T: Send + 'static>(
         .map_err(blocking_join_err(context))?
 }
 
-/// Process memory figures for the Home memory row (plan v0.1.14 §9, D5–D9a).
+/// Process memory figures for the Home memory row.
 ///
 /// Only the core (sing-box) and the app's main process are measured; WebView
 /// helpers and the privileged helper daemon are out of scope by design.
@@ -145,7 +145,7 @@ pub struct MemoryUsage {
     /// Core memory; `None` while the core is not running, its pid is not
     /// readable, or the process cannot be queried. A privileged macOS core
     /// (helper / TUN) is unreadable by design and is never probed with
-    /// elevation (D9a): the UI then shows the app-only figure and says so.
+    /// elevation: the UI then shows the app-only figure and says so.
     pub core_bytes: Option<u64>,
     /// Sum of the readable parts; `0` when nothing could be read (the UI shows
     /// `—` rather than a fake number).
@@ -156,7 +156,7 @@ pub struct MemoryUsage {
 pub struct StatusResponse {
     pub core: CoreState,
     pub subscription_count: usize,
-    /// Process memory for the Home memory row (plan v0.1.14 §9).
+    /// Process memory for the Home memory row.
     pub memory: MemoryUsage,
     pub proxy_recovery_warning: Vec<UiMessage>,
     /// Live OS match when the platform backend is available and core is running.

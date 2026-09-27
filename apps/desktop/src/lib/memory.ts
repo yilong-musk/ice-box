@@ -30,7 +30,7 @@ export function formatMemoryPart(bytes: number | null): string {
  * summing them keeps the breakdown adding up to the label, where rounding the
  * byte total instead can differ from the two rounded parts by one MB. The
  * label and the color band both use this value, so the color always matches
- * the number the user sees (plan v0.1.14 §9). */
+ * the number the user sees. */
 export function displayMemoryMb(memory: MemoryUsage): number {
   let mb = 0;
   if (memory.app_bytes != null) mb += memoryMb(memory.app_bytes);

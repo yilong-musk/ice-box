@@ -25,6 +25,15 @@ const listenStateChanged = vi.fn();
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
 
+/** Labels of the info panel's rows, in render order. */
+function infoRowLabels(container: HTMLElement): (string | null)[] {
+  const card = within(container).getByText(t("home.infoTitle")).closest("[data-slot=card]");
+  if (!card) throw new Error("home info card not found");
+  return within(card as HTMLElement)
+    .getAllByText(/.+/, { selector: "[data-slot=item-description]" })
+    .map((node) => node.textContent);
+}
+
 vi.mock("../api/tauri", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
@@ -180,7 +189,12 @@ describe("Home", () => {
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
     expect(view.getByText(t("home.proxyStatus"))).toBeInTheDocument();
     expect(view.getByText(t("home.infoTitle"))).toBeInTheDocument();
-    expect(view.queryByText(t("home.capture.systemProxy"))).toBeNull();
+    // Row 2 is the memory figure: the capture state it replaced no longer has
+    // a row of its own (it lives in the power subtitle and the warnings).
+    expect(infoRowLabels(container).slice(0, 2)).toEqual([
+      t("home.info.core"),
+      t("home.info.memory"),
+    ]);
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
     // The mode switch lives inside the 代理状态 card, below the power button.
     const statusCard = view
@@ -321,8 +335,8 @@ describe("Home", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
       ...tunStatus,
-      // D9a: a privileged macOS core cannot be read — show the app figure and
-      // say the core is not included.
+      // A privileged macOS core cannot be read — show the app figure and say
+      // the core is not included.
       memory: {
         app_bytes: 41 * 1024 * 1024,
         core_bytes: null,
@@ -821,7 +835,7 @@ describe("Home", () => {
     expect(power).toHaveAttribute("aria-pressed", "true");
     expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
     expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.proxyOutOfSync"));
-    expect(view.queryByText(t("home.capture.systemProxy"))).toBeNull();
+    expect(infoRowLabels(container)[1]).toBe(t("home.info.memory"));
   });
 
   it("does not flash poll errors while power toggle start is pending", async () => {
@@ -948,7 +962,7 @@ describe("Home", () => {
     );
     expect(view.getByText(t("home.info.memory"))).toBeInTheDocument();
     // Row 2 shows the memory figure; the capture state moved to the power
-    // subtitle asserted above (plan v0.1.14 §9).
+    // subtitle asserted above.
     expect(view.getByTestId("home-info-memory")).toHaveTextContent("38 MB");
   });
 

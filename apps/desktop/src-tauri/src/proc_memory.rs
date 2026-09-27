@@ -2,8 +2,8 @@
 
 //! Per-process memory figure, for the Home memory readout.
 //!
-//! Scope (plan v0.1.14 §9, D5): the core process (sing-box) and the app's own
-//! main process only. WebView helpers (WebKit / WebView2) and the privileged
+//! Scope: the core process (sing-box) and the app's own main process only.
+//! WebView helpers (WebKit / WebView2) and the privileged
 //! helper daemon are out of scope, so the figure is lower than the "whole app"
 //! number in Activity Monitor / Task Manager.
 //!
@@ -19,10 +19,10 @@
 //! differ by the shared-page inflation RSS carried. Linux reads `VmRSS` from
 //! procfs and is exercised by the local gate only.
 //!
-//! macOS degradation (D9a): a privileged core (helper / TUN) runs as root and
-//! its memory cannot be read from the unprivileged app (`proc_pid_rusage`
-//! fails with EPERM). That surfaces as an error here and the caller falls back
-//! to the app-only figure — never elevated just to read it.
+//! macOS degradation: a privileged core (helper / TUN) runs as root and its
+//! memory cannot be read from the unprivileged app (`proc_pid_rusage` fails
+//! with EPERM). That surfaces as an error here and the caller falls back to
+//! the app-only figure — never elevated just to read it.
 
 use std::io;
 
