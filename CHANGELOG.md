@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Every node delay test now probes several nodes at once instead of one after
+  another: the Nodes page's batch and expanded-group tests and the macOS tray
+  menu's per-page test keep four probes in flight (`DELAY_TEST_CONCURRENCY` in
+  `Nodes.tsx`, `MAX_PROBES_IN_FLIGHT` in `tray_delay.rs`), while a test of a
+  single node stays a single probe. Both surfaces claim the list in page order
+  and record each result as it lands, so a long list or group finishes in a
+  fraction of the time; cancelling still drops every result still in flight,
+  and closing the tray menu still stops a run from claiming further probes
+  while the ones in flight land.
+
 - The macOS tray menu's delay test buttons now all read "延迟测试" / "Test
   Delay": the top page of a node list and every group page used to carry
   different wording ("测速：当前出口" / "测速本组" and "Test Delay: Current

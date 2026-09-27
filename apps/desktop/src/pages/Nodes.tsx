@@ -100,6 +100,11 @@ const FIRST_PAINT = 8;
 const REVEAL_BATCH = 16;
 const MEMBER_FIRST_PAINT = 24;
 const MEMBER_BATCH = 32;
+/** Probes in flight during one delay test: a few nodes at a time keeps a long
+ * list moving without flooding the core or the upstream links. The macOS tray
+ * menu's delay test runs the same pool (`MAX_PROBES_IN_FLIGHT` in
+ * `apps/desktop/src-tauri/src/tray_delay.rs`). */
+const DELAY_TEST_CONCURRENCY = 4;
 
 function firstPaintCount(total: number): number {
   return Math.min(total, FIRST_PAINT);
@@ -617,24 +622,41 @@ export function Nodes({ onNavigate, active = true }: Props) {
       !cancelRef.current &&
       mountedRef.current;
 
-    for (let i = 0; i < tags.length; i++) {
-      if (!isCurrent()) break;
-      const tag = tags[i];
-      if (multi) setBatchProgress(`${i + 1} / ${tags.length}`);
-      writeDelay(tag, "testing");
-      try {
-        const r = await api.testNodeDelay(tag);
-        if (!isCurrent()) break;
-        writeDelay(tag, r.delay_ms);
-      } catch (e) {
-        if (!isCurrent()) break;
-        writeDelay(tag, "error");
-        if (!multi) {
-          setError(formatInvokeError(e));
-          break;
+    // Probes run a few at a time — one at a time made a long list take too
+    // long. Workers claim tags in list order before awaiting, so probes still
+    // leave in page order even though their results land out of order.
+    let next = 0;
+    let finished = 0;
+    const progressText = () =>
+      `${Math.min(finished + 1, tags.length)} / ${tags.length}`;
+    if (multi) setBatchProgress(progressText());
+    const probe = async () => {
+      for (;;) {
+        if (!isCurrent()) return;
+        const index = next++;
+        if (index >= tags.length) return;
+        const tag = tags[index];
+        writeDelay(tag, "testing");
+        let value: DelayCell;
+        try {
+          const r = await api.testNodeDelay(tag);
+          value = r.delay_ms;
+        } catch (e) {
+          value = "error";
+          if (!multi && isCurrent()) setError(formatInvokeError(e));
         }
+        if (!isCurrent()) return;
+        writeDelay(tag, value);
+        finished += 1;
+        if (multi) setBatchProgress(progressText());
       }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(tags.length, DELAY_TEST_CONCURRENCY) },
+        () => probe(),
+      ),
+    );
 
     if (!mountedRef.current || run !== delayRunRef.current) return;
     if (multi) setBatchProgress(null);

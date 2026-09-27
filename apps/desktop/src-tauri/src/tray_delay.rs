@@ -11,14 +11,15 @@
 //! One button per page probes the page's *real exit nodes*, in page order: a
 //! real node is probed itself, a strategy group follows its live `now` member
 //! down to the leaf (a group without one is skipped), and an exit node behind
-//! several rows is probed once. Probes run one at a time; the menu is
-//! re-derived at most once a second while they do, and once more when the run
-//! ends.
+//! several rows is probed once. A few probes run at once, the same way the
+//! Nodes page's batch test does; the menu is re-derived at most once a second
+//! while they do, and once more when the run ends.
 //!
 //! A run is cancelled by closing the tray menu: the button lives in the menu,
 //! so the menu is open when a run starts, and the next close — the user
-//! dismissing the menu — is the cancel, fired between two probes. A close that
-//! the start click itself brings is not a dismissal; see
+//! dismissing the menu — is the cancel: it stops the run from claiming further
+//! probes while the ones already in flight land. A close that the start click
+//! itself brings is not a dismissal; see
 //! [`START_CLOSE_GRACE`].
 //!
 //! A dismissal also lets the results go: the menu shows the last test until it
@@ -39,8 +40,8 @@ use std::sync::Mutex;
 use crate::commands::{collect_nodes, probe_node_delay};
 #[cfg(target_os = "macos")]
 use crate::AppState;
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(target_os = "macos", test))]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
@@ -139,8 +140,8 @@ impl DelayView {
 struct RunState {
     scope: DelayScope,
     tags: Vec<String>,
-    /// Probes finished so far; the tag at this index is the one in flight.
-    next: usize,
+    /// Probes finished so far, whichever order they came back in.
+    done: usize,
 }
 
 #[derive(Debug, Default)]
@@ -158,7 +159,7 @@ impl DelayState {
         let run = self.run.as_ref().map(|run| {
             (
                 run.scope.clone(),
-                (run.next + 1).min(run.tags.len()),
+                (run.done + 1).min(run.tags.len()),
                 run.tags.len(),
             )
         });
@@ -179,19 +180,19 @@ impl DelayState {
         self.run = Some(RunState {
             scope,
             tags,
-            next: 0,
+            done: 0,
         });
     }
 
-    /// Record the probe of `tags[index]` and move the progress on. A run the
-    /// menu closed on records nothing: its results were let go with the menu.
-    fn advance(&mut self, index: usize, tag: &str, outcome: DelayOutcome) {
+    /// Record one finished probe and move the progress on. A run the menu
+    /// closed on records nothing: its results were let go with the menu.
+    fn advance(&mut self, tag: &str, outcome: DelayOutcome) {
         if self.abandoned {
             return;
         }
         self.outcomes.insert(tag.to_string(), outcome);
         if let Some(run) = self.run.as_mut() {
-            run.next = index + 1;
+            run.done += 1;
         }
     }
 
@@ -204,7 +205,7 @@ impl DelayState {
     /// starts from the default labels rather than the last test's numbers. A
     /// run still in flight is abandoned with them — it records nothing more —
     /// while its marker stays until [`Self::finish`], so its page keeps
-    /// reading as busy until the probe in flight has landed.
+    /// reading as busy until the probes in flight have landed.
     ///
     /// `true` when there was something to let go of, so the caller only
     /// refreshes the menu when the rows it shows moved.
@@ -294,8 +295,15 @@ pub(crate) fn delay_test_tags(nodes: &[NodeInfo], scope: &DelayScope) -> Vec<Str
     tags
 }
 
+/// Probes in flight during one run, the same limit the Nodes page's batch test
+/// uses (`DELAY_TEST_CONCURRENCY` in `apps/desktop/src/pages/Nodes.tsx`): a few
+/// nodes at a time keeps a long page moving without flooding the core or the
+/// upstream links.
+#[cfg(any(target_os = "macos", test))]
+const MAX_PROBES_IN_FLIGHT: usize = 4;
+
 /// Menu refresh throttle while a test runs: each rebuild re-derives the whole
-/// menu, and results land one probe at a time, so once a second is plenty.
+/// menu, and results land in bursts, so once a second is plenty.
 #[cfg(target_os = "macos")]
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -310,7 +318,8 @@ static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 
-/// Set by a close of the tray menu after a test start; consumed between probes.
+/// Set by a close of the tray menu after a test start; consulted before a
+/// probe is claimed, so a cancelled run drains instead of starting new probes.
 #[cfg(target_os = "macos")]
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -345,6 +354,49 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
     tauri::async_runtime::spawn_blocking(move || run(app, scope));
 }
 
+/// Probe `tags` with at most `max_in_flight` at once, claiming them in page
+/// order and handing each finished probe to `record` as it lands: the results
+/// may arrive in any order, the claims never do. `probe` runs on worker
+/// threads, `record` on the caller's, so state owned by the run (the menu
+/// refresh throttle) needs no lock. A raised `cancel` stops the workers from
+/// claiming further tags; the probes already in flight still land.
+#[cfg(any(target_os = "macos", test))]
+fn run_probes(
+    tags: &[String],
+    max_in_flight: usize,
+    cancel: &AtomicBool,
+    probe: impl Fn(&str) -> DelayOutcome + Sync,
+    mut record: impl FnMut(&str, DelayOutcome),
+) {
+    let next = AtomicUsize::new(0);
+    let (sender, results) = std::sync::mpsc::channel();
+    std::thread::scope(|threads| {
+        for _ in 0..max_in_flight.min(tags.len()) {
+            let sender = sender.clone();
+            let next = &next;
+            let probe = &probe;
+            threads.spawn(move || loop {
+                if cancel.load(Ordering::SeqCst) {
+                    return;
+                }
+                let index = next.fetch_add(1, Ordering::SeqCst);
+                let Some(tag) = tags.get(index) else {
+                    return;
+                };
+                if sender.send((index, probe(tag))).is_err() {
+                    return;
+                }
+            });
+        }
+        // Drop the caller's own sender: the loop below ends once the last
+        // worker has sent its last result and exited.
+        drop(sender);
+        for (index, outcome) in results {
+            record(&tags[index], outcome);
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn run(app: AppHandle, scope: DelayScope) {
     let Some(state) = app.try_state::<AppState>() else {
@@ -372,13 +424,11 @@ fn run(app: AppHandle, scope: DelayScope) {
     // from it) and must not still show the idle labels.
     crate::tray::sync_menu(&app);
     let mut last_refresh = Instant::now();
-    for (index, tag) in tags.iter().enumerate() {
-        // A close of the menu cancels between probes; the probe in flight runs
-        // to its own timeout (5s) first.
-        if CANCEL_REQUESTED.load(Ordering::SeqCst) {
-            break;
-        }
-        let outcome = match probe_node_delay(state.inner(), tag) {
+    run_probes(
+        &tags,
+        MAX_PROBES_IN_FLIGHT,
+        &CANCEL_REQUESTED,
+        |tag| match probe_node_delay(state.inner(), tag) {
             Ok(delay_ms) => DelayOutcome::Done(delay_ms),
             Err(err) => {
                 tracing::warn!(
@@ -389,13 +439,15 @@ fn run(app: AppHandle, scope: DelayScope) {
                 );
                 DelayOutcome::Failed
             }
-        };
-        lock_state().advance(index, tag, outcome);
-        if last_refresh.elapsed() >= REFRESH_INTERVAL {
-            crate::tray::sync_menu(&app);
-            last_refresh = Instant::now();
-        }
-    }
+        },
+        |tag, outcome| {
+            lock_state().advance(tag, outcome);
+            if last_refresh.elapsed() >= REFRESH_INTERVAL {
+                crate::tray::sync_menu(&app);
+                last_refresh = Instant::now();
+            }
+        },
+    );
     let cancelled = CANCEL_REQUESTED.load(Ordering::SeqCst);
     lock_state().finish();
     RUN_ACTIVE.store(false, Ordering::SeqCst);
@@ -669,13 +721,13 @@ mod tests {
         assert_eq!(view.outcome("B"), Some(DelayOutcome::Testing));
         assert!(!view.idle());
 
-        state.advance(0, "A", DelayOutcome::Done(45));
+        state.advance("A", DelayOutcome::Done(45));
         let view = state.view();
         assert_eq!(view.run, Some((DelayScope::Top, 2, 2)));
         assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(45)));
         assert_eq!(view.outcome("B"), Some(DelayOutcome::Testing));
 
-        state.advance(1, "B", DelayOutcome::Failed);
+        state.advance("B", DelayOutcome::Failed);
         state.finish();
         let view = state.view();
         assert!(view.idle());
@@ -691,7 +743,7 @@ mod tests {
             DelayScope::Group("G".to_string()),
             vec!["A".to_string(), "B".to_string(), "C".to_string()],
         );
-        state.advance(0, "A", DelayOutcome::Done(30));
+        state.advance("A", DelayOutcome::Done(30));
         assert!(state.drop_results());
         // Nothing left to drop: the closed menu is already default.
         assert!(!state.drop_results());
@@ -704,14 +756,14 @@ mod tests {
     }
 
     #[test]
-    fn the_probe_in_flight_records_nothing_after_the_close() {
-        // The menu can close while a probe is between its start and its result;
-        // that result belongs to a menu that no longer exists.
+    fn the_probes_in_flight_record_nothing_after_the_close() {
+        // The menu can close while probes are between their start and their
+        // results; those results belong to a menu that no longer exists.
         let mut state = DelayState::default();
         state.begin(DelayScope::Top, vec!["A".to_string(), "B".to_string()]);
         assert!(state.drop_results());
-        state.advance(0, "A", DelayOutcome::Done(45));
-        // The page still reads as busy until the probe returns…
+        state.advance("A", DelayOutcome::Done(45));
+        // The page still reads as busy until the probes return…
         let view = state.view();
         assert!(!view.idle());
         assert_eq!(view.progress(&DelayScope::Top), Some((1, 2)));
@@ -727,12 +779,12 @@ mod tests {
     fn a_run_after_the_close_records_its_results_again() {
         let mut state = DelayState::default();
         state.begin(DelayScope::Top, vec!["A".to_string()]);
-        state.advance(0, "A", DelayOutcome::Done(45));
+        state.advance("A", DelayOutcome::Done(45));
         state.finish();
         state.drop_results();
 
         state.begin(DelayScope::Top, vec!["A".to_string()]);
-        state.advance(0, "A", DelayOutcome::Done(12));
+        state.advance("A", DelayOutcome::Done(12));
         state.finish();
         let view = state.view();
         assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(12)));
@@ -760,11 +812,92 @@ mod tests {
         // second test on another page still shows what the first one measured.
         let mut state = DelayState::default();
         state.begin(DelayScope::Top, vec!["A".to_string()]);
-        state.advance(0, "A", DelayOutcome::Done(10));
+        state.advance("A", DelayOutcome::Done(10));
         state.finish();
         state.begin(DelayScope::Group("G".to_string()), vec!["B".to_string()]);
         let view = state.view();
         assert_eq!(view.outcome("A"), Some(DelayOutcome::Done(10)));
         assert_eq!(view.outcome("B"), Some(DelayOutcome::Testing));
+    }
+
+    #[test]
+    fn a_run_keeps_several_probes_in_flight() {
+        let tags: Vec<String> = (0..6).map(|index| format!("n{index}")).collect();
+        // Probes announce themselves and wait there until the whole first
+        // batch has arrived, so the test observes the real concurrency rather
+        // than a timing race. The timeout is only there to keep a broken pool
+        // from hanging the test run: a sequential pool fails the assertions
+        // below instead.
+        let arrived = Mutex::new(0usize);
+        let released = Mutex::new(false);
+        let arrived_cond = std::sync::Condvar::new();
+        let released_cond = std::sync::Condvar::new();
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+
+        let (first_batch, peak, mut probed) = std::thread::scope(|threads| {
+            let waiter = threads.spawn(|| {
+                let mut arrived = arrived.lock().unwrap();
+                while *arrived < MAX_PROBES_IN_FLIGHT {
+                    let (guard, timeout) = arrived_cond
+                        .wait_timeout(arrived, std::time::Duration::from_secs(5))
+                        .unwrap();
+                    arrived = guard;
+                    if timeout.timed_out() {
+                        break;
+                    }
+                }
+                let first_batch = *arrived;
+                *released.lock().unwrap() = true;
+                released_cond.notify_all();
+                first_batch
+            });
+            let mut probed = Vec::new();
+            run_probes(
+                &tags,
+                MAX_PROBES_IN_FLIGHT,
+                &AtomicBool::new(false),
+                |tag| {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    *arrived.lock().unwrap() += 1;
+                    arrived_cond.notify_all();
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = released_cond.wait(released).unwrap();
+                    }
+                    drop(released);
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    DelayOutcome::Done(tag.len() as u32)
+                },
+                |tag, outcome| probed.push((tag.to_string(), outcome)),
+            );
+            (waiter.join().unwrap(), peak.load(Ordering::SeqCst), probed)
+        });
+
+        assert_eq!(first_batch, MAX_PROBES_IN_FLIGHT);
+        assert_eq!(peak, MAX_PROBES_IN_FLIGHT);
+        // Every tag was probed once, whatever order the results landed in.
+        probed.sort_by_key(|(tag, _)| tag.clone());
+        assert_eq!(
+            probed,
+            tags.iter()
+                .map(|tag| (tag.clone(), DelayOutcome::Done(tag.len() as u32)))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_cancelled_run_claims_no_probes() {
+        let tags = vec!["A".to_string(), "B".to_string()];
+        let mut probed = Vec::new();
+        run_probes(
+            &tags,
+            MAX_PROBES_IN_FLIGHT,
+            &AtomicBool::new(true),
+            |_| DelayOutcome::Done(1),
+            |tag, outcome| probed.push((tag.to_string(), outcome)),
+        );
+        assert!(probed.is_empty());
     }
 }

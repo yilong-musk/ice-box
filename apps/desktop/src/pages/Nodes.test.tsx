@@ -695,4 +695,36 @@ describe("Nodes", () => {
       "10 ms",
     );
   });
+
+  it("probes a batch with several nodes in flight at once", async () => {
+    const pending = new Map<
+      string,
+      (value: { tag: string; delay_ms: number }) => void
+    >();
+    testNodeDelay.mockImplementation(
+      (tag: string) =>
+        new Promise((resolve) => {
+          pending.set(tag, resolve);
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
+
+    // Both leaves are claimed before either probe returns: the run does not
+    // wait for one node before starting the next.
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledWith("node-a");
+      expect(testNodeDelay).toHaveBeenCalledWith("node-b");
+    });
+
+    await act(async () => {
+      pending.get("node-a")?.({ tag: "node-a", delay_ms: 10 });
+      pending.get("node-b")?.({ tag: "node-b", delay_ms: 20 });
+    });
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
+    });
+  });
 });
