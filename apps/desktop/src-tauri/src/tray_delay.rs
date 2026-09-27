@@ -19,8 +19,8 @@
 //! so the menu is open when a run starts, and the next close — the user
 //! dismissing the menu — is the cancel: it stops the run from claiming further
 //! probes while the ones already in flight land. A close that the start click
-//! itself brings is not a dismissal; see
-//! [`START_CLOSE_GRACE`].
+//! itself brings is not a dismissal; the click that takes the row tells the
+//! two apart ([`CLICKS_IN_FLIGHT`]).
 //!
 //! A dismissal also lets the results go: the menu shows the last test until it
 //! is closed, and reopening it starts from the default labels instead of
@@ -313,8 +313,8 @@ static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the tray menu is open right now: set when its tracking begins,
 /// cleared when it ends. A mirror, not a state of the run — the close that
-/// finds a run active while the menu was open is the cancel, as long as it is
-/// not the close the start click itself can bring ([`START_CLOSE_GRACE`]).
+/// finds a run active while the menu was open is the cancel, unless the click
+/// that started the run says the close is its own ([`CLICKS_IN_FLIGHT`]).
 #[cfg(target_os = "macos")]
 static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 
@@ -323,19 +323,59 @@ static MENU_OPENED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// How long after a start click a close of the tray menu still counts as part
-/// of that click. Closing the menu is the cancel gesture, but a close that the
-/// start click itself brings — the menu's tracking ending on the release, on a
-/// platform that does that even with the row's view on it — must not cancel
-/// the run the click just started.
+/// Set while a delay row handles the click that starts a run: a close of the
+/// tray menu that arrives then is the click's own — the row takes the press
+/// out of the queue, so the tracking ends as part of that click, with the menu
+/// still open — and not the user dismissing the menu.
+///
+/// Cleared a main-queue drain after the row's handler returns rather than at
+/// its end: a close that the click itself brings can be posted by the dispatch
+/// unwinding around the handler, and that dispatch still runs before the
+/// drain, while a dismissal — an Esc or a click away — is a later event,
+/// handled by a later run-loop pass. The counter hands every click a token of
+/// its own, so a drain queued by one click cannot clear the mark of a click
+/// that followed it.
 #[cfg(target_os = "macos")]
-const START_CLOSE_GRACE: Duration = Duration::from_millis(500);
+static CLICKS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
-/// When the run in flight started, for [`START_CLOSE_GRACE`]. Written by
-/// [`start`] on the thread that takes the click, read by the menu watcher on
-/// the main thread, so it is a plain mutex rather than an atomic.
+/// Marks a delay row's click handling for the menu watcher: see
+/// [`CLICKS_IN_FLIGHT`]. Held for the row's whole handler — the nested tracking
+/// of the press included — so the close that the click brings finds the click
+/// still in flight.
 #[cfg(target_os = "macos")]
-static STARTED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+pub(crate) struct ClickInFlight {
+    /// This click's mark in [`CLICKS_IN_FLIGHT`].
+    token: usize,
+}
+
+#[cfg(target_os = "macos")]
+impl ClickInFlight {
+    pub(crate) fn begin() -> Self {
+        let token = CLICKS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        Self { token }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ClickInFlight {
+    fn drop(&mut self) {
+        // The clear waits for the next main-queue drain: the dispatch the
+        // click unwinds — above all a tracking-end AppKit posts for a row that
+        // took the press — still runs before that drain, while a dismissal is
+        // a new event, handled by a later run-loop pass. Only this click's own
+        // mark is dropped, so a click that followed it keeps its own.
+        let token = self.token;
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            let _ = CLICKS_IN_FLIGHT.compare_exchange(token, 0, Ordering::SeqCst, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Whether a delay row is handling a click right now.
+#[cfg(target_os = "macos")]
+fn click_in_flight() -> bool {
+    CLICKS_IN_FLIGHT.load(Ordering::SeqCst) != 0
+}
 
 /// Tray「延迟测试」: probe the page's exit nodes in order and refresh the menu
 /// as results land. Off the main thread like the other tray actions.
@@ -346,9 +386,6 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
         return;
     }
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-    *STARTED_AT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
     tracing::info!(scope = ?scope, "tray delay: run requested");
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || run(app, scope));
@@ -359,7 +396,9 @@ pub(crate) fn start(app: &AppHandle, scope: DelayScope) {
 /// may arrive in any order, the claims never do. `probe` runs on worker
 /// threads, `record` on the caller's, so state owned by the run (the menu
 /// refresh throttle) needs no lock. A raised `cancel` stops the workers from
-/// claiming further tags; the probes already in flight still land.
+/// starting further probes — each one claims its next tag first and reads the
+/// cancel after that claim ([`claim_probe`]) — while the probes already in
+/// flight still land.
 #[cfg(any(target_os = "macos", test))]
 fn run_probes(
     tags: &[String],
@@ -376,11 +415,7 @@ fn run_probes(
             let next = &next;
             let probe = &probe;
             threads.spawn(move || loop {
-                if cancel.load(Ordering::SeqCst) {
-                    return;
-                }
-                let index = next.fetch_add(1, Ordering::SeqCst);
-                let Some(tag) = tags.get(index) else {
+                let Some((index, tag)) = claim_probe(tags, next, cancel) else {
                     return;
                 };
                 if sender.send((index, probe(tag))).is_err() {
@@ -395,6 +430,25 @@ fn run_probes(
             record(&tags[index], outcome);
         }
     });
+}
+
+/// The next tag for a worker to probe, `None` when the list is exhausted or
+/// the run has been cancelled. The claim comes first and the cancel read after
+/// it: a cancel that lands between the two drops the claimed tag — it is never
+/// probed and never handed to another worker — instead of leaving the worker
+/// to start one more probe after the request.
+#[cfg(any(target_os = "macos", test))]
+fn claim_probe<'a>(
+    tags: &'a [String],
+    next: &AtomicUsize,
+    cancel: &AtomicBool,
+) -> Option<(usize, &'a str)> {
+    let index = next.fetch_add(1, Ordering::SeqCst);
+    let tag = tags.get(index)?;
+    if cancel.load(Ordering::SeqCst) {
+        return None;
+    }
+    Some((index, tag))
 }
 
 #[cfg(target_os = "macos")]
@@ -542,13 +596,18 @@ fn on_menu_closed(app: &AppHandle) {
     if !was_open {
         return;
     }
+    // A close that lands while a delay row holds the click is the click's own:
+    // the row took the press, so the tracking ends as part of that click and
+    // the menu stays open. Put the mirror back — the dismissal is still to
+    // come, and it must find the menu open to be a cancel — and leave the run
+    // and its results alone. A close with no click in flight is the user
+    // dismissing the menu, however soon after a start it lands.
+    if click_in_flight() {
+        MENU_OPENED.store(true, Ordering::SeqCst);
+        tracing::info!("tray delay: menu closed with the click it is handling; kept open");
+        return;
+    }
     if RUN_ACTIVE.load(Ordering::SeqCst) {
-        // The click that starts a run can bring a close of its own; that one is
-        // the click, not the user dismissing the menu, so the run outlives it.
-        if started_within(START_CLOSE_GRACE) {
-            tracing::info!("tray delay: menu closed with the start click; run kept");
-            return;
-        }
         tracing::info!("tray delay: menu closed; cancelling the run");
         CANCEL_REQUESTED.store(true, Ordering::SeqCst);
     }
@@ -562,15 +621,6 @@ fn on_menu_closed(app: &AppHandle) {
     tracing::info!("tray delay: menu closed; results dropped");
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || crate::tray::sync_menu(&app));
-}
-
-/// Whether the run in flight started less than `window` ago.
-#[cfg(target_os = "macos")]
-fn started_within(window: Duration) -> bool {
-    let started = STARTED_AT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    matches!(*started, Some(started) if started.elapsed() < window)
 }
 
 #[cfg(test)]
@@ -899,5 +949,38 @@ mod tests {
             |tag, outcome| probed.push((tag.to_string(), outcome)),
         );
         assert!(probed.is_empty());
+    }
+
+    #[test]
+    fn a_cancel_drops_a_freshly_claimed_probe() {
+        // The claim happens before the cancel is read, so a worker that has
+        // just taken the next tag drops it when the request has landed
+        // instead of starting one more probe after the cancel.
+        let tags = vec!["A".to_string(), "B".to_string()];
+        let next = AtomicUsize::new(0);
+        let cancel = AtomicBool::new(false);
+        assert_eq!(claim_probe(&tags, &next, &cancel), Some((0, "A")));
+        cancel.store(true, Ordering::SeqCst);
+        assert_eq!(claim_probe(&tags, &next, &cancel), None);
+        // The dropped claim is spent: no later worker picks it up.
+        assert_eq!(next.load(Ordering::SeqCst), 2);
+        // An exhausted list ends the worker whatever the cancel says.
+        cancel.store(false, Ordering::SeqCst);
+        assert_eq!(claim_probe(&tags, &next, &cancel), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_click_stays_marked_past_its_handler() {
+        // The mark outlives the row's handler, because the close the click
+        // brings can be posted by the dispatch unwinding around it; only the
+        // main-queue drain clears it, which a test without a running run loop
+        // never reaches — so the test puts the marker back itself.
+        assert!(!click_in_flight());
+        let click = ClickInFlight::begin();
+        assert!(click_in_flight());
+        drop(click);
+        assert!(click_in_flight());
+        CLICKS_IN_FLIGHT.store(0, Ordering::SeqCst);
     }
 }

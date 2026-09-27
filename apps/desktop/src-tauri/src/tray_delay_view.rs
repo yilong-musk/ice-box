@@ -21,7 +21,12 @@
 //! click). Menus light their own rows up with that material, so the button
 //! lights up the way the rows around it do rather than in a colour of its own.
 //! A click calls [`crate::tray_delay::start`] with the scope the row stands
-//! for.
+//! for. A row that takes no click — a button while a test runs — takes the
+//! press anyway: the click must not fall through to the menu's tracking and
+//! close the menu, which would cancel the very run the disabled row shows.
+//! Every press a row handles is marked for the menu watcher
+//! ([`crate::tray_delay::ClickInFlight`]), which is how a close that the click
+//! itself brings is told from a dismissal.
 //!
 //! One AppKit quirk is worked around (SO 15075033, Radar 7128269): the menu's
 //! window is not the key window, and a view inside a menu item can stop
@@ -29,7 +34,7 @@
 //! takes the window's key status back on its way into it and rebuilds its
 //! tracking area there, the fix the report describes.
 
-use crate::tray_delay::DelayScope;
+use crate::tray_delay::{ClickInFlight, DelayScope};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
@@ -228,16 +233,19 @@ define_class!(
         /// A press on an enabled row tracks the mouse itself, the way a
         /// control inside a menu does, and that tracking is what keeps the menu
         /// open: the row takes the release out of the queue, so the menu never
-        /// sees this click complete and has nothing to close on.
+        /// sees this click complete and has nothing to close on. A disabled row
+        /// takes the press all the same: letting it through would close the
+        /// menu — and with it cancel the run the disabled row stands for — on a
+        /// click that is meant to do nothing.
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, _event: &NSEvent) {
-            if !self.ivars().enabled.get() {
-                return;
+            let _click = ClickInFlight::begin();
+            if self.ivars().enabled.get() {
+                let ivars = self.ivars();
+                ivars.pressed.set(true);
+                ivars.hovered.set(true);
+                self.update_highlight();
             }
-            let ivars = self.ivars();
-            ivars.pressed.set(true);
-            ivars.hovered.set(true);
-            self.update_highlight();
             self.track_press();
         }
 
@@ -245,6 +253,7 @@ define_class!(
         /// window to pull them from — still starts its run on the release.
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
+            let _click = ClickInFlight::begin();
             if !self.ivars().pressed.replace(false) {
                 return;
             }

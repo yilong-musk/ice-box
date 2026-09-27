@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { t } from "./i18n";
 import {
+  displayMemoryMb,
   formatMemory,
   formatMemoryPart,
   memoryAvailable,
@@ -64,6 +65,23 @@ describe("memoryLabel / memoryToneFor", () => {
     const coreOnly = { app_bytes: null, core_bytes: 101 * MB, total_bytes: 101 * MB };
     expect(memoryLabel(coreOnly)).toBe("101 MB");
     expect(memoryToneFor(coreOnly)).toBe("bad");
+  });
+
+  it("sums the rounded parts the tooltip prints", () => {
+    // 30.4 MB per side rounds to 30 MB each while the byte total (60.8 MB)
+    // rounds to 61: the row shows the parts' sum, so the tooltip's
+    // `core + app` breakdown adds up to the label, and the band follows that
+    // same figure.
+    const parts = {
+      app_bytes: 30.4 * MB,
+      core_bytes: 30.4 * MB,
+      total_bytes: 60.8 * MB,
+    };
+    expect(displayMemoryMb(parts)).toBe(60);
+    expect(memoryLabel(parts)).toBe("60 MB");
+    expect(memoryToneFor(parts)).toBe("warn");
+    expect(formatMemoryPart(parts.app_bytes)).toBe("30 MB");
+    expect(formatMemoryPart(parts.core_bytes)).toBe("30 MB");
   });
 });
 

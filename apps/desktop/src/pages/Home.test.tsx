@@ -233,6 +233,42 @@ describe("Home", () => {
     );
   });
 
+  it("keeps the memory breakdown adding up to the figure it labels", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      // 30.4 MB per side rounds to 30 MB each, while the byte total (60.8 MB)
+      // rounds to 61: the row sums the rounded parts, so the tooltip it shows
+      // adds up to the label.
+      memory: {
+        app_bytes: 30.4 * 1024 * 1024,
+        core_bytes: 30.4 * 1024 * 1024,
+        total_bytes: 60.8 * 1024 * 1024,
+      },
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-info-memory")).toHaveTextContent("60 MB");
+    });
+    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+      "title",
+      t("home.memory.tooltip", { core: "30 MB", app: "30 MB" }),
+    );
+  });
+
   it.each([
     { mb: 59, toneClass: "text-ok" },
     { mb: 60, toneClass: "text-warn" },

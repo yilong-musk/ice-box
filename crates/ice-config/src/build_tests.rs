@@ -607,7 +607,10 @@ fn windows_resolver_skips_a_detoured_final_tag() {
 }
 
 #[test]
-fn windows_resolver_falls_back_when_every_server_is_detoured() {
+fn windows_resolver_stays_unset_when_every_server_is_detoured() {
+    // A detoured resolver is the DNS loop itself (the proxy dial needs the
+    // node's server domain resolved first), so there is no fallback: the
+    // route key stays unset and sing-box keeps its own resolution instead.
     let dns = json!({
         "servers": [
             { "type": "tls", "tag": "cn-dns", "server": "223.5.5.5", "detour": "proxy" },
@@ -615,10 +618,7 @@ fn windows_resolver_falls_back_when_every_server_is_detoured() {
         ],
         "final": "remote-dns",
     });
-    assert_eq!(
-        windows_default_domain_resolver(&dns).as_deref(),
-        Some("remote-dns")
-    );
+    assert_eq!(windows_default_domain_resolver(&dns), None);
 }
 
 #[test]

@@ -25,6 +25,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The macOS tray menu's delay test tells the close that a start click brings
+  from a dismissal by the click itself instead of the 500 ms window: a delay
+  row marks every press it handles, and a close that arrives with such a click
+  — the tracking AppKit ends for the row that took the press, with the menu
+  still open — leaves the run and its results alone and keeps the menu's open
+  state, while an Esc or click-away close is the cancel however soon after a
+  start it lands, instead of being swallowed by the window. A click on a
+  disabled row (a button while a test runs) is now taken by the row as well,
+  where it used to fall through to the menu's tracking and close the menu —
+  cancelling the very run the row was showing.
+
+- `hysteria2://` share links whose authority carries the official hopping
+  list (`host:123,5000-6000`) are no longer skipped as a bad port: the list
+  becomes sing-box `server_ports` (`server_port` keeps the first port), and
+  the `mport` parameter now takes the same grammar — single ports and mixed
+  lists like `123,5000-6000`, not just `a-b` ranges whose every segment
+  carried a `-`. sing-box takes a single port as the one-port range it wants
+  (`123:123`), and a malformed or out-of-range part still discards the whole
+  list: `mport` keeps the fixed port, while a bad authority port skips the
+  link as it always has.
+
+- A Windows DNS block whose servers are all proxy-detoured no longer falls
+  back to its `final` tag for `route.default_domain_resolver`: that resolver
+  is the loop the direct-resolver pick exists to avoid (the proxy dial itself
+  needs the node's server domain resolved first), so the route key stays
+  unset — with a warning — and sing-box keeps its own resolution. The
+  injected `uri_list` block is unaffected: its directly-dialable `cn-dns` is
+  still picked.
+
+- The Home memory row's label and tooltip now agree on the same rounded MB
+  figure: the label sums the rounded per-process figures the tooltip prints,
+  where rounding the byte total could differ from the two parts by one MB.
+  The colour band follows the same figure, so the band still matches the
+  number the row shows.
+
 - The macOS tray menu's node delay test no longer shows the results of the
   previous test after the menu is closed and opened again: dismissing the menu
   drops every ` · 45 ms` / ` · 失败` suffix *and* the attributed title that

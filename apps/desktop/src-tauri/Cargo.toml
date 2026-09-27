@@ -59,6 +59,10 @@ windows-sys = { version = "0.59", features = [
 # its delay results in place (`tray.rs`). Versions match what `tauri`'s own
 # macOS stack already resolves to, so no extra code enters the app.
 block2 = "0.6"
+# The delay button's click marker hands its clear to the main queue
+# (`tray_delay.rs`), which is what tells the close a click brings from a
+# dismissal after the row's handler has returned.
+dispatch2 = "0.3"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",

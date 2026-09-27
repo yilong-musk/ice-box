@@ -5,20 +5,37 @@ import { t } from "./i18n";
 
 export type MemoryTone = "ok" | "warn" | "bad";
 
-/** Rounded whole-MB figure. The label and the color band both use this value,
- * so the color always matches the number the user sees (plan v0.1.14 §9). */
+/** Rounded whole-MB figure. */
 export function memoryMb(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));
 }
 
+/** `N MB` for a whole-MB figure. */
+function formatMemoryMb(mb: number): string {
+  return `${mb} MB`;
+}
+
 /** `128 MB`. */
 export function formatMemory(bytes: number): string {
-  return `${memoryMb(bytes)} MB`;
+  return formatMemoryMb(memoryMb(bytes));
 }
 
 /** One side of the breakdown: `N MB`, or `—` when that part is unreadable. */
 export function formatMemoryPart(bytes: number | null): string {
   return bytes == null ? t("common.dash") : formatMemory(bytes);
+}
+
+/** Whole-MB figure the row shows for `memory`: the readable parts, each
+ * rounded, summed. The tooltip prints those same per-process figures, so
+ * summing them keeps the breakdown adding up to the label, where rounding the
+ * byte total instead can differ from the two rounded parts by one MB. The
+ * label and the color band both use this value, so the color always matches
+ * the number the user sees (plan v0.1.14 §9). */
+export function displayMemoryMb(memory: MemoryUsage): number {
+  let mb = 0;
+  if (memory.app_bytes != null) mb += memoryMb(memory.app_bytes);
+  if (memory.core_bytes != null) mb += memoryMb(memory.core_bytes);
+  return mb;
 }
 
 /** Whether at least one part was read; otherwise the row shows `—`. */
@@ -30,9 +47,11 @@ export function memoryAvailable(
   );
 }
 
-/** Row value: the rounded total, or `—` when nothing could be read. */
+/** Row value: the rounded breakdown, or `—` when nothing could be read. */
 export function memoryLabel(memory: MemoryUsage | null | undefined): string {
-  return memoryAvailable(memory) ? formatMemory(memory.total_bytes) : t("common.dash");
+  return memoryAvailable(memory)
+    ? formatMemoryMb(displayMemoryMb(memory))
+    : t("common.dash");
 }
 
 /** Color band by the displayed value: <60 MB green, 60–99 yellow, ≥100 red. */
@@ -46,5 +65,5 @@ export function memoryTone(mb: number): MemoryTone {
 export function memoryToneFor(
   memory: MemoryUsage | null | undefined,
 ): MemoryTone | null {
-  return memoryAvailable(memory) ? memoryTone(memoryMb(memory.total_bytes)) : null;
+  return memoryAvailable(memory) ? memoryTone(displayMemoryMb(memory)) : null;
 }

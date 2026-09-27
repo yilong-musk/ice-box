@@ -198,9 +198,10 @@ fn dns_server_has_proxy_dependency(server: &Value) -> bool {
 ///
 /// Returns the `final` tag when its server dials directly — the status quo —
 /// otherwise the first directly-dialable tagged server (the injected block's
-/// `cn-dns`). When every server is detoured the `final` tag is kept with a
-/// warning: a resolver must still be emitted. `None` when the block has no
-/// `final` tag, leaving the route key unset as before.
+/// `cn-dns`). When every server is detoured no resolver is emitted at all,
+/// with a warning: the route default would fall into the `final` tag, the loop
+/// this function exists to keep out, so the key stays unset and sing-box keeps
+/// its own resolution. `None` when the block has no `final` tag either.
 fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
     let final_tag = dns_final_tag(dns)?;
     let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
@@ -225,9 +226,9 @@ fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
         None => {
             tracing::warn!(
                 final_tag = %final_tag,
-                "every DNS server is detoured; the Windows resolver keeps the final tag"
+                "every DNS server is detoured; the Windows resolver stays unset"
             );
-            Some(final_tag)
+            None
         }
     }
 }
@@ -489,8 +490,9 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // backs the OS resolver. Windows: `local` re-enters the TUN, so the route
     // default points at a directly-dialable DNS server instead — the `final`
     // tag when it is not detoured, else the first directly-dialable tagged
-    // server. A proxy-detoured resolver (the injected `remote-dns`) would loop:
-    // the proxy dial itself needs the node's server domain resolved first.
+    // server — and stays unset when every server is detoured. A proxy-detoured
+    // resolver (the injected `remote-dns`) would loop: the proxy dial itself
+    // needs the node's server domain resolved first.
     if input.platform.is_windows() {
         if let Some(resolver) = windows_default_domain_resolver(&dns) {
             route
