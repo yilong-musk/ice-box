@@ -369,6 +369,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                       >
                         <ItemContent className="min-w-0">
                           <ItemTitle
+                            className="w-full min-w-0"
                             title={`${summary}\n${JSON.stringify(row.rule)}`}
                           >
                             <span className="truncate">
