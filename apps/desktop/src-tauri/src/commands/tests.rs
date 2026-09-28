@@ -412,7 +412,7 @@ fn cached_system_proxy_applied_ignores_expired_memo_when_proxy_busy() {
         *cache = Some((
             endpoints.clone(),
             std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(10))
+                .checked_sub(std::time::Duration::from_secs(60))
                 .expect("monotonic clock"),
             true,
         ));
@@ -453,6 +453,12 @@ fn require_known_node_tag_rejects_unknown() {
 fn require_known_node_tag_accepts_merged_node() {
     let state = temp_state_with_node("ok");
     require_known_node_tag(&state, "n1").expect("known tag");
+    let first = active_profile(&state).unwrap();
+    let second = active_profile(&state).unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "read paths must share the cached profile allocation"
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }
 

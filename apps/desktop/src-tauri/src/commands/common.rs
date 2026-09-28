@@ -24,9 +24,9 @@ pub(crate) use ice_core::{
     CoreStatus, HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
 };
 pub(crate) use ice_engine::{
-    active_subscription, host_platform, list_profile_outbounds, load_index,
-    redact_subscription_url_for_log, redact_subscription_url_for_ui, write_subscription_error,
-    SubscriptionError, SubscriptionManager, SubscriptionPaths,
+    active_subscription, host_platform, redact_subscription_url_for_log,
+    redact_subscription_url_for_ui, write_subscription_error, SubscriptionError,
+    SubscriptionManager, SubscriptionPaths,
 };
 pub(crate) use ice_proxy_sys::{
     disk_proxy_state, is_proxy_live_applied, proxy_backup_indicates_ownership,
@@ -206,11 +206,9 @@ pub struct StatusResponse {
     pub tun_elevation_ready: bool,
 }
 
-/// How long a `system_proxy_applied` check result is reused. The check spawns
-/// `networksetup` subprocesses (list + 4 gets per service); status is polled every 2s
-/// by two components, so caching keeps the subprocess storm away while the result stays
-/// fresh enough for the "proxy syncing…" indicator.
-const PROXY_APPLIED_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Slow consistency fallback. Mutations and window activation invalidate the
+/// memo immediately; the one-second tray readout never starts an OS probe.
+const PROXY_APPLIED_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub(crate) fn proxy_applied_cache_fresh(
     state: &AppState,
@@ -273,6 +271,7 @@ struct ProfileSig {
 pub struct ProfileCacheEntry {
     sig: ProfileSig,
     pub profile: Arc<NormalizedProfile>,
+    node_tags: Arc<std::collections::HashSet<String>>,
     /// Parallel to `profile.route.rules`.
     pub fingerprints: Arc<Vec<String>>,
     /// Lazy lowercase-serialized rule text for keyword search: built once per
@@ -308,15 +307,7 @@ impl ProfileCacheEntry {
     }
 }
 
-/// Change-detected merged log view (`get_log_view` polls every 2s).
-pub struct LogViewCache {
-    /// `file_sig` per source (app, core, helper), in read order; `None` for a
-    /// missing/unreadable source or when the helper log is not in play.
-    pub(crate) sigs: Vec<Option<(SystemTime, u64)>>,
-    pub(crate) n: usize,
-    pub(crate) debug: bool,
-    pub(crate) lines: Vec<String>,
-}
+pub(crate) type LogViewCache = crate::log_view::LogViewReader;
 
 pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
     let meta = std::fs::metadata(path).ok()?;
@@ -328,7 +319,7 @@ pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
 /// (same semantics as `load_active_profile_with_default_rules`).
 pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntry>, AppError> {
     let sub_paths = SubscriptionPaths::from_app(&state.paths);
-    let index = load_index(&sub_paths).map_err(AppError::from)?;
+    let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
     let active = active_subscription(&index);
     let sig = ProfileSig {
         index: file_sig(&sub_paths.index()),
@@ -357,6 +348,7 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     };
     let entry = ProfileCacheEntry {
         sig,
+        node_tags: Arc::new(profile.all_outbounds().map(|o| o.tag.clone()).collect()),
         fingerprints: Arc::new(profile.route.rules.iter().map(rule_fingerprint).collect()),
         profile,
         keyword_text: Arc::new(Mutex::new(None)),
@@ -367,29 +359,24 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     Ok(Some(entry))
 }
 
-pub(crate) fn active_profile(state: &AppState) -> Result<NormalizedProfile, AppError> {
+pub(crate) fn active_profile(state: &AppState) -> Result<Arc<NormalizedProfile>, AppError> {
     cached_profile(state)?
-        .map(|entry| (*entry.profile).clone())
+        .map(|entry| entry.profile)
         .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))
 }
 
-pub(crate) fn merged_outbounds(state: &AppState) -> Result<Vec<NormalizedOutbound>, AppError> {
-    Ok(list_profile_outbounds(&active_profile(state)?))
-}
-
-/// Like `merged_outbounds`, but `Ok(None)` when no active subscription exists
-/// (first-run / all subscriptions removed). Read paths use this so the UI gets
-/// an empty list instead of an error; mutation paths keep erroring via
-/// `merged_outbounds`.
+/// Test adapter for checking the cached profile's group-first ordering.
+#[cfg(test)]
 pub(crate) fn merged_outbounds_opt(
     state: &AppState,
 ) -> Result<Option<Vec<NormalizedOutbound>>, AppError> {
-    Ok(cached_profile(state)?.map(|entry| list_profile_outbounds(&entry.profile)))
+    Ok(cached_profile(state)?.map(|entry| ice_engine::list_profile_outbounds(&entry.profile)))
 }
 
 pub(crate) fn require_known_node_tag(state: &AppState, tag: &str) -> Result<(), AppError> {
-    let outbounds = merged_outbounds(state)?;
-    if !outbounds.iter().any(|o| o.tag == tag) {
+    let entry = cached_profile(state)?
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))?;
+    if !entry.node_tags.contains(tag) {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             format!("unknown node tag: {tag}"),
@@ -485,17 +472,40 @@ pub(crate) fn proxy_service_posture(
     settings: Option<&AppSettings>,
     running: bool,
 ) -> ProxyServicePosture {
+    let mut posture = cached_proxy_service_posture(state, settings, running);
+    if running && state.system_proxy_available {
+        posture.live = settings.and_then(|settings| cached_system_proxy_applied(state, settings));
+    }
+    posture
+}
+
+/// Display-only read: never invokes a system-proxy subprocess.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn cached_proxy_service_posture(
+    state: &AppState,
+    settings: Option<&AppSettings>,
+    running: bool,
+) -> ProxyServicePosture {
     let recorded = running.then(|| match disk_proxy_state(&state.paths.proxy_backup()) {
         DiskProxyState::Applied => true,
         DiskProxyState::NotApplied => false,
         DiskProxyState::Unknown => true,
     });
     let live = if running && state.system_proxy_available {
-        settings.and_then(|settings| cached_system_proxy_applied(state, settings))
+        settings.and_then(|settings| {
+            proxy_applied_cache_fresh(state, &endpoints_from_settings(settings), Instant::now())
+        })
     } else {
         None
     };
     ProxyServicePosture { live, recorded }
+}
+
+pub(crate) fn invalidate_runtime_probes(state: &AppState) {
+    if let Ok(mut cache) = state.proxy_applied_cache.lock() {
+        *cache = None;
+    }
+    state.core_snapshot.request_probe_refresh();
 }
 
 /// Announce a state change to the window and the tray.
@@ -506,6 +516,9 @@ pub(crate) fn proxy_service_posture(
 /// its menu items at once. Callers announce after releasing their locks.
 pub(crate) fn broadcast_state_change(app: &AppHandle) {
     use tauri::Emitter;
+    if let Some(state) = app.try_state::<AppState>() {
+        invalidate_runtime_probes(state.inner());
+    }
     let _ = app.emit(crate::core_snapshot::APP_STATE_CHANGED, ());
     tray::sync_menu(app);
 }

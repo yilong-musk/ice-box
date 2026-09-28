@@ -6,10 +6,11 @@ use crate::capture::TrafficCapture;
 use crate::orchestrate::{current_settings, restore_proxy_after_unexpected_core_exit};
 use crate::AppState;
 use ice_core::CoreStatus;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager, Runtime};
 
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
+const DNS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Reap an unexpectedly exited sing-box child and restore the active capture
 /// backend (system proxy via `proxy-backup.json`, or the TUN journal).
@@ -77,29 +78,51 @@ pub fn reconcile_unexpected_core_exit(state: &AppState) {
 /// network change: the interface and routes are intact but name resolution is
 /// broken (the classic "TUN is on but nothing resolves" after sleep). Uses
 /// `try_lock` so a mutation in flight is skipped and retried on the next tick.
-fn heal_tun_dns(state: &AppState) {
+fn heal_tun_dns(state: &AppState) -> bool {
     if state.capture.active_backend() != TrafficCapture::Tun {
-        return;
+        return true;
     }
     let Ok(_orch) = state.orchestrate.try_lock() else {
-        return;
+        return false;
     };
     let warning = state.capture.heal_tun_dns();
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         *slot = warning.into_iter().collect();
     }
+    true
 }
 
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
 pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(WATCH_INTERVAL);
-        let Some(state) = app.try_state::<AppState>() else {
-            break;
-        };
-        reconcile_unexpected_core_exit(state.inner());
-        heal_tun_dns(state.inner());
-        crate::commands::cap_oversized_logs(state.inner());
+    std::thread::spawn(move || {
+        let mut last_dns_check: Option<Instant> = None;
+        let mut last_tick = SystemTime::now();
+        loop {
+            std::thread::sleep(WATCH_INTERVAL);
+            let Some(state) = app.try_state::<AppState>() else {
+                break;
+            };
+            reconcile_unexpected_core_exit(state.inner());
+            let now = Instant::now();
+            let wall_now = SystemTime::now();
+            let resumed = wall_now
+                .duration_since(last_tick)
+                .map_or(true, |gap| gap > WATCH_INTERVAL * 3);
+            last_tick = wall_now;
+            let requested = state.core_snapshot.take_probe_refresh();
+            if resumed || requested {
+                last_dns_check = None;
+                if let Ok(mut cache) = state.proxy_applied_cache.lock() {
+                    *cache = None;
+                }
+            }
+            if last_dns_check.is_none_or(|last| now.duration_since(last) >= DNS_CHECK_INTERVAL)
+                && heal_tun_dns(state.inner())
+            {
+                last_dns_check = Some(now);
+            }
+            crate::commands::cap_oversized_logs(state.inner());
+        }
     });
 }
 

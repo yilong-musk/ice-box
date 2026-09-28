@@ -93,6 +93,7 @@ export function Rules({ onNavigate, active = true }: Props) {
   const [nearBottom, setNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
+  const overviewRequestRef = useRef<Promise<RuleOverview> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,16 +103,25 @@ export function Rules({ onNavigate, active = true }: Props) {
   }, []);
 
   useEffect(() => {
+    if (filters.keyword === debouncedKeyword) return;
     const id = window.setTimeout(
-      () => setDebouncedKeyword(filters.keyword),
+      () => {
+        setDebouncedKeyword(filters.keyword);
+        setOffset(0);
+      },
       MAX_KEYWORD_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(id);
-  }, [filters.keyword]);
+  }, [filters.keyword, debouncedKeyword]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refreshOverview = false) => {
     const gen = nextGeneration();
+    let overviewRequest: Promise<RuleOverview> | null = null;
     try {
+      if (refreshOverview || !overviewRequestRef.current) {
+        overviewRequestRef.current = api.getRuleOverview();
+      }
+      overviewRequest = overviewRequestRef.current;
       const req: ListRulesRequest = {
         keyword: debouncedKeyword || null,
         type: filters.type || null,
@@ -121,7 +131,7 @@ export function Rules({ onNavigate, active = true }: Props) {
         limit,
       };
       const [ov, list] = await Promise.all([
-        api.getRuleOverview(),
+        overviewRequest,
         api.listRules(req),
       ]);
       if (isStale(gen)) return;
@@ -134,9 +144,15 @@ export function Rules({ onNavigate, active = true }: Props) {
       }
       setError(null);
     } catch (e) {
+      if (overviewRequestRef.current === overviewRequest) overviewRequestRef.current = null;
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
-  }, [debouncedKeyword, filters, offset, limit, isStale, nextGeneration]);
+  }, [debouncedKeyword, filters.type, filters.status, filters.custom, offset, limit, isStale, nextGeneration]);
+
+  useEffect(() => {
+    overviewRequestRef.current = null;
+    if (!active) nextGeneration();
+  }, [active, nextGeneration]);
 
   useEffect(() => {
     if (!active) return;
@@ -163,11 +179,11 @@ export function Rules({ onNavigate, active = true }: Props) {
 
   function changeFilters(next: Partial<Filters>) {
     setFilters((f) => ({ ...f, ...next }));
-    setOffset(0);
+    if (next.keyword === undefined) setOffset(0);
   }
 
   async function reloadAfterMutation() {
-    if (mountedRef.current) await load();
+    if (mountedRef.current) await load(true);
   }
 
   async function onToggleDisabled(row: RuleRow) {
@@ -255,7 +271,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => void load()}
+              onClick={() => void load(true)}
               disabled={busy}
             >
               {t("common.refresh")}

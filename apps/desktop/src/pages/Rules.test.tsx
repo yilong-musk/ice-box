@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
@@ -196,6 +196,31 @@ describe("Rules", () => {
       };
       expect(call.keyword).toBe("goo");
     });
+    expect(listRules).toHaveBeenCalledTimes(2);
+    expect(getRuleOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not query on each keystroke or reload the overview for search", async () => {
+    const view = render(<Rules />);
+    await waitFor(() => expect(view.getByText("youtube.com")).toBeInTheDocument());
+    vi.useFakeTimers();
+    try {
+      listRules.mockClear();
+      getRuleOverview.mockClear();
+      const input = view.getByLabelText(t("rules.searchAria"));
+      fireEvent.change(input, { target: { value: "g" } });
+      await act(async () => { vi.advanceTimersByTime(200); });
+      fireEvent.change(input, { target: { value: "goo" } });
+      await act(async () => { vi.advanceTimersByTime(299); });
+      expect(listRules).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(listRules).toHaveBeenCalledTimes(1);
+      expect(listRules).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: "goo", offset: 0 }));
+      expect(getRuleOverview).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("disables a rule and refreshes", async () => {

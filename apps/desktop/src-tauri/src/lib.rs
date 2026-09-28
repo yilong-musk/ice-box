@@ -131,7 +131,7 @@ pub struct AppState {
     pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
-    pub log_view_cache: Mutex<Option<commands::LogViewCache>>,
+    pub(crate) log_view_cache: Mutex<Option<commands::LogViewCache>>,
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
@@ -355,6 +355,9 @@ pub fn run() {
             }
             WindowEvent::Focused(focused) => {
                 if *focused {
+                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                        commands::invalidate_runtime_probes(state.inner());
+                    }
                     let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
                 }
             }

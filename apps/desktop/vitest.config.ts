@@ -20,6 +20,7 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
     // Parallel jsdom + Recharts workers starve waitFor timers on WSL.
     fileParallelism: false,
+    testTimeout: 30_000,
   },
 });
 

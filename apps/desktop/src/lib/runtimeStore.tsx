@@ -71,36 +71,24 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
       setVisible(document.visibilityState !== "hidden");
     };
     document.addEventListener("visibilitychange", onVis);
-    let unHidden = () => {};
-    let unShown = () => {};
-    let unCore = () => {};
-    let unState = () => {};
-    void listenOptional(api.listenWindowHidden, () => setVisible(false)).then(
-      (u) => {
-        unHidden = u;
-      },
-    );
-    void listenOptional(api.listenWindowShown, () => setVisible(true)).then(
-      (u) => {
-        unShown = u;
-      },
-    );
-    void listenOptional(api.listenCoreStatusChanged, () => {
-      void refreshStatus();
-    }).then((u) => {
-      unCore = u;
-    });
-    void listenOptional(api.listenStateChanged, () => {
-      void refreshStatus();
-    }).then((u) => {
-      unState = u;
-    });
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const register = (fn: Parameters<typeof listenOptional>[0], handler: () => void) => {
+      void listenOptional(fn, () => { if (!disposed) handler(); }).then((off) => {
+        // Tauri can finish registration after unmount or a StrictMode cleanup.
+        if (disposed) off();
+        else unlisteners.push(off);
+      });
+    };
+    register(api.listenWindowHidden, () => setVisible(false));
+    register(api.listenWindowShown, () => setVisible(true));
+    register(api.listenCoreStatusChanged, () => { void refreshStatus(); });
+    register(api.listenStateChanged, () => { void refreshStatus(); });
     return () => {
+      disposed = true;
+      genRef.current += 1;
       document.removeEventListener("visibilitychange", onVis);
-      unHidden();
-      unShown();
-      unCore();
-      unState();
+      unlisteners.forEach((off) => off());
     };
   }, [enabled, refreshStatus]);
 

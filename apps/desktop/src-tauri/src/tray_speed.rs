@@ -26,7 +26,7 @@
 //! is proxied do not read as live traffic.
 
 use crate::capture::TrafficCapture;
-use crate::commands::{current_settings, proxy_service_posture};
+use crate::commands::{cached_proxy_service_posture, current_settings, file_sig};
 use crate::tray::TRAY_ID;
 use crate::AppState;
 use block2::RcBlock;
@@ -104,6 +104,10 @@ pub fn spawn_watchdog(app: AppHandle) {
         // every tick, and past ticks reject the cache) from hopping to the main
         // thread every second.
         let mut applied: Option<(TrayDisplayMode, Option<String>, bool)> = None;
+        let mut settings_cache: Option<(
+            Option<(std::time::SystemTime, u64)>,
+            ice_config::AppSettings,
+        )> = None;
         loop {
             std::thread::sleep(READOUT_INTERVAL);
             let Some(state) = app.try_state::<AppState>() else {
@@ -113,9 +117,17 @@ pub fn spawn_watchdog(app: AppHandle) {
             // Settings are read here rather than pushed by the Settings page:
             // the tray menu watchdog reads them the same way, and a failed read
             // keeps the previous item instead of guessing a mode.
-            let Ok(settings) = current_settings(&state.paths) else {
-                continue;
-            };
+            let sig = file_sig(&state.paths.settings());
+            if settings_cache
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != sig)
+            {
+                let Ok(settings) = current_settings(&state.paths) else {
+                    continue;
+                };
+                settings_cache = Some((sig, settings));
+            }
+            let settings = &settings_cache.as_ref().expect("settings loaded").1;
             let mode = settings.tray_display_mode;
             // The readout dims with the *proxy service*, not with the core
             // process: the same answer Home's power control and the tray menu
@@ -125,16 +137,13 @@ pub fn spawn_watchdog(app: AppHandle) {
             // modes draw, but it is cheap to track for every mode: the item is
             // redrawn on a service switch either way.
             let running = state.core_snapshot.load().state.status == CoreStatus::Running;
-            let tun_active = state.capture.status(&settings).traffic_capture == TrafficCapture::Tun;
-            let service_on =
-                proxy_service_posture(state.inner(), Some(&settings), running).engaged(tun_active);
+            let tun_active = state.capture.active_backend() == TrafficCapture::Tun;
+            let service_on = cached_proxy_service_posture(state.inner(), Some(settings), running)
+                .engaged(tun_active);
             let readout = match mode {
                 // No text to draw: skip the traffic read entirely.
                 TrayDisplayMode::Icon => None,
-                _ => Some(readout_text(
-                    state.traffic.snapshot().points.last().copied(),
-                    now_ms(),
-                )),
+                _ => Some(readout_text(state.traffic.latest_timed(), now_ms())),
             };
             let next = (mode, readout, service_on);
             if applied.as_ref() == Some(&next) {

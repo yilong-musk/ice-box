@@ -25,38 +25,19 @@ pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<Str
         let debug = current_settings(&state.paths)
             .map(|s| s.log_debug)
             .unwrap_or(false);
-        // Change detection: the view is polled every 2s; skip the read + parse
-        // when no source file changed and the requested depth / debug flag
-        // are unchanged. Settings is in the sigs so flipping debug invalidates.
-        let sigs = vec![
-            file_sig(&state.paths.app_log()),
-            file_sig(&state.paths.core_log()),
-            extra_core_log.and_then(file_sig),
-            file_sig(&state.paths.settings()),
-        ];
-        if let Ok(cache) = state.log_view_cache.lock() {
-            if let Some(entry) = cache.as_ref() {
-                if entry.n == req.n && entry.debug == debug && entry.sigs == sigs {
-                    return Ok(entry.lines.clone());
-                }
-            }
-        }
-        let lines = crate::log_view::read_log_view(
+        // Serialize readers so overlapping polls cannot duplicate appended
+        // lines or replace a newer cursor with an older snapshot.
+        let mut cache = state
+            .log_view_cache
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::ConfigInvalid, "log view cache poisoned"))?;
+        cache.get_or_insert_with(LogViewCache::default).read(
             &state.paths.app_log(),
             &state.paths.core_log(),
             extra_core_log,
             req.n,
             debug,
-        )?;
-        if let Ok(mut cache) = state.log_view_cache.lock() {
-            *cache = Some(LogViewCache {
-                sigs,
-                n: req.n,
-                debug,
-                lines: lines.clone(),
-            });
-        }
-        Ok(lines)
+        )
     })
     .await
 }

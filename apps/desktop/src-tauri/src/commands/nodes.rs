@@ -16,7 +16,7 @@ pub struct NodeInfo {
 /// Node list with the live group state. Shared by the `list_nodes` command and
 /// the tray node menu (which re-derives it on every sync tick).
 pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError> {
-    let Some(outbounds) = merged_outbounds_opt(state)? else {
+    let Some(entry) = cached_profile(state)? else {
         return Ok(vec![]);
     };
     let settings = current_settings(&state.paths)?;
@@ -28,8 +28,16 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
     } else {
         None
     };
-    Ok(outbounds
+    let live_by_tag: std::collections::HashMap<_, _> = live
         .iter()
+        .flatten()
+        .map(|group| (group.tag.as_str(), group))
+        .collect();
+    Ok(entry
+        .profile
+        .groups
+        .iter()
+        .chain(entry.profile.nodes.iter())
         .map(|o| {
             let ty = o
                 .outbound
@@ -40,9 +48,7 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
             let is_group = ["selector", "urltest", "fallback", "loadbalance"]
                 .iter()
                 .any(|g| g == &ty);
-            let live_state = live
-                .as_ref()
-                .and_then(|groups| groups.iter().find(|g| g.tag == o.tag));
+            let live_state = live_by_tag.get(o.tag.as_str()).copied();
             let static_members: Vec<String> = o
                 .outbound
                 .get("outbounds")
@@ -616,7 +622,7 @@ pub(crate) fn select_node(app: &AppHandle, state: &AppState, tag: &str) -> Resul
     // One profile load (mtime-cached) validates the tag and computes the
     // selection group; the pick itself is applied live via the Clash API.
     let profile = active_profile(state)?;
-    if !profile.all_tags().iter().any(|t| t == tag) {
+    if !profile.all_outbounds().any(|o| o.tag == tag) {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             format!("unknown node tag: {tag}"),
@@ -802,8 +808,8 @@ pub(crate) fn select_group_member(
     group: &str,
     member: &str,
 ) -> Result<(), AppError> {
-    let outbounds = merged_outbounds(state)?;
-    validate_static_group_member(&outbounds, group, member)?;
+    let profile = active_profile(state)?;
+    validate_static_group_member(profile.all_outbounds(), group, member)?;
 
     let mut selections = load_group_selections(&state.paths.group_selections());
     selections.insert(group.to_string(), member.to_string());
@@ -848,17 +854,20 @@ pub async fn set_group_selection(
     .await
 }
 
-pub(crate) fn validate_static_group_member(
-    outbounds: &[NormalizedOutbound],
+pub(crate) fn validate_static_group_member<'a>(
+    outbounds: impl IntoIterator<Item = &'a NormalizedOutbound>,
     group: &str,
     member: &str,
 ) -> Result<(), AppError> {
-    let g = outbounds.iter().find(|o| o.tag == group).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::ConfigInvalid,
-            format!("unknown strategy group: {group}"),
-        )
-    })?;
+    let g = outbounds
+        .into_iter()
+        .find(|o| o.tag == group)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!("unknown strategy group: {group}"),
+            )
+        })?;
     if g.outbound.get("type").and_then(|v| v.as_str()) != Some("selector") {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,

@@ -2,8 +2,9 @@
 
 //! Disk-backed subscription manager and the in-memory placeholder.
 
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ice_config::{HostPlatform, NormalizedProfile};
 use uuid::Uuid;
@@ -40,6 +41,59 @@ pub struct SubscriptionManager<F: HttpFetcher = DirectFetcher> {
 pub struct FetchedUpdate {
     pub meta: SubscriptionMeta,
     pub fetched: FetchResponse,
+    pub(crate) spooled: Option<SpooledBody>,
+}
+
+/// All responses in a batch share one anonymous file, removed on final drop.
+#[derive(Debug, Clone)]
+pub(crate) struct SpooledBody {
+    file: Arc<Mutex<std::fs::File>>,
+    offset: u64,
+    len: u64,
+}
+
+impl FetchedUpdate {
+    fn spool(
+        mut self,
+        file: &mut Option<Arc<Mutex<std::fs::File>>>,
+    ) -> Result<Self, SubscriptionError> {
+        if self.fetched.body.is_empty() {
+            return Ok(self);
+        }
+        if file.is_none() {
+            *file = Some(Arc::new(Mutex::new(tempfile::tempfile()?)));
+        }
+        let file = file.as_ref().expect("spool initialized");
+        let mut writer = file.lock().unwrap_or_else(|e| e.into_inner());
+        let offset = writer.seek(SeekFrom::End(0))?;
+        writer.write_all(self.fetched.body.as_bytes())?;
+        self.spooled = Some(SpooledBody {
+            file: Arc::clone(file),
+            offset,
+            len: self.fetched.body.len() as u64,
+        });
+        // Replacing, rather than clearing, releases the response allocation.
+        self.fetched.body = String::new();
+        Ok(self)
+    }
+
+    fn materialize(mut self) -> Result<Self, SubscriptionError> {
+        if let Some(body) = self.spooled.take() {
+            let mut reader = body.file.lock().unwrap_or_else(|e| e.into_inner());
+            reader.seek(SeekFrom::Start(body.offset))?;
+            (&mut *reader)
+                .take(body.len)
+                .read_to_string(&mut self.fetched.body)?;
+            if self.fetched.body.len() as u64 != body.len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "subscription spool truncated",
+                )
+                .into());
+            }
+        }
+        Ok(self)
+    }
 }
 
 /// Result of the network phase of an add; the disk phase consumes it via
@@ -204,11 +258,16 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             meta.etag.as_deref(),
             meta.last_modified.as_deref(),
         )?;
-        Ok(FetchedUpdate { meta, fetched })
+        Ok(FetchedUpdate {
+            meta,
+            fetched,
+            spooled: None,
+        })
     }
 
     /// Disk phase of an update: normalize + persist, or record `last_error`.
     pub fn apply_update(&self, upd: FetchedUpdate) -> Result<SubscriptionMeta, SubscriptionError> {
+        let upd = upd.materialize()?;
         // A subscription removed while its fetch was in flight must not be resurrected:
         // the index no longer contains the id, so stop before writing any files.
         let current = load_index(&self.paths)?
@@ -235,9 +294,8 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         }
     }
 
-    /// Network phase of updating every subscription. Fetches run in parallel (up to one
-    /// `FETCH_TIMEOUT` of wall time instead of N×) and write nothing to disk, so the caller
-    /// can run them without holding the orchestrate lock.
+    /// Fetch in parallel without the orchestrate lock. Completed bodies are
+    /// spooled to an anonymous temporary file; subscription storage is unchanged.
     pub fn fetch_all(&self) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
     where
         F: Sync,
@@ -267,9 +325,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         self.fetch_ids(ids)
     }
 
-    /// Parallel network phase for an explicit id list. Writes nothing to disk, so callers
-    /// can run it without holding the orchestrate lock; [`SubscriptionManager::apply_all`]
-    /// persists the results serially.
+    /// Parallel fetch with bounded pending responses and disk-backed bodies.
+    /// Only temporary storage is written, so the orchestrate lock is unnecessary.
+    /// [`SubscriptionManager::apply_all`] materializes and persists one body at a time.
     pub fn fetch_ids(&self, ids: Vec<Uuid>) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
     where
         F: Sync,
@@ -286,9 +344,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 .enumerate()
                 .collect::<std::collections::VecDeque<_>>(),
         ));
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(worker_count);
 
-        std::thread::scope(|scope| {
+        let mut completed = std::thread::scope(|scope| {
             for _ in 0..worker_count {
                 let queue = std::sync::Arc::clone(&queue);
                 let sender = sender.clone();
@@ -314,9 +372,17 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                 });
             }
             drop(sender);
+            // Drain while workers are running: joining before receiving would
+            // deadlock a bounded channel. Never retain a whole batch in memory.
+            let mut file = None;
+            receiver
+                .into_iter()
+                .map(|(index, id, result)| {
+                    (index, id, result.and_then(|update| update.spool(&mut file)))
+                })
+                .collect::<Vec<_>>()
         });
 
-        let mut completed: Vec<_> = receiver.into_iter().collect();
         completed.sort_unstable_by_key(|(index, _, _)| *index);
         completed
             .into_iter()
@@ -344,7 +410,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         };
         let mut out = Vec::with_capacity(fetched.len());
         for (id, result) in fetched {
-            match result {
+            match result.and_then(FetchedUpdate::materialize) {
                 Err(err) => {
                     apply_error_to_index(&self.paths, &mut index, id, err.ui_message());
                     out.push((id, Err(err)));

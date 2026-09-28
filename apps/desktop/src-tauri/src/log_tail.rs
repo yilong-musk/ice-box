@@ -9,9 +9,6 @@ use std::path::Path;
 use ice_config::{AppError, ErrorCode};
 
 pub const LOG_TAIL_MAX: usize = 500;
-/// Hard cap for scan reads: the merged view reads deeper before filtering, but must
-/// stay bounded to avoid pulling whole files into memory.
-pub const LOG_SCAN_MAX: usize = 10_000;
 
 const INITIAL_WINDOW: u64 = 256 * 1024;
 const MAX_WINDOW: u64 = 4 * 1024 * 1024;
@@ -75,13 +72,6 @@ fn tail_lines_from_window(text: &str, from_start: bool, n: usize) -> Vec<String>
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn read_log_tail(path: &Path, n: usize) -> Result<Vec<String>, AppError> {
     read_tail(path, n.min(LOG_TAIL_MAX))
-}
-
-/// Read up to `n` trailing lines (capped at [`LOG_SCAN_MAX`]); used by the merged view
-/// so filtering still yields enough lines. Callers decide the policy; raw log files are
-/// never modified here.
-pub fn read_log_tail_deep(path: &Path, n: usize) -> Result<Vec<String>, AppError> {
-    read_tail(path, n.min(LOG_SCAN_MAX))
 }
 
 fn read_tail(path: &Path, n: usize) -> Result<Vec<String>, AppError> {

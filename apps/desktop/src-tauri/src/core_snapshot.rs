@@ -8,6 +8,7 @@
 use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
 use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Emitter};
 
@@ -20,6 +21,20 @@ pub const TRAFFIC_SAMPLE: &str = "traffic://sample";
 /// fallback poll.
 pub const APP_STATE_CHANGED: &str = "app://state-changed";
 
+#[cfg(test)]
+#[test]
+fn runtime_probe_invalidations_are_coalesced_and_rearmed_on_mutations() {
+    let hub = CoreSnapshotHub::from_state(CoreState::default());
+    assert!(hub.take_probe_refresh());
+    assert!(!hub.take_probe_refresh());
+    hub.request_probe_refresh();
+    hub.request_probe_refresh();
+    assert!(hub.take_probe_refresh());
+    assert!(!hub.take_probe_refresh());
+    hub.publish(CoreState::default());
+    assert!(hub.take_probe_refresh());
+}
+
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct CoreSnapshot {
     pub state: CoreState,
@@ -29,6 +44,7 @@ pub struct CoreSnapshot {
 pub struct CoreSnapshotHub {
     inner: RwLock<Arc<CoreSnapshot>>,
     emitter: Mutex<Option<AppHandle>>,
+    probes_dirty: AtomicBool,
 }
 
 impl CoreSnapshotHub {
@@ -39,6 +55,7 @@ impl CoreSnapshotHub {
                 generation: 0,
             })),
             emitter: Mutex::new(None),
+            probes_dirty: AtomicBool::new(true),
         })
     }
 
@@ -53,6 +70,7 @@ impl CoreSnapshotHub {
     }
 
     pub fn publish(&self, state: CoreState) {
+        self.request_probe_refresh();
         let snapshot = {
             let mut slot = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let generation = slot.generation.saturating_add(1);
@@ -65,6 +83,14 @@ impl CoreSnapshotHub {
                 let _ = app.emit(CORE_STATUS_CHANGED, snapshot.as_ref());
             }
         }
+    }
+
+    pub fn request_probe_refresh(&self) {
+        self.probes_dirty.store(true, Ordering::Release);
+    }
+
+    pub fn take_probe_refresh(&self) -> bool {
+        self.probes_dirty.swap(false, Ordering::AcqRel)
     }
 }
 

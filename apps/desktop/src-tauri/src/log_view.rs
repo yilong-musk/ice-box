@@ -11,13 +11,18 @@
 //! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — the filter
 //! applies only at read/display time.
 
+#[cfg(test)]
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 
+#[cfg(test)]
 use ice_config::AppError;
 
-use crate::log_tail::{read_log_tail_deep, LOG_TAIL_MAX};
+use crate::log_tail::LOG_TAIL_MAX;
+
+mod reader;
+pub(crate) use reader::LogViewReader;
 
 /// Lines scanned per source so filtering still yields up to `VIEW_MAX` lines.
 const SCAN_PER_SOURCE: usize = 3000;
@@ -49,16 +54,6 @@ enum Level {
 enum Source {
     App,
     Core,
-}
-
-struct LogLine {
-    ts: DateTime<FixedOffset>,
-    source: Source,
-    /// Global read order across the merged tails; tiebreak for same-timestamp
-    /// lines from different files (files are read app → core → helper).
-    order: usize,
-    level: Level,
-    text: String,
 }
 
 impl Level {
@@ -113,10 +108,14 @@ fn parse_tz_offset(tok: &str) -> Option<i32> {
 /// Parse a sing-box line: `+0800 2026-08-23 13:47:01 INFO message` (or, defensively,
 /// `2026-08-23 13:47:01 INFO message` without the zone prefix).
 fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
-    let toks: Vec<&str> = line.split_whitespace().collect();
-    if toks.len() < 4 {
-        return None;
-    }
+    let mut words = line.split_whitespace();
+    let toks = [
+        words.next()?,
+        words.next()?,
+        words.next()?,
+        words.next()?,
+        words.next().unwrap_or(""),
+    ];
     let (date_idx, time_idx) = if toks[1].len() == 10 && toks[2].len() == 8 {
         (1, 2)
     } else if toks[0].len() == 10 && toks[1].len() == 8 {
@@ -160,34 +159,6 @@ fn display_worthy(source: Source, level: Level, text: &str) -> bool {
         },
         Level::Trace | Level::Debug => false,
     }
-}
-
-fn collect(
-    out: &mut Vec<LogLine>,
-    source: Source,
-    path: &Path,
-    next_order: &mut usize,
-    debug: bool,
-) -> Result<(), AppError> {
-    for raw in read_log_tail_deep(path, SCAN_PER_SOURCE)? {
-        let order = *next_order;
-        *next_order += 1;
-        let parsed = match source {
-            Source::App => parse_app_line(&raw),
-            Source::Core => parse_core_line(&raw),
-        };
-        let Some((ts, level)) = parsed else { continue };
-        if debug || display_worthy(source, level, &raw) {
-            out.push(LogLine {
-                ts,
-                source,
-                order,
-                level,
-                text: raw,
-            });
-        }
-    }
-    Ok(())
 }
 
 /// sing-box logs `hijack-dns` payloads that fail to parse as DNS (STUN/mDNS
@@ -337,6 +308,7 @@ fn format_display_line(
 /// Lines with identical timestamps keep file read order (app, then core, then
 /// the helper core log). Display lines use a compact timestamp and omit source
 /// tags; the filter never touches the log files themselves.
+#[cfg(test)]
 pub fn read_log_view(
     app_log: &Path,
     core_log: &Path,
@@ -344,27 +316,7 @@ pub fn read_log_view(
     n: usize,
     debug: bool,
 ) -> Result<Vec<String>, AppError> {
-    let n = n.min(VIEW_MAX);
-    let mut lines: Vec<LogLine> = Vec::new();
-    let mut next_order = 0usize;
-    collect(&mut lines, Source::App, app_log, &mut next_order, debug)?;
-    collect(&mut lines, Source::Core, core_log, &mut next_order, debug)?;
-    if let Some(helper_log) = helper_core_log {
-        // Missing / unreadable helper log: read_tail yields an empty tail for
-        // missing paths, and collect errors are dropped — never a view error.
-        let _ = collect(&mut lines, Source::Core, helper_log, &mut next_order, debug);
-    }
-    lines.sort_by_key(|a| (a.ts, a.source, a.order));
-    // Keep the newest lines after merging both sources. Truncating the ascending
-    // list directly would retain stale entries and hide the latest connections.
-    let drop_count = lines.len().saturating_sub(n);
-    if drop_count > 0 {
-        lines.drain(..drop_count);
-    }
-    Ok(lines
-        .into_iter()
-        .map(|l| format_display_line(l.ts, l.source, l.level, &l.text))
-        .collect())
+    LogViewReader::default().read(app_log, core_log, helper_core_log, n, debug)
 }
 
 #[cfg(test)]
@@ -374,7 +326,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_dir(label: &str) -> std::path::PathBuf {
+    pub(super) fn temp_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "ice-box-logview-{label}-{}",
             SystemTime::now()

@@ -312,6 +312,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                 a.id,
                 Ok(FetchedUpdate {
                     meta: a_meta,
+                    spooled: None,
                     fetched: FetchResponse {
                         body: r#"{"outbounds":[{"type":"socks","tag":"x","server":"1.1.1.1","server_port":1},{"type":"socks","tag":"y","server":"2.2.2.2","server_port":2}]}"#
                             .into(),
@@ -327,6 +328,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                 b.id,
                 Ok(FetchedUpdate {
                     meta: b_meta,
+                    spooled: None,
                     fetched: FetchResponse {
                         body: String::new(),
                         not_modified: true,
@@ -392,6 +394,14 @@ fn fetch_all_caps_network_concurrency() {
 
     let updates = mgr.fetch_all();
     assert_eq!(updates.len(), count);
+    for (_, update) in &updates {
+        let update = update.as_ref().expect("fetch succeeded");
+        assert!(
+            update.fetched.body.is_empty(),
+            "batch bodies must not remain in memory"
+        );
+        assert!(update.spooled.is_some(), "completed bodies are disk-backed");
+    }
     assert!(
         max_active.load(Ordering::SeqCst) > 1,
         "fetch_all should retain useful parallelism"
@@ -399,6 +409,12 @@ fn fetch_all_caps_network_concurrency() {
     assert!(
         max_active.load(Ordering::SeqCst) <= super::MAX_FETCH_CONCURRENCY,
         "fetch_all exceeded its worker limit"
+    );
+    assert!(
+        mgr.apply_all(updates)
+            .iter()
+            .all(|(_, result)| result.is_ok()),
+        "spooled bodies must remain readable until apply"
     );
     let _ = fs::remove_dir_all(paths.root());
 }
