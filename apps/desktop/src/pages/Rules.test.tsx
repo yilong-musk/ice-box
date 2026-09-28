@@ -371,6 +371,45 @@ describe("Rules", () => {
     expect(addCustomRule).not.toHaveBeenCalled();
   });
 
+  it("lowercases domain matcher input while typing", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "BiliVideo.COM" } });
+    expect(input.value).toBe("bilivideo.com");
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matcherType")), {
+      target: { value: "domain_regex" },
+    });
+    const regexInput = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.change(regexInput, { target: { value: "[A-Z]+\\.CN$" } });
+    expect(regexInput.value).toBe("[A-Z]+\\.CN$");
+  });
+
+  it("leaves IME composition text intact and lowercases it on completion", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.compositionStart(input);
+    // Rewriting the field while the IME owns it makes WebKit re-commit the
+    // marked text, so the value must stay untouched until the composition ends.
+    fireEvent.change(input, { target: { value: "BiliVideo.COM" }, isComposing: true });
+    expect(input.value).toBe("BiliVideo.COM");
+
+    fireEvent.compositionEnd(input);
+    expect(input.value).toBe("bilivideo.com");
+  });
+
   it("resets the form after a successful add", async () => {
     const { container } = render(<Rules />);
     const view = within(container);

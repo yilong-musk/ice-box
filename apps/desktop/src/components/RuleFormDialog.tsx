@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { api, type NodeInfo } from "../api/client";
@@ -47,6 +47,7 @@ function RuleFormDialog({
   const [outbound, setOutbound] = useState("direct");
   const [nodeOptions, setNodeOptions] = useState<NodeInfo[]>([]);
   const [customError, setCustomError] = useState<string | null>(null);
+  const composingRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -66,9 +67,14 @@ function RuleFormDialog({
   }, [open]);
 
   const previewDef = RULE_MATCHER_DEFS.find((d) => d.key === matcherKey);
+  // sing-box lowercases the incoming hostname but matches the pattern as
+  // written, so an uppercase pattern would never match. Show the value
+  // lowercased as it is typed, and keep the rule itself lowercase too.
+  const lowercaseInput = previewDef?.lowercase === true;
+  const matcherText = lowercaseInput ? matcherValue.toLowerCase() : matcherValue;
   const previewRule = buildCustomRule(
     matcherKey,
-    previewDef?.kind === "boolean" ? matcherBool : matcherValue,
+    previewDef?.kind === "boolean" ? matcherBool : matcherText,
     outbound,
   );
 
@@ -160,10 +166,30 @@ function RuleFormDialog({
                   id="rule-match-value"
                   type="text"
                   aria-label={t("ruleForm.matchValue")}
+                  className={lowercaseInput ? "lowercase" : undefined}
                   placeholder={previewDef?.placeholder}
                   value={matcherValue}
+                  onCompositionStart={() => {
+                    composingRef.current = true;
+                  }}
+                  onCompositionEnd={(e) => {
+                    composingRef.current = false;
+                    if (lowercaseInput) {
+                      setMatcherValue(e.currentTarget.value.toLowerCase());
+                    }
+                  }}
                   onChange={(e) => {
-                    setMatcherValue(e.target.value);
+                    const next = e.target.value;
+                    // Rewriting the field in the middle of an IME composition
+                    // makes WebKit re-commit the marked text and the value comes
+                    // out scrambled, so leave the DOM alone while composing —
+                    // the `lowercase` class still renders it lowercased — and
+                    // sync the real value once the composition ends.
+                    setMatcherValue(
+                      lowercaseInput && !composingRef.current
+                        ? next.toLowerCase()
+                        : next,
+                    );
                     setCustomError(null);
                   }}
                 />

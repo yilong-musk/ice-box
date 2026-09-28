@@ -101,6 +101,12 @@ export type RuleMatcherDef = {
   label: MessageKey;
   kind: "array" | "boolean";
   placeholder: string;
+  /**
+   * Lowercase typed values so the input matches how sing-box compares them:
+   * the domain matchers lowercase the incoming hostname but not the pattern,
+   * so an uppercase pattern would never match.
+   */
+  lowercase?: boolean;
 };
 
 /**
@@ -109,9 +115,9 @@ export type RuleMatcherDef = {
  * geoip → rule-set expansion at build time. Use `rule_set` instead.
  */
 export const RULE_MATCHER_DEFS: RuleMatcherDef[] = [
-  { key: "domain", label: "ruleType.domain", kind: "array", placeholder: "example.com" },
-  { key: "domain_suffix", label: "ruleType.domainSuffix", kind: "array", placeholder: "google.com" },
-  { key: "domain_keyword", label: "ruleType.domainKeyword", kind: "array", placeholder: "youtube" },
+  { key: "domain", label: "ruleType.domain", kind: "array", placeholder: "example.com", lowercase: true },
+  { key: "domain_suffix", label: "ruleType.domainSuffix", kind: "array", placeholder: "google.com", lowercase: true },
+  { key: "domain_keyword", label: "ruleType.domainKeyword", kind: "array", placeholder: "youtube", lowercase: true },
   { key: "domain_regex", label: "ruleType.domainRegex", kind: "array", placeholder: ".*\\.cn$" },
   { key: "ip_cidr", label: "ruleType.ipCidr", kind: "array", placeholder: "10.0.0.0/8" },
   { key: "ip_is_private", label: "ruleType.ipIsPrivate", kind: "boolean", placeholder: "" },
