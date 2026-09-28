@@ -18,7 +18,7 @@ const listenStateChanged = vi.fn();
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),

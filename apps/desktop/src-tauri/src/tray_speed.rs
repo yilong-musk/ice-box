@@ -25,8 +25,8 @@
 //! on its own runs with the service off), so the zeroes it prints while nothing
 //! is proxied do not read as live traffic.
 
+use crate::application::{cached_proxy_service_posture, current_settings, file_sig};
 use crate::capture::TrafficCapture;
-use crate::commands::{cached_proxy_service_posture, current_settings, file_sig};
 use crate::tray::TRAY_ID;
 use crate::AppState;
 use block2::RcBlock;
@@ -98,7 +98,8 @@ const READOUT_PADDING: f64 = 0.5;
 /// if the stream were still live, and the stopped service also dims the text
 /// (see [`readout_dimmed`]).
 pub fn spawn_watchdog(app: AppHandle) {
-    std::thread::spawn(move || {
+    let workers = app.state::<AppState>().workers.clone();
+    workers.spawn("tray-speed", move |cancel| {
         // This loop is the only writer of the readout, so the cache needs no lock:
         // it keeps an unchanged item (idle traffic reads the same `0.0 B/s`
         // every tick, and past ticks reject the cache) from hopping to the main
@@ -109,7 +110,9 @@ pub fn spawn_watchdog(app: AppHandle) {
             ice_config::AppSettings,
         )> = None;
         loop {
-            std::thread::sleep(READOUT_INTERVAL);
+            if !cancel.wait(READOUT_INTERVAL) {
+                break;
+            }
             let Some(state) = app.try_state::<AppState>() else {
                 // Tauri drops managed state while the app tears down.
                 break;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it, vi } from "vitest";
-import type { CheckAppUpdateResponse } from "../api/tauri";
+import type { CheckAppUpdateResponse } from "../api/client";
 import {
   BACKGROUND_UPDATE_RETRY_MS,
   CORE_READY_RETRY_MS,

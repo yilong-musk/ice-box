@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { NodeInfo } from "../api/tauri";
+import type { NodeInfo } from "../api/client";
 import { t } from "./i18n";
 
 export type DelayCell = number | "error" | "testing" | null;

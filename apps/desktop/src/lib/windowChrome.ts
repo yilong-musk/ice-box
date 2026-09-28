@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-export type WindowChrome = "macos-overlay" | "windows-custom" | "plain";
-export type WindowCommand = "minimize" | "toggleMaximize" | "close";
+import type { WindowChrome, WindowCommand } from "./windowChromeContract";
+export type { WindowChrome, WindowCommand } from "./windowChromeContract";
 
 /** Classify the native chrome so the UI can inset traffic lights or draw caption buttons. */
 export function detectWindowChrome(

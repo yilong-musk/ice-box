@@ -6,7 +6,7 @@ import {
   api,
   formatInvokeError,
   type NodeInfo,
-} from "../api/tauri";
+} from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";

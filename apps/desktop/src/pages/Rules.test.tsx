@@ -13,7 +13,7 @@ const addCustomRule = vi.fn();
 const removeCustomRule = vi.fn();
 const listNodes = vi.fn();
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getRuleOverview: (...args: unknown[]) => getRuleOverview(...args),
     listRules: (...args: unknown[]) => listRules(...args),

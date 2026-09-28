@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { RuleRow } from "../api/tauri";
+import type { RuleRow } from "../api/client";
 import { t, type MessageKey } from "./i18n";
 
 export const RULE_TYPE_LABEL_KEYS: Record<string, MessageKey> = {

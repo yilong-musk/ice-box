@@ -21,7 +21,7 @@ import {
   formatPortValidationError,
 } from "../../lib/listenValidation";
 import { t } from "../../lib/i18n";
-import type { AppSettings } from "../../api/tauri";
+import type { AppSettings } from "../../api/client";
 
 export function PortsCard({
   form,

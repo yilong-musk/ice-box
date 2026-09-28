@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { persistLanguagePreference } from "../lib/i18n";
-import { formatInvokeError } from "./tauri";
+import { formatInvokeError } from "./format";
 
 describe("formatInvokeError", () => {
   beforeEach(() => {

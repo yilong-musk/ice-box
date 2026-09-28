@@ -22,7 +22,7 @@ import {
   type LanguagePreference,
   type MessageKey,
 } from "../../lib/i18n";
-import type { TrayDisplayMode } from "../../api/tauri";
+import type { TrayDisplayMode } from "../../api/client";
 import type { ThemePreference } from "../../lib/theme";
 
 const APPEARANCE_OPTIONS = [

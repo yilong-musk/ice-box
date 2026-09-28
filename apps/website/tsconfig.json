@@ -11,6 +11,8 @@
     // Live Demo typechecks desktop UI sources. Pin React to this package so
     // those files do not pick up a second @types/react from apps/desktop.
     "paths": {
+      "@platform/api": ["./src/browser-api.ts"],
+      "@platform/windowChrome": ["./src/browser-window-chrome.ts"],
       "@/*": ["../desktop/src/*"],
       "react": ["./node_modules/@types/react"],
       "react/*": ["./node_modules/@types/react/*"],

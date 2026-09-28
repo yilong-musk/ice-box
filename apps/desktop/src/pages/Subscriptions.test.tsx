@@ -3,7 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
-import { api } from "../api/tauri";
+import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
 
@@ -16,7 +16,7 @@ vi.mock("../lib/nodes", () => ({
   clearNodesSnapshot: vi.fn(),
 }));
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
     addSubscription: vi.fn(),

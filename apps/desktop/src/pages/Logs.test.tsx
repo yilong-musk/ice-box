@@ -7,7 +7,7 @@ import { Logs } from "./Logs";
 
 const getLogView = vi.fn();
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getLogView: (...args: unknown[]) => getLogView(...args),
   },

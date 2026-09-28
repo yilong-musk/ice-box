@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { api, formatInvokeError, type TrafficSample } from "../api/tauri";
+import { api, formatInvokeError, type TrafficSample } from "../api/client";
 import { formatRate } from "../lib/traffic";
 import {
   type ChartConfig,

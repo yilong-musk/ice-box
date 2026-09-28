@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { api, type NodeInfo } from "../api/tauri";
+import { api, type NodeInfo } from "../api/client";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {

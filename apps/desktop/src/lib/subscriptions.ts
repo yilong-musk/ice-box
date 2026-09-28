@@ -4,7 +4,7 @@ import {
   formatInvokeError,
   type SubscriptionMeta,
   type SubscriptionUserInfo,
-} from "../api/tauri";
+} from "../api/client";
 import { t } from "./i18n";
 import { formatQuota } from "./traffic";
 

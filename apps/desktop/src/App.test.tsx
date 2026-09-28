@@ -69,7 +69,7 @@ const tunStatus = {
   helper_stale: false,
 } as const;
 
-vi.mock("./api/tauri", () => ({
+vi.mock("./api/client", () => ({
   formatDiagnostic: (warning: string) => warning,
   formatUiMessage: (msg: unknown) => {
     if (!msg) return "";

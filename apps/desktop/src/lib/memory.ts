@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { MemoryUsage } from "../api/tauri";
+import type { MemoryUsage } from "../api/client";
 import { t } from "./i18n";
 
 export type MemoryTone = "ok" | "warn" | "bad";

@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, type StatusResponse } from "../api/tauri";
+import { api, type StatusResponse } from "../api/client";
 
 const STATUS_FALLBACK_MS = 10_000;
 
@@ -45,6 +45,7 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
       : document.visibilityState !== "hidden",
   );
   const genRef = useRef(0);
+  const requestRef = useRef(0);
 
   const bumpGeneration = useCallback(() => {
     genRef.current += 1;
@@ -55,9 +56,11 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
 
   const refreshStatus = useCallback(async () => {
     const gen = genRef.current;
+    const request = ++requestRef.current;
     try {
       const next = await api.getStatus();
-      if (gen !== genRef.current) return null;
+      // Mutation generations and request ordering guard different races.
+      if (gen !== genRef.current || request !== requestRef.current) return null;
       setStatus(next);
       return next;
     } catch {

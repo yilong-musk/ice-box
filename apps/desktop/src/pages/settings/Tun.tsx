@@ -13,7 +13,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { formatInvokeError, formatUiMessage, api, type AppSettings, type StatusResponse } from "../../api/tauri";
+import { formatInvokeError, formatUiMessage, api, type AppSettings, type StatusResponse } from "../../api/client";
 import { t, type MessageKey } from "../../lib/i18n";
 import { HelperActions } from "./Helper";
 

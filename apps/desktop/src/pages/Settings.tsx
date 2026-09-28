@@ -8,7 +8,7 @@ import {
   type SettingsPatch,
   type StatusResponse,
   type CheckAppUpdateResponse,
-} from "../api/tauri";
+} from "../api/client";
 import {
   formatListenValidationError,
   formatPortValidationError,
@@ -29,7 +29,7 @@ import { PortsCard } from "./settings/Ports";
 import { StartupCard } from "./settings/Startup";
 import { TunCard } from "./settings/Tun";
 import { formatUpdateError, UpdateCard } from "./settings/Update";
-import { isMacosHost } from "../lib/windowChrome";
+import { isMacosHost } from "@platform/windowChrome";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",

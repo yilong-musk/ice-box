@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub(crate) use super::{AppHost, AppResources};
 pub(crate) use crate::capture::{
     only_tun_enabled_changed, tun_topology_changed, TrafficCapture, TunStatus,
 };
@@ -9,7 +10,6 @@ pub(crate) use crate::orchestrate::{
     orchestrate_start_with_cache, orphan_reclaim_cores, patch_selected_tag_default, resolve_binary,
 };
 pub(crate) use crate::shutdown::graceful_stop;
-pub(crate) use crate::tray::{self, TrayLanguage};
 pub(crate) use crate::AppState;
 pub(crate) use ice_config::NormalizedOutbound;
 pub(crate) use ice_config::{
@@ -40,16 +40,35 @@ pub(crate) use std::sync::atomic::Ordering;
 pub(crate) use std::sync::mpsc::SyncSender;
 pub(crate) use std::sync::{Arc, Mutex, MutexGuard};
 pub(crate) use std::time::{Instant, SystemTime};
-pub(crate) use tauri::{AppHandle, Manager, State};
 pub(crate) use uuid::Uuid;
 
 pub(crate) use crate::lock_poisoned;
 
-pub(crate) fn lock_orchestrate(state: &AppState) -> Result<MutexGuard<'_, ()>, AppError> {
-    state
+pub(crate) struct MutationGuard<'a> {
+    guard: Option<MutexGuard<'a, ()>>,
+    state: &'a AppState,
+}
+
+impl Drop for MutationGuard<'_> {
+    fn drop(&mut self) {
+        self.state.runtime_status.invalidate_probes();
+        drop(self.guard.take());
+        // Publish only after releasing the write lock, including error paths
+        // whose rollback may have changed the committed runtime state.
+        let _ = collect_status(self.state);
+    }
+}
+
+pub(crate) fn lock_orchestrate(state: &AppState) -> Result<MutationGuard<'_>, AppError> {
+    let guard = state
         .orchestrate
         .lock()
-        .map_err(|_| lock_poisoned("orchestrate"))
+        .map_err(|_| lock_poisoned("orchestrate"))?;
+    state.runtime_status.invalidate_probes();
+    Ok(MutationGuard {
+        guard: Some(guard),
+        state,
+    })
 }
 
 fn is_sticky_recovery(msg: &UiMessage) -> bool {
@@ -75,13 +94,11 @@ pub(crate) fn replace_recovery_warnings(state: &AppState, warnings: Vec<UiMessag
     }
 }
 
-pub(crate) fn resource_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
-    app.path().resource_dir().ok()
+pub(crate) fn resource_dir(app: &impl AppResources) -> Option<std::path::PathBuf> {
+    app.resource_dir()
 }
 
-pub(crate) fn binary_for<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Result<std::path::PathBuf, AppError> {
+pub(crate) fn binary_for(app: &impl AppResources) -> Result<std::path::PathBuf, AppError> {
     resolve_binary(resource_dir(app).as_deref())
 }
 
@@ -117,28 +134,11 @@ pub(crate) fn detach_traffic(state: &AppState) {
     state.traffic.set_endpoints(None);
 }
 
-/// Join-error mapping for `spawn_blocking` (blocking work must not run on the
-/// main thread — sync commands freeze the UI event loop).
-pub(crate) fn blocking_join_err<E: std::fmt::Display>(context: &str) -> impl FnOnce(E) -> AppError {
-    let context = context.to_string();
-    move |e| AppError::new(ErrorCode::ConfigInvalid, format!("{context}: {e}"))
-}
-
-/// Run blocking IPC work on Tokio's blocking pool so the UI event loop stays live.
-pub(crate) async fn run_blocking<T: Send + 'static>(
-    context: &'static str,
-    f: impl FnOnce() -> Result<T, AppError> + Send + 'static,
-) -> Result<T, AppError> {
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(blocking_join_err(context))?
-}
-
 /// Process memory figures for the Home memory row.
 ///
 /// Only the core (sing-box) and the app's main process are measured; WebView
 /// helpers and the privileged helper daemon are out of scope by design.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct MemoryUsage {
     /// App main process memory; `None` when it cannot be read.
     pub app_bytes: Option<u64>,
@@ -152,8 +152,15 @@ pub struct MemoryUsage {
     pub total_bytes: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct StatusResponse {
+    /// Monotonic publication revision of the entire committed runtime read.
+    pub revision: u64,
+    pub sampled_at_ms: u64,
+    /// A mutation is in progress; this response is the last committed view.
+    pub refresh_pending: bool,
+    pub diagnostics: crate::runtime_status::ProbeFreshness,
+    pub workers: Vec<crate::workers::WorkerStatus>,
     pub core: CoreState,
     pub subscription_count: usize,
     /// Process memory for the Home memory row.
@@ -161,7 +168,7 @@ pub struct StatusResponse {
     pub proxy_recovery_warning: Vec<UiMessage>,
     /// Live OS match when the platform backend is available and core is running.
     pub system_proxy_applied: Option<bool>,
-    /// On-disk `applied` flag (enables「停止代理服务」even when the OS was changed externally).
+    /// On-disk ownership flag; permits stopping capture after external OS changes.
     pub system_proxy_recorded: Option<bool>,
     /// False on platforms without a real system-proxy backend (e.g. Linux Noop).
     pub system_proxy_available: bool,
@@ -180,7 +187,7 @@ pub struct StatusResponse {
     /// frontend hides the TUN card and switches when set.
     pub tun_ui_hidden: bool,
     /// Privileged helper daemon installed + authorized (read-only probe).
-    /// Drives the「安装/卸载辅助组件」actions in Settings and Home.
+    /// Drives helper install/uninstall actions in Settings and Home.
     pub helper_installed: bool,
     /// Whether this platform has an installable privileged helper at all.
     /// macOS only in this release: Windows elevates the TUN core through a
@@ -409,6 +416,7 @@ pub(crate) fn cached_helper_installed(state: &AppState) -> bool {
 }
 
 pub(crate) fn reset_helper_probe_cache(state: &AppState) {
+    state.runtime_status.invalidate_probes();
     if let Ok(mut cache) = state.helper_probe_cache.lock() {
         *cache = None;
     }
@@ -441,6 +449,7 @@ pub(crate) fn cached_tun_task_ready(state: &AppState) -> bool {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn reset_tun_task_cache(state: &AppState) {
+    state.runtime_status.invalidate_probes();
     if let Ok(mut cache) = state.tun_task_cache.lock() {
         *cache = None;
     }
@@ -448,7 +457,7 @@ pub(crate) fn reset_tun_task_cache(state: &AppState) {
 
 /// Live proxy-service posture: the OS proxy match plus the on-disk ownership
 /// record. Read by `collect_status` (window) and by the tray menu, which both
-/// answer the same question —「is the proxy service on?」— from one place.
+/// derive proxy-service engagement from the same source.
 pub(crate) struct ProxyServicePosture {
     /// Live OS match for the configured endpoints. `None` while the core is
     /// not running, the platform backend is unavailable, or an apply/restore
@@ -502,6 +511,7 @@ pub(crate) fn cached_proxy_service_posture(
 }
 
 pub(crate) fn invalidate_runtime_probes(state: &AppState) {
+    state.runtime_status.invalidate_probes();
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
     }
@@ -514,13 +524,8 @@ pub(crate) fn invalidate_runtime_probes(state: &AppState) {
 /// restore) must not leave the Home page showing stale status or mode until its
 /// fallback poll: the event makes the UI re-read both, and the tray re-derives
 /// its menu items at once. Callers announce after releasing their locks.
-pub(crate) fn broadcast_state_change(app: &AppHandle) {
-    use tauri::Emitter;
-    if let Some(state) = app.try_state::<AppState>() {
-        invalidate_runtime_probes(state.inner());
-    }
-    let _ = app.emit(crate::core_snapshot::APP_STATE_CHANGED, ());
-    tray::sync_menu(app);
+pub(crate) fn broadcast_state_change(app: &impl AppHost) {
+    app.state_changed();
 }
 
 /// Memory of the app process plus the running core, when readable.
@@ -552,9 +557,31 @@ fn core_memory_bytes(state: &AppState) -> Option<u64> {
 }
 
 pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppError> {
+    let _read = state
+        .runtime_status
+        .read_gate
+        .lock()
+        .map_err(|_| lock_poisoned("runtime read"))?;
+    // Readers never queue behind a multi-second capture transition.
+    let _orch = match state.orchestrate.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let mut status = state.runtime_status.latest().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::CoreInvalidState,
+                    "runtime status is initializing",
+                )
+            })?;
+            status.refresh_pending = true;
+            status.diagnostics.stale = true;
+            return Ok(status);
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => return Err(lock_poisoned("orchestrate")),
+    };
     // ORCH-1: never take `state.core`. Unexpected-exit reaping lives on the
     // watchdog (`reconcile_unexpected_core_exit`); status reads the snapshot.
-    let core_state = state.core_snapshot.load().state.clone();
+    let core_snapshot = state.core_snapshot.load();
+    let core_state = core_snapshot.state.clone();
     let running = core_state.status == CoreStatus::Running;
     let paths = SubscriptionPaths::from_app(&state.paths);
     // `load_index` also sweeps leftover dirs under a process-wide commit lock.
@@ -568,14 +595,26 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         .unwrap_or_default();
     let proxy_available = state.system_proxy_available;
     let settings = current_settings(&state.paths).ok();
-    let posture = proxy_service_posture(state, settings.as_ref(), running);
+    let posture = cached_proxy_service_posture(state, settings.as_ref(), running);
     let system_proxy_recorded = posture.recorded;
-    let system_proxy_applied = posture.live;
+    let (probes, mut diagnostics) = state.runtime_status.probes_at(Instant::now());
+    diagnostics.stale |= probes.core_generation != core_snapshot.generation
+        || probes.settings_signature != file_sig(&state.paths.settings());
+    let system_proxy_applied = if running && proxy_available && !diagnostics.stale {
+        probes.system_proxy_applied
+    } else {
+        None
+    };
     let capture = settings
         .as_ref()
         .map(|settings| state.capture.status(settings))
         .unwrap_or_else(|| state.capture.status(&ice_config::AppSettings::default()));
-    Ok(StatusResponse {
+    Ok(state.runtime_status.publish(StatusResponse {
+        revision: 0,
+        sampled_at_ms: crate::runtime_status::timestamp_ms(),
+        refresh_pending: false,
+        diagnostics,
+        workers: state.workers.statuses(),
         core: core_state,
         subscription_count: count,
         memory: memory_usage(state),
@@ -592,10 +631,55 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tun_available: capture.tun_available,
         tun_unavailable_reason: capture.tun_unavailable_reason,
         tun_ui_hidden: capture.tun_ui_hidden,
-        helper_installed: cached_helper_installed(state),
+        helper_installed: probes.helper_installed,
         helper_supported: cfg!(target_os = "macos"),
         launch_at_login_supported: crate::autostart::SUPPORTED,
-        helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
-        tun_elevation_ready: cached_tun_task_ready(state),
-    })
+        helper_stale: probes.helper_stale,
+        tun_elevation_ready: probes.tun_elevation_ready,
+    }))
+}
+
+/// Slow diagnostics run outside status reads and outside mutation locks.
+pub(crate) fn refresh_runtime_probes(state: &AppState) -> bool {
+    let Ok(_flight) = state.runtime_status.probe_refresh.try_lock() else {
+        return false;
+    };
+    if !state.runtime_status.probes_at(Instant::now()).1.stale {
+        return false;
+    }
+    let epoch = state.runtime_status.probe_epoch();
+    let core = state.core_snapshot.load();
+    let settings_sig = file_sig(&state.paths.settings());
+    let values = (|| {
+        let settings = current_settings(&state.paths)?;
+        let system_proxy_applied =
+            if core.state.status == CoreStatus::Running && state.system_proxy_available {
+                Some(
+                    cached_system_proxy_applied(state, &settings).ok_or_else(|| {
+                        AppError::new(ErrorCode::CoreInvalidState, "proxy transition in progress")
+                    })?,
+                )
+            } else {
+                None
+            };
+        Ok(crate::runtime_status::ProbeValues {
+            core_generation: core.generation,
+            settings_signature: settings_sig,
+            system_proxy_applied,
+            helper_installed: cached_helper_installed(state),
+            helper_stale: crate::helper_install::helper_core_stale(state.capture.resource_dir()),
+            tun_elevation_ready: cached_tun_task_ready(state),
+        })
+    })();
+    if core.generation != state.core_snapshot.load().generation
+        || settings_sig != file_sig(&state.paths.settings())
+    {
+        state.runtime_status.invalidate_probes();
+        return false;
+    }
+    state.runtime_status.complete_probe(
+        epoch,
+        values.map_err(|error: AppError| error.ui_message()),
+        Instant::now(),
+    )
 }

@@ -68,6 +68,8 @@ fn temp_state_with_node(label: &str) -> AppState {
         paths: paths.clone(),
         core,
         core_snapshot,
+        runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+        workers: crate::workers::WorkerSupervisor::default(),
         proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
         orchestrate: Mutex::new(()),
         proxy_recovery_warning: Mutex::new(Vec::new()),
@@ -139,6 +141,8 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         paths: paths.clone(),
         core,
         core_snapshot,
+        runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+        workers: crate::workers::WorkerSupervisor::default(),
         proxy: Mutex::new(Box::new(ice_proxy_sys::NoopSystemProxy)),
         orchestrate: Mutex::new(()),
         proxy_recovery_warning: Mutex::new(Vec::new()),
@@ -322,6 +326,112 @@ fn collect_status_snapshots_stopped_core() {
     assert_eq!(status.system_proxy_recorded, None);
     assert_eq!(status.system_proxy_applied, None);
     assert!(!status.system_proxy_available);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn status_keeps_one_committed_revision_while_a_mutation_is_inflight() {
+    let state = temp_state_with_node("status-transaction");
+    let before = collect_status(&state).unwrap();
+    let guard = lock_orchestrate(&state).unwrap();
+    let mut settings = current_settings(&state.paths).unwrap();
+    settings.tun.enabled = true;
+    persist_settings(&state.paths.settings(), &settings, host_platform()).unwrap();
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let during = collect_status(&state).unwrap();
+    assert_eq!(during.revision, before.revision);
+    assert_eq!(during.core.status, before.core.status);
+    assert_eq!(during.configured_tun, before.configured_tun);
+    assert!(during.refresh_pending);
+    drop(guard);
+    let after = state.runtime_status.latest().unwrap();
+    assert!(after.revision > before.revision);
+    assert_eq!(after.core.status, CoreStatus::Running);
+    assert!(after.configured_tun);
+    assert!(!after.refresh_pending);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn status_does_not_wait_for_a_slow_probe() {
+    let state = temp_state_with_node("status-probe");
+    let _probe = state.runtime_status.probe_refresh.lock().unwrap();
+    let status = collect_status(&state).unwrap();
+    assert!(status.revision > 0);
+    assert!(status.diagnostics.stale);
+    assert!(status.diagnostics.checked_at_ms.is_none());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn concurrent_status_reads_do_not_report_a_mutation() {
+    let state = Arc::new(temp_state_with_node("parallel-status"));
+    let barrier = Arc::new(std::sync::Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let state = state.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let status = collect_status(&state).unwrap();
+                assert!(!status.refresh_pending);
+                status.revision
+            })
+        })
+        .collect();
+    let mut revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    revisions.sort();
+    revisions.dedup();
+    assert_eq!(revisions.len(), 4);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn a_probe_from_an_older_core_or_settings_is_explicitly_stale() {
+    let state = temp_state_with_node("probe-context");
+    state.runtime_status.complete_probe(
+        0,
+        Ok(crate::runtime_status::ProbeValues {
+            core_generation: state.core_snapshot.load().generation,
+            settings_signature: file_sig(&state.paths.settings()),
+            ..Default::default()
+        }),
+        Instant::now(),
+    );
+    assert!(!collect_status(&state).unwrap().diagnostics.stale);
+    state
+        .core_snapshot
+        .publish(state.core_snapshot.load().state.clone());
+    assert!(collect_status(&state).unwrap().diagnostics.stale);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn application_ports_work_without_a_tauri_runtime() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            Some("bundled-resources".into())
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+    assert_eq!(resource_dir(&host), Some("bundled-resources".into()));
+    broadcast_state_change(&host);
+    assert_eq!(host.notifications.get(), 1);
+    let state = temp_state_with_node("headless-use-case");
+    let subscriptions = list_subscriptions_use_case(&state).unwrap();
+    assert_eq!(subscriptions.as_array().unwrap().len(), 1);
     let _ = fs::remove_dir_all(state.paths.root());
 }
 
@@ -926,7 +1036,7 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
 
 #[test]
 fn only_launch_at_login_changed_ignores_other_fields() {
-    use crate::commands::settings::only_launch_at_login_changed;
+    use crate::application::settings::only_launch_at_login_changed;
 
     let off = AppSettings::default();
     let on = AppSettings {
@@ -945,7 +1055,7 @@ fn only_launch_at_login_changed_ignores_other_fields() {
 
 #[test]
 fn only_tray_display_mode_changed_ignores_other_fields() {
-    use crate::commands::settings::only_tray_display_mode_changed;
+    use crate::application::settings::only_tray_display_mode_changed;
 
     let both = AppSettings::default();
     let speed = AppSettings {

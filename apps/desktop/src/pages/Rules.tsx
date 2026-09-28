@@ -7,7 +7,7 @@ import {
   type ListRulesRequest,
   type RuleOverview,
   type RuleRow,
-} from "../api/tauri";
+} from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";

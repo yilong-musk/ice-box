@@ -14,13 +14,13 @@
 //! menu: a green-arrow prompt that opens Settings → App Updates. Native menu
 //! text cannot be coloured, so the arrow travels as the item's icon.
 
-use crate::capture::TrafficCapture;
-use crate::commands::{
+use crate::application::{
     apply_after_subscription_change, apply_proxy_mode, broadcast_state_change, collect_nodes,
     copy_proxy_terminal_command, current_settings, disable_active_backend_inner, lock_orchestrate,
     open_proxy_terminal_from_state, proxy_service_posture, select_group_member, select_node,
     start_service, NodeInfo,
 };
+use crate::capture::TrafficCapture;
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 #[cfg(any(target_os = "macos", test))]
@@ -1583,7 +1583,7 @@ fn current_view(app: &AppHandle) -> Option<TrayView> {
         service_on: posture.engaged(tun_active),
         service_enabled: state.system_proxy_available || capture.tun_available,
         mode: settings.proxy_mode,
-        cli_proxy_enabled: crate::commands::mixed_proxy_endpoint(state.inner()).is_ok(),
+        cli_proxy_enabled: crate::application::mixed_proxy_endpoint(state.inner()).is_ok(),
     })
 }
 
@@ -2178,8 +2178,11 @@ pub fn sync_update_prompt(app: &AppHandle) {
 /// node groups in step with state changes the tray did not make: window actions,
 /// recovery, subscription updates, and external OS edits.
 pub fn spawn_state_watchdog(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(SYNC_INTERVAL);
+    let workers = app.state::<AppState>().workers.clone();
+    workers.spawn("tray-state", move |cancel| loop {
+        if !cancel.wait(SYNC_INTERVAL) {
+            break;
+        }
         if app.try_state::<AppState>().is_none() {
             // Tauri drops managed state while the app tears down.
             break;

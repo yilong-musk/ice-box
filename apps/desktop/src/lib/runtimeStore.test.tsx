@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(),
   listen: vi.fn(),
 }));
-vi.mock("../api/tauri", () => ({ api: {
+vi.mock("../api/client", () => ({ api: {
   getStatus: mocks.getStatus,
   listenWindowHidden: mocks.listen,
   listenWindowShown: mocks.listen,
@@ -101,5 +101,63 @@ describe("runtime listener lifecycle", () => {
     await act(async () => { resolvers[0]({ subscription_count: 1 }); });
     expect(view.getByText("2")).toBeInTheDocument();
     expect(view.queryByText("1")).toBeNull();
+  });
+
+  it("keeps the latest request when responses arrive in reverse order", async () => {
+    const captured: { store: RuntimeStore | null } = { store: null };
+    function Consumer() {
+      captured.store = useRuntimeStore();
+      return <span>{captured.store?.status?.subscription_count ?? "pending"}</span>;
+    }
+    const view = render(<RuntimeStoreProvider><Consumer /></RuntimeStoreProvider>);
+    await act(async () => {});
+    const resolvers: Array<(value: { subscription_count: number }) => void> = [];
+    mocks.getStatus.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)));
+    const older = captured.store!.refreshStatus();
+    const newer = captured.store!.refreshStatus();
+    await act(async () => { resolvers[1]({ subscription_count: 2 }); });
+    await expect(newer).resolves.toEqual({ subscription_count: 2 });
+    await act(async () => { resolvers[0]({ subscription_count: 1 }); });
+    await expect(older).resolves.toBeNull();
+    expect(view.getByText("2")).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it("does not revive an older request when the latest request fails", async () => {
+    const captured: { store: RuntimeStore | null } = { store: null };
+    function Consumer() {
+      captured.store = useRuntimeStore();
+      return null;
+    }
+    const view = render(<RuntimeStoreProvider><Consumer /></RuntimeStoreProvider>);
+    await act(async () => {});
+    let resolveOlder!: (value: { subscription_count: number }) => void;
+    mocks.getStatus
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOlder = resolve; }))
+      .mockRejectedValueOnce(new Error("unavailable"));
+    const older = captured.store!.refreshStatus();
+    await expect(captured.store!.refreshStatus()).resolves.toBeNull();
+    await act(async () => { resolveOlder({ subscription_count: 1 }); });
+    await expect(older).resolves.toBeNull();
+    expect(captured.store!.status).toBeNull();
+    view.unmount();
+  });
+
+  it("still rejects responses from an earlier mutation generation", async () => {
+    const captured: { store: RuntimeStore | null } = { store: null };
+    function Consumer() {
+      captured.store = useRuntimeStore();
+      return null;
+    }
+    const view = render(<RuntimeStoreProvider><Consumer /></RuntimeStoreProvider>);
+    await act(async () => {});
+    let resolveStatus!: (value: { subscription_count: number }) => void;
+    mocks.getStatus.mockImplementationOnce(() => new Promise(resolve => { resolveStatus = resolve; }));
+    const response = captured.store!.refreshStatus();
+    captured.store!.bumpGeneration();
+    await act(async () => { resolveStatus({ subscription_count: 1 }); });
+    await expect(response).resolves.toBeNull();
+    expect(captured.store!.status).toBeNull();
+    view.unmount();
   });
 });

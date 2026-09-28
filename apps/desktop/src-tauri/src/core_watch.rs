@@ -94,11 +94,14 @@ fn heal_tun_dns(state: &AppState) -> bool {
 
 /// Poll core health for the app lifetime (independent of frontend tab visibility).
 pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
-    std::thread::spawn(move || {
+    let workers = app.state::<AppState>().workers.clone();
+    workers.spawn("core-watch", move |cancel| {
         let mut last_dns_check: Option<Instant> = None;
         let mut last_tick = SystemTime::now();
         loop {
-            std::thread::sleep(WATCH_INTERVAL);
+            if !cancel.wait(WATCH_INTERVAL) {
+                break;
+            }
             let Some(state) = app.try_state::<AppState>() else {
                 break;
             };
@@ -111,6 +114,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
             last_tick = wall_now;
             let requested = state.core_snapshot.take_probe_refresh();
             if resumed || requested {
+                state.runtime_status.invalidate_probes();
                 last_dns_check = None;
                 if let Ok(mut cache) = state.proxy_applied_cache.lock() {
                     *cache = None;
@@ -121,7 +125,7 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
             {
                 last_dns_check = Some(now);
             }
-            crate::commands::cap_oversized_logs(state.inner());
+            crate::application::cap_oversized_logs(state.inner());
         }
     });
 }
@@ -241,6 +245,8 @@ mod tests {
             paths: paths.clone(),
             core,
             core_snapshot,
+            runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+            workers: crate::workers::WorkerSupervisor::default(),
             proxy: Mutex::new(Box::new(TrackProxy {
                 restore_calls: restore_calls.clone(),
             })),
@@ -343,7 +349,7 @@ mod tests {
         fs::write(&core, b"keep").unwrap();
         fs::write(core.with_file_name("sing-box.log.1"), b"old").unwrap();
 
-        crate::commands::cap_oversized_logs(state.as_ref());
+        crate::application::cap_oversized_logs(state.as_ref());
 
         assert_eq!(fs::read(&core).unwrap(), b"keep");
         assert!(!core.with_file_name("sing-box.log.1").exists());

@@ -32,12 +32,12 @@
 //! AppKit gives no menu item a way to prevent that, so the row handles its own
 //! mouse events instead.
 
-use crate::commands::NodeInfo;
+use crate::application::NodeInfo;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
-use crate::commands::{collect_nodes, probe_node_delay};
+use crate::application::{collect_nodes, probe_node_delay};
 #[cfg(target_os = "macos")]
 use crate::AppState;
 #[cfg(any(target_os = "macos", test))]
