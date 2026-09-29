@@ -12,6 +12,7 @@ const setRuleDisabled = vi.fn();
 const addCustomRule = vi.fn();
 const removeCustomRule = vi.fn();
 const listNodes = vi.fn();
+const listenStateChanged = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -21,6 +22,7 @@ vi.mock("../api/client", () => ({
     addCustomRule: (...args: unknown[]) => addCustomRule(...args),
     removeCustomRule: (...args: unknown[]) => removeCustomRule(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -93,6 +95,7 @@ describe("Rules", () => {
     setRuleDisabled.mockResolvedValue({ ok: true, disabled: true });
     addCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-new" });
     removeCustomRule.mockResolvedValue({ ok: true });
+    listenStateChanged.mockResolvedValue(() => {});
     listNodes.mockResolvedValue([
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
@@ -143,6 +146,52 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(getRuleOverview.mock.calls.length).toBeGreaterThan(initialLoads);
     });
+  });
+
+  it("re-reads the overview and list when a background update is announced", async () => {
+    let announce: () => void = () => {};
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      announce = handler;
+      return Promise.resolve(() => {});
+    });
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` })).toBeInTheDocument();
+    expect(getRuleOverview).toHaveBeenCalledTimes(1);
+
+    // A subscription auto-update added a geoip rule while the page stayed open.
+    getRuleOverview.mockResolvedValue(
+      sampleOverview({
+        total: 4,
+        types: [
+          { rule_type: "domain_suffix", count: 2 },
+          { rule_type: "geoip", count: 2 },
+        ],
+      }),
+    );
+    listRules.mockResolvedValue(sampleList({ total: 4 }));
+    act(() => announce());
+
+    await waitFor(() => {
+      expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 2` })).toBeInTheDocument();
+    });
+    expect(getRuleOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops listening for announcements while the pane is inactive", async () => {
+    const off = vi.fn();
+    listenStateChanged.mockResolvedValue(off);
+    const { container, rerender } = render(<Rules active />);
+    await waitFor(() => {
+      expect(within(container).getByText("youtube.com")).toBeInTheDocument();
+    });
+    await waitFor(() => expect(listenStateChanged).toHaveBeenCalledTimes(1));
+
+    rerender(<Rules active={false} />);
+    await waitFor(() => expect(off).toHaveBeenCalledTimes(1));
   });
 
   it("filters disabled rules from the chip next to type filters", async () => {

@@ -114,10 +114,22 @@ pub fn spawn_core_watchdog<R: Runtime>(app: AppHandle<R>) {
             last_tick = wall_now;
             let requested = state.core_snapshot.take_probe_refresh();
             if resumed || requested {
-                state.runtime_status.invalidate_probes();
                 last_dns_check = None;
+                // Clear the memo before waking the probe worker, which would
+                // otherwise re-read the value being discarded.
                 if let Ok(mut cache) = state.proxy_applied_cache.lock() {
                     *cache = None;
+                }
+                if resumed {
+                    // The gap may have hidden any change: the old sample is
+                    // not evidence of the current state.
+                    state.runtime_status.invalidate_probes();
+                } else {
+                    // Window activation or a core publish. The last sample
+                    // stays served (core generation and settings signature
+                    // are checked on read) while a fresh one is taken, so
+                    // Home does not flash "unknown" for one probe.
+                    state.runtime_status.request_refresh();
                 }
             }
             if last_dns_check.is_none_or(|last| now.duration_since(last) >= DNS_CHECK_INTERVAL)

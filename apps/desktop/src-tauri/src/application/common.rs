@@ -253,10 +253,13 @@ pub(crate) fn cached_system_proxy_applied(
         return Some(value);
     }
     let value = is_proxy_live_applied(proxy.as_ref(), &state.paths.proxy_backup(), &endpoints);
-    drop(proxy);
+    // Publish the memo before releasing `proxy`: an apply/restore that follows
+    // clears it afterwards, so a probe woken at the start of a mutation cannot
+    // write a pre-mutation value over that clear.
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = Some((endpoints, now, value));
     }
+    drop(proxy);
     Some(value)
 }
 
@@ -416,10 +419,12 @@ pub(crate) fn cached_helper_installed(state: &AppState) -> bool {
 }
 
 pub(crate) fn reset_helper_probe_cache(state: &AppState) {
-    state.runtime_status.invalidate_probes();
+    // Drop the memo first: invalidating wakes the probe worker, which must not
+    // re-read the value being discarded.
     if let Ok(mut cache) = state.helper_probe_cache.lock() {
         *cache = None;
     }
+    state.runtime_status.invalidate_probes();
 }
 
 /// TTL for the Windows scheduled-task pin probe (one `schtasks /Query /XML`
@@ -449,10 +454,12 @@ pub(crate) fn cached_tun_task_ready(state: &AppState) -> bool {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn reset_tun_task_cache(state: &AppState) {
-    state.runtime_status.invalidate_probes();
+    // Drop the memo first: invalidating wakes the probe worker, which must not
+    // re-read the value being discarded.
     if let Ok(mut cache) = state.tun_task_cache.lock() {
         *cache = None;
     }
+    state.runtime_status.invalidate_probes();
 }
 
 /// Live proxy-service posture: the OS proxy match plus the on-disk ownership
@@ -510,8 +517,18 @@ pub(crate) fn cached_proxy_service_posture(
     ProxyServicePosture { live, recorded }
 }
 
-pub(crate) fn invalidate_runtime_probes(state: &AppState) {
-    state.runtime_status.invalidate_probes();
+/// Ask for a re-sample after window activation or a state announcement.
+///
+/// This does not withhold the current probe sample: readers keep the last value
+/// (subject to `PROBE_MAX_AGE` and the core-generation / settings checks in
+/// `collect_status`) until the new one lands. Withholding it here would drop
+/// `system_proxy_applied` to `None` for the length of every probe and make the
+/// Home subtitle flicker on each focus. Mutations invalidate through
+/// `lock_orchestrate` instead, where the old value really is wrong.
+///
+/// The memo is cleared so the re-sample reads the OS; the core watchdog picks
+/// the request up on its next tick and wakes the probe worker.
+pub(crate) fn request_runtime_probe_refresh(state: &AppState) {
     if let Ok(mut cache) = state.proxy_applied_cache.lock() {
         *cache = None;
     }
@@ -644,10 +661,11 @@ pub(crate) fn refresh_runtime_probes(state: &AppState) -> bool {
     let Ok(_flight) = state.runtime_status.probe_refresh.try_lock() else {
         return false;
     };
-    if !state.runtime_status.probes_at(Instant::now()).1.stale {
+    // Due at `PROBE_INTERVAL`, which is earlier than the sample stops being
+    // served (`PROBE_MAX_AGE`): readers keep the old value while this runs.
+    let Some(epoch) = state.runtime_status.begin_refresh(Instant::now()) else {
         return false;
-    }
-    let epoch = state.runtime_status.probe_epoch();
+    };
     let core = state.core_snapshot.load();
     let settings_sig = file_sig(&state.paths.settings());
     let values = (|| {

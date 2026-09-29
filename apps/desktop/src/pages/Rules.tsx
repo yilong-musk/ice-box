@@ -159,6 +159,43 @@ export function Rules({ onNavigate, active = true }: Props) {
     void load();
   }, [active, load]);
 
+  // Keep the latest `load` and `busy` reachable from the long-lived listener
+  // below, so filter changes do not re-register it.
+  const loadRef = useRef(load);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  // A background subscription auto-update (or a tray action) changes the rule
+  // set while this page stays on screen. The overview is memoized between
+  // loads, so without this its counts and the type chips would keep the
+  // pre-update numbers until the user leaves the page or edits a rule. The
+  // announcement carries no detail, so re-read the overview and the current
+  // page together. A local mutation in flight reloads on its own, and an
+  // inactive pane reloads when it is reactivated.
+  useEffect(() => {
+    if (!active || typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        if (busyRef.current) return;
+        void loadRef.current(true);
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [active]);
+
   // Recompute pager visibility whenever the list content changes.
   useEffect(() => {
     const el = listRef.current;

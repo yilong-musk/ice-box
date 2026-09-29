@@ -409,6 +409,56 @@ fn a_probe_from_an_older_core_or_settings_is_explicitly_stale() {
 }
 
 #[test]
+fn system_proxy_applied_does_not_blink_while_a_probe_refresh_is_due_or_requested() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL, PROBE_MAX_AGE};
+    let mut state = temp_state_with_node("probe-grace");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let sample = |state: &AppState, at: Instant| {
+        let values = ProbeValues {
+            core_generation: state.core_snapshot.load().generation,
+            settings_signature: file_sig(&state.paths.settings()),
+            system_proxy_applied: Some(true),
+            ..ProbeValues::default()
+        };
+        let epoch = state.runtime_status.probe_epoch();
+        state.runtime_status.complete_probe(epoch, Ok(values), at)
+    };
+
+    // One interval old: the worker's refresh is due, but Home still reads the
+    // value instead of dropping to `None` for the length of the probe.
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    sample(&state, aged);
+    assert!(state.runtime_status.begin_refresh(Instant::now()).is_some());
+    let status = collect_status(&state).unwrap();
+    assert_eq!(status.system_proxy_applied, Some(true));
+    assert!(!status.diagnostics.stale);
+
+    // Past the serving window the sample is withheld.
+    let expired = Instant::now()
+        .checked_sub(PROBE_MAX_AGE + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    sample(&state, expired);
+    assert_eq!(collect_status(&state).unwrap().system_proxy_applied, None);
+
+    // A refresh request (window focus) keeps the current sample; a mutation's
+    // invalidation withholds it.
+    sample(&state, Instant::now());
+    state.runtime_status.request_refresh();
+    assert_eq!(
+        collect_status(&state).unwrap().system_proxy_applied,
+        Some(true)
+    );
+    state.runtime_status.invalidate_probes();
+    assert_eq!(collect_status(&state).unwrap().system_proxy_applied, None);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn application_ports_work_without_a_tauri_runtime() {
     struct Host {
         notifications: std::cell::Cell<usize>,

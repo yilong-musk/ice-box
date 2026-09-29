@@ -368,7 +368,7 @@ pub fn run() {
             WindowEvent::Focused(focused) => {
                 if *focused {
                     if let Some(state) = window.app_handle().try_state::<AppState>() {
-                        application::invalidate_runtime_probes(state.inner());
+                        application::request_runtime_probe_refresh(state.inner());
                     }
                     let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
                 }
