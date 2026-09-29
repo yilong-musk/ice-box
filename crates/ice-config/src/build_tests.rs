@@ -202,6 +202,8 @@ fn group_selection_overrides_selector_default_in_built_config() {
         group_selections: selections,
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect("build");
@@ -290,6 +292,8 @@ fn g5_10_empty_outbounds() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect_err("empty");
@@ -335,6 +339,8 @@ fn dns_listen_key_dropped_without_dns_inbound() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -383,6 +389,8 @@ fn geoip_rules_expand_to_local_rule_sets_when_files_present() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -427,6 +435,8 @@ fn geoip_rules_dropped_when_rule_set_file_missing() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -483,6 +493,8 @@ fn custom_geoip_expanded_and_geosite_dropped_at_build() {
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -694,6 +706,8 @@ fn disabled_rules_dropped_and_custom_rules_prepended() {
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -744,6 +758,8 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -787,6 +803,8 @@ fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -843,6 +861,8 @@ fn remote_rule_sets_and_hosts_dns_are_dropped_for_user_mode() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -898,6 +918,8 @@ fn subscription_rule_with_unknown_outbound_still_fails() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect_err("subscription rule with unknown outbound must still fail");
@@ -920,6 +942,8 @@ fn proxy_mode_rule_keeps_rules_and_subscription_final() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -968,6 +992,8 @@ fn proxy_mode_global_keeps_rules_with_clash_mode_global_target() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -1003,6 +1029,8 @@ fn proxy_mode_global_without_groups_uses_injected_proxy_selector() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -1038,6 +1066,8 @@ fn proxy_mode_direct_keeps_rules_with_clash_mode_direct() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap();
@@ -1131,11 +1161,11 @@ fn tun_gate_status_is_stable_per_platform() {
     assert_eq!(windows.reason, None);
 
     let linux = tun_gate_for(HostPlatform::Linux);
-    assert!(
-        !linux.ready,
-        "TUN must stay fail-closed off-macOS/off-Windows until its gate is green"
-    );
+    assert!(!linux.ready, "Linux has no TUN backend");
     assert!(linux.reason.is_some());
+
+    assert!(tun_gate_for(HostPlatform::Android).ready);
+    assert!(tun_gate_for(HostPlatform::Ios).ready);
 }
 
 /// TUN parameters with an explicit interface name (required at build time).
@@ -1169,6 +1199,8 @@ fn diagnostic_intent_never_emits_tun_inbound_even_when_tun_enabled() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect("diagnostic build");
@@ -1196,6 +1228,8 @@ fn tun_config_has_both_inbounds_and_locked_shape() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect("tun build");
@@ -1257,6 +1291,8 @@ fn tun_config_reserved_rules_precede_clash_mode_and_sniff_precedes_domain_rules(
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect("tun build");
@@ -1300,6 +1336,8 @@ fn tun_config_works_for_every_proxy_mode_and_direct_only_keeps_tun() {
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
+            tun_exclude_package: None,
+            shared_root: None,
             platform: HostPlatform::MacOs,
         })
         .expect("tun build per mode");
@@ -1341,6 +1379,8 @@ fn tun_config_requires_interface_name_at_build_time() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect_err("interface name required");
@@ -1366,6 +1406,8 @@ fn tun_config_rejects_invalid_mtu_and_address_at_build_time() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect_err("bad mtu");
@@ -1402,6 +1444,8 @@ fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::Linux,
     })
     .expect_err("tun gate not green");
@@ -1490,6 +1534,8 @@ fn windows_tun_runtime_config_emits_ipv4_port_53_hijack_without_protocol_dns() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::Windows,
     })
     .expect("windows tun build");
@@ -1575,6 +1621,8 @@ fn build_input_serde_preserves_capture_intent_and_defaults_to_diagnostic() {
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .expect("serialize");
@@ -1628,7 +1676,175 @@ fn generated_diagnostic_configs_pass_elevated_guard_unchanged() {
         None,
     ))
     .expect("runtime");
+    assert!(runtime.get("endpoints").is_none());
     assert_guard_unchanged(runtime);
+}
+
+#[test]
+fn mobile_ignores_diagnostic_intent_and_emits_tun() {
+    for platform in [HostPlatform::Android, HostPlatform::Ios] {
+        let cfg = build_direct_only_config(
+            &LocalTemplate::default(),
+            CaptureIntent::Diagnostic,
+            platform,
+        )
+        .expect("mobile direct");
+        let inbounds = cfg["inbounds"].as_array().expect("inbounds");
+        assert_eq!(inbounds.len(), 1);
+        assert_eq!(inbounds[0]["type"], "tun");
+        assert_eq!(inbounds[0]["tag"], "tun-in");
+        assert!(inbounds[0].get("interface_name").is_none());
+        assert!(inbounds[0].get("route_exclude_address").is_none());
+        assert!(inbounds[0].get("loopback_address").is_none());
+        assert!(inbounds[0].get("exclude_package").is_none());
+        assert_eq!(inbounds[0]["stack"], "gvisor");
+        let rules = cfg["route"]["rules"].as_array().expect("rules");
+        assert_eq!(rules[0]["action"], "sniff");
+        assert_eq!(rules[1]["protocol"], "dns");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[2]["outbound"], "direct");
+        assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
+        assert_eq!(cfg["dns"]["final"], "local");
+        assert!(cfg.get("endpoints").is_none());
+        assert!(cfg["log"].get("output").is_none());
+    }
+}
+
+#[test]
+fn android_exclude_package_is_emitted_and_ios_ignores_it() {
+    let mut input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
+    input.platform = HostPlatform::Android;
+    input.tun_exclude_package = Some("com.yilongmusk.icebox".into());
+    let cfg = build_runtime_json(&input).expect("android");
+    assert_eq!(
+        cfg["inbounds"][0]["exclude_package"][0],
+        "com.yilongmusk.icebox"
+    );
+    assert!(cfg["inbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|inbound| inbound["type"] != "mixed"));
+
+    input.platform = HostPlatform::Ios;
+    input.tun_exclude_package = Some("com.yilong-musk.icebox".into());
+    let cfg = build_runtime_json(&input).expect("ios ignores a desktop-illegal id");
+    assert!(cfg["inbounds"][0].get("exclude_package").is_none());
+
+    input.platform = HostPlatform::Android;
+    input.tun_exclude_package = Some("com.yilong-musk.icebox".into());
+    assert!(build_runtime_config(&input).is_err());
+}
+
+#[test]
+fn mobile_shared_root_sets_cache_and_log_and_desktop_ignores_it() {
+    let root = PathBuf::from("/data/user/0/com.yilongmusk.icebox/files");
+    let mut input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
+    input.platform = HostPlatform::Android;
+    input.shared_root = Some(root.clone());
+    let cfg = build_runtime_json(&input).expect("android shared root");
+    assert_eq!(
+        cfg["log"]["output"],
+        root.join("sing-box.log").to_string_lossy().as_ref()
+    );
+    assert_eq!(cfg["experimental"]["cache_file"]["enabled"], true);
+    assert_eq!(
+        cfg["experimental"]["cache_file"]["path"],
+        root.join("cache.db").to_string_lossy().as_ref()
+    );
+
+    input.platform = HostPlatform::MacOs;
+    let cfg = build_runtime_json(&input).expect("desktop ignores shared root");
+    assert!(cfg["log"].get("output").is_none());
+    assert!(cfg["experimental"].get("cache_file").is_none());
+    assert_eq!(cfg["inbounds"][0]["type"], "mixed");
+}
+
+#[test]
+fn wireguard_node_becomes_an_endpoint() {
+    let node = NormalizedOutbound {
+        tag: "WG-01".into(),
+        outbound: Arc::new(json!({
+            "type": "wireguard",
+            "tag": "WG-01",
+            "server": "wg.example.xyz",
+            "server_port": 443,
+            "private_key": "privkey",
+            "peer_public_key": "pubkey",
+            "preshared_key": "psk",
+            "reserved": [0, 1, 2],
+            "local_address": ["10.0.0.1/32"],
+            "mtu": 1420
+        })),
+    };
+    let cfg = build_runtime_json(&build_input_from_nodes(
+        LocalTemplate::default(),
+        vec![node],
+        None,
+    ))
+    .expect("wireguard");
+    assert!(cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|outbound| outbound["type"] != "wireguard"));
+    let endpoint = &cfg["endpoints"][0];
+    assert_eq!(endpoint["type"], "wireguard");
+    assert_eq!(endpoint["tag"], "WG-01");
+    assert_eq!(endpoint["address"][0], "10.0.0.1/32");
+    assert_eq!(endpoint["private_key"], "privkey");
+    assert_eq!(endpoint["mtu"], 1420);
+    assert!(endpoint.get("local_address").is_none());
+    assert!(endpoint.get("server").is_none());
+    assert_eq!(endpoint["peers"][0]["address"], "wg.example.xyz");
+    assert_eq!(endpoint["peers"][0]["port"], 443);
+    assert_eq!(endpoint["peers"][0]["public_key"], "pubkey");
+    assert_eq!(endpoint["peers"][0]["pre_shared_key"], "psk");
+    assert_eq!(endpoint["peers"][0]["reserved"], json!([0, 1, 2]));
+    assert_eq!(
+        endpoint["peers"][0]["allowed_ips"],
+        json!(["0.0.0.0/0", "::/0"])
+    );
+    let proxy = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .expect("proxy selector");
+    assert!(proxy["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "WG-01"));
+    assert_guard_unchanged(cfg);
+
+    let bare = NormalizedOutbound {
+        tag: "WG-bare".into(),
+        outbound: Arc::new(json!({
+            "type": "wireguard",
+            "tag": "WG-bare",
+            "server": "1.2.3.4",
+            "server_port": 51820,
+            "private_key": "priv",
+            "peer_public_key": "pub"
+        })),
+    };
+    let cfg = build_runtime_json(&build_input_from_nodes(
+        LocalTemplate::default(),
+        vec![bare],
+        None,
+    ))
+    .expect("default address");
+    assert_eq!(cfg["endpoints"][0]["address"][0], "10.0.0.2/32");
+    assert!(cfg["endpoints"][0].get("mtu").is_none());
+}
+
+#[test]
+fn build_mobile_config_rejects_desktop_platforms() {
+    let input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
+    let err = build_mobile_config(&input).expect_err("desktop");
+    assert!(matches!(err, ConfigError::Invalid(_)));
 }
 
 #[test]

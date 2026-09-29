@@ -14,9 +14,9 @@ export function detectWindowChrome(
   return "plain";
 }
 
-/** True when the frontend runs inside the macOS webview. Gate macOS-only
- * settings on this rather than on the tray itself: the Tauri window is the
- * only surface the frontend can inspect. */
+/** True when the webview's chrome class is the macOS overlay. Product
+ * settings use status flags (`tray_display_supported` and the other
+ * `*_supported` fields); this classifier also matches iPhone and iPad. */
 export function isMacosHost(
   userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
   platform = typeof navigator === "undefined" ? "" : navigator.platform,

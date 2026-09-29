@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-tunnel"
+version.workspace = true
+description = "Platform VPN tunnel for the ice-box mobile shells"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+links = "tauri-plugin-tunnel"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", default-features = false }
+thiserror = { workspace = true }

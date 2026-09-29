@@ -164,6 +164,11 @@ pub struct SubscriptionIndex {
 /// Detect format from raw subscription body.
 pub fn detect_format(raw: &str) -> SubscriptionFormat {
     let trimmed = raw.trim_start();
+    // HTML error pages sometimes contain the substring `proxies:` and used to
+    // be classified as Clash, then panic inside the YAML parser.
+    if looks_like_markup(trimmed) {
+        return SubscriptionFormat::Unknown;
+    }
     // Cheap structural sniff instead of a full JSON parse (bodies can be up to
     // 8 MiB): sing-box bodies are objects carrying a quoted `outbounds` /
     // `endpoints` key. The real parse happens later in `parse_singbox_profile`,
@@ -218,8 +223,34 @@ pub fn normalize_raw_body(
     if format == SubscriptionFormat::Unknown {
         return Err(SubscriptionError::UnknownFormat);
     }
-    let profile = parse_profile(&decoded, format, platform)?;
-    Ok((format, profile))
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parse_profile(&decoded, format, platform)
+    }));
+    match parsed {
+        Ok(result) => result.map(|profile| (format, profile)),
+        Err(payload) => Err(SubscriptionError::ParseFailed(format!(
+            "parser panicked: {}",
+            panic_payload_message(payload.as_ref())
+        ))),
+    }
+}
+
+fn looks_like_markup(trimmed: &str) -> bool {
+    const MARKERS: &[&str] = &["<!doctype", "<html", "<head", "<body", "<?xml"];
+    MARKERS.iter().any(|marker| {
+        trimmed.len() >= marker.len()
+            && trimmed.as_bytes()[..marker.len()].eq_ignore_ascii_case(marker.as_bytes())
+    })
+}
+
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 pub fn parse_profile(

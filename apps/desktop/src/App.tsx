@@ -41,6 +41,7 @@ import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
+import { isPhoneShell } from "@platform/shell";
 import {
   readLanguagePreference,
   t,
@@ -157,6 +158,7 @@ function AppShell() {
   > | null>(null);
 
   useEffect(() => {
+    if (isPhoneShell()) return;
     const checker = startBackgroundAppUpdateCheck({
       check: ({ startup }) => api.checkAppUpdate(true, startup),
       recordCooldown: () => api.recordAppUpdateCheck(),
@@ -183,6 +185,7 @@ function AppShell() {
   // checks are on, and nothing once the switch turns them off (Settings clears
   // `availableUpdate` through `publishSidebarUpdate`).
   useEffect(() => {
+    if (isPhoneShell()) return;
     if (typeof api.setTrayUpdateAvailable !== "function") return;
     const version =
       availableUpdate?.available && availableUpdate.version
@@ -195,6 +198,7 @@ function AppShell() {
 
   // Tray prompt → Settings → App Updates, the same landing spot as the arrow.
   useEffect(() => {
+    if (isPhoneShell()) return;
     if (typeof api.listenTrayUpdateClick !== "function") return;
     let cancelled = false;
     let unlisten = () => {};
@@ -261,6 +265,105 @@ function AppShell() {
   }
 
   const current = NAV_ITEMS.find((item) => item.id === tab);
+
+  const pages = (
+    <>
+      {visited.has("home") && (
+        <TabPane active={tab === "home"}>
+          <Home
+            onNavigate={selectTab}
+            active={tab === "home"}
+            onStatus={setGlobalStatus}
+          />
+        </TabPane>
+      )}
+      {visited.has("nodes") && (
+        <TabPane active={tab === "nodes"}>
+          <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+        </TabPane>
+      )}
+      {visited.has("subs") && (
+        <TabPane active={tab === "subs"}>
+          <Subscriptions />
+        </TabPane>
+      )}
+      {visited.has("rules") && (
+        <TabPane active={tab === "rules"}>
+          <Rules onNavigate={selectTab} active={tab === "rules"} />
+        </TabPane>
+      )}
+      {visited.has("logs") && (
+        <TabPane active={tab === "logs"}>
+          <Logs active={tab === "logs"} />
+        </TabPane>
+      )}
+      {visited.has("settings") && (
+        <TabPane active={tab === "settings"}>
+          <Settings
+            active={tab === "settings"}
+            availableUpdate={availableUpdate}
+            onAvailableUpdate={setAvailableUpdate}
+            focusUpdateNonce={focusUpdateNonce}
+          />
+        </TabPane>
+      )}
+    </>
+  );
+
+  const recovery = status?.proxy_recovery_warning?.length ? (
+    <div className="px-4 pt-3">
+      <ErrorAlert>
+        {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
+      </ErrorAlert>
+    </div>
+  ) : null;
+
+  if (isPhoneShell()) {
+    return (
+      <TooltipProvider>
+        <div
+          className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
+          data-testid="phone-shell"
+        >
+          <header className="flex shrink-0 items-center px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2">
+            <h1 className="font-heading text-sm font-medium tracking-tight">
+              ice-box
+            </h1>
+          </header>
+          {recovery}
+          <main
+            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pb-2"
+            data-testid="app-main"
+          >
+            {pages}
+          </main>
+          <nav
+            data-testid="phone-tab-bar"
+            aria-label={t("app.nav.aria")}
+            className="grid shrink-0 grid-cols-6 border-t border-sidebar-border bg-sidebar pb-[env(safe-area-inset-bottom)]"
+          >
+            {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-current={tab === id ? "page" : undefined}
+                className={cn(
+                  "flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 px-1 text-[10px] leading-tight",
+                  tab === id
+                    ? "text-sidebar-foreground"
+                    : "text-sidebar-foreground/60",
+                )}
+                onClick={() => selectTab(id)}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="w-full truncate text-center">{t(labelKey)}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      </TooltipProvider>
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -343,57 +446,13 @@ function AppShell() {
           </Sidebar>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {status?.proxy_recovery_warning?.length ? (
-              <div className="px-4 pt-3">
-                <ErrorAlert>
-                  {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
-                </ErrorAlert>
-              </div>
-            ) : null}
+            {recovery}
 
             <main
               className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
               data-testid="app-main"
             >
-              {visited.has("home") && (
-                <TabPane active={tab === "home"}>
-                  <Home
-                    onNavigate={selectTab}
-                    active={tab === "home"}
-                    onStatus={setGlobalStatus}
-                  />
-                </TabPane>
-              )}
-              {visited.has("nodes") && (
-                <TabPane active={tab === "nodes"}>
-                  <Nodes onNavigate={selectTab} active={tab === "nodes"} />
-                </TabPane>
-              )}
-              {visited.has("subs") && (
-                <TabPane active={tab === "subs"}>
-                  <Subscriptions />
-                </TabPane>
-              )}
-              {visited.has("rules") && (
-                <TabPane active={tab === "rules"}>
-                  <Rules onNavigate={selectTab} active={tab === "rules"} />
-                </TabPane>
-              )}
-              {visited.has("logs") && (
-                <TabPane active={tab === "logs"}>
-                  <Logs active={tab === "logs"} />
-                </TabPane>
-              )}
-              {visited.has("settings") && (
-                <TabPane active={tab === "settings"}>
-                  <Settings
-                    active={tab === "settings"}
-                    availableUpdate={availableUpdate}
-                    onAvailableUpdate={setAvailableUpdate}
-                    focusUpdateNonce={focusUpdateNonce}
-                  />
-                </TabPane>
-              )}
+              {pages}
             </main>
           </div>
         </div>

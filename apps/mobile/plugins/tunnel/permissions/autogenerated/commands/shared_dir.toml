@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-shared-dir"
+description = "Enables the shared_dir command without any pre-configured scope."
+commands.allow = ["shared_dir"]
+
+[[permission]]
+identifier = "deny-shared-dir"
+description = "Denies the shared_dir command without any pre-configured scope."
+commands.deny = ["shared_dir"]

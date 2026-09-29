@@ -19,11 +19,10 @@ import {
 import { Settings } from "./Settings";
 import { RuntimeStoreProvider } from "../lib/runtimeStore";
 
-/** The macOS-only menu bar card is gated on the host classifier; jsdom is not a
- * macOS host, so that one test flips the flag. */
-const hostState = vi.hoisted(() => ({ macos: false }));
-vi.mock("@platform/windowChrome", () => ({
-  isMacosHost: () => hostState.macos,
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
 }));
 
 const getSettings = vi.fn();
@@ -108,12 +107,13 @@ const defaultStatus = {
   helper_supported: true,
   launch_at_login_supported: true,
   helper_stale: false,
+  tray_display_supported: false,
 } as const;
 
 describe("Settings", () => {
   beforeEach(() => {
+    phoneShell.value = false;
     vi.clearAllMocks();
-    hostState.macos = false;
     saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
@@ -447,7 +447,7 @@ describe("Settings", () => {
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
-  it("hides the menu bar item setting away from macOS", async () => {
+  it("hides the menu bar item when the platform does not support it", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
@@ -457,8 +457,8 @@ describe("Settings", () => {
     expect(view.queryByLabelText(t("settings.tray"))).toBeNull();
   });
 
-  it("persists the menu bar item mode on macOS", async () => {
-    hostState.macos = true;
+  it("persists the menu bar item mode when the platform supports it", async () => {
+    getStatus.mockResolvedValue({ ...defaultStatus, tray_display_supported: true });
     const { container } = render(<Settings />);
     const view = within(container);
 
@@ -483,7 +483,7 @@ describe("Settings", () => {
   });
 
   it("orders the settings cards", async () => {
-    hostState.macos = true;
+    getStatus.mockResolvedValue({ ...defaultStatus, tray_display_supported: true });
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() =>
@@ -504,6 +504,20 @@ describe("Settings", () => {
       t("settings.update"),
       t("settings.data"),
     ]);
+  });
+
+  it("hides desktop-only settings on the phone shell", async () => {
+    phoneShell.value = true;
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText(t("settings.appearance"))).toBeInTheDocument();
+    });
+    expect(view.queryByText(t("settings.inbound"))).not.toBeInTheDocument();
+    expect(view.queryByText(t("settings.update"))).not.toBeInTheDocument();
+    expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
+    expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
   });
 
   it("persists the login item through its own save path", async () => {

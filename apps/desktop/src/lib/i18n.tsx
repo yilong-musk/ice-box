@@ -100,6 +100,11 @@ const zh = {
   "home.power.recorded": "已记录，可恢复系统代理",
   "home.power.tunReady": "将启用 TUN 模式接管流量",
   "home.power.clickToCapture": "点击接管系统代理",
+  "home.power.vpnStart": "连接 VPN",
+  "home.power.vpnStop": "断开 VPN",
+  "home.power.vpnOn": "VPN 已连接",
+  "home.power.vpnOff": "点击连接 VPN",
+  "home.warn.vpnPermission": "连接 VPN 需要系统授权。点击连接后按系统提示允许。",
   "home.warn.proxyOutOfSync": "系统代理未接管或已不同步",
   "home.warn.permissionRequired":
     "启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。",
@@ -512,6 +517,12 @@ const en: Record<MessageKey, string> = {
   "home.power.recorded": "Recorded; system proxy can be restored",
   "home.power.tunReady": "Will capture traffic via TUN",
   "home.power.clickToCapture": "Click to capture via system proxy",
+  "home.power.vpnStart": "Connect VPN",
+  "home.power.vpnStop": "Disconnect VPN",
+  "home.power.vpnOn": "VPN is connected",
+  "home.power.vpnOff": "Tap to connect VPN",
+  "home.warn.vpnPermission":
+    "Connecting the VPN needs system permission. Tap connect and allow the system prompt.",
   "home.warn.proxyOutOfSync": "System proxy is not applied or out of sync",
   "home.warn.permissionRequired":
     "Enabling TUN requires system permission; no system configuration was changed. Clicking “Install Helper” opens the system authorization prompt; installation retries automatically, or disable TUN and use the system proxy.",

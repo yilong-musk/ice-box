@@ -17,6 +17,7 @@
     "paths": {
       "@platform/api": ["./src/api/tauri.ts"],
       "@platform/windowChrome": ["./src/lib/windowChrome.ts"],
+      "@platform/shell": ["./src/lib/shell.ts"],
       "@/*": ["./src/*"]
     },
 

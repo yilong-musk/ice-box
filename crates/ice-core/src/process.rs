@@ -274,10 +274,10 @@ fn waitid_reports_exited(pid: u32) -> bool {
             libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
         );
         rc == 0 && {
-            // Linux exposes `si_pid()` as a method; macOS/BSD keep a field.
-            #[cfg(target_os = "linux")]
+            // Linux and Android expose `si_pid()` as a method; macOS/BSD keep a field.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             let reported = info.si_pid();
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             let reported = info.si_pid;
             reported == pid as libc::pid_t
         }

@@ -8,14 +8,15 @@
 //! directly, so the engine stays free of desktop-only concerns (process
 //! lifecycle and system proxy live in `ice-core` / `ice-proxy-sys`).
 //!
-//! Supported platforms today: macOS / Windows. The crate has no platform
-//! dependencies, keeping future mobile hosts (embedded libsing-box) viable.
+//! Supported platforms: macOS, Windows, Android, and iOS for config
+//! generation. Linux stays diagnostic-only. The crate has no platform
+//! dependencies, so a mobile host can embed libbox beside it.
 
 pub use ice_config::{
-    build_direct_only_config, build_runtime_config, clash_mode_name, config_to_pretty_json,
-    minimal_dns_block, redact_config_str, rule_type_of, tun_gate_for, tun_reserved_rules,
-    validate_config_for_intent, validate_template, AppSettings, BuildInput, CaptureIntent,
-    ConfigError, GroupSelections, HostPlatform, LocalTemplate, NormalizedOutbound,
+    build_direct_only_config, build_mobile_config, build_runtime_config, clash_mode_name,
+    config_to_pretty_json, minimal_dns_block, redact_config_str, rule_type_of, tun_gate_for,
+    tun_reserved_rules, validate_config_for_intent, validate_template, AppSettings, BuildInput,
+    CaptureIntent, ConfigError, GroupSelections, HostPlatform, LocalTemplate, NormalizedOutbound,
     NormalizedProfile, NormalizedRoute, ProxyMode, RuleOverrides, RuntimeConfig, TunGate,
     TunSettings, RULE_TYPE_KEYS,
 };
@@ -119,6 +120,8 @@ pub fn subscription_to_config(
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent,
+        tun_exclude_package: None,
+        shared_root: None,
         platform,
     };
     let config = build_runtime_config(&input)?;
@@ -205,10 +208,13 @@ proxies:
             "shadowsocks",
             "socks",
             "http",
-            "wireguard",
         ] {
             assert!(types.contains(&t), "missing outbound type {t}");
         }
+        let endpoints = value["endpoints"].as_array().expect("wireguard endpoint");
+        assert_eq!(endpoints[0]["type"], "wireguard");
+        assert!(endpoints[0].get("local_address").is_none());
+        assert_eq!(endpoints[0]["peers"][0]["public_key"], "pubkey");
         let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
         assert!(tags.contains(&"日本东京01|1023.81 GB"));
         let reality = outbounds
@@ -343,6 +349,8 @@ proxies:
     fn engine_exposes_tun_gate_for_preflight() {
         assert!(tun_gate_for(HostPlatform::MacOs).ready);
         assert!(tun_gate_for(HostPlatform::Windows).ready);
+        assert!(tun_gate_for(HostPlatform::Android).ready);
+        assert!(tun_gate_for(HostPlatform::Ios).ready);
         assert!(!tun_gate_for(HostPlatform::Linux).ready);
         let gate: TunGate = tun_gate();
         assert_eq!(gate.ready, host_platform().tun_ready());
@@ -371,6 +379,8 @@ proxies:
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
             platform: HostPlatform::MacOs,
         })
         .expect("build")
@@ -411,6 +421,8 @@ proxies:
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
             platform: HostPlatform::MacOs,
         })
         .expect_err("empty profile");

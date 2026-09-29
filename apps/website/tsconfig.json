@@ -13,6 +13,7 @@
     "paths": {
       "@platform/api": ["./src/browser-api.ts"],
       "@platform/windowChrome": ["./src/browser-window-chrome.ts"],
+      "@platform/shell": ["../desktop/src/lib/shell.ts"],
       "@/*": ["../desktop/src/*"],
       "react": ["./node_modules/@types/react"],
       "react/*": ["./node_modules/@types/react/*"],

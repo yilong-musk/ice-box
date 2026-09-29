@@ -17,6 +17,7 @@ export default defineConfig({
     alias: [
       { find: "@platform/api", replacement: path.resolve(root, "src/browser-api.ts") },
       { find: "@platform/windowChrome", replacement: path.resolve(root, "src/browser-window-chrome.ts") },
+      { find: "@platform/shell", replacement: path.resolve(desktopSrc, "lib/shell.ts") },
       { find: "@", replacement: desktopSrc },
     ],
   },

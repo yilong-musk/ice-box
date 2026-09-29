@@ -1,0 +1,13 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Prepare, start, stop, and inspect the platform VPN tunnel."
+permissions = [
+  "allow-prepare",
+  "allow-start",
+  "allow-stop",
+  "allow-reload",
+  "allow-status",
+  "allow-shared-dir",
+  "allow-memory",
+]

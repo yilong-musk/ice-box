@@ -36,8 +36,20 @@ pub fn parse_clash_profile(
     raw: &str,
     platform: HostPlatform,
 ) -> Result<NormalizedProfile, SubscriptionError> {
-    let doc: Value = serde_yaml::from_str(raw)
-        .map_err(|e| SubscriptionError::ParseFailed(format!("clash yaml: {e}")))?;
+    let doc: Value = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serde_yaml::from_str::<Value>(raw)
+    })) {
+        Ok(Ok(doc)) => doc,
+        Ok(Err(err)) => {
+            return Err(SubscriptionError::ParseFailed(format!("clash yaml: {err}")));
+        }
+        Err(payload) => {
+            return Err(SubscriptionError::ParseFailed(format!(
+                "clash yaml panicked: {}",
+                crate::panic_payload_message(payload.as_ref())
+            )));
+        }
+    };
 
     let proxy_result = parse_proxies(&doc).map_err(|_| SubscriptionError::EmptyNodes)?;
 

@@ -13,16 +13,16 @@ echo "== cargo fmt --check =="
 cargo fmt --check
 
 echo "== cargo clippy =="
-# Exclude the Tauri desktop crate: it needs GTK/webkit system libs that are
-# installed on CI runners but often missing on dev machines. CI gate.sh covers it.
-cargo clippy --workspace --all-targets --exclude ice-box -- -D warnings
+# Exclude the Tauri shells: they need GTK/webkit system libs that are
+# installed on CI runners but often missing on dev machines. CI gate.sh covers them.
+cargo clippy --workspace --all-targets --exclude ice-box --exclude ice-box-mobile -- -D warnings
 
 echo "== cargo test (lib) =="
 # Fast path: unit tests only. CI `scripts/gate.sh` runs lib + integration +
 # doc tests for every crate except ice-box, then `cargo test -p ice-box --lib`.
-# ice-box is excluded here because it needs GTK/webkit, which many local
-# machines lack.
-cargo test --workspace --lib --exclude ice-box
+# The Tauri shells are excluded here because they need GTK/webkit, which many
+# local machines lack.
+cargo test --workspace --lib --exclude ice-box --exclude ice-box-mobile
 
 echo "== cargo test (ice-tun-sys integration) =="
 # Host-free TUN recovery / backend / helper e2e tests live in
@@ -33,6 +33,7 @@ echo "== tsc --noEmit =="
 # `npx tsc` resolves the stub npm package `tsc`, not `typescript`.
 (cd apps/desktop && npm run typecheck)
 (cd apps/website && npm run typecheck)
+(cd apps/mobile && npm run typecheck)
 
 echo "== vitest =="
 (cd apps/desktop && npm test)

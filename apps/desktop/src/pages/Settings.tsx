@@ -20,6 +20,7 @@ import {
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
@@ -29,7 +30,6 @@ import { PortsCard } from "./settings/Ports";
 import { StartupCard } from "./settings/Startup";
 import { TunCard } from "./settings/Tun";
 import { formatUpdateError, UpdateCard } from "./settings/Update";
-import { isMacosHost } from "@platform/windowChrome";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -513,7 +513,7 @@ export function Settings({
             themePreference={themePreference}
             setThemePreference={setThemePreference}
             language={form.language}
-            trayMode={isMacosHost() ? form.tray_display_mode : null}
+            trayMode={status?.tray_display_supported === true ? form.tray_display_mode : null}
             busy={busy}
             loaded={loaded}
             onLanguageChange={(value) => {
@@ -525,15 +525,17 @@ export function Settings({
             }
           />
 
-          <PortsCard
-            form={form}
-            setForm={setForm}
-            fieldErrors={fieldErrors}
-            busy={busy}
-            loaded={loaded}
-            clearFieldError={clearFieldError}
-            setFieldErrors={setFieldErrors}
-          />
+          {isPhoneShell() ? null : (
+            <PortsCard
+              form={form}
+              setForm={setForm}
+              fieldErrors={fieldErrors}
+              busy={busy}
+              loaded={loaded}
+              clearFieldError={clearFieldError}
+              setFieldErrors={setFieldErrors}
+            />
+          )}
 
           {tunUiHidden ? null : (
             <TunCard
@@ -568,6 +570,7 @@ export function Settings({
             />
           )}
 
+          {isPhoneShell() ? null : (
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard
               checkAppUpdates={form.check_app_updates}
@@ -592,6 +595,7 @@ export function Settings({
               onInstall={() => void runUpdateInstall()}
             />
           </div>
+          )}
 
           <DataCard
             form={form}

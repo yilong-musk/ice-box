@@ -18,6 +18,7 @@ export default defineConfig(async () => ({
     alias: {
       "@platform/api": path.resolve(root, "src/api/tauri.ts"),
       "@platform/windowChrome": path.resolve(root, "src/lib/windowChrome.ts"),
+      "@platform/shell": path.resolve(root, "src/lib/shell.ts"),
       "@": path.resolve(root, "./src"),
     },
   },

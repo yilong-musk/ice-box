@@ -379,6 +379,8 @@ pub fn generate_config_with_cache(
         group_selections,
         rule_overrides,
         capture_intent,
+        tun_exclude_package: None,
+        shared_root: None,
         platform,
     })?;
     write_config_if_changed(&app_paths.config(), &app_paths.config_bak(), &config)

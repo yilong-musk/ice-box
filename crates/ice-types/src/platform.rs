@@ -31,9 +31,18 @@ impl HostPlatform {
         matches!(self, Self::MacOs)
     }
 
-    /// TUN is in scope for the first release on macOS and Windows only.
+    /// Desktop TUN (macOS and Windows) and the mobile VPN (Android and iOS).
+    /// Linux has no TUN backend.
     pub fn tun_ready(self) -> bool {
-        matches!(self, Self::MacOs | Self::Windows)
+        matches!(
+            self,
+            Self::MacOs | Self::Windows | Self::Android | Self::Ios
+        )
+    }
+
+    /// Android and iOS always generate the mobile TUN shape.
+    pub fn is_mobile(self) -> bool {
+        matches!(self, Self::Android | Self::Ios)
     }
 }
 
@@ -56,11 +65,15 @@ mod tests {
     }
 
     #[test]
-    fn tun_ready_only_macos_and_windows() {
+    fn tun_ready_covers_desktop_tun_and_mobile() {
         assert!(HostPlatform::MacOs.tun_ready());
         assert!(HostPlatform::Windows.tun_ready());
+        assert!(HostPlatform::Android.tun_ready());
+        assert!(HostPlatform::Ios.tun_ready());
         assert!(!HostPlatform::Linux.tun_ready());
-        assert!(!HostPlatform::Android.tun_ready());
-        assert!(!HostPlatform::Ios.tun_ready());
+        assert!(HostPlatform::Android.is_mobile());
+        assert!(HostPlatform::Ios.is_mobile());
+        assert!(!HostPlatform::MacOs.is_mobile());
+        assert!(!HostPlatform::Linux.is_mobile());
     }
 }

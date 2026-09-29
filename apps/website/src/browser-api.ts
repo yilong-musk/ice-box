@@ -178,6 +178,7 @@ export const api = {
       launch_at_login_supported: true,
       helper_stale: false,
       tun_elevation_ready: true,
+      tray_display_supported: false,
     };
   },
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },

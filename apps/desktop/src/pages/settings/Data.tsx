@@ -14,6 +14,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { isPhoneShell } from "@platform/shell";
 import { t } from "../../lib/i18n";
 import { formatInvokeError, api, type AppSettings } from "../../api/client";
 
@@ -60,6 +61,7 @@ export function DataCard({
             </FieldLabel>
           </Field>
           <FieldDescription>{t("settings.logDebugDesc")}</FieldDescription>
+          {isPhoneShell() ? null : (
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -75,6 +77,7 @@ export function DataCard({
               {t("settings.openDataDir")}
             </Button>
           </div>
+          )}
         </div>
       </CardContent>
     </Card>

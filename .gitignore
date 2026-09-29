@@ -25,6 +25,15 @@ Thumbs.db
 # Logs
 *.log
 
+# Android / libbox binaries. Built locally; not source.
+*.aar
+*.apk
+*.aab
+*.so
+
+# Tauri plugin build copies the Android runtime into this directory.
+**/.tauri/
+
 # Tauri generated (capabilities / schema)
 apps/desktop/src-tauri/gen/
 

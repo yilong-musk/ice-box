@@ -118,6 +118,7 @@ const TUN_INBOUND_KEYS: &[&str] = &[
     "stack",
     "route_exclude_address",
     "loopback_address",
+    "exclude_package",
 ];
 
 /// Whether `ty` is allowed as an elevated (or subscription) outbound type.
@@ -245,10 +246,18 @@ pub fn sanitize_for_elevated_core(cfg: &mut Value, ctx: &GuardContext) -> Result
         .and_then(|v| v.as_array())
         .ok_or_else(|| GuardError::new("/outbounds", "outbounds must be an array"))?
         .len();
-    if outbound_len > MAX_OUTBOUNDS {
+    let endpoint_len = cfg
+        .get("endpoints")
+        .and_then(|v| v.as_array())
+        .map(|endpoints| endpoints.len())
+        .unwrap_or(0);
+    if outbound_len + endpoint_len > MAX_OUTBOUNDS {
         return Err(GuardError::new(
             "/outbounds",
-            format!("outbound count {outbound_len} exceeds {MAX_OUTBOUNDS}"),
+            format!(
+                "outbound count {} exceeds {MAX_OUTBOUNDS}",
+                outbound_len + endpoint_len
+            ),
         ));
     }
     if outbound_len == 0 {
@@ -304,12 +313,125 @@ pub fn minimal_allowed_config() -> Value {
 }
 
 fn reject_ungated_top_level(cfg: &Value) -> Result<(), GuardError> {
-    for key in ["endpoints", "services"] {
-        if cfg.get(key).is_some() {
+    if cfg.get("services").is_some() {
+        return Err(GuardError::new(
+            "/services",
+            "services is not allowed in an elevated config",
+        ));
+    }
+    validate_endpoints(cfg)
+}
+
+const WIREGUARD_ENDPOINT_KEYS: &[&str] = &[
+    "type",
+    "tag",
+    "address",
+    "private_key",
+    "listen_port",
+    "peers",
+    "mtu",
+    "udp_timeout",
+    "workers",
+    "detour",
+];
+
+const WIREGUARD_PEER_KEYS: &[&str] = &[
+    "address",
+    "port",
+    "public_key",
+    "pre_shared_key",
+    "allowed_ips",
+    "persistent_keepalive_interval",
+    "reserved",
+];
+
+/// Client WireGuard endpoints are the sing-box 1.13 replacement for the
+/// removed outbound. `system`, interface names, and filesystem keys stay
+/// rejected. `services` stays rejected entirely.
+fn validate_endpoints(cfg: &Value) -> Result<(), GuardError> {
+    let Some(endpoints) = cfg.get("endpoints") else {
+        return Ok(());
+    };
+    let endpoints = endpoints
+        .as_array()
+        .ok_or_else(|| GuardError::new("/endpoints", "endpoints must be an array"))?;
+    for (idx, endpoint) in endpoints.iter().enumerate() {
+        let pointer = format!("/endpoints/{idx}");
+        let obj = endpoint
+            .as_object()
+            .ok_or_else(|| GuardError::new(&pointer, "endpoint must be a JSON object"))?;
+        let ty = obj.get("type").and_then(Value::as_str).ok_or_else(|| {
+            GuardError::new(format!("{pointer}/type"), "endpoint is missing type")
+        })?;
+        if ty != "wireguard" {
             return Err(GuardError::new(
-                format!("/{key}"),
-                format!("{key} is not allowed in an elevated config"),
+                format!("{pointer}/type"),
+                format!("endpoint type {ty:?} is not allowed"),
             ));
+        }
+        reject_wireguard_system(obj, &pointer)?;
+        for key in obj.keys() {
+            if !WIREGUARD_ENDPOINT_KEYS.contains(&key.as_str()) {
+                return Err(GuardError::new(
+                    format!("{pointer}/{}", json_pointer_escape(key)),
+                    format!("endpoint key {key:?} is not allowed"),
+                ));
+            }
+        }
+        let private_key = obj.get("private_key").and_then(Value::as_str).unwrap_or("");
+        if private_key.is_empty() {
+            return Err(GuardError::new(
+                format!("{pointer}/private_key"),
+                "wireguard endpoint requires private_key",
+            ));
+        }
+        let peers = obj.get("peers").and_then(Value::as_array).ok_or_else(|| {
+            GuardError::new(
+                format!("{pointer}/peers"),
+                "wireguard endpoint requires peers",
+            )
+        })?;
+        if peers.is_empty() {
+            return Err(GuardError::new(
+                format!("{pointer}/peers"),
+                "wireguard endpoint requires peers",
+            ));
+        }
+        for (peer_idx, peer) in peers.iter().enumerate() {
+            let peer_pointer = format!("{pointer}/peers/{peer_idx}");
+            let peer_obj = peer.as_object().ok_or_else(|| {
+                GuardError::new(&peer_pointer, "wireguard peer must be a JSON object")
+            })?;
+            for key in peer_obj.keys() {
+                if !WIREGUARD_PEER_KEYS.contains(&key.as_str()) {
+                    return Err(GuardError::new(
+                        format!("{peer_pointer}/{}", json_pointer_escape(key)),
+                        format!("wireguard peer key {key:?} is not allowed"),
+                    ));
+                }
+            }
+            if peer_obj
+                .get("public_key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err(GuardError::new(
+                    format!("{peer_pointer}/public_key"),
+                    "wireguard peer requires public_key",
+                ));
+            }
+            if peer_obj
+                .get("address")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err(GuardError::new(
+                    format!("{peer_pointer}/address"),
+                    "wireguard peer requires address",
+                ));
+            }
         }
     }
     Ok(())
@@ -1654,7 +1776,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoints_and_services_are_rejected() {
+    fn services_are_rejected_and_wireguard_endpoints_are_checked() {
         let dir = temp_dir("ep");
         let mut cfg = minimal_allowed_config();
         cfg["endpoints"] = json!([{
@@ -1663,8 +1785,33 @@ mod tests {
             "system": true,
             "state_directory": "/etc/cron.d"
         }]);
-        let err = sanitize(cfg, &ctx(&dir)).expect_err("endpoints");
-        assert_eq!(err.pointer, "/endpoints");
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("system endpoint");
+        assert_eq!(err.pointer, "/endpoints/0/system");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["endpoints"] = json!([{
+            "type": "wireguard",
+            "tag": "wg",
+            "private_key": "priv",
+            "peers": [{ "address": "1.2.3.4", "public_key": "pub", "path": "/tmp/x" }]
+        }]);
+        let err = sanitize(cfg, &ctx(&dir)).expect_err("peer path");
+        assert_eq!(err.pointer, "/endpoints/0/peers/0/path");
+
+        let mut cfg = minimal_allowed_config();
+        cfg["endpoints"] = json!([{
+            "type": "wireguard",
+            "tag": "wg",
+            "private_key": "priv",
+            "address": ["10.0.0.2/32"],
+            "peers": [{
+                "address": "1.2.3.4",
+                "port": 51820,
+                "public_key": "pub",
+                "allowed_ips": ["0.0.0.0/0", "::/0"]
+            }]
+        }]);
+        sanitize(cfg, &ctx(&dir)).expect("client wireguard endpoint");
 
         let mut cfg = minimal_allowed_config();
         cfg["services"] = json!([{ "type": "derp", "tag": "derp" }]);

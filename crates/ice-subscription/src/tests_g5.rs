@@ -832,6 +832,8 @@ fn g5_8_selected_via_resolve_and_build() {
         group_selections: Default::default(),
         rule_overrides: Default::default(),
         capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     })
     .unwrap()
@@ -1445,4 +1447,24 @@ fn fetch_ids_continues_after_injected_panic() {
         "the next job must still run after a panic"
     );
     let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn html_page_is_an_unknown_subscription_not_a_panic() {
+    let html = "<!DOCTYPE html><html><body>proxies:\n  - name: no</body></html>";
+    let err = normalize_raw_body(html, HostPlatform::Android).expect_err("html");
+    assert!(matches!(err, SubscriptionError::UnknownFormat));
+
+    let err = normalize_raw_body("<HTML><BODY>proxies: []</BODY></HTML>", HostPlatform::Ios)
+        .expect_err("html");
+    assert!(matches!(err, SubscriptionError::UnknownFormat));
+}
+
+#[test]
+fn clash_shaped_garbage_does_not_panic() {
+    let result = std::panic::catch_unwind(|| {
+        normalize_raw_body("proxies: *not yaml*\n", HostPlatform::MacOs)
+    });
+    assert!(result.is_ok(), "a parser panic must become an error");
+    assert!(result.unwrap().is_err());
 }
