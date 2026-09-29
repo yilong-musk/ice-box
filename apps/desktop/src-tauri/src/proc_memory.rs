@@ -130,10 +130,20 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn a child process");
-        let bytes = process_memory_bytes(child.id()).expect("child memory must be readable");
-        assert!(bytes > 0, "child memory must be positive, got {bytes}");
+        // spawn() can return before the loader faults in the child's pages.
+        // Bound the wait and always reap the child, including assertion failures.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let result = loop {
+            let result = process_memory_bytes(child.id());
+            if !matches!(result, Ok(0)) || std::time::Instant::now() >= deadline {
+                break result;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         let _ = child.kill();
         let _ = child.wait();
+        let bytes = result.expect("child memory must be readable");
+        assert!(bytes > 0, "child memory must be positive, got {bytes}");
     }
 
     #[test]

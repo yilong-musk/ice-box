@@ -11,6 +11,8 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@platform/api": path.resolve(root, "src/api/tauri.ts"),
+      "@platform/windowChrome": path.resolve(root, "src/lib/windowChrome.ts"),
       "@": path.resolve(root, "./src"),
     },
   },
@@ -20,6 +22,7 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
     // Parallel jsdom + Recharts workers starve waitFor timers on WSL.
     fileParallelism: false,
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
-

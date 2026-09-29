@@ -22,7 +22,7 @@ import { RuntimeStoreProvider } from "../lib/runtimeStore";
 /** The macOS-only menu bar card is gated on the host classifier; jsdom is not a
  * macOS host, so that one test flips the flag. */
 const hostState = vi.hoisted(() => ({ macos: false }));
-vi.mock("../lib/windowChrome", () => ({
+vi.mock("@platform/windowChrome", () => ({
   isMacosHost: () => hostState.macos,
 }));
 
@@ -41,7 +41,7 @@ const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
 const listenStateChanged = vi.fn().mockResolvedValue(() => {});
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getSettings: (...args: unknown[]) => getSettings(...args),
     getStatus: (...args: unknown[]) => getStatus(...args),

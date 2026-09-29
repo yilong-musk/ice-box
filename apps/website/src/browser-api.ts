@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type {
+  ApiContract,
   AppSettings,
   CheckAppUpdateResponse,
   DelayTestResponse,
@@ -16,8 +17,7 @@ import type {
   TrafficSnapshot,
   SettingsPatch,
   UiMessage,
-} from "../../../apps/desktop/src/api/tauri";
-import { isMessageKey, t } from "../../../apps/desktop/src/lib/i18n";
+} from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
 
 export type {
@@ -40,7 +40,7 @@ export type {
   TrafficSnapshot,
   SettingsPatch,
   UiMessage,
-} from "../../../apps/desktop/src/api/tauri";
+} from "../../../apps/desktop/src/api/contracts";
 
 /** README / CI screenshot mode (`demo.html?capture=1`) freezes traffic and skips mock latency. */
 function isCaptureMode(): boolean {
@@ -140,39 +140,6 @@ let trafficTick = 0;
 
 const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-
-export function formatInvokeError(err: unknown): string {
-  if (err && typeof err === "object") {
-    const o = err as Record<string, unknown>;
-    if (typeof o.code === "string" && typeof o.message === "string") {
-      return `${o.code}: ${o.message}`;
-    }
-    if (typeof o.message === "string") return o.message;
-  }
-  return String(err);
-}
-
-export function formatDiagnostic(warning: string): string {
-  return warning;
-}
-
-export function formatUiMessage(
-  msg: UiMessage | string | null | undefined,
-): string {
-  if (!msg) return "";
-  if (typeof msg === "string") return msg;
-  const params = msg.params ?? {};
-  if (msg.key === "ui.raw") return params.text ?? "";
-  const label = isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
-  const detail = params.detail;
-  if (detail && !label.includes(detail)) {
-    return `${label}: ${detail}`;
-  }
-  return label;
-}
-
-type DesktopTauriModule = typeof import("../../../apps/desktop/src/api/tauri");
-type DesktopApi = DesktopTauriModule["api"];
 
 export const api = {
   async getStatus(): Promise<StatusResponse> {
@@ -329,12 +296,4 @@ export const api = {
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
-} satisfies DesktopApi;
-
-/** Compile-time check that the Live Demo stand-in covers desktop API values (FE-7). */
-export const browserApi = {
-  api,
-  formatInvokeError,
-  formatDiagnostic,
-  formatUiMessage,
-} satisfies typeof import("../../../apps/desktop/src/api/tauri");
+} satisfies ApiContract;

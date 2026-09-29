@@ -23,6 +23,7 @@ percent-encoding = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.7"
 flate2 = "1"
+tempfile = "3"
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["ring"] }

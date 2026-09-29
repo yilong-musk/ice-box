@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test:performance": "node ./scripts/smoke-performance.mjs",
     "capture-home": "node ./scripts/capture-home.mjs"
   },
   "dependencies": {

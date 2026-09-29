@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Minus, Square, X } from "lucide-react";
-import { detectWindowChrome, runWindowCommand } from "@/lib/windowChrome";
+import { detectWindowChrome, runWindowCommand } from "@platform/windowChrome";
 import { t, useLanguagePreference } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 

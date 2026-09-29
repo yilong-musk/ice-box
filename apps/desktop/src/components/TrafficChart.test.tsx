@@ -8,7 +8,7 @@ import { TrafficChart } from "./TrafficChart";
 
 const getTrafficSince = vi.fn();
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getTrafficSince: (...args: unknown[]) => getTrafficSince(...args),
   },

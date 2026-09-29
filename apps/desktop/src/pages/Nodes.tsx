@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   api,
   formatInvokeError,
   type NodeInfo,
-} from "../api/tauri";
+} from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
+import { memberWindow, nodeLayout, visibleNodeRows, MEMBER_ROW_HEIGHT, NODE_ROW_HEIGHT } from "../lib/virtualNodes";
 import {
   applyGroupNowToNodes,
   applySelectedTagToNodes,
@@ -95,32 +96,15 @@ function delayBadge(delay: DelayCell) {
 }
 
 const EMPTY_DELAYS: Record<string, DelayCell> = {};
-/** First commit only. Strategy groups sit at the front and are expensive. */
-const FIRST_PAINT = 8;
-const REVEAL_BATCH = 16;
-const MEMBER_FIRST_PAINT = 24;
-const MEMBER_BATCH = 32;
 /** Probes in flight during one delay test: a few nodes at a time keeps a long
  * list moving without flooding the core or the upstream links. The macOS tray
  * menu's delay test runs the same pool (`MAX_PROBES_IN_FLIGHT` in
  * `apps/desktop/src-tauri/src/tray_delay.rs`). */
 const DELAY_TEST_CONCURRENCY = 4;
 
-function firstPaintCount(total: number): number {
-  return Math.min(total, FIRST_PAINT);
-}
-
-function scheduleIdle(fn: () => void): () => void {
-  const idle = window.requestIdleCallback?.bind(window);
-  if (typeof idle === "function" && !import.meta.env.VITEST) {
-    const id = idle(fn, { timeout: 200 });
-    return () => window.cancelIdleCallback?.(id);
-  }
-  const id = window.setTimeout(fn, 0);
-  return () => window.clearTimeout(id);
-}
-
 type GroupMembersProps = {
+  start: number;
+  end: number;
   groupTag: string;
   members: string[];
   groupNow: string | null;
@@ -134,6 +118,8 @@ type GroupMembersProps = {
 };
 
 const GroupMembers = memo(function GroupMembers({
+  start,
+  end,
   groupTag,
   members,
   groupNow,
@@ -145,54 +131,24 @@ const GroupMembers = memo(function GroupMembers({
   lang,
   showDivider,
 }: GroupMembersProps) {
-  const [shown, setShown] = useState(() =>
-    Math.min(MEMBER_FIRST_PAINT, members.length),
-  );
-  const shownRef = useRef(shown);
-  shownRef.current = shown;
-  const membersRef = useRef(members);
-  membersRef.current = members;
-
-  useEffect(() => {
-    const first = Math.min(MEMBER_FIRST_PAINT, members.length);
-    shownRef.current = first;
-    setShown(first);
-    if (first >= members.length) return;
-    let cancelled = false;
-    let raf = 0;
-    const pump = () => {
-      if (cancelled) return;
-      const total = membersRef.current.length;
-      if (shownRef.current >= total) return;
-      const next = Math.min(total, shownRef.current + MEMBER_BATCH);
-      shownRef.current = next;
-      setShown(next);
-      if (next < total) raf = window.requestAnimationFrame(pump);
-    };
-    raf = window.requestAnimationFrame(pump);
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(raf);
-    };
-  }, [members]);
-
   return (
     <div
       id={groupMembersDomId(groupTag)}
       lang={lang}
       aria-label={t("nodes.membersAria", { group: groupTag })}
+      style={{ paddingTop: start * MEMBER_ROW_HEIGHT, paddingBottom: (members.length - end) * MEMBER_ROW_HEIGHT }}
       className={cn(
         "flex flex-col pl-6",
-        showDivider && "border-b border-border",
+        showDivider && "shadow-[inset_0_-1px_0_var(--border)]",
       )}
     >
-      {members.slice(0, shown).map((member) => {
+      {members.slice(start, end).map((member) => {
         const isExit = member === groupNow;
         return (
           <div
             key={`${groupTag}::${member}`}
             className={cn(
-              "flex h-8 items-center gap-2 overflow-hidden px-0",
+              "flex h-8 shrink-0 items-center gap-2 overflow-hidden px-0",
               isExit && "bg-muted/50",
             )}
           >
@@ -238,6 +194,8 @@ const GroupMembers = memo(function GroupMembers({
 });
 
 type NodeRowProps = {
+  memberStart: number;
+  memberEnd: number;
   node: NodeInfo;
   selected: boolean;
   expanded: boolean;
@@ -254,6 +212,8 @@ type NodeRowProps = {
 };
 
 const NodeRow = memo(function NodeRow({
+  memberStart,
+  memberEnd,
   node,
   selected,
   expanded,
@@ -277,6 +237,7 @@ const NodeRow = memo(function NodeRow({
   return (
     <div lang={lang}>
       <Item
+        style={{ height: NODE_ROW_HEIGHT }}
         size="sm"
         variant={selected ? "muted" : "default"}
         className={cn(
@@ -399,6 +360,8 @@ const NodeRow = memo(function NodeRow({
       </Item>
       {expandable && expanded && node.group_all ? (
         <GroupMembers
+          start={memberStart}
+          end={memberEnd}
           groupTag={node.tag}
           members={node.group_all}
           groupNow={node.group_now}
@@ -457,12 +420,30 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const onGroupSelectRef = useRef<(group: string, member: string) => void>(
     () => {},
   );
-  const [revealCount, setRevealCount] = useState(() => {
-    const total = readNodesSnapshot()?.nodes.length ?? 0;
-    return firstPaintCount(total);
-  });
-  const revealRef = useRef(revealCount);
-  revealRef.current = revealCount;
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 600 });
+  const viewportStateRef = useRef(viewport);
+  viewportStateRef.current = viewport;
+  const listVisible = active && (runtime?.visible ?? true);
+  const layout = useMemo(() => nodeLayout(nodes, expandedGroups), [nodes, expandedGroups]);
+  const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
+  const updateViewport = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const next = { top: el.scrollTop, height: el.clientHeight || 600 };
+    setViewport(prev => prev.top === next.top && prev.height === next.height ? prev : next);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!listVisible || !el) return;
+    const height = el.clientHeight || 600;
+    el.scrollTop = Math.max(0, Math.min(viewportStateRef.current.top, layout.height - height));
+    updateViewport();
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [listVisible, listReady, layout.height, updateViewport]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -545,33 +526,6 @@ export function Nodes({ onNavigate, active = true }: Props) {
       window.clearInterval(id);
     };
   }, [active, nextGeneration, refresh]);
-
-  useEffect(() => {
-    if (!listReady || nodes.length === 0) return;
-    let cancelled = false;
-    let cancelSched = () => {};
-    const pump = () => {
-      if (cancelled) return;
-      const total = nodesRef.current.length;
-      if (total === 0) {
-        if (revealRef.current !== 0) {
-          revealRef.current = 0;
-          setRevealCount(0);
-        }
-        return;
-      }
-      if (revealRef.current >= total) return;
-      const next = Math.min(total, revealRef.current + REVEAL_BATCH);
-      revealRef.current = next;
-      setRevealCount(next);
-      if (next < total) cancelSched = scheduleIdle(pump);
-    };
-    cancelSched = scheduleIdle(pump);
-    return () => {
-      cancelled = true;
-      cancelSched();
-    };
-  }, [listReady, nodes]);
 
   const setGroupOpen = useCallback((tag: string, open: boolean) => {
     setExpandedGroups((prev) => {
@@ -758,13 +712,10 @@ export function Nodes({ onNavigate, active = true }: Props) {
   onSelectRef.current = onSelect;
   onGroupSelectRef.current = onGroupSelect;
 
-  const visibleCount =
-    nodes.length === 0
-      ? 0
-      : revealCount > 0
-        ? Math.min(revealCount, nodes.length)
-        : firstPaintCount(nodes.length);
-  const visibleNodes = nodes.slice(0, visibleCount);
+  const visibleRows = useMemo(
+    () => visibleNodeRows(layout.rows, viewportTop, viewport.height),
+    [layout.rows, viewportTop, viewport.height],
+  );
 
   return (
     <div className="nodes-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="nodes-panel">
@@ -813,25 +764,31 @@ export function Nodes({ onNavigate, active = true }: Props) {
               actionLabel={t("home.goToSubs")}
               onAction={() => onNavigate?.("subs")}
             />
-          ) : (
+          ) : listVisible ? (
             <ScrollArea
+              viewportRef={viewportRef}
+              onViewportScroll={updateViewport}
               type="scroll"
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label={t("nodes.listAria")} className="gap-0!">
-                {visibleNodes.map((n, index) => {
+              <ItemGroup aria-label={t("nodes.listAria")} className="relative gap-0!" style={{ height: layout.height }}>
+                {visibleRows.map(({ node: n, index, top, members }) => {
                   const expanded =
                     isGroupType(n.outbound_type) &&
                     Boolean(n.group_all?.length) &&
                     expandedGroups.has(n.tag);
+                  const memberRange = memberWindow(members, top, viewportTop, viewport.height);
                   return (
+                    <div key={n.tag} role="listitem" aria-posinset={index + 1} aria-setsize={nodes.length}
+                      className="absolute inset-x-0" style={{ top }}>
                     <NodeRow
-                      key={n.tag}
+                      memberStart={memberRange.start}
+                      memberEnd={memberRange.end}
                       node={n}
                       selected={n.tag === selectedTag}
                       expanded={expanded}
-                      showDivider={index < visibleNodes.length - 1}
+                      showDivider={index < nodes.length - 1}
                       running={running}
                       busy={busy}
                       delay={delays[n.tag] ?? null}
@@ -842,11 +799,12 @@ export function Nodes({ onNavigate, active = true }: Props) {
                       onGroupSelect={handleGroupSelect}
                       lang={lang}
                     />
+                    </div>
                   );
                 })}
               </ItemGroup>
             </ScrollArea>
-          )}
+          ) : null}
         </CardContent>
       </Card>
     </div>

@@ -5,6 +5,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-09-28
+
+### Changed
+
+- Nodes list rendering is windowed: the page keeps a single outer scroll
+  viewport and only mounts the rows (and expanded group members) that fall
+  inside it, with a fixed-height overscan so fast scrolls stay smooth. Layout
+  height still accounts for every expanded group, so scrollbar size and scroll
+  position stay correct on large subscriptions; the Live Demo adds a text-only
+  `test:performance` smoke that expands a 5 000-member group and checks that
+  the DOM stays bounded. Rules search no longer reloads the overview on each
+  keyword change, and resetting the page offset waits for the debounced term.
+
+- Log view reads are incremental. Each source keeps a byte offset and a short
+  retained window instead of re-scanning the whole file on every 2 s poll;
+  growth, truncation, and rotation (inode / creation-time change) still force
+  a bounded rescan of the last few megabytes. Oversized core / app log
+  compaction is now a chunked in-place rewrite that keeps an existing append
+  handle valid and includes bytes written after the length snapshot.
+
+- Subscription batch updates no longer hold every response body in memory at
+  once: parallel fetches use a bounded completion channel and spool each body
+  into a shared anonymous temporary file, then materialize and persist one
+  subscription at a time. Empty bodies skip the spool; a truncated spool read
+  fails the update instead of applying a partial profile.
+
+- Runtime probes are cheaper between mutations. The system-proxy applied check
+  is memoized for 30 s and cleared on state broadcasts, window activation, and
+  sleep/resume gaps; the tray speed readout and display-only posture path never
+  start an OS probe of their own. Tray node-menu rebuilds run on demand or at
+  most every 30 s (subscriptions and the rest of the menu keep the existing
+  cadence). TUN DNS healing is likewise paced to 30 s, with an immediate retry
+  after a mutation or a wall-clock resume.
+
+- The custom-rule form lowercases `domain`, `domain_suffix`, and
+  `domain_keyword` values as they are typed, and the preview and stored rule
+  use the lowercased text. sing-box lowercases the incoming hostname but
+  matches the pattern as written, so a pattern with uppercase letters could
+  never match. `domain_regex` keeps its case, and the field is left alone
+  while an IME is composing. Rules saved by earlier versions are not rewritten:
+  one that contains uppercase letters still cannot match until it is deleted
+  and re-added in lowercase.
+
+- The desktop backend is split into an application layer (shared by the IPC
+  commands, the tray, and background workers) behind thin Tauri adapters, and
+  status is served from a committed runtime read model. A status read never
+  waits for a start / stop in flight — it returns the last committed status
+  with `refresh_pending` set — and the slow probes (system-proxy applied
+  check, helper install / staleness, TUN elevation) run on their own worker
+  and carry explicit freshness. A probe sample is refreshed every 2 s but
+  served for up to 4 s, so a refresh never blanks the Home "System proxy is
+  active" state; a mutation withholds the sample until a new probe lands and
+  wakes the worker at once. Window activation and state announcements only
+  request a re-sample, keeping the last value visible meanwhile.
+
+- Background loops (core health, runtime probes, tray state and speed,
+  subscription auto-update, single-instance focus) run under a worker
+  supervisor. A panic restarts only the failing worker after a short delay.
+  Quit and in-app update pause the workers while the core is stopped, so an
+  auto-update cannot start a fetch or apply a profile mid-teardown; a failed
+  stop resumes them, and a successful quit or update install cancels every
+  timer and joins the workers within a 500 ms budget instead of leaving
+  threads to the process exit.
+
+- GitHub Release bodies are short: a headline, one line about the installers,
+  and a link to the version's section in this changelog, instead of the
+  section pasted in full. `scripts/release-notes.sh` still fails when the
+  section is missing or empty, and the release process document describes the
+  new body.
+
+### Fixed
+
+- Frontend runtime listeners unregister correctly under React StrictMode and
+  when Tauri finishes `listen` after unmount: a disposed flag drops late
+  registrations and every settled unlistener is called on cleanup, so a
+  remount does not stack duplicate status refreshes.
+
+- The Rules page refreshes while it stays open. Its overview (total, disabled,
+  custom, and type counts) is memoized between loads, so a background
+  subscription auto-update used to leave the numbers and list at their
+  pre-update state until the user left the page or edited a rule. The page now
+  re-reads both when the app announces a state change, and skips that while a
+  local edit is in flight or the pane is inactive (reactivation already
+  reloads).
+
+- Rows in the vertical `ScrollArea` lists (for example a custom rule with a
+  long `domain_suffix` list) no longer widen past the viewport, which clipped
+  their right-hand controls (outbound badge, disable / enable, delete) with no
+  horizontal scrollbar to reach them. The Rules row title now ellipsizes
+  instead of running under the controls.
+
 ## [0.1.14] - 2026-09-27
 
 ### Added

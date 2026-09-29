@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, type StatusResponse } from "../api/tauri";
+import { api, type StatusResponse } from "../api/client";
 
 const STATUS_FALLBACK_MS = 10_000;
 
@@ -45,6 +45,7 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
       : document.visibilityState !== "hidden",
   );
   const genRef = useRef(0);
+  const requestRef = useRef(0);
 
   const bumpGeneration = useCallback(() => {
     genRef.current += 1;
@@ -55,9 +56,11 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
 
   const refreshStatus = useCallback(async () => {
     const gen = genRef.current;
+    const request = ++requestRef.current;
     try {
       const next = await api.getStatus();
-      if (gen !== genRef.current) return null;
+      // Mutation generations and request ordering guard different races.
+      if (gen !== genRef.current || request !== requestRef.current) return null;
       setStatus(next);
       return next;
     } catch {
@@ -71,36 +74,24 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
       setVisible(document.visibilityState !== "hidden");
     };
     document.addEventListener("visibilitychange", onVis);
-    let unHidden = () => {};
-    let unShown = () => {};
-    let unCore = () => {};
-    let unState = () => {};
-    void listenOptional(api.listenWindowHidden, () => setVisible(false)).then(
-      (u) => {
-        unHidden = u;
-      },
-    );
-    void listenOptional(api.listenWindowShown, () => setVisible(true)).then(
-      (u) => {
-        unShown = u;
-      },
-    );
-    void listenOptional(api.listenCoreStatusChanged, () => {
-      void refreshStatus();
-    }).then((u) => {
-      unCore = u;
-    });
-    void listenOptional(api.listenStateChanged, () => {
-      void refreshStatus();
-    }).then((u) => {
-      unState = u;
-    });
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const register = (fn: Parameters<typeof listenOptional>[0], handler: () => void) => {
+      void listenOptional(fn, () => { if (!disposed) handler(); }).then((off) => {
+        // Tauri can finish registration after unmount or a StrictMode cleanup.
+        if (disposed) off();
+        else unlisteners.push(off);
+      });
+    };
+    register(api.listenWindowHidden, () => setVisible(false));
+    register(api.listenWindowShown, () => setVisible(true));
+    register(api.listenCoreStatusChanged, () => { void refreshStatus(); });
+    register(api.listenStateChanged, () => { void refreshStatus(); });
     return () => {
+      disposed = true;
+      genRef.current += 1;
       document.removeEventListener("visibilitychange", onVis);
-      unHidden();
-      unShown();
-      unCore();
-      unState();
+      unlisteners.forEach((off) => off());
     };
   }, [enabled, refreshStatus]);
 

@@ -17,7 +17,7 @@ import {
   Settings as SettingsIcon,
   Waypoints,
 } from "lucide-react";
-import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/tauri";
+import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/client";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
 import { Subscriptions } from "./pages/Subscriptions";

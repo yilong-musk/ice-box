@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
-import type { RuleRow } from "../api/tauri";
+import type { RuleRow } from "../api/client";
 import { t } from "./i18n";
 import {
   MATCH_KEY_ORDER,

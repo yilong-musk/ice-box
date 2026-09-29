@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { t } from "../../lib/i18n";
-import { formatInvokeError, api, type AppSettings } from "../../api/tauri";
+import { formatInvokeError, api, type AppSettings } from "../../api/client";
 
 export function DataCard({
   form,

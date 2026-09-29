@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { t } from "../../lib/i18n";
-import type { StatusResponse } from "../../api/tauri";
+import type { StatusResponse } from "../../api/client";
 
 export function HelperActions({
   status,

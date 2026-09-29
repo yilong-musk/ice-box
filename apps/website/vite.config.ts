@@ -11,25 +11,12 @@ const desktopSrc = path.resolve(root, "../desktop/src");
 
 export default defineConfig({
   base: "./",
-  plugins: [
-    {
-      name: "website-desktop-browser-adapters",
-      enforce: "pre",
-      resolveId(source, importer) {
-        if (!importer?.includes(`${path.sep}apps${path.sep}desktop${path.sep}src${path.sep}`)) return null;
-        if (source === "./api/tauri" || source.endsWith("/api/tauri")) return path.resolve(root, "src/browser-api.ts");
-        if (source === "@/lib/windowChrome") return path.resolve(root, "src/browser-window-chrome.ts");
-        return null;
-      },
-    },
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [react(), tailwindcss()],
   resolve: {
     dedupe: ["react", "react-dom", "lucide-react", "recharts", "radix-ui", "class-variance-authority", "clsx", "tailwind-merge"],
     alias: [
-      { find: path.resolve(desktopSrc, "api/tauri"), replacement: path.resolve(root, "src/browser-api.ts") },
-      { find: path.resolve(desktopSrc, "lib/windowChrome"), replacement: path.resolve(root, "src/browser-window-chrome.ts") },
+      { find: "@platform/api", replacement: path.resolve(root, "src/browser-api.ts") },
+      { find: "@platform/windowChrome", replacement: path.resolve(root, "src/browser-window-chrome.ts") },
       { find: "@", replacement: desktopSrc },
     ],
   },

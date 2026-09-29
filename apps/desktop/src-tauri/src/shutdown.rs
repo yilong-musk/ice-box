@@ -117,10 +117,16 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
     let Some(state) = app.try_state::<AppState>() else {
         return QuitOutcome::Stopped;
     };
-    let binary = crate::commands::binary_for(app).unwrap_or_default();
+    let binary = crate::application::binary_for(app).unwrap_or_default();
+    let _pause = state.workers.pause();
 
     match graceful_stop(state.inner(), binary) {
-        Ok(()) => QuitOutcome::Stopped,
+        Ok(()) => {
+            state
+                .workers
+                .shutdown(std::time::Duration::from_millis(500));
+            QuitOutcome::Stopped
+        }
         Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
             tracing::error!(error = %err, "tray quit: proxy restore failed; staying open");
             if let Some(win) = app.get_webview_window("main") {
@@ -231,6 +237,8 @@ mod tests {
             paths: paths.clone(),
             core,
             core_snapshot,
+            runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+            workers: crate::workers::WorkerSupervisor::default(),
             proxy: Mutex::new(proxy),
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(Vec::new()),

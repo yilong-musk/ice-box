@@ -2,7 +2,7 @@
 
 //! Background auto-update of subscriptions flagged with `auto_update`.
 
-use crate::commands;
+use crate::application;
 use crate::orchestrate::current_settings;
 use crate::AppState;
 use ice_engine::{
@@ -68,6 +68,9 @@ pub(crate) fn due_auto_update_ids(
 /// Returns `false` when the pass was deferred (orchestrate busy); the caller
 /// may retry shortly.
 pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
+    if state.workers.is_paused_or_stopping() {
+        return true;
+    }
     let paths = SubscriptionPaths::from_app(&state.paths);
     let mgr = SubscriptionManager::open(paths, host_platform());
     let items = match mgr.list() {
@@ -89,18 +92,24 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
         tracing::debug!("auto-update: orchestrate busy, deferring apply");
         return false;
     };
+    // A quit may have started during network I/O; never apply after teardown.
+    if state.workers.is_paused_or_stopping() {
+        return true;
+    }
     let results = mgr.apply_all(fetched);
     let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
     let failed = results.len() - updated;
     tracing::info!(updated, failed, "auto-update subscriptions");
     let settings = current_settings(&state.paths).unwrap_or_default();
-    if let Some(warning) = commands::apply_after_subscription_change(app, state, &settings) {
+    if let Some(warning) = application::apply_after_subscription_change(app, state, &settings) {
         tracing::warn!(
             code = %warning.code,
             error = %warning.message,
             "auto-update: apply warning"
         );
     }
+    drop(_orch);
+    application::broadcast_state_change(app);
     true
 }
 
@@ -109,36 +118,28 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
 /// startup grace period) so subscriptions that went stale while the app was
 /// closed refresh promptly instead of waiting for the first hourly tick.
 pub fn spawn_subscription_watchdog(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        if let Some(state) = app.try_state::<AppState>() {
-            state
-                .subscription_watchdog_alive
-                .store(true, Ordering::SeqCst);
+    struct Liveness(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Liveness {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
         }
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_subscription_watchdog_loop(&app);
-        }));
-        if panicked.is_err() {
-            if let Some(state) = app.try_state::<AppState>() {
-                state
-                    .subscription_watchdog_alive
-                    .store(false, Ordering::SeqCst);
-            }
-            tracing::error!("subscription watchdog panicked; restarting after a delay");
-            std::thread::sleep(STARTUP_RETRY_DELAY);
-            continue;
-        }
-        if let Some(state) = app.try_state::<AppState>() {
-            state
-                .subscription_watchdog_alive
-                .store(false, Ordering::SeqCst);
-        }
-        break;
+    }
+    let workers = app.state::<AppState>().workers.clone();
+    workers.spawn("subscription-update", move |cancel| {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let alive = state.subscription_watchdog_alive.clone();
+        alive.store(true, Ordering::SeqCst);
+        let _liveness = Liveness(alive);
+        run_subscription_watchdog_loop(&app, &cancel);
     });
 }
 
-fn run_subscription_watchdog_loop(app: &AppHandle) {
-    std::thread::sleep(STARTUP_GRACE);
+fn run_subscription_watchdog_loop(app: &AppHandle, cancel: &crate::workers::WorkerToken) {
+    if !cancel.wait(STARTUP_GRACE) {
+        return;
+    }
     for _ in 0..STARTUP_RETRIES {
         let Some(state) = app.try_state::<AppState>() else {
             return;
@@ -148,15 +149,23 @@ fn run_subscription_watchdog_loop(app: &AppHandle) {
         }));
         match ok {
             Ok(true) => break,
-            Ok(false) => std::thread::sleep(STARTUP_RETRY_DELAY),
+            Ok(false) => {
+                if !cancel.wait(STARTUP_RETRY_DELAY) {
+                    return;
+                }
+            }
             Err(_) => {
                 tracing::error!("auto-update pass panicked; retrying");
-                std::thread::sleep(STARTUP_RETRY_DELAY);
+                if !cancel.wait(STARTUP_RETRY_DELAY) {
+                    return;
+                }
             }
         }
     }
     loop {
-        std::thread::sleep(AUTO_UPDATE_TICK);
+        if !cancel.wait(AUTO_UPDATE_TICK) {
+            break;
+        }
         let Some(state) = app.try_state::<AppState>() else {
             break;
         };

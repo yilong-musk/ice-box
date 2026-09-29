@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { CheckAppUpdateResponse } from "../api/tauri";
+import type { CheckAppUpdateResponse } from "../api/client";
 
 /** Backoff after a failed background GitHub check. After the 15-minute retry
  * still fails, the ladder is exhausted and the 24h cooldown starts. */

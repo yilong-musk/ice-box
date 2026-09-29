@@ -16,6 +16,8 @@ export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
+      "@platform/api": path.resolve(root, "src/api/tauri.ts"),
+      "@platform/windowChrome": path.resolve(root, "src/lib/windowChrome.ts"),
       "@": path.resolve(root, "./src"),
     },
   },

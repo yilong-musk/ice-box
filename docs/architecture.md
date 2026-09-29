@@ -91,6 +91,60 @@ orchestration lock. Background workers perform blocking operations while the UI
 reads runtime snapshots and receives events. This prevents overlapping
 operations from racing to replace the core or restore the same OS state.
 
+### Application services and shell adapters
+
+Shared use cases live in `src-tauri/src/application`: core/capture lifecycle,
+settings, subscriptions, node/rule selection, profile caches, and log reads.
+Tauri commands marshal IPC arguments and schedule blocking work; tray actions
+and subscription workers call the same application services, never commands.
+`AppResources` and `AppHost` expose resource paths and post-mutation events.
+Their Tauri implementation lives in `app_host.rs`, outside the service layer.
+This is a module-level boundary, not a separate headless crate: `AppState` and
+the shell build still depend on Tauri. The configuration-only scope of
+`ice-engine` and the existing capture rollback paths are unchanged.
+
+### Runtime reads and diagnostics
+
+`RuntimeReadModel` publishes immutable, monotonically versioned status values.
+Short read assemblies serialize separately, then try the orchestration lock;
+when a mutation holds it, a reader receives the last committed revision with
+`refresh_pending=true`, not a mixture of old settings and new capture state.
+The initial view is established before startup recovery. Application mutation
+guards publish again after releasing their write lock, including error paths.
+The Home power control treats a pending refresh as busy. Frontend requests use
+both mutation generations and request sequence numbers, so reversed responses
+cannot replace the newest requested status.
+
+Helper IPC, binary drift checks, and system-proxy/elevation probes run on a
+separate background worker, never inside status reads. Probe metadata reports
+last successful check time, age, staleness, and errors. Results that cross a
+mutation are discarded; core generation and settings signatures also identify
+outdated samples. Probe freshness is independent of the complete status
+revision: a core generation alone is not an application-wide version.
+
+### Background worker lifecycle
+
+`WorkerSupervisor` owns recurring core health, subscription refresh, runtime
+probe, tray state/speed, and instance-focus workers. Each retains an independent
+thread so a slow subscription fetch cannot delay health reconciliation. Named
+workers expose liveness and restart counts; panics retry with a delay.
+Condition-variable waits use monotonic deadlines and can interrupt hourly
+timers on cancellation. Quit pauses workers during cleanup, resumes them if
+cleanup fails, and cancels/joins them within a shared bounded budget on success.
+In-flight subscription fetches recheck the pause before applying their results.
+Update installation retains its pause through installation and releases it on
+failure. Startup one-shot initialization remains separate from recurring work.
+
+### Frontend platform contract
+
+`api/contracts.ts` defines DTOs and `ApiContract` without native dependencies;
+`api/format.ts` owns shared error and diagnostic presentation. Views import the
+`api/client.ts` facade. Desktop and website composition roots explicitly bind
+`@platform/api` and `@platform/windowChrome` to their adapters, instead of
+rewriting imports based on the importing file's directory. Both API adapters
+must satisfy the same contract. Architecture regression tests guard the service
+and UI dependency directions; builds typecheck both platform bindings.
+
 Configuration changes are validated before application. Reload is preferred
 where supported, with restart as a fallback; health checks determine success.
 Failures attempt to restore the previous configuration and release capture
@@ -115,7 +169,7 @@ Closing the window leaves the app in the tray, whose menu mirrors the Home
 power switch (start / stop the proxy service)
 and the routing-mode selector, the Subscriptions page for switching the active
 subscription, and the Nodes page for switching the active exit (one node per
-strategy group, nested one level down); all of them call the same command paths
+strategy group, nested one level down); all of them call the same application services
 the window does. The Nodes menu on macOS also carries a delay test per page
 (`tray_delay.rs`): the top page probes every strategy group's current exit, a
 group page probes its members, the measured delay lands in the row labels, and

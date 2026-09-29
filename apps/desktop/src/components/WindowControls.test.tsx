@@ -4,13 +4,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "@/lib/i18n";
 import { WindowControls } from "./WindowControls";
-import type { WindowChrome } from "@/lib/windowChrome";
+import type { WindowChrome } from "@platform/windowChrome";
 
 const runWindowCommand = vi.fn();
 let chrome: WindowChrome = "macos-overlay";
 
-vi.mock("@/lib/windowChrome", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/windowChrome")>();
+vi.mock("@platform/windowChrome", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@platform/windowChrome")>();
   return {
     ...actual,
     detectWindowChrome: () => chrome,

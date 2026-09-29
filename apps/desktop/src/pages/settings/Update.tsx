@@ -18,7 +18,7 @@ import { formatProgress } from "../../components/UpdateAvailableDialog";
 import { APP_VERSION } from "../../lib/appVersion";
 import { t } from "../../lib/i18n";
 import { isErrorCode } from "../../api/errorCodes";
-import { formatInvokeError, type CheckAppUpdateResponse } from "../../api/tauri";
+import { formatInvokeError, type CheckAppUpdateResponse } from "../../api/client";
 
 function invokeErrorCode(err: unknown): string | null {
   if (err && typeof err === "object") {

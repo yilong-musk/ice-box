@@ -7,7 +7,7 @@ import {
   type ListRulesRequest,
   type RuleOverview,
   type RuleRow,
-} from "../api/tauri";
+} from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";
@@ -93,6 +93,7 @@ export function Rules({ onNavigate, active = true }: Props) {
   const [nearBottom, setNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
+  const overviewRequestRef = useRef<Promise<RuleOverview> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,16 +103,25 @@ export function Rules({ onNavigate, active = true }: Props) {
   }, []);
 
   useEffect(() => {
+    if (filters.keyword === debouncedKeyword) return;
     const id = window.setTimeout(
-      () => setDebouncedKeyword(filters.keyword),
+      () => {
+        setDebouncedKeyword(filters.keyword);
+        setOffset(0);
+      },
       MAX_KEYWORD_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(id);
-  }, [filters.keyword]);
+  }, [filters.keyword, debouncedKeyword]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refreshOverview = false) => {
     const gen = nextGeneration();
+    let overviewRequest: Promise<RuleOverview> | null = null;
     try {
+      if (refreshOverview || !overviewRequestRef.current) {
+        overviewRequestRef.current = api.getRuleOverview();
+      }
+      overviewRequest = overviewRequestRef.current;
       const req: ListRulesRequest = {
         keyword: debouncedKeyword || null,
         type: filters.type || null,
@@ -121,7 +131,7 @@ export function Rules({ onNavigate, active = true }: Props) {
         limit,
       };
       const [ov, list] = await Promise.all([
-        api.getRuleOverview(),
+        overviewRequest,
         api.listRules(req),
       ]);
       if (isStale(gen)) return;
@@ -134,14 +144,57 @@ export function Rules({ onNavigate, active = true }: Props) {
       }
       setError(null);
     } catch (e) {
+      if (overviewRequestRef.current === overviewRequest) overviewRequestRef.current = null;
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
-  }, [debouncedKeyword, filters, offset, limit, isStale, nextGeneration]);
+  }, [debouncedKeyword, filters.type, filters.status, filters.custom, offset, limit, isStale, nextGeneration]);
+
+  useEffect(() => {
+    overviewRequestRef.current = null;
+    if (!active) nextGeneration();
+  }, [active, nextGeneration]);
 
   useEffect(() => {
     if (!active) return;
     void load();
   }, [active, load]);
+
+  // Keep the latest `load` and `busy` reachable from the long-lived listener
+  // below, so filter changes do not re-register it.
+  const loadRef = useRef(load);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  // A background subscription auto-update (or a tray action) changes the rule
+  // set while this page stays on screen. The overview is memoized between
+  // loads, so without this its counts and the type chips would keep the
+  // pre-update numbers until the user leaves the page or edits a rule. The
+  // announcement carries no detail, so re-read the overview and the current
+  // page together. A local mutation in flight reloads on its own, and an
+  // inactive pane reloads when it is reactivated.
+  useEffect(() => {
+    if (!active || typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        if (busyRef.current) return;
+        void loadRef.current(true);
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [active]);
 
   // Recompute pager visibility whenever the list content changes.
   useEffect(() => {
@@ -163,11 +216,11 @@ export function Rules({ onNavigate, active = true }: Props) {
 
   function changeFilters(next: Partial<Filters>) {
     setFilters((f) => ({ ...f, ...next }));
-    setOffset(0);
+    if (next.keyword === undefined) setOffset(0);
   }
 
   async function reloadAfterMutation() {
-    if (mountedRef.current) await load();
+    if (mountedRef.current) await load(true);
   }
 
   async function onToggleDisabled(row: RuleRow) {
@@ -255,7 +308,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => void load()}
+              onClick={() => void load(true)}
               disabled={busy}
             >
               {t("common.refresh")}
@@ -353,6 +406,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                       >
                         <ItemContent className="min-w-0">
                           <ItemTitle
+                            className="w-full min-w-0"
                             title={`${summary}\n${JSON.stringify(row.rule)}`}
                           >
                             <span className="truncate">

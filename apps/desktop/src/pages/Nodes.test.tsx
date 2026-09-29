@@ -18,7 +18,7 @@ const listenStateChanged = vi.fn();
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
@@ -201,7 +201,7 @@ describe("Nodes", () => {
     });
   });
 
-  it("renders a long node list without dropping later rows", async () => {
+  it("renders later rows when scrolling a freshly loaded long list", async () => {
     listNodes.mockResolvedValue(
       Array.from({ length: 80 }, (_, i) => ({
         tag: `node-${i}`,
@@ -217,13 +217,16 @@ describe("Nodes", () => {
       expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
       expect(view.getByText("node-0")).toBeInTheDocument();
     });
+    fireEvent.scroll(container.querySelector('[data-slot="scroll-area-viewport"]')!, {
+      target: { scrollTop: 3880 },
+    });
     await waitFor(() => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
     const titles = container.querySelectorAll(
       `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
     );
-    expect(titles).toHaveLength(80);
+    expect(titles.length).toBeLessThanOrEqual(15);
   });
 
   it("does not flash the empty-state guide before nodes load", async () => {
@@ -301,7 +304,7 @@ describe("Nodes", () => {
     const { container, rerender } = render(<Nodes active={false} />);
     const view = within(container);
 
-    expect(view.getByText("cached-node")).toBeInTheDocument();
+    expect(view.queryByText("cached-node")).toBeNull();
     expect(listNodes).not.toHaveBeenCalled();
 
     rerender(<Nodes active />);
@@ -341,7 +344,7 @@ describe("Nodes", () => {
     expect(view.queryByText("leaf-89")).toBeNull();
   });
 
-  it("reveals a large strategy-group member list after expand", async () => {
+  it("virtualizes strategy-group members while scrolling", async () => {
     const groupAll = Array.from({ length: 90 }, (_, i) => `leaf-${i}`);
     writeNodesSnapshot({
       nodes: [
@@ -360,14 +363,18 @@ describe("Nodes", () => {
     const view = within(container);
 
     await expandGroup(view, "选择组");
+    expect(view.queryByText("leaf-89")).toBeNull();
+    const viewport = container.querySelector('[data-slot="scroll-area-viewport"]')!;
+    fireEvent.scroll(viewport, { target: { scrollTop: 2336 } });
     await waitFor(() => {
       expect(
         view.getByLabelText(t("nodes.setMemberAria", { member: "leaf-89", group: "选择组" })),
       ).toBeInTheDocument();
     });
+    expect(view.queryByLabelText(t("nodes.memberCurrentAria", { member: "leaf-0" }))).toBeNull();
   });
 
-  it("opens a long list with one screen then fills the rest", async () => {
+  it("bounds long-list DOM and restores scrolling after hiding", async () => {
     writeNodesSnapshot({
       nodes: Array.from({ length: 80 }, (_, i) => ({
         tag: `node-${i}`,
@@ -379,7 +386,7 @@ describe("Nodes", () => {
       running: true,
     });
     listNodes.mockImplementation(() => new Promise(() => {}));
-    const { container } = render(<Nodes />);
+    const { container, rerender } = render(<Nodes />);
     const view = within(container);
 
     expect(view.getByText("node-0")).toBeInTheDocument();
@@ -387,15 +394,24 @@ describe("Nodes", () => {
       `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
     );
     expect(firstPaint.length).toBeGreaterThan(0);
-    expect(firstPaint.length).toBeLessThanOrEqual(8);
+    expect(firstPaint.length).toBeLessThanOrEqual(15);
     expect(view.queryByText("node-79")).toBeNull();
 
+    fireEvent.scroll(container.querySelector('[data-slot="scroll-area-viewport"]')!, {
+      target: { scrollTop: 3880 },
+    });
     await waitFor(() => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
+    expect(view.queryByText("node-0")).toBeNull();
     expect(
       container.querySelectorAll(`[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`),
-    ).toHaveLength(80);
+    ).toHaveLength(14);
+    rerender(<Nodes active={false} />);
+    expect(view.queryByRole("list", { name: t("nodes.listAria") })).toBeNull();
+    rerender(<Nodes active />);
+    expect(view.getByText("node-79")).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="scroll-area-viewport"]')).toHaveProperty("scrollTop", 3880);
   });
 
   it("shows empty-state guide when no nodes", async () => {

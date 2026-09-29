@@ -61,8 +61,11 @@ fn write_focus_request(data_root: &Path) {
 /// Poll for secondary-instance focus requests for the app lifetime.
 pub fn spawn_focus_watchdog<R: Runtime>(app: AppHandle<R>, paths: AppPaths) {
     let focus_path = paths.root().join(FOCUS_FILE);
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(400));
+    let workers = app.state::<crate::AppState>().workers.clone();
+    workers.spawn("instance-focus", move |cancel| loop {
+        if !cancel.wait(Duration::from_millis(400)) {
+            break;
+        }
         if !focus_path.exists() {
             continue;
         }

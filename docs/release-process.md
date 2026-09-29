@@ -10,7 +10,8 @@ A release is a **`vX.Y.Z` tag pushed to `main`**. The tag push triggers
 `.github/workflows/release.yml`, which gates the workspace, builds the macOS
 arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`) and the Windows NSIS `.exe`
 (plus `.exe.sig`), synthesizes `latest.json`, and publishes a GitHub Release with
-the artifacts and compliance notices.
+the artifacts, the compliance notices, and a short release body that links to the
+full changelog.
 
 macOS releases are ad-hoc signed at the bundle level (documented product
 decision: no Developer ID certificate, no notarization). TUN elevation is
@@ -79,12 +80,17 @@ Add a section to `CHANGELOG.md` (Keep a Changelog style):
 ...
 ```
 
-Release notes for the GitHub Release are extracted from this section by
-`scripts/release-notes.sh`. Verify locally before tagging:
+The GitHub Release body is deliberately short: `scripts/release-notes.sh` prints
+a headline, one line about the release, and a link to this section in
+`CHANGELOG.md`. The full per-release notes stay in the changelog and are never
+pasted into the release body. Verify locally before tagging:
 
 ```bash
-bash scripts/release-notes.sh v0.1.2
+bash scripts/release-notes.sh v0.1.2   # short blurb + changelog link
 ```
+
+The script fails when the version's changelog section is missing or empty, so
+run it before tagging.
 
 ### 3. Gate and merge to `main`
 
@@ -119,7 +125,7 @@ Pushing the tag is the point of no return: it triggers the release pipeline.
 |-----|--------|------|
 | `build-macos` | macos-latest | gate + headless acceptance + `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets) → upload DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | gate + headless acceptance + NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`) → upload EXE + `.exe.sig` |
-| `publish` | ubuntu-latest | `needs` both build jobs; downloads artifacts; extracts the changelog section via `scripts/release-notes.sh`; `scripts/merge-updater-latest.sh` writes `latest.json`; creates the GitHub Release |
+| `publish` | ubuntu-latest | `needs` both build jobs; downloads artifacts; builds the short release body via `scripts/release-notes.sh`; `scripts/merge-updater-latest.sh` reuses that body as `latest.json` `notes`; creates the GitHub Release |
 
 Published assets:
 
@@ -139,7 +145,11 @@ Published assets:
 ```bash
 gh run list --workflow release.yml --limit 1   # conclusion: success
 gh release view v0.1.2 --json assets           # dmg, exe, tar.gz, sigs, latest.json
+gh release view v0.1.2 --json body             # short blurb + CHANGELOG.md link
 ```
+
+The release body is the short blurb from `scripts/release-notes.sh`; the full
+notes stay one click away in `CHANGELOG.md`.
 
 `latest.json` must list both `darwin-aarch64` and `windows-x86_64` with non-empty
 signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`

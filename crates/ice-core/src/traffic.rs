@@ -137,6 +137,11 @@ impl TrafficMonitor {
         }
     }
 
+    /// Read one sample without copying the chart window or recomputing its peak.
+    pub fn latest_timed(&self) -> Option<TimedTrafficSample> {
+        lock_inner(&self.shared).points.back().copied()
+    }
+
     /// Samples newer than `cursor` (exclusive). `cursor == None` returns the
     /// full window. `generation` changes when history is dropped.
     pub fn snapshot_since(&self, cursor: Option<u64>) -> TrafficDelta {
@@ -368,6 +373,18 @@ mod tests {
     use crate::clash_api::{MockClashApi, TrafficSample};
     use crate::health::HealthEndpoints;
     use std::time::Instant;
+
+    #[test]
+    fn latest_timed_matches_the_last_snapshot_point_without_consuming_it() {
+        let monitor = TrafficMonitor::new();
+        assert_eq!(monitor.latest_timed(), None);
+        monitor.seed_history_for_test(TrafficSample { up: 9, down: 8 });
+        assert_eq!(
+            monitor.latest_timed(),
+            monitor.snapshot().points.last().copied()
+        );
+        assert_eq!(monitor.snapshot().points.len(), 1);
+    }
 
     #[test]
     fn retain_window_drops_points_older_than_60s() {

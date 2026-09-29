@@ -60,14 +60,12 @@ fn drop_prefix_len(len: u64, max_bytes: u64) -> u64 {
     drop.max(over).min(len - 1)
 }
 
-/// Keep `file` from `start`, aligned to the next full line.
-fn tail_from(file: &mut File, start: u64) -> io::Result<Vec<u8>> {
-    let len = file.metadata()?.len();
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Find the next line boundary without allocating the retained log tail.
+fn aligned_start(file: &mut File, start: u64, len: u64, buf: &mut [u8]) -> io::Result<u64> {
     if start == 0 || len <= 1 {
-        file.seek(SeekFrom::Start(0))?;
-        let mut all = Vec::new();
-        file.read_to_end(&mut all)?;
-        return Ok(all);
+        return Ok(0);
     }
     let start = start.min(len - 1);
     let at_line_start = {
@@ -76,25 +74,56 @@ fn tail_from(file: &mut File, start: u64) -> io::Result<Vec<u8>> {
         file.read_exact(&mut prev)?;
         prev[0] == b'\n'
     };
-    file.seek(SeekFrom::Start(start))?;
-    let mut tail = Vec::new();
-    file.read_to_end(&mut tail)?;
-    if !at_line_start {
-        if let Some(i) = tail.iter().position(|&b| b == b'\n') {
-            if i + 1 < tail.len() {
-                tail.drain(..=i);
-            }
-        }
+    if at_line_start {
+        return Ok(start);
     }
-    Ok(tail)
+    let mut pos = start;
+    while pos < len {
+        let want = (len - pos).min(buf.len() as u64) as usize;
+        file.read_exact(&mut buf[..want])?;
+        if let Some(i) = buf[..want].iter().position(|&b| b == b'\n') {
+            let next = pos + i as u64 + 1;
+            return Ok(if next < len { next } else { start });
+        }
+        pos += want as u64;
+    }
+    Ok(start)
 }
 
-fn rewrite_in_place(file: &mut File, data: &[u8]) -> io::Result<()> {
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(data)?;
-    file.flush()?;
+fn copy_tail(
+    file: &mut File,
+    start: u64,
+    from: &mut u64,
+    end: u64,
+    buf: &mut [u8],
+) -> io::Result<()> {
+    while *from < end {
+        let count = (end - *from).min(buf.len() as u64) as usize;
+        file.seek(SeekFrom::Start(*from))?;
+        file.read_exact(&mut buf[..count])?;
+        file.seek(SeekFrom::Start(*from - start))?;
+        file.write_all(&buf[..count])?;
+        *from += count as u64;
+    }
     Ok(())
+}
+
+fn compact_in_place(file: &mut File, start: u64, len: u64, buf: &mut [u8]) -> io::Result<u64> {
+    if start == 0 {
+        return Ok(len);
+    }
+    let mut from = start;
+    copy_tail(file, start, &mut from, len, buf)?;
+    // Keep appends that arrived during the long copy. Do not empty the file
+    // first: an O_APPEND writer must not start overwriting our retained tail.
+    // Uncoordinated external writers can still race the final set_len; this
+    // same-inode operation is not a transactional rotation.
+    let end = file.metadata()?.len();
+    copy_tail(file, start, &mut from, end, buf)?;
+    let kept = from - start;
+    file.set_len(kept)?;
+    file.flush()?;
+    Ok(kept)
 }
 
 /// Drop the oldest slice of `path` in place (same inode) so an `O_APPEND`
@@ -103,10 +132,11 @@ fn rewrite_in_place(file: &mut File, data: &[u8]) -> io::Result<()> {
 pub fn trim_log_file(path: &Path, max_bytes: u64, keep: u32) -> io::Result<u64> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let len = file.metadata()?.len();
-    let kept = tail_from(&mut file, drop_prefix_len(len, max_bytes))?;
-    rewrite_in_place(&mut file, &kept)?;
+    let mut buf = [0u8; COPY_BUFFER_BYTES];
+    let start = aligned_start(&mut file, drop_prefix_len(len, max_bytes), len, &mut buf)?;
+    let kept = compact_in_place(&mut file, start, len, &mut buf)?;
     drop_rotated_siblings(path, keep);
-    Ok(kept.len() as u64)
+    Ok(kept)
 }
 
 /// When `path` exceeds `max_bytes`, drop the oldest quarter in place and
@@ -163,6 +193,50 @@ mod tests {
             drop_prefix_len(just_over, SIZED_LOG_MAX_BYTES),
             SIZED_LOG_TRIM_BYTES
         );
+    }
+
+    #[test]
+    fn chunked_trim_preserves_tail_and_an_existing_append_handle() {
+        let dir = temp_dir("chunks");
+        let path = dir.join("core.log");
+        let body = "0123456789abcdef\n".repeat(20_000);
+        fs::write(&path, &body).unwrap();
+        let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+        let dropped = drop_prefix_len(body.len() as u64, 200_000) as usize;
+        let aligned = if body.as_bytes()[dropped - 1] == b'\n' {
+            dropped
+        } else {
+            dropped + body[dropped..].find('\n').unwrap() + 1
+        };
+        trim_log_file(&path, 200_000, 0).unwrap();
+        writer.write_all(b"appended\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{}appended\n", &body[aligned..])
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn compaction_includes_growth_since_the_initial_length_snapshot() {
+        let dir = temp_dir("growth");
+        let path = dir.join("core.log");
+        fs::write(&path, b"old\nkeep\n").unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let len = file.metadata().unwrap().len();
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"new\n")
+            .unwrap();
+        compact_in_place(&mut file, 4, len, &mut [0; 3]).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"keep\nnew\n");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

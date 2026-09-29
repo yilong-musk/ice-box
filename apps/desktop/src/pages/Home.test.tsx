@@ -34,7 +34,7 @@ function infoRowLabels(container: HTMLElement): (string | null)[] {
     .map((node) => node.textContent);
 }
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),

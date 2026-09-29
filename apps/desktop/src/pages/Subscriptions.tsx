@@ -7,7 +7,7 @@ import {
   formatUiMessage,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
-} from "../api/tauri";
+} from "../api/client";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
   isInsecureSubscriptionUrl,

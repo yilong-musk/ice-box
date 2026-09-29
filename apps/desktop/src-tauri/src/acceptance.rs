@@ -217,6 +217,8 @@ mod tests {
             paths: paths.clone(),
             core,
             core_snapshot,
+            runtime_status: crate::runtime_status::RuntimeReadModel::default(),
+            workers: crate::workers::WorkerSupervisor::default(),
             proxy: Mutex::new(Box::new(TrackProxy::default())),
             orchestrate: Mutex::new(()),
             proxy_recovery_warning: Mutex::new(Vec::new()),

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod acceptance;
+mod app_host;
 mod app_update;
+mod application;
 mod autostart;
 mod capture;
 mod commands;
@@ -15,6 +17,7 @@ mod orchestrate;
 mod proc_memory;
 mod proxy_terminal;
 mod runtime;
+mod runtime_status;
 mod shutdown;
 mod subscription_watch;
 mod tray;
@@ -34,6 +37,7 @@ mod tray_speed;
 #[cfg(target_os = "windows")]
 mod tray_wheel;
 mod windows_elevation;
+mod workers;
 
 use crate::capture::CaptureController;
 use crate::core_snapshot::{wrap_core, CoreSnapshotHub};
@@ -99,6 +103,8 @@ pub struct AppState {
     pub core: Mutex<Box<dyn CoreHandle>>,
     /// Published on every core transition; `collect_status` never takes `core`.
     pub core_snapshot: Arc<CoreSnapshotHub>,
+    pub runtime_status: runtime_status::RuntimeReadModel,
+    pub workers: workers::WorkerSupervisor,
     pub proxy: Mutex<Box<dyn SystemProxy>>,
     /// Serializes config mutations (subscriptions, settings, start/stop, node select).
     pub orchestrate: Mutex<()>,
@@ -123,7 +129,7 @@ pub struct AppState {
     /// read paths poll every 2-5s and must not re-parse a multi-MB profile
     /// each time. Invalidated implicitly: the key changes when the active
     /// subscription, its profile, or `auto_default_rules` changes on disk.
-    pub profile_cache: Mutex<Option<commands::ProfileCacheEntry>>,
+    pub profile_cache: Mutex<Option<application::ProfileCacheEntry>>,
     /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
     pub profile_parse_cache: Arc<ice_engine::ProfileCache>,
     /// Subscription auto-update watchdog liveness (SUB-4). False while the
@@ -131,7 +137,7 @@ pub struct AppState {
     pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
-    pub log_view_cache: Mutex<Option<commands::LogViewCache>>,
+    pub(crate) log_view_cache: Mutex<Option<application::LogViewCache>>,
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
@@ -238,6 +244,8 @@ pub fn run() {
                 paths,
                 core,
                 core_snapshot,
+                runtime_status: runtime_status::RuntimeReadModel::default(),
+                workers: workers::WorkerSupervisor::default(),
                 proxy: Mutex::new(proxy),
                 orchestrate: Mutex::new(()),
                 proxy_recovery_warning: Mutex::new(settings_reset_warning),
@@ -262,6 +270,8 @@ pub fn run() {
                 let handle = app.handle().clone();
                 let state = app.state::<AppState>();
                 state.core_snapshot.bind_emitter(handle.clone());
+                // Establish a committed read before startup takes the write lock.
+                let _ = application::collect_status(state.inner());
                 state.traffic.set_on_sample({
                     let handle = handle.clone();
                     move |sample| {
@@ -297,13 +307,14 @@ pub fn run() {
             let (orch_tx, orch_rx) = std::sync::mpsc::sync_channel(1);
             std::thread::spawn(move || {
                 let state = handle.state::<AppState>();
-                if let Err(err) = commands::auto_start_on_launch(&handle, &state, Some(orch_tx)) {
+                if let Err(err) = application::auto_start_on_launch(&handle, &state, Some(orch_tx))
+                {
                     if state.shutdown_requested.load(Ordering::SeqCst) {
                         tracing::info!(error = %err, "auto-start aborted by quit");
                         return;
                     }
                     tracing::error!(error = %err, "auto-start failed");
-                    crate::commands::append_recovery_warning(
+                    crate::application::append_recovery_warning(
                         &state,
                         ice_config::UiMessage::new("recover.autoStartFailed")
                             .with("detail", err.to_string()),
@@ -344,6 +355,7 @@ pub fn run() {
             tray_speed::spawn_watchdog(app.handle().clone());
             tray::spawn_state_watchdog(app.handle().clone());
             core_watch::spawn_core_watchdog(app.handle().clone());
+            runtime_status::spawn_probe_watchdog(app.handle().clone());
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
             Ok(())
         })
@@ -355,6 +367,9 @@ pub fn run() {
             }
             WindowEvent::Focused(focused) => {
                 if *focused {
+                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                        application::request_runtime_probe_refresh(state.inner());
+                    }
                     let _ = window.emit(crate::core_snapshot::WINDOW_SHOWN, ());
                 }
             }
@@ -411,6 +426,11 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
             if crate::app_update::update_installing() {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    state
+                        .workers
+                        .shutdown(std::time::Duration::from_millis(500));
+                }
                 // The updater already ran graceful_stop; let NSIS / the
                 // bundle replace take over instead of prevent_exit.
                 return;

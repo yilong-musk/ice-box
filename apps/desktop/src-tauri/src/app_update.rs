@@ -252,7 +252,8 @@ fn stop_for_update(app: &AppHandle) -> Result<(), AppError> {
     let Some(state) = app.try_state::<AppState>() else {
         return Ok(());
     };
-    let binary = crate::commands::binary_for(app).unwrap_or_default();
+    let binary = crate::application::binary_for(app).unwrap_or_default();
+    let _pause = state.workers.pause();
     graceful_stop(state.inner(), binary)
 }
 
@@ -439,6 +440,10 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
         .await
         .map_err(|err| map_updater_err(ERR_UPDATE_INSTALL_FAILED, err))?;
 
+    // Retain the pause through installation; an install failure drops it and
+    // resumes the existing workers, while a successful restart cancels them.
+    let workers = app.state::<AppState>().workers.clone();
+    let _pause = workers.pause();
     UPDATE_INSTALLING.store(true, Ordering::SeqCst);
     if let Err(err) = stop_for_update(&app) {
         UPDATE_INSTALLING.store(false, Ordering::SeqCst);

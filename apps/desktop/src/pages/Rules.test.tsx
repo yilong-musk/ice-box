@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
@@ -12,8 +12,9 @@ const setRuleDisabled = vi.fn();
 const addCustomRule = vi.fn();
 const removeCustomRule = vi.fn();
 const listNodes = vi.fn();
+const listenStateChanged = vi.fn();
 
-vi.mock("../api/tauri", () => ({
+vi.mock("../api/client", () => ({
   api: {
     getRuleOverview: (...args: unknown[]) => getRuleOverview(...args),
     listRules: (...args: unknown[]) => listRules(...args),
@@ -21,6 +22,7 @@ vi.mock("../api/tauri", () => ({
     addCustomRule: (...args: unknown[]) => addCustomRule(...args),
     removeCustomRule: (...args: unknown[]) => removeCustomRule(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
+    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -93,6 +95,7 @@ describe("Rules", () => {
     setRuleDisabled.mockResolvedValue({ ok: true, disabled: true });
     addCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-new" });
     removeCustomRule.mockResolvedValue({ ok: true });
+    listenStateChanged.mockResolvedValue(() => {});
     listNodes.mockResolvedValue([
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
@@ -143,6 +146,52 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(getRuleOverview.mock.calls.length).toBeGreaterThan(initialLoads);
     });
+  });
+
+  it("re-reads the overview and list when a background update is announced", async () => {
+    let announce: () => void = () => {};
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      announce = handler;
+      return Promise.resolve(() => {});
+    });
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` })).toBeInTheDocument();
+    expect(getRuleOverview).toHaveBeenCalledTimes(1);
+
+    // A subscription auto-update added a geoip rule while the page stayed open.
+    getRuleOverview.mockResolvedValue(
+      sampleOverview({
+        total: 4,
+        types: [
+          { rule_type: "domain_suffix", count: 2 },
+          { rule_type: "geoip", count: 2 },
+        ],
+      }),
+    );
+    listRules.mockResolvedValue(sampleList({ total: 4 }));
+    act(() => announce());
+
+    await waitFor(() => {
+      expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 2` })).toBeInTheDocument();
+    });
+    expect(getRuleOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops listening for announcements while the pane is inactive", async () => {
+    const off = vi.fn();
+    listenStateChanged.mockResolvedValue(off);
+    const { container, rerender } = render(<Rules active />);
+    await waitFor(() => {
+      expect(within(container).getByText("youtube.com")).toBeInTheDocument();
+    });
+    await waitFor(() => expect(listenStateChanged).toHaveBeenCalledTimes(1));
+
+    rerender(<Rules active={false} />);
+    await waitFor(() => expect(off).toHaveBeenCalledTimes(1));
   });
 
   it("filters disabled rules from the chip next to type filters", async () => {
@@ -196,6 +245,31 @@ describe("Rules", () => {
       };
       expect(call.keyword).toBe("goo");
     });
+    expect(listRules).toHaveBeenCalledTimes(2);
+    expect(getRuleOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not query on each keystroke or reload the overview for search", async () => {
+    const view = render(<Rules />);
+    await waitFor(() => expect(view.getByText("youtube.com")).toBeInTheDocument());
+    vi.useFakeTimers();
+    try {
+      listRules.mockClear();
+      getRuleOverview.mockClear();
+      const input = view.getByLabelText(t("rules.searchAria"));
+      fireEvent.change(input, { target: { value: "g" } });
+      await act(async () => { vi.advanceTimersByTime(200); });
+      fireEvent.change(input, { target: { value: "goo" } });
+      await act(async () => { vi.advanceTimersByTime(299); });
+      expect(listRules).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(listRules).toHaveBeenCalledTimes(1);
+      expect(listRules).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: "goo", offset: 0 }));
+      expect(getRuleOverview).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("disables a rule and refreshes", async () => {
@@ -344,6 +418,45 @@ describe("Rules", () => {
       ).toBe(false);
     });
     expect(addCustomRule).not.toHaveBeenCalled();
+  });
+
+  it("lowercases domain matcher input while typing", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "BiliVideo.COM" } });
+    expect(input.value).toBe("bilivideo.com");
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matcherType")), {
+      target: { value: "domain_regex" },
+    });
+    const regexInput = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.change(regexInput, { target: { value: "[A-Z]+\\.CN$" } });
+    expect(regexInput.value).toBe("[A-Z]+\\.CN$");
+  });
+
+  it("leaves IME composition text intact and lowercases it on completion", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
+    fireEvent.compositionStart(input);
+    // Rewriting the field while the IME owns it makes WebKit re-commit the
+    // marked text, so the value must stay untouched until the composition ends.
+    fireEvent.change(input, { target: { value: "BiliVideo.COM" }, isComposing: true });
+    expect(input.value).toBe("BiliVideo.COM");
+
+    fireEvent.compositionEnd(input);
+    expect(input.value).toBe("bilivideo.com");
   });
 
   it("resets the form after a successful add", async () => {

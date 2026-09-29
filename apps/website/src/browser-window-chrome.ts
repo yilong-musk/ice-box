@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-export function detectWindowChrome(): "native" { return "native"; }
-export async function runWindowCommand(): Promise<void> {}
+import type { WindowChrome, WindowCommand } from "../../desktop/src/lib/windowChromeContract";
+export type { WindowChrome, WindowCommand } from "../../desktop/src/lib/windowChromeContract";
+
+export function detectWindowChrome(_userAgent?: string, _platform?: string): WindowChrome { return "plain"; }
+export function isMacosHost(_userAgent?: string, _platform?: string): boolean { return false; }
+export async function runWindowCommand(_command: WindowCommand): Promise<void> {}

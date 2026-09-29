@@ -14,13 +14,13 @@
 //! menu: a green-arrow prompt that opens Settings → App Updates. Native menu
 //! text cannot be coloured, so the arrow travels as the item's icon.
 
-use crate::capture::TrafficCapture;
-use crate::commands::{
+use crate::application::{
     apply_after_subscription_change, apply_proxy_mode, broadcast_state_change, collect_nodes,
     copy_proxy_terminal_command, current_settings, disable_active_backend_inner, lock_orchestrate,
     open_proxy_terminal_from_state, proxy_service_posture, select_group_member, select_node,
     start_service, NodeInfo,
 };
+use crate::capture::TrafficCapture;
 use crate::core_snapshot::APP_STATE_CHANGED;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 #[cfg(any(target_os = "macos", test))]
@@ -41,7 +41,7 @@ use serde::Deserialize;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
     menu::{
@@ -59,6 +59,7 @@ use uuid::Uuid;
 /// action anyway). The `proxy_applied_cache` is shared with the poll, so while
 /// the window is open the probe is usually a cache hit.
 const SYNC_INTERVAL: Duration = Duration::from_secs(5);
+const NODE_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Tray icon id. The macOS speed readout looks the icon up by id instead of
 /// holding a handle, so the managed menu state stays free of the platform icon.
@@ -697,6 +698,7 @@ struct TrayMenuState {
     /// re-click or a failed switch would leave a wrong check mark on screen.
     /// Written from the menu thread (no lock), consumed by the sync.
     nodes_dirty: AtomicBool,
+    last_nodes_sync: Mutex<Option<Instant>>,
     subs: Submenu<Wry>,
     /// Body currently attached to `subs`, with the same locking rule as
     /// `nodes_model`.
@@ -1483,6 +1485,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         nodes,
         nodes_model: Mutex::new(node_model),
         nodes_dirty: AtomicBool::new(false),
+        last_nodes_sync: Mutex::new(None),
         subs,
         subs_model: Mutex::new(subs_model),
         subs_dirty: AtomicBool::new(false),
@@ -1580,7 +1583,7 @@ fn current_view(app: &AppHandle) -> Option<TrayView> {
         service_on: posture.engaged(tun_active),
         service_enabled: state.system_proxy_available || capture.tun_available,
         mode: settings.proxy_mode,
-        cli_proxy_enabled: crate::commands::mixed_proxy_endpoint(state.inner()).is_ok(),
+        cli_proxy_enabled: crate::application::mixed_proxy_endpoint(state.inner()).is_ok(),
     })
 }
 
@@ -2097,6 +2100,10 @@ fn resolve_selected_tag(nodes: &[NodeInfo], selected: Option<&str>) -> String {
 /// mutations, so a watchdog rebuild plus a main-thread caller here would
 /// deadlock on `nodes_model`.
 pub fn sync_menu(app: &AppHandle) {
+    sync_menu_inner(app, true);
+}
+
+fn sync_menu_inner(app: &AppHandle, force_nodes: bool) {
     let Some(menu) = app.try_state::<TrayMenuState>() else {
         return;
     };
@@ -2123,7 +2130,14 @@ pub fn sync_menu(app: &AppHandle) {
         menu.nodes_dirty.load(Ordering::SeqCst),
         tray_popup_menu_open(),
     );
-    if !skip_nodes {
+    let nodes_due = force_nodes
+        || menu.nodes_dirty.load(Ordering::SeqCst)
+        || menu
+            .last_nodes_sync
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none_or(|at| at.elapsed() >= NODE_SYNC_INTERVAL);
+    if !skip_nodes && nodes_due {
         if let Some(entries) = current_node_entries(app) {
             if let Err(err) = menu.apply_nodes(app, &entries) {
                 tracing::warn!(
@@ -2131,6 +2145,11 @@ pub fn sync_menu(app: &AppHandle) {
                     error = %err.message,
                     "tray node menu sync failed"
                 );
+            } else {
+                *menu
+                    .last_nodes_sync
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
             }
         }
     }
@@ -2159,13 +2178,16 @@ pub fn sync_update_prompt(app: &AppHandle) {
 /// node groups in step with state changes the tray did not make: window actions,
 /// recovery, subscription updates, and external OS edits.
 pub fn spawn_state_watchdog(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(SYNC_INTERVAL);
+    let workers = app.state::<AppState>().workers.clone();
+    workers.spawn("tray-state", move |cancel| loop {
+        if !cancel.wait(SYNC_INTERVAL) {
+            break;
+        }
         if app.try_state::<AppState>().is_none() {
             // Tauri drops managed state while the app tears down.
             break;
         }
-        sync_menu(&app);
+        sync_menu_inner(&app, false);
     });
 }
 

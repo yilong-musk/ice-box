@@ -21,10 +21,16 @@ function ScrollArea({
       className={cn("relative", className)}
       {...props}
     >
+      {/* Radix wraps the children in a `display: table` div so wide content can
+          scroll horizontally. Every ScrollArea in this app is vertical-only
+          (`type="scroll"` + the default vertical bar), so that wrapper only
+          makes rows wider than the viewport and clips their right-hand
+          controls. Force it back to a block box so content stays viewport-wide
+          and the existing `min-w-0` / `truncate` rules can kick in. */}
       <ScrollAreaPrimitive.Viewport
         ref={viewportRef}
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:block!"
         onScroll={onViewportScroll}
       >
         {children}

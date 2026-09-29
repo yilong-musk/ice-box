@@ -12,7 +12,7 @@ import {
   type NodeInfo,
   type ProxyMode,
   type StatusResponse,
-} from "../api/tauri";
+} from "../api/client";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -304,6 +304,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     status?.tun_status === "preparing" || status?.tun_status === "stopping";
   const busy =
     pending ||
+    status?.refresh_pending === true ||
     core?.status === "starting" ||
     core?.status === "stopping" ||
     tunTransitioning;
