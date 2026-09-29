@@ -712,7 +712,12 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       )}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
-      <div className="grid shrink-0 grid-cols-2 items-stretch gap-3">
+      <div
+        className={cn(
+          "grid shrink-0 items-stretch gap-3",
+          phone ? "grid-cols-1" : "grid-cols-2",
+        )}
+      >
         <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>{t("home.proxyStatus")}</CardTitle>

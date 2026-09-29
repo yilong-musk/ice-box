@@ -3,7 +3,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "../../desktop/src/App";
-import "../../desktop/src/index.css";
+import "./app.css";
 import { applyFlagEmojiPolyfill } from "../../desktop/src/lib/flagEmoji";
 import { applyStoredTheme } from "../../desktop/src/lib/theme";
 import { applyStoredLanguage } from "../../desktop/src/lib/i18n";

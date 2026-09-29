@@ -4,7 +4,7 @@
 **/*.rs.bk
 
 # Node / frontend
-node_modules/
+node_modules
 dist/
 *.tsbuildinfo
 

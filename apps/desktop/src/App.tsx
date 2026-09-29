@@ -325,10 +325,24 @@ function AppShell() {
           className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
           data-testid="phone-shell"
         >
-          <header className="flex shrink-0 items-center px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2">
-            <h1 className="font-heading text-sm font-medium tracking-tight">
-              ice-box
-            </h1>
+          <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+            <img
+              src={logo}
+              alt=""
+              className="size-7 shrink-0 object-contain"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1">
+              <h1 className="font-heading text-sm font-medium tracking-tight">
+                ice-box
+              </h1>
+              <p className="mt-0.5 text-[11px] leading-none text-sidebar-foreground/50 tabular-nums">
+                {APP_VERSION}
+              </p>
+            </div>
+            <h2 className="text-sm font-medium">
+              {current ? t(current.labelKey) : ""}
+            </h2>
           </header>
           {recovery}
           <main
@@ -340,23 +354,26 @@ function AppShell() {
           <nav
             data-testid="phone-tab-bar"
             aria-label={t("app.nav.aria")}
-            className="grid shrink-0 grid-cols-6 border-t border-sidebar-border bg-sidebar pb-[env(safe-area-inset-bottom)]"
+            className="phone-tab-bar grid shrink-0 grid-cols-6 border-t border-sidebar-border bg-sidebar"
           >
             {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
+                aria-label={t(labelKey)}
                 aria-current={tab === id ? "page" : undefined}
                 className={cn(
-                  "flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 px-1 text-[10px] leading-tight",
+                  "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-xs leading-tight",
                   tab === id
-                    ? "text-sidebar-foreground"
-                    : "text-sidebar-foreground/60",
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70",
                 )}
                 onClick={() => selectTab(id)}
               >
                 <Icon className="size-4 shrink-0" />
-                <span className="w-full truncate text-center">{t(labelKey)}</span>
+                <span className="w-full text-center">
+                  {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
+                </span>
               </button>
             ))}
           </nav>
