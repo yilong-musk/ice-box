@@ -28,7 +28,38 @@ pub use ui::{UiMessage, UI_RAW_KEY};
 
 /// sing-box core version the config generator targets.
 ///
-/// Re-exported by `ice-engine` as the public pin. Bundled desktop binaries
-/// (`third_party/sing-box/VERSION`) must match; generated config features
-/// are only tested against this version range.
-pub const ENGINE_COMPAT_CORE_VERSION: &str = "1.13.19";
+/// This is `third_party/sing-box/VERSION`, the same pin desktop downloads and
+/// `scripts/build-libbox.sh` clones. Following a sing-box stable release means
+/// updating that file and `third_party/sing-box/CHECKSUMS.sha256`, then
+/// reviewing generated config against the new schema. The libbox build tracks
+/// the tag on its own; its feature-tag allowlist changes only when config
+/// generation starts emitting a protocol the new core added.
+pub const ENGINE_COMPAT_CORE_VERSION: &str =
+    strip_trailing_newline(include_str!("../../../third_party/sing-box/VERSION"));
+
+/// Drop one trailing newline. `str::trim` is not const on this toolchain.
+const fn strip_trailing_newline(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+    let mut end = bytes.len();
+    if end > 0 && bytes[end - 1] == b'\n' {
+        end -= 1;
+    }
+    if end > 0 && bytes[end - 1] == b'\r' {
+        end -= 1;
+    }
+    let (head, _) = bytes.split_at(end);
+    // `end` stops on ASCII newline bytes, so `head` stays valid UTF-8.
+    unsafe { core::str::from_utf8_unchecked(head) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compat_core_version_matches_vendor_pin() {
+        let pinned = include_str!("../../../third_party/sing-box/VERSION").trim();
+        assert_eq!(ENGINE_COMPAT_CORE_VERSION, pinned);
+        assert!(!pinned.is_empty());
+    }
+}

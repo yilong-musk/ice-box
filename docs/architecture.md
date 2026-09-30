@@ -75,8 +75,13 @@ reported counters, and a conditional refresh may update them without replacing
 the cached body.
 
 The generated configuration targets the bundled core's compatibility version.
-The client owns configuration generation; sing-box never fetches subscriptions
-or interprets application preferences.
+That version is `third_party/sing-box/VERSION`. Desktop downloads, the Android
+libbox build, and `ENGINE_COMPAT_CORE_VERSION` all read it, so a core upgrade
+starts there. The project follows each stable sing-box release: update the
+version file and `third_party/sing-box/CHECKSUMS.sha256`, then review config
+generation against that release's schema before shipping it. The client owns
+configuration generation; sing-box never fetches subscriptions or interprets
+application preferences.
 
 ## Runtime ownership
 

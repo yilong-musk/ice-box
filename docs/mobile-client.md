@@ -212,12 +212,19 @@ The desktop build downloads a pinned `sing-box` binary
 ([`third_party/sing-box`](../third_party/sing-box)). Android embeds the core as
 a libbox AAR built from the same pinned source tag:
 
-- `scripts/build-libbox.sh android` builds the AAR with SagerNet's gomobile
-  fork and sing-box's libbox build tooling, with the build tags the generated
-  configs need, and records its checksum next to the existing ones. The same
-  script gains an `apple` target when iOS resumes.
-- The AAR version must equal `ENGINE_COMPAT_CORE_VERSION`; the build fails
-  otherwise, so desktop and mobile never diverge on config compatibility.
+- `scripts/build-libbox.sh android` runs that tag's `cmd/internal/build_libbox`,
+  so the JDK check, NDK pin, API level, ldflags, and tag list come from the
+  release being built. The script keeps the primary `libbox.aar` and, when
+  that release still has one, skips the legacy AAR. It keeps the feature tags
+  config generation emits (`gvisor`, `quic`, `wireguard`, `utls`, `clash_api`)
+  plus whatever toolchain tags upstream added, and drops other `with_*` tags
+  (Naive, Tailscale, and protocols a newer release may add). Extend that
+  allowlist when config generation starts emitting one of those protocols.
+  The AAR checksum is recorded next to the existing ones. The same script
+  gains an `apple` target when iOS resumes.
+- The cloned tag is `third_party/sing-box/VERSION`. `build_libbox` embeds
+  `git describe` of that checkout, which the script requires to be exactly
+  that version, the same string as `ENGINE_COMPAT_CORE_VERSION`.
 
 ### Rust on Android
 

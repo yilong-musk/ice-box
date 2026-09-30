@@ -433,7 +433,8 @@ proxies:
     }
 
     #[test]
-    fn compat_core_version_pin_is_locked() {
-        assert_eq!(ENGINE_COMPAT_CORE_VERSION, "1.13.19");
+    fn compat_core_version_matches_vendor_pin() {
+        let pinned = include_str!("../../../third_party/sing-box/VERSION").trim();
+        assert_eq!(ENGINE_COMPAT_CORE_VERSION, pinned);
     }
 }
