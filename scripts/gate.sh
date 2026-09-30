@@ -56,6 +56,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== android version code =="
   bash "$ROOT/scripts/test-android-version-code.sh"
 
+  echo "== android apk signer lines =="
+  bash "$ROOT/scripts/test-verify-android-apk.sh"
+
   echo "== vite build =="
   (cd apps/desktop && npm run build)
 

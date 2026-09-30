@@ -6,7 +6,33 @@
 # Without --release, the APK must verify (the CI debug APK is signed with
 # the Android debug key). With --release, the signer must not be that debug
 # key, and the native libraries must be arm64-v8a only.
+#
+# --release-certs-text reads `apksigner verify --print-certs` output on stdin
+# and applies only the release signer checks. scripts/test-verify-android-apk.sh
+# uses it so the signer-line spellings stay covered without an SDK.
 set -euo pipefail
+
+# apksigner spells the signer line two ways:
+#   Signer #1 certificate DN:  (build-tools 36)
+#   V2 Signer: certificate DN: (the copy on GitHub-hosted runners)
+# Both lines contain "certificate DN:".
+check_release_certs() {
+  local certs="$1"
+  if printf '%s\n' "$certs" | grep -q "CN=Android Debug"; then
+    echo "release APK is signed with the Android debug key" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$certs" | grep -q "certificate DN:"; then
+    echo "release APK has no signer certificate" >&2
+    printf '%s\n' "$certs" >&2
+    return 1
+  fi
+}
+
+if [[ "${1:-}" == "--release-certs-text" ]]; then
+  check_release_certs "$(cat)"
+  exit 0
+fi
 
 RELEASE=0
 if [[ "${1:-}" == "--release" ]]; then
@@ -41,15 +67,11 @@ fi
 "$APKSIGNER" verify --verbose --print-certs "$APK"
 
 if [[ "$RELEASE" == 1 ]]; then
-  certs="$("$APKSIGNER" verify --print-certs "$APK")"
-  if printf '%s\n' "$certs" | grep -q "CN=Android Debug"; then
-    echo "release APK is signed with the Android debug key" >&2
+  if ! certs="$("$APKSIGNER" verify --print-certs "$APK" 2>&1)"; then
+    printf '%s\n' "$certs" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$certs" | grep -q "Signer #1 certificate DN:"; then
-    echo "release APK has no signer certificate" >&2
-    exit 1
-  fi
+  check_release_certs "$certs"
   listing="$(unzip -l "$APK")"
   if ! printf '%s\n' "$listing" | grep -q "lib/arm64-v8a/"; then
     echo "release APK is missing lib/arm64-v8a" >&2
