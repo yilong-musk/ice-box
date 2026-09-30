@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Print the short GitHub Release body for a tag like v0.1.1 (or plain 0.1.1).
 #
-# Formal release bodies stay terse: one line about the release plus a link to
-# the version's section in CHANGELOG.md. The full notes live in the changelog
+# Formal release bodies stay terse: a headline plus a link to the version's
+# section in CHANGELOG.md. The full notes live in the changelog
 # and are never pasted into the release body (see docs/release-process.md).
 # Usage: scripts/release-notes.sh v0.1.1
 set -euo pipefail
@@ -51,8 +51,6 @@ ANCHOR="$(printf '%s - %s' "$VERSION" "$DATE" \
 
 cat <<EOF
 **ice-box v$VERSION** — $DATE
-
-macOS (Apple Silicon) and Windows installers are attached below.
 
 Full changelog: [CHANGELOG.md › $VERSION]($REPO_URL/blob/main/CHANGELOG.md#$ANCHOR)
 EOF

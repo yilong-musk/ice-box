@@ -81,8 +81,8 @@ Add a section to `CHANGELOG.md` (Keep a Changelog style):
 ```
 
 The GitHub Release body is deliberately short: `scripts/release-notes.sh` prints
-a headline, one line about the release, and a link to this section in
-`CHANGELOG.md`. The full per-release notes stay in the changelog and are never
+a headline and a link to this section in `CHANGELOG.md`. The full per-release
+notes stay in the changelog and are never
 pasted into the release body. Verify locally before tagging:
 
 ```bash
