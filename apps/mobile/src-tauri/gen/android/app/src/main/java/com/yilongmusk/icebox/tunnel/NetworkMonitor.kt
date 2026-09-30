@@ -22,6 +22,11 @@ import java.util.concurrent.Executors
 /**
  * Tracks the underlying (non-VPN) default network and reports it to libbox,
  * which binds outbound sockets to it and re-dials after network changes.
+ *
+ * `registerBestMatchingNetworkCallback` follows that network without asking
+ * the system to keep an extra one up. The plain default callback is the VPN
+ * itself once the tunnel is connected, so the request still requires
+ * `NOT_VPN`.
  */
 class NetworkMonitor(private val context: Context) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -30,6 +35,8 @@ class NetworkMonitor(private val context: Context) {
     @Volatile
     var defaultNetwork: Network? = null
         private set
+
+    private var started = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = update(network)
@@ -40,14 +47,18 @@ class NetworkMonitor(private val context: Context) {
     }
 
     fun start() {
+        if (started) return
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
-        connectivity.requestNetwork(request, callback)
+        connectivity.registerBestMatchingNetworkCallback(request, callback, context.mainExecutor)
+        started = true
     }
 
     fun stop() {
+        if (!started) return
+        started = false
         runCatching { connectivity.unregisterNetworkCallback(callback) }
     }
 

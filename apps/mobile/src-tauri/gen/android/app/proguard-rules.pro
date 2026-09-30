@@ -1,5 +1,8 @@
 -keep class com.yilongmusk.icebox.tunnel.** { *; }
 -keep class io.nekohasekai.libbox.** { *; }
+# gomobile runtime. R8 strips go.Seq in release builds and libbox crashes on start.
+-keep class go.** { *; }
+-dontwarn go.**
 
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the

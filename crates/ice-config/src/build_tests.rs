@@ -1694,16 +1694,36 @@ fn mobile_ignores_diagnostic_intent_and_emits_tun() {
         assert_eq!(inbounds[0]["type"], "tun");
         assert_eq!(inbounds[0]["tag"], "tun-in");
         assert!(inbounds[0].get("interface_name").is_none());
-        assert!(inbounds[0].get("route_exclude_address").is_none());
+        let excludes: Vec<&str> = inbounds[0]["route_exclude_address"]
+            .as_array()
+            .expect("route_exclude_address")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert_eq!(
+            excludes,
+            [
+                "192.168.0.0/16",
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "127.0.0.0/8",
+                "169.254.0.0/16",
+                "224.0.0.0/4",
+                "fe80::/10",
+                "fc00::/7",
+            ]
+        );
         assert!(inbounds[0].get("loopback_address").is_none());
         assert!(inbounds[0].get("exclude_package").is_none());
         assert_eq!(inbounds[0]["stack"], "gvisor");
         let rules = cfg["route"]["rules"].as_array().expect("rules");
         assert_eq!(rules[0]["action"], "sniff");
-        assert_eq!(rules[1]["protocol"], "dns");
-        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[1]["ip_is_private"], true);
+        assert_eq!(rules[1]["outbound"], "direct");
         assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
         assert_eq!(rules[2]["outbound"], "direct");
+        assert_eq!(rules[3]["protocol"], "dns");
+        assert_eq!(rules[3]["action"], "hijack-dns");
         assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
         assert_eq!(cfg["dns"]["final"], "local");
         assert!(cfg.get("endpoints").is_none());

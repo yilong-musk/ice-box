@@ -11,6 +11,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.yilongmusk.icebox.tunnel.ensureGeoipRuleSets
 import kotlin.math.roundToInt
 
 class MainActivity : TauriActivity() {
@@ -19,6 +20,9 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    // The Rust runtime starts inside super.onCreate and may write config.json
+    // as soon as the page calls in. Rule-sets have to be on disk before that.
+    ensureGeoipRuleSets(this)
     super.onCreate(savedInstanceState)
     // Wry loads the Rust library inside super.onCreate. Init the platform
     // verifier after that so subscription HTTPS can use the OS trust store.

@@ -34,6 +34,8 @@ import org.json.JSONObject
     ],
 )
 class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
+    private val statusLock = Any()
+    private var lastStatus: JSONObject? = null
     // Keep these strings aligned with TunnelFiles.kt in the app module.
     // They stay inside this class so the two modules can share a package
     // without clashing top-level names.
@@ -88,8 +90,7 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun status(invoke: Invoke) {
-        val file = File(activity.filesDir, STATUS_FILE)
-        val stored = runCatching { JSONObject(file.readText()) }.getOrNull()
+        val stored = readStatus()
         val phase = stored?.optString("phase", "stopped").orEmpty().ifEmpty { "stopped" }
         val denied = runCatching {
             File(activity.filesDir, PERMISSION_FILE).readText().trim() == "denied"
@@ -114,6 +115,7 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun shared_dir(invoke: Invoke) {
+        ensureGeoipRuleSets(activity)
         val payload = JSObject()
         payload.put("path", activity.filesDir.absolutePath)
         invoke.resolve(payload)
@@ -121,8 +123,7 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun memory(invoke: Invoke) {
-        val file = File(activity.filesDir, STATUS_FILE)
-        val stored = runCatching { JSONObject(file.readText()) }.getOrNull()
+        val stored = readStatus()
         val payload = JSObject()
         if (stored != null && stored.has("memory_bytes") && !stored.isNull("memory_bytes")) {
             payload.put("bytes", stored.getLong("memory_bytes"))
@@ -196,6 +197,27 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.resolve(JSObject())
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * A torn read used to parse as "stopped" and skip a live reload.
+     * The writer renames a complete file into place. If this read still
+     * fails while the file exists, keep the last snapshot that parsed.
+     */
+    private fun readStatus(): JSONObject? {
+        val file = File(activity.filesDir, STATUS_FILE)
+        val parsed = runCatching { JSONObject(file.readText()) }.getOrNull()
+        synchronized(statusLock) {
+            if (parsed != null) {
+                lastStatus = parsed
+                return parsed
+            }
+            if (file.exists()) {
+                return lastStatus
+            }
+            lastStatus = null
+            return null
         }
     }
 

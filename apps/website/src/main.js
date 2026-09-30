@@ -50,7 +50,7 @@ root.innerHTML = `
         <div class="hero-meta">
           <span><b class="status-dot green"></b> ${displayVersion}</span>
           <span>GPL-3.0-or-later</span>
-          <span>macOS · Windows</span>
+          <span>macOS · Windows · Android</span>
         </div>
       </div>
     </section>

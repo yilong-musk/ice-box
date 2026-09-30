@@ -96,7 +96,7 @@ fn build_direct_only_config_with(
     Ok(config)
 }
 
-/// Mobile TUN config (`docs/mobile-client.md`).
+/// Mobile TUN config.
 ///
 /// Desktop platforms are rejected. An empty profile falls back to the
 /// direct-only mobile config, matching the desktop Start path. `shared_root`
@@ -425,8 +425,8 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
-        // Reserved bypass rules precede `clash_mode` (`docs/tun.md`,
-        // `docs/mobile-client.md`): the control path stays direct even in
+        // Reserved bypass rules precede `clash_mode` (`docs/tun.md`): the
+        // control path stays direct even in
         // Global mode. Desktop emits them only for a Tun intent; mobile
         // always does.
         prepend_capture_rules(
@@ -641,20 +641,26 @@ fn prepend_capture_rules(
     }
 }
 
-/// Reserved rules for a mobile VPN (`docs/mobile-client.md`).
+/// Reserved rules for a mobile VPN.
 ///
-/// Sniff runs first so later domain rules see a domain. DNS is hijacked into
-/// the core. Loopback stays direct so the Clash API is not captured in global
-/// mode. macOS `process_name` rules and the Windows peer-reject / UDP-443
-/// rules are desktop TUN only.
+/// Sniff runs first so later domain rules see a domain. Private, link-local,
+/// and multicast destinations stay on the physical network, ahead of DNS
+/// hijack, so a LAN resolver, captive portal, or printer is not captured in
+/// global mode. Public DNS is still hijacked. macOS `process_name` rules and
+/// the Windows peer-reject / UDP-443 rules are desktop TUN only.
 fn mobile_reserved_rules() -> Vec<Value> {
     vec![
         json!({ "action": "sniff" }),
-        json!({ "protocol": "dns", "action": "hijack-dns" }),
+        json!({ "ip_is_private": true, "outbound": "direct" }),
         json!({
-            "ip_cidr": ["127.0.0.0/8", "::1/128"],
+            "ip_cidr": [
+                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+                "224.0.0.0/4", "ff00::/8",
+                "fe80::/10", "fc00::/7",
+            ],
             "outbound": "direct"
         }),
+        json!({ "protocol": "dns", "action": "hijack-dns" }),
     ]
 }
 
@@ -925,6 +931,20 @@ fn android_ident(name: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// Same physical-network exclusions as the desktop TUN inbound. libbox turns
+/// this into Android `VpnService.Builder.excludeRoute`, so those prefixes
+/// never enter the tunnel.
+const TUN_ROUTE_EXCLUDE_ADDRESS: &[&str] = &[
+    "192.168.0.0/16",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "224.0.0.0/4",
+    "fe80::/10",
+    "fc00::/7",
+];
+
 fn mobile_tun_inbound(
     tun: &TunSettings,
     platform: HostPlatform,
@@ -939,6 +959,7 @@ fn mobile_tun_inbound(
         "auto_route": tun.auto_route,
         "strict_route": tun.strict_route,
         "stack": tun.stack,
+        "route_exclude_address": TUN_ROUTE_EXCLUDE_ADDRESS,
     });
     if let Some(package) = package {
         inbound["exclude_package"] = json!([package]);
@@ -1122,11 +1143,7 @@ fn tun_inbound(tun: &TunSettings) -> Value {
         "auto_route": tun.auto_route,
         "strict_route": tun.strict_route,
         "stack": tun.stack,
-        "route_exclude_address": [
-            "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12",
-            "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4",
-            "fe80::/10", "fc00::/7"
-        ],
+        "route_exclude_address": TUN_ROUTE_EXCLUDE_ADDRESS,
         "loopback_address": ["127.0.0.1", "::1"],
     });
     // `interface_name` is Some here by construction; keep the key absent if a

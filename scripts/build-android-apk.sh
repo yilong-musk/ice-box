@@ -11,6 +11,8 @@
 #
 # ICE_BOX_SKIP_LIBBOX=1 reuses apps/mobile/.../libs/libbox.aar when it exists.
 # arm64 is the published ABI. amd64 is the emulator.
+# GeoIP rule-sets are fetched and packaged as APK assets. The phone copies
+# them into its files directory before it writes config.json.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,6 +35,8 @@ amd64) TAURI_TARGET="x86_64" ;;
   exit 1
   ;;
 esac
+
+bash "$ROOT/scripts/fetch-geoip.sh"
 
 AAR="$ROOT/apps/mobile/src-tauri/gen/android/app/libs/libbox.aar"
 if [[ "${ICE_BOX_SKIP_LIBBOX:-}" == 1 && -f "$AAR" ]]; then

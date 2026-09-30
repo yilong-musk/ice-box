@@ -1,9 +1,10 @@
 # ice-box Architecture
 
-ice-box is a local desktop proxy client for macOS and Windows. A Tauri + React
-application manages a bundled sing-box process; sing-box owns protocol handling
-and traffic forwarding. This document describes the system's structure,
-ownership boundaries, and key design decisions.
+ice-box is a local proxy client for macOS, Windows, and Android. The desktop
+apps and the Android app share one React UI. Each native shell manages a
+bundled sing-box core; sing-box owns protocol handling and traffic forwarding.
+This document describes the system's structure, ownership boundaries, and key
+design decisions.
 
 ## System structure
 
@@ -18,15 +19,35 @@ flowchart LR
     Core -->|"Forward"| Network["Destination or proxy server"]
 ```
 
-The Rust application is the control plane: it owns user intent, configuration,
-process lifecycle, and OS integration. sing-box is the data plane: user traffic
-does not pass through React or the application's configuration code. Keeping
-the core in a separate process isolates its lifecycle and avoids duplicating
-protocol implementations in the client.
+The diagram is the desktop path. Android runs libbox in the VPN service
+process, and the website has no core.
 
-The desktop app manages one core instance, including when a privileged runner
-starts it. The website reuses the UI with a simulated backend; it has no access
-to native proxy controls.
+The Rust application is the control plane: it owns user intent, configuration,
+and OS integration. sing-box is the data plane: user traffic does not pass
+through React or the application's configuration code.
+
+## Clients
+
+| Client | Shell | Core | Capture |
+|--------|-------|------|---------|
+| macOS and Windows | [`apps/desktop`](../apps/desktop) | One sing-box process. TUN starts it through a privileged runner | System proxy or [TUN](tun.md) |
+| Android | [`apps/mobile`](../apps/mobile) | libbox inside the VPN service process (`:tunnel`) | Android VPN service |
+| Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop UI |
+
+The Android application id is `com.yilongmusk.icebox`, and `minSdk` is 34. The
+published build is one `arm64-v8a` APK. The phone UI hides desktop ports, the
+TUN switch, launch-at-login, the tray, and subscription auto-update. A profile
+changes when the user imports or refreshes it. The power button connects or
+disconnects the VPN, and the first start asks for the system VPN permission.
+The app's own package is excluded from the tunnel, so subscription fetches and
+update checks stay direct. A window narrower than 768px uses a bottom tab bar;
+a wider window uses the sidebar, with the same phone capabilities. Settings
+checks GitHub Releases, downloads the arm64 APK, and hands it to the system
+installer. The same page explains battery-optimization exemption, strict
+Private DNS, and always-on VPN.
+
+The sections below describe the desktop shell. Android differences are the
+table and the paragraph above.
 
 ## Responsibilities
 
@@ -247,11 +268,16 @@ back to the saved settings so a command can be prepared before starting it —
 and they never read or write the user's environment outside the process they
 start.
 
-App updates run in Rust and verify signed artifacts before installation.
-Installation uses the same capture/core shutdown path as Quit. Update integrity
-signing is separate from OS application signing; artifact production and
-distribution policy are defined in [release-process.md](release-process.md).
-Every launch runs one background check round after the first UI frame. That
+On macOS and Windows, app updates run in Rust and verify signed artifacts
+before installation. Android downloads the arm64 APK from the same GitHub
+release and hands it to the system installer. The APK is a release asset and
+is absent from `latest.json`.
+On macOS and Windows, installation uses the same capture/core shutdown path as
+Quit. Update integrity signing is separate from OS application signing;
+artifact production and distribution policy are defined in
+[release-process.md](release-process.md).
+Every launch on those platforms runs one background check round after the
+first UI frame. That
 launch round ignores the 24-hour cooldown, so restarting always reaches GitHub.
 A successful background GitHub fetch starts the cooldown in
 `update-check.json`, which paces the rounds that follow while the app keeps
