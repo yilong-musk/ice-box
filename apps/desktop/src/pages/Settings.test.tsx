@@ -35,6 +35,10 @@ const ensureTunElevation = vi.fn();
 const start = vi.fn();
 const checkAppUpdate = vi.fn();
 const installAppUpdate = vi.fn();
+const openAppDownload = vi.fn();
+const requestBatteryExemption = vi.fn();
+const openNetworkSettings = vi.fn();
+const openVpnSettings = vi.fn();
 const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
 const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
@@ -50,6 +54,11 @@ vi.mock("../api/client", () => ({
     recordAppUpdateCheck: vi.fn(),
     skipAppUpdate: vi.fn(),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
+    openAppDownload: (...args: unknown[]) => openAppDownload(...args),
+    requestBatteryExemption: (...args: unknown[]) =>
+      requestBatteryExemption(...args),
+    openNetworkSettings: (...args: unknown[]) => openNetworkSettings(...args),
+    openVpnSettings: (...args: unknown[]) => openVpnSettings(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     listenCoreStatusChanged: (...args: unknown[]) =>
       listenCoreStatusChanged(...args),
@@ -515,9 +524,54 @@ describe("Settings", () => {
       expect(view.getByText(t("settings.appearance"))).toBeInTheDocument();
     });
     expect(view.queryByText(t("settings.inbound"))).not.toBeInTheDocument();
-    expect(view.queryByText(t("settings.update"))).not.toBeInTheDocument();
+    expect(view.getByText(t("settings.update"))).toBeInTheDocument();
+    expect(view.getByText(t("settings.updatePhoneDesc"))).toBeInTheDocument();
+    expect(
+      view.queryByRole("button", { name: t("settings.updateInstall") }),
+    ).not.toBeInTheDocument();
+    expect(view.getByText(t("settings.system"))).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("settings.alwaysOnAction") })).toBeInTheDocument();
     expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
     expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
+  });
+
+  it("explains battery optimization and private DNS, and downloads the APK", async () => {
+    phoneShell.value = true;
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      battery_unrestricted: false,
+      private_dns_strict: true,
+      always_on_vpn: false,
+    });
+    openAppDownload.mockResolvedValue(undefined);
+    requestBatteryExemption.mockResolvedValue(undefined);
+    openNetworkSettings.mockResolvedValue(undefined);
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.1.16",
+          notes: null,
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText(t("settings.batteryTitle"))).toBeInTheDocument();
+    });
+    expect(view.getByText(t("settings.privateDnsTitle"))).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: t("settings.batteryAction") }));
+    await waitFor(() => expect(requestBatteryExemption).toHaveBeenCalled());
+    fireEvent.click(view.getByRole("button", { name: t("settings.privateDnsAction") }));
+    await waitFor(() => expect(openNetworkSettings).toHaveBeenCalled());
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateDownload") }));
+    await waitFor(() => expect(openAppDownload).toHaveBeenCalled());
+    expect(
+      view.queryByRole("button", { name: t("settings.updateInstall") }),
+    ).not.toBeInTheDocument();
   });
 
   it("persists the login item through its own save path", async () => {

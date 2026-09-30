@@ -6,12 +6,13 @@
 use std::sync::Mutex;
 
 use ice_config::{AppError, AppPaths, ErrorCode, ProxyMode, SettingsPatch};
-use ice_subscription::AutoUpdateInterval;
+use ice_subscription::{AutoUpdateInterval, SubscriptionManager};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_tunnel::{Tunnel, TunnelError};
 use uuid::Uuid;
 
+use crate::config::PLATFORM;
 use crate::host::{
     stopped_view, tunnel_view, ListRulesRequest, ListRulesResponse, MobileHost, NodeInfo,
     RemoveResult, RuleMutation, RuleOverview,
@@ -160,6 +161,26 @@ fn notify(app: &AppHandle) {
     let _ = app.emit("app://state-changed", ());
 }
 
+/// Blocking IPC must not run on the UI thread. A subscription fetch holds the
+/// WebView for the whole timeout and Android reports the app as not responding.
+async fn run_blocking<T: Send + 'static>(
+    context: &'static str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, AppError> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| AppError::new(ErrorCode::ConfigInvalid, format!("{context}: {err}")))
+}
+
+fn guidance_of(tunnel: &Tunnel<Wry>) -> Option<crate::status::DeviceGuidance> {
+    let status = tunnel.device_status().ok()?;
+    Some(crate::status::DeviceGuidance {
+        battery_unrestricted: status.battery_unrestricted,
+        private_dns_strict: status.private_dns_strict,
+        always_on_vpn: status.always_on_vpn,
+    })
+}
+
 #[tauri::command]
 pub fn get_status(
     app: AppHandle,
@@ -176,7 +197,7 @@ pub fn get_status(
         Err(TunnelError::Unavailable) => (stopped_view(), None, None),
         Err(TunnelError::Plugin(message)) => (tunnel_view("error", "unknown"), Some(message), None),
     };
-    host.status(view, message.as_deref(), memory)
+    host.status(view, message.as_deref(), memory, guidance_of(&tunnel))
 }
 
 #[tauri::command]
@@ -233,21 +254,36 @@ pub fn list_subscriptions(
 }
 
 #[tauri::command]
-pub fn add_subscription(
+pub async fn add_subscription(
     app: AppHandle,
-    host: State<'_, Mutex<MobileHost>>,
-    tunnel: State<'_, Tunnel<Wry>>,
     req: AddSubscriptionRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let mut host = ready(&app, &host, &tunnel)?;
-    let meta = host.add_subscription(
-        &req.url,
-        req.name.as_deref(),
-        req.auto_update,
-        req.auto_update_interval,
-    )?;
-    apply_config(&mut host, &tunnel)?;
-    drop(host);
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let url = req.url;
+    let name = req.name;
+    let auto_update = req.auto_update;
+    let interval = req.auto_update_interval;
+    let fetched = run_blocking("add_subscription", move || {
+        SubscriptionManager::open(paths, PLATFORM).fetch_add(
+            &url,
+            name.as_deref(),
+            auto_update,
+            interval,
+        )
+    })
+    .await?
+    .map_err(AppError::from)?;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let meta = guard.apply_added(fetched)?;
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
     notify(&app);
     Ok(meta)
 }
@@ -271,30 +307,57 @@ pub fn remove_subscription(
 }
 
 #[tauri::command]
-pub fn update_subscription(
+pub async fn update_subscription(
     app: AppHandle,
-    host: State<'_, Mutex<MobileHost>>,
-    tunnel: State<'_, Tunnel<Wry>>,
     req: IdRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let mut host = ready(&app, &host, &tunnel)?;
-    let meta = host.update_subscription(req.id)?;
-    apply_config(&mut host, &tunnel)?;
-    drop(host);
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let id = req.id;
+    let fetched = run_blocking("update_subscription", move || {
+        SubscriptionManager::open(paths, PLATFORM).fetch_update(id)
+    })
+    .await?;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let meta = match fetched {
+        Ok(update) => guard.apply_updated(update)?,
+        Err(err) => {
+            guard.note_subscription_error(id, err.ui_message())?;
+            drop(guard);
+            notify(&app);
+            return Err(err.into());
+        }
+    };
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
     notify(&app);
     Ok(meta)
 }
 
 #[tauri::command]
-pub fn update_all_subscriptions(
-    app: AppHandle,
-    host: State<'_, Mutex<MobileHost>>,
-    tunnel: State<'_, Tunnel<Wry>>,
-) -> Result<serde_json::Value, AppError> {
-    let mut host = ready(&app, &host, &tunnel)?;
-    let report = host.update_all()?;
-    apply_config(&mut host, &tunnel)?;
-    drop(host);
+pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Value, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let fetched = run_blocking("update_all_subscriptions", move || {
+        SubscriptionManager::open(paths, PLATFORM).fetch_all()
+    })
+    .await?;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let report = guard.apply_updates(fetched)?;
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
     notify(&app);
     Ok(report)
 }
@@ -547,6 +610,62 @@ pub fn add_custom_rule(
         fingerprint: Some(fingerprint),
         apply_warning,
     })
+}
+
+#[tauri::command]
+pub async fn check_app_update(
+    app: AppHandle,
+    req: crate::app_update::CheckAppUpdateRequest,
+) -> Result<crate::app_update::CheckAppUpdateResponse, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.app_paths()?
+    };
+    let background = req.background;
+    let startup = req.startup;
+    run_blocking("check_app_update", move || {
+        crate::app_update::check_release(&paths, background, startup)
+    })
+    .await?
+}
+
+#[tauri::command]
+pub fn record_app_update_check(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+) -> Result<(), AppError> {
+    let guard = ready(&app, &host, &tunnel)?;
+    crate::app_update::record_check(&guard.app_paths()?)
+}
+
+#[tauri::command]
+pub fn open_app_download(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+) -> Result<(), AppError> {
+    let guard = ready(&app, &host, &tunnel)?;
+    let url = crate::app_update::cached_apk_url(&guard.app_paths()?)?;
+    drop(guard);
+    tunnel.open_https_url(&url).map_err(map_tunnel)
+}
+
+#[tauri::command]
+pub fn request_battery_exemption(tunnel: State<'_, Tunnel<Wry>>) -> Result<(), AppError> {
+    tunnel.request_battery_exemption().map_err(map_tunnel)
+}
+
+#[tauri::command]
+pub fn open_network_settings(tunnel: State<'_, Tunnel<Wry>>) -> Result<(), AppError> {
+    tunnel.open_network_settings().map_err(map_tunnel)
+}
+
+#[tauri::command]
+pub fn open_vpn_settings(tunnel: State<'_, Tunnel<Wry>>) -> Result<(), AppError> {
+    tunnel.open_vpn_settings().map_err(map_tunnel)
 }
 
 #[tauri::command]

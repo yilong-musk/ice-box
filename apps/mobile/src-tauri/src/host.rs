@@ -71,6 +71,7 @@ impl MobileHost {
         view: TunnelView,
         message: Option<&str>,
         memory_bytes: Option<u64>,
+        guidance: Option<status::DeviceGuidance>,
     ) -> Result<StatusResponse, AppError> {
         let paths = self.paths()?.clone();
         let settings = load_settings(&paths.settings())?;
@@ -78,11 +79,25 @@ impl MobileHost {
         let count = read_index(&SubscriptionPaths::from_app(&paths))
             .map(|index| index.items.len())
             .unwrap_or(0);
-        Ok(status::status_response(view, message, memory_bytes, count))
+        Ok(status::status_response(
+            view,
+            message,
+            memory_bytes,
+            count,
+            guidance,
+        ))
     }
 
     pub fn paths_ready(&self) -> bool {
         self.paths.is_some()
+    }
+
+    pub fn app_paths(&self) -> Result<AppPaths, AppError> {
+        self.paths().cloned()
+    }
+
+    pub fn subscription_paths(&self) -> Result<SubscriptionPaths, AppError> {
+        Ok(SubscriptionPaths::from_app(self.paths()?))
     }
 
     pub fn set_service_enabled(&mut self, enabled: bool) -> Result<(), AppError> {
@@ -105,24 +120,27 @@ impl MobileHost {
         metas.iter().map(public_meta).collect()
     }
 
-    pub fn add_subscription(
+    pub fn apply_added(&self, add: ice_subscription::FetchedAdd) -> Result<Value, AppError> {
+        let meta = self.manager()?.apply_add(add)?;
+        public_meta(&meta)
+    }
+
+    pub fn apply_updated(
         &self,
-        url: &str,
-        name: Option<&str>,
-        auto_update: bool,
-        interval: Option<AutoUpdateInterval>,
+        update: ice_subscription::FetchedUpdate,
     ) -> Result<Value, AppError> {
-        let meta = self.manager()?.add(url, name, auto_update, interval)?;
+        let meta = self.manager()?.apply_update(update)?;
         public_meta(&meta)
     }
 
-    pub fn update_subscription(&self, id: Uuid) -> Result<Value, AppError> {
-        let meta = self.manager()?.update(id)?;
-        public_meta(&meta)
-    }
-
-    pub fn update_all(&self) -> Result<Value, AppError> {
-        let results = self.manager()?.update_all();
+    pub fn apply_updates(
+        &self,
+        fetched: Vec<(
+            Uuid,
+            Result<ice_subscription::FetchedUpdate, ice_subscription::SubscriptionError>,
+        )>,
+    ) -> Result<Value, AppError> {
+        let results = self.manager()?.apply_all(fetched);
         let items: Vec<Value> = results
             .into_iter()
             .map(|(id, result)| match result {
@@ -131,6 +149,15 @@ impl MobileHost {
             })
             .collect();
         Ok(Value::Array(items))
+    }
+
+    pub fn note_subscription_error(
+        &self,
+        id: Uuid,
+        message: ice_config::UiMessage,
+    ) -> Result<(), AppError> {
+        ice_subscription::write_subscription_error(&self.subscription_paths()?, id, message)?;
+        Ok(())
     }
 
     pub fn remove_subscription(&self, id: Uuid) -> Result<(), AppError> {

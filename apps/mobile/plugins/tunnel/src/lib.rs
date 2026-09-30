@@ -19,6 +19,20 @@ use tauri::plugin::PluginHandle;
 #[cfg(target_os = "android")]
 const PLUGIN_IDENTIFIER: &str = "com.yilongmusk.icebox.tunnel";
 
+/// Android system facts the phone Settings page explains.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DeviceStatus {
+    pub battery_unrestricted: bool,
+    pub private_dns_strict: bool,
+    pub always_on_vpn: bool,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct UrlRequest<'a> {
+    url: &'a str,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TunnelError {
     #[error("the tunnel plugin is only available on Android")]
@@ -138,6 +152,51 @@ impl<R: Runtime> Tunnel<R> {
         }
         #[cfg(not(target_os = "android"))]
         {
+            Err(TunnelError::Unavailable)
+        }
+    }
+
+    /// Battery-optimization, Private DNS, and always-on VPN flags.
+    /// Android only; other targets return [`TunnelError::Unavailable`].
+    pub fn device_status(&self) -> Result<DeviceStatus, TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            return self
+                .handle
+                .run_mobile_plugin("device_status", ())
+                .map_err(|err| TunnelError::Plugin(err.to_string()));
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(TunnelError::Unavailable)
+        }
+    }
+
+    pub fn request_battery_exemption(&self) -> Result<(), TunnelError> {
+        self.unit_command("request_battery_exemption")
+    }
+
+    pub fn open_network_settings(&self) -> Result<(), TunnelError> {
+        self.unit_command("open_network_settings")
+    }
+
+    pub fn open_vpn_settings(&self) -> Result<(), TunnelError> {
+        self.unit_command("open_vpn_settings")
+    }
+
+    /// Open an already-validated https URL in the system browser.
+    pub fn open_https_url(&self, url: &str) -> Result<(), TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            let _: serde_json::Value = self
+                .handle
+                .run_mobile_plugin("open_https_url", UrlRequest { url })
+                .map_err(|err| TunnelError::Plugin(err.to_string()))?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = url;
             Err(TunnelError::Unavailable)
         }
     }

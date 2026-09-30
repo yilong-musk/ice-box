@@ -451,6 +451,9 @@ describe("App", () => {
       "aria-current",
       "page",
     );
-    expect(checkAppUpdate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(checkAppUpdate).toHaveBeenCalled();
+    });
+    expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
   });
 });

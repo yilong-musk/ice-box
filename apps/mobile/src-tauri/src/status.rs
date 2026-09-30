@@ -120,6 +120,13 @@ enum TunStatus {
     Disabled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceGuidance {
+    pub battery_unrestricted: bool,
+    pub private_dns_strict: bool,
+    pub always_on_vpn: bool,
+}
+
 #[derive(Clone, Serialize)]
 pub struct StatusResponse {
     revision: u64,
@@ -151,6 +158,12 @@ pub struct StatusResponse {
     tun_elevation_ready: bool,
     vpn_permission: &'static str,
     tunnel_status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    battery_unrestricted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private_dns_strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    always_on_vpn: Option<bool>,
 }
 
 pub fn status_response(
@@ -158,6 +171,7 @@ pub fn status_response(
     message: Option<&str>,
     memory_bytes: Option<u64>,
     subscription_count: usize,
+    guidance: Option<DeviceGuidance>,
 ) -> StatusResponse {
     let core_status = core_status_for(view.phase);
     let core_message = match view.phase {
@@ -217,6 +231,9 @@ pub fn status_response(
         tun_elevation_ready: true,
         vpn_permission: view.permission.as_str(),
         tunnel_status: view.phase.as_str(),
+        battery_unrestricted: guidance.map(|item| item.battery_unrestricted),
+        private_dns_strict: guidance.map(|item| item.private_dns_strict),
+        always_on_vpn: guidance.map(|item| item.always_on_vpn),
     }
 }
 
@@ -260,6 +277,7 @@ mod tests {
             None,
             Some(4096),
             2,
+            None,
         );
         let json = serde_json::to_value(&status).expect("status");
         assert_eq!(json["core"]["status"], "running");
@@ -272,6 +290,9 @@ mod tests {
         assert_eq!(json["tun_available"], false);
         assert_eq!(json["helper_supported"], false);
         assert_eq!(json["launch_at_login_supported"], false);
+        assert!(json.get("battery_unrestricted").is_none());
+        assert!(json.get("private_dns_strict").is_none());
+        assert!(json.get("always_on_vpn").is_none());
         assert_eq!(json["tray_display_supported"], false);
         assert_eq!(json["tun_elevation_ready"], true);
     }

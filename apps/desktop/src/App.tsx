@@ -158,7 +158,6 @@ function AppShell() {
   > | null>(null);
 
   useEffect(() => {
-    if (isPhoneShell()) return;
     const checker = startBackgroundAppUpdateCheck({
       check: ({ startup }) => api.checkAppUpdate(true, startup),
       recordCooldown: () => api.recordAppUpdateCheck(),

@@ -10,4 +10,9 @@ permissions = [
   "allow-status",
   "allow-shared-dir",
   "allow-memory",
+  "allow-device-status",
+  "allow-request-battery-exemption",
+  "allow-open-network-settings",
+  "allow-open-vpn-settings",
+  "allow-open-https-url",
 ]

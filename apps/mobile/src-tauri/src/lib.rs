@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod app_update;
 mod commands;
 mod config;
 mod host;
 mod status;
+mod subscription_watch;
 
 #[cfg(target_os = "android")]
 mod android;
@@ -11,6 +13,8 @@ mod android;
 use std::sync::Mutex;
 
 use tauri::Manager;
+#[cfg(target_os = "android")]
+use tauri::RunEvent;
 
 use crate::host::MobileHost;
 
@@ -27,6 +31,7 @@ pub fn run() {
                 )?;
             }
             app.manage(Mutex::new(MobileHost::new()));
+            app.manage(subscription_watch::start(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,7 +61,35 @@ pub fn run() {
             commands::set_rule_disabled,
             commands::add_custom_rule,
             commands::remove_custom_rule,
+            commands::check_app_update,
+            commands::record_app_update_check,
+            commands::open_app_download,
+            commands::request_battery_exemption,
+            commands::open_network_settings,
+            commands::open_vpn_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Activity onPause / a later onResume. The first onResume is not
+            // delivered; the watcher starts in the foreground instead.
+            #[cfg(target_os = "android")]
+            if let Some(watch) = app.try_state::<subscription_watch::SubscriptionWatch>() {
+                match event {
+                    RunEvent::WindowEvent {
+                        event: tauri::WindowEvent::Suspended,
+                        ..
+                    } => watch.pause(),
+                    RunEvent::WindowEvent {
+                        event: tauri::WindowEvent::Resumed,
+                        ..
+                    } => watch.resume(),
+                    _ => {}
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = (app, event);
+            }
+        });
 }

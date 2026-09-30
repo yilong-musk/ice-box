@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-open-vpn-settings"
+description = "Enables the open_vpn_settings command without any pre-configured scope."
+commands.allow = ["open_vpn_settings"]
+
+[[permission]]
+identifier = "deny-open-vpn-settings"
+description = "Denies the open_vpn_settings command without any pre-configured scope."
+commands.deny = ["open_vpn_settings"]

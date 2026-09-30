@@ -11,12 +11,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the repository. The release workflow publishes one arm64-v8a APK beside the
   desktop installers. Its version code comes from the semantic version, so a
   newer release installs over the previous one.
+- Phone Settings checks GitHub Releases and opens the arm64 APK in the system
+  browser. The app does not install the APK itself.
+- Phone Settings explains battery-optimization exemption, strict Private DNS,
+  and always-on VPN.
+- Subscriptions marked for auto-update refresh while the app is in the
+  foreground and again when it returns to the foreground.
 
 ### Fixed
 
 - A subscription node whose WireGuard key or Reality public key is not 32
   bytes is skipped with a warning. One invalid node no longer prevents the
   core from starting.
+- Importing or refreshing a subscription no longer runs the network request
+  on the Android UI thread.
 
 ## [0.1.15] - 2026-09-28
 

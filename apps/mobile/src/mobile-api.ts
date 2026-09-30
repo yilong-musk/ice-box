@@ -26,14 +26,6 @@ import type {
 const noop = async () => {};
 const unlisten = async () => () => {};
 
-const noUpdate: CheckAppUpdateResponse = {
-  available: false,
-  version: null,
-  notes: null,
-  skipped: false,
-  should_prompt: false,
-};
-
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
   listSubscriptions: () => invoke<SubscriptionMeta[]>("list_subscriptions"),
@@ -121,11 +113,18 @@ export const api = {
   copyProxyCommand: noop,
   openProxyTerminal: noop,
   restoreLaunchProxy: noop,
-  checkAppUpdate: async () => noUpdate,
+  checkAppUpdate: (background = false, startup = false) =>
+    invoke<CheckAppUpdateResponse>("check_app_update", {
+      req: { background, startup },
+    }),
+  recordAppUpdateCheck: () => invoke<void>("record_app_update_check"),
   recordUpdatePrompt: noop,
-  recordAppUpdateCheck: noop,
   skipAppUpdate: async () => {},
   installAppUpdate: noop,
+  openAppDownload: () => invoke<void>("open_app_download"),
+  requestBatteryExemption: () => invoke<void>("request_battery_exemption"),
+  openNetworkSettings: () => invoke<void>("open_network_settings"),
+  openVpnSettings: () => invoke<void>("open_vpn_settings"),
   listenAppUpdateProgress: unlisten,
   setTrayLanguage: noop,
   setTrayUpdateAvailable: noop,

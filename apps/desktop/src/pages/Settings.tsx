@@ -24,6 +24,7 @@ import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
+import { AndroidSystemCard } from "./settings/Android";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
@@ -136,6 +137,21 @@ export function Settings({
   const updateCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!isPhoneShell()) return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void api
+        .getStatus()
+        .then((next) => setStatus(next))
+        .catch(() => {
+          // The next status poll still refreshes the system rows.
+        });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  useEffect(() => {
     if (runtime?.status) {
       setStatus(runtime.status);
     }
@@ -206,6 +222,18 @@ export function Settings({
     } catch (e) {
       setUpdateError(formatUpdateError(e));
       setUpdateInfo(null);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function runUpdateDownload() {
+    setUpdateError(null);
+    setUpdateBusy(true);
+    try {
+      await api.openAppDownload();
+    } catch (e) {
+      setUpdateError(formatUpdateError(e));
     } finally {
       setUpdateBusy(false);
     }
@@ -570,7 +598,6 @@ export function Settings({
             />
           )}
 
-          {isPhoneShell() ? null : (
           <div ref={updateCardRef} id="settings-app-update">
             <UpdateCard
               checkAppUpdates={form.check_app_updates}
@@ -593,9 +620,13 @@ export function Settings({
               }}
               onCheck={() => void runUpdateCheck()}
               onInstall={() => void runUpdateInstall()}
+              onDownload={
+                isPhoneShell() ? () => void runUpdateDownload() : undefined
+              }
             />
           </div>
-          )}
+
+          {isPhoneShell() ? <AndroidSystemCard status={status} /> : null}
 
           <DataCard
             form={form}

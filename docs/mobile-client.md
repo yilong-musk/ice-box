@@ -185,7 +185,7 @@ committed.
 | System proxy / TUN switch | None; the VPN is the only capture | Same |
 | Config apply while running | Write config, `reload`; restart the tunnel on failure | Same |
 | TUN journal and startup recovery | None | None |
-| `WorkerSupervisor` workers | Foreground timers; refresh on app resume, `WorkManager` later | Foreground timers; `BGAppRefreshTask` later |
+| `WorkerSupervisor` workers | Foreground timer while the activity is resumed, plus a pass on resume; `WorkManager` later | Foreground timers; `BGAppRefreshTask` later |
 | Launch at login | System always-on VPN setting | Connect On Demand (later) |
 | Tray | Persistent VPN notification; Quick Settings tile later | Control Center / widget later |
 | Terminal helpers, reveal data dir | None | None |
@@ -206,7 +206,13 @@ committed.
   exclusion), `protect()` core sockets, default-network monitoring through
   `ConnectivityManager` for reconnects, and a log sink into the shared root.
 - The service declares always-on VPN support, so the system can start it
-  without the UI; it then reads the last config as described above.
+  without the UI; it then reads the last config as described above. Phone
+  Settings explains that switch, asks for a battery-optimization exemption
+  when the app is still optimized, and says when Private DNS is in strict
+  mode (`private_dns_mode=hostname`) so system DNS bypasses `hijack-dns`.
+- Subscriptions with auto-update refresh on a foreground timer (hourly, same
+  cadence as desktop) and again when the activity resumes. The network fetch
+  does not hold the UI thread. `WorkManager` is still Phase 3.
 
 ### libbox
 
@@ -246,8 +252,11 @@ a libbox AAR built from the same pinned source tag:
   means users must uninstall to upgrade, so it is backed up offline.
 - Releases attach one `arm64-v8a` APK next to the desktop installers; the
   `x86_64` build is a development artifact and is not published. The Tauri
-  updater plugin does not support Android; the app checks GitHub Releases the
-  way desktop does and opens the APK download for the system installer.
+  updater plugin does not support Android. Phone Settings checks the same
+  GitHub `latest.json` the desktop updater uses and opens the arm64 APK in
+  the system browser. The app does not install the APK itself. The check is
+  a direct request, the same path as a subscription fetch, because the VPN
+  excludes this app.
 - The Android version code is derived from the semantic version, so every
   release installs over the previous one.
 
@@ -385,15 +394,15 @@ next tag after those secrets exist.
 | Rule / Global / Direct | All three modes applied. Switching to Direct while the VPN was running reloaded libbox |
 | Start and stop | After VPN consent, Home showed Running, the selected outbound, and a live traffic curve. Logs showed `tun` inbound connections. Disconnect returned Home to Stopped and removed `tun0` |
 | Rules | Disabling one generated rule and adding a custom domain-suffix rule both stuck, and the custom rule reloaded the running core |
-| Logs and Settings | The Logs page showed core lines. Phone Settings shows Appearance and Data only; Ports, Update, TUN, and launch-at-login stay hidden. Language, theme, and debug logs persisted |
+| Logs and Settings | The Logs page showed core lines. Phone Settings shows Appearance, Data, App Updates, and the system guidance card. Ports, TUN, and launch-at-login stay hidden. Language, theme, and debug logs persisted |
 | Invalid node keys | A WireGuard or Reality key that is not 32 bytes is skipped with a warning. One such node no longer rejects the whole config at startup |
 
 ## Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| OEM background restrictions | The VPN is killed on some vendor ROMs | Foreground service, a battery-optimization exemption prompt, always-on VPN guidance |
-| Private DNS (DNS over TLS) in strict mode | System DNS bypasses `hijack-dns` | Detect it and explain in the UI; cover it in the spike |
+| OEM background restrictions | The VPN is killed on some vendor ROMs | Foreground service. Phone Settings prompts for a battery-optimization exemption and explains always-on VPN |
+| Private DNS (DNS over TLS) in strict mode | System DNS bypasses `hijack-dns` | Phone Settings detects `private_dns_mode=hostname` and explains it |
 | Tauri mobile maturity and native project edits | Build friction on Tauri upgrades | Commit generated projects; pin Tauri versions; CI APK build |
 | libbox build toolchain (Go, gomobile fork) | Unreproducible or broken core builds | Pin toolchain versions in the script; cache per core version; checksum artifacts |
 | Release keystore loss | Users cannot upgrade in place | Offline backup; key only in CI secrets |

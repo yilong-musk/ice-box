@@ -5,7 +5,10 @@ package com.yilongmusk.icebox.tunnel
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.result.ActivityResult
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
@@ -126,6 +129,79 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(payload)
     }
 
+    @Command
+    fun device_status(invoke: Invoke) {
+        val payload = JSObject()
+        payload.put("battery_unrestricted", batteryUnrestricted())
+        payload.put("private_dns_strict", privateDnsStrict())
+        payload.put("always_on_vpn", alwaysOnVpn())
+        invoke.resolve(payload)
+    }
+
+    @Command
+    fun request_battery_exemption(invoke: Invoke) {
+        val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${activity.packageName}")
+        }
+        if (start(direct)) {
+            invoke.resolve(JSObject())
+            return
+        }
+        open(invoke, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+
+    @Command
+    fun open_network_settings(invoke: Invoke) {
+        open(invoke, Intent(Settings.ACTION_WIRELESS_SETTINGS))
+    }
+
+    @Command
+    fun open_vpn_settings(invoke: Invoke) {
+        open(invoke, Intent(Settings.ACTION_VPN_SETTINGS))
+    }
+
+    @Command
+    fun open_https_url(invoke: Invoke) {
+        val url = invoke.getArgs().getString("url").orEmpty()
+        if (!isAllowedDownloadUrl(url)) {
+            invoke.reject("refusing url")
+            return
+        }
+        open(invoke, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }
+
+    private fun batteryUnrestricted(): Boolean {
+        val manager = activity.getSystemService(PowerManager::class.java) ?: return false
+        return manager.isIgnoringBatteryOptimizations(activity.packageName)
+    }
+
+    private fun privateDnsStrict(): Boolean {
+        val mode = Settings.Global.getString(activity.contentResolver, "private_dns_mode")
+        return mode == "hostname"
+    }
+
+    private fun alwaysOnVpn(): Boolean {
+        val selected = Settings.Secure.getString(activity.contentResolver, "always_on_vpn_app")
+        return selected == activity.packageName
+    }
+
+    private fun start(intent: Intent): Boolean {
+        return try {
+            activity.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun open(invoke: Invoke, intent: Intent) {
+        if (start(intent)) {
+            invoke.resolve(JSObject())
+        } else {
+            invoke.reject("settings unavailable")
+        }
+    }
+
     private fun launch(invoke: Invoke, action: String) {
         try {
             val intent = Intent(action).setClassName(activity.packageName, SERVICE_CLASS)
@@ -134,6 +210,17 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
         }
+    }
+
+    private fun isAllowedDownloadUrl(url: String): Boolean {
+        val prefix = "https://github.com/yilong-musk/ice-box/releases/download/v"
+        if (!url.startsWith(prefix)) return false
+        val rest = url.removePrefix(prefix)
+        val slash = rest.indexOf('/')
+        if (slash <= 0 || slash != rest.lastIndexOf('/')) return false
+        val version = rest.substring(0, slash)
+        if (!Regex("""\d+\.\d+\.\d+""").matches(version)) return false
+        return rest.substring(slash + 1) == "ice-box_${version}_android_arm64.apk"
     }
 
     private fun permission(value: String): JSObject {

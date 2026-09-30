@@ -119,6 +119,12 @@ export type StatusResponse = {
   vpn_permission?: "unknown" | "granted" | "denied";
   /** Mobile tunnel lifecycle. Omitted on desktop. */
   tunnel_status?: "stopped" | "connecting" | "connected" | "disconnecting" | "error";
+  /** Android only. True when the app is exempt from battery optimization. */
+  battery_unrestricted?: boolean;
+  /** Android only. True when Private DNS is pinned to a hostname. */
+  private_dns_strict?: boolean;
+  /** Android only. True when this app is the system always-on VPN. */
+  always_on_vpn?: boolean;
 };
 
 
@@ -406,6 +412,14 @@ export interface DesktopShellApi {
   recordAppUpdateCheck(): Promise<void>;
   skipAppUpdate(version: string): Promise<void>;
   installAppUpdate(): Promise<void>;
+  /** Android: open the release APK in the system browser. No-op on desktop. */
+  openAppDownload(): Promise<void>;
+  /** Android: system prompt to ignore battery optimization. No-op on desktop. */
+  requestBatteryExemption(): Promise<void>;
+  /** Android: open the system network screen. No-op on desktop. */
+  openNetworkSettings(): Promise<void>;
+  /** Android: open the system VPN screen. No-op on desktop. */
+  openVpnSettings(): Promise<void>;
   listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
   setTrayLanguage(language: "zh" | "en"): Promise<void>;
   setTrayUpdateAvailable(version: string | null): Promise<void>;

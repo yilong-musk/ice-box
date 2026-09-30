@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the device_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-status",
+          "markdownDescription": "Enables the device_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-status",
+          "markdownDescription": "Denies the device_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the memory command without any pre-configured scope.",
           "type": "string",
           "const": "allow-memory",
@@ -305,6 +317,42 @@
           "type": "string",
           "const": "deny-memory",
           "markdownDescription": "Denies the memory command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_https_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-https-url",
+          "markdownDescription": "Enables the open_https_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_https_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-https-url",
+          "markdownDescription": "Denies the open_https_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_network_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-network-settings",
+          "markdownDescription": "Enables the open_network_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_network_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-network-settings",
+          "markdownDescription": "Denies the open_network_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_vpn_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-vpn-settings",
+          "markdownDescription": "Enables the open_vpn_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_vpn_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-vpn-settings",
+          "markdownDescription": "Denies the open_vpn_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the prepare command without any pre-configured scope.",
@@ -329,6 +377,18 @@
           "type": "string",
           "const": "deny-reload",
           "markdownDescription": "Denies the reload command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_battery_exemption command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-battery-exemption",
+          "markdownDescription": "Enables the request_battery_exemption command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_battery_exemption command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-battery-exemption",
+          "markdownDescription": "Denies the request_battery_exemption command without any pre-configured scope."
         },
         {
           "description": "Enables the shared_dir command without any pre-configured scope.",
@@ -379,10 +439,10 @@
           "markdownDescription": "Denies the stop command without any pre-configured scope."
         },
         {
-          "description": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`",
+          "description": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`"
+          "markdownDescription": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`"
         }
       ]
     }

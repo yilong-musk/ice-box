@@ -8,6 +8,11 @@ const COMMANDS: &[&str] = &[
     "status",
     "shared_dir",
     "memory",
+    "device_status",
+    "request_battery_exemption",
+    "open_network_settings",
+    "open_vpn_settings",
+    "open_https_url",
 ];
 
 fn main() {
