@@ -146,6 +146,7 @@ describe("App", () => {
     });
     installAppUpdate.mockResolvedValue(undefined);
     saveSettings.mockResolvedValue(undefined);
+    window.innerWidth = 1280;
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -439,6 +440,7 @@ describe("App", () => {
 
   it("uses a bottom tab bar on the phone shell", async () => {
     phoneShell.value = true;
+    window.innerWidth = 390;
 
     const { container } = render(<App />);
     const view = within(container);
@@ -454,6 +456,26 @@ describe("App", () => {
     await waitFor(() => {
       expect(checkAppUpdate).toHaveBeenCalled();
     });
+    expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+  });
+
+  it("uses the sidebar when the phone shell is wide", async () => {
+    phoneShell.value = true;
+    window.innerWidth = 1280;
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("tablet-shell")).toBeInTheDocument();
+    });
+    expect(view.getByTestId("app-brand-row")).toBeInTheDocument();
+    expect(view.queryByTestId("phone-tab-bar")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-titlebar]")).toBeNull();
+    expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
   });
 });

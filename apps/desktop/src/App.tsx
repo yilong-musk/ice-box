@@ -42,6 +42,7 @@ import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
 import { isPhoneShell } from "@platform/shell";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   readLanguagePreference,
   t,
@@ -144,6 +145,7 @@ function AppShell() {
     useState<CheckAppUpdateResponse | null>(null);
   const [focusUpdateNonce, setFocusUpdateNonce] = useState(0);
   useThemePreference();
+  const narrow = useIsMobile();
   const { preference, resolved, setPreference } = useLanguagePreference();
   const bootLanguageRef = useRef(preference);
 
@@ -317,7 +319,9 @@ function AppShell() {
     </div>
   ) : null;
 
-  if (isPhoneShell()) {
+  const phone = isPhoneShell();
+
+  if (phone && narrow) {
     return (
       <TooltipProvider>
         <div
@@ -385,16 +389,20 @@ function AppShell() {
     <TooltipProvider>
       <SidebarProvider
         defaultOpen
-        className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
+        className={cn(
+          "flex h-svh w-full flex-col overflow-hidden bg-background text-foreground",
+          phone && "pt-[env(safe-area-inset-top)]",
+        )}
         style={SIDEBAR_PROVIDER_STYLE}
+        data-testid={phone ? "tablet-shell" : undefined}
       >
-        <TitleBar label={current ? t(current.labelKey) : ""} />
+        {phone ? null : <TitleBar label={current ? t(current.labelKey) : ""} />}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
             collapsible="offcanvas"
             side="left"
-            className="top-12! h-[calc(100svh-3rem)]!"
+            className={phone ? undefined : "top-12! h-[calc(100svh-3rem)]!"}
           >
             <SidebarContent>
               <SidebarGroup>
@@ -462,10 +470,20 @@ function AppShell() {
           </Sidebar>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {phone ? (
+              <header className="flex shrink-0 items-center px-4 pt-3">
+                <h2 className="text-sm font-medium">
+                  {current ? t(current.labelKey) : ""}
+                </h2>
+              </header>
+            ) : null}
             {recovery}
 
             <main
-              className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
+              className={cn(
+                "content-main content-fill min-h-0 flex-1 overflow-hidden p-4",
+                phone && "pb-[max(1rem,env(safe-area-inset-bottom))]",
+              )}
               data-testid="app-main"
             >
               {pages}

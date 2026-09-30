@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and always-on VPN.
 - The phone does not auto-update subscriptions. A profile changes only when
   the user imports or refreshes it.
+- A phone-shell window at least 768px wide uses the sidebar. A narrower
+  window keeps the bottom tab bar. Phone capabilities stay in either layout.
 
 ### Fixed
 

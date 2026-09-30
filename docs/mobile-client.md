@@ -35,9 +35,9 @@ phone:
 - the Rules view (disable subscription rules, add custom rules);
 - logs and the subset of Settings that applies to a phone.
 
-Out of scope for the first release: Google Play, tablet layout, per-app
-routing, Quick Settings tile, speed in the notification, LAN sharing, and
-in-app APK installation. The design leaves room for each of them. The phone
+Out of scope for the first release: Google Play, per-app routing, Quick
+Settings tile, speed in the notification, LAN sharing, and in-app APK
+installation. The design leaves room for each of them. The phone
 does not auto-update subscriptions. A profile changes only when the user
 imports or refreshes it.
 
@@ -276,7 +276,10 @@ aliasing `@` to `apps/desktop/src` the way the website does:
   the tunnel status from the plugin, so Home can explain the first-run consent.
 - The layout gains a phone variant used by both platforms: bottom tab
   navigation instead of the sidebar, safe-area insets, touch-sized targets, and
-  a Home without the system-proxy, TUN, and Mixed cards.
+  a Home without the system-proxy, TUN, and Mixed cards. A phone-shell window
+  at least 768px wide uses the sidebar and keeps the phone capabilities
+  (no desktop ports, TUN, or launch-at-login). A narrower window keeps the
+  tab bar. Rotating a phone to landscape can cross that width.
 
 ## Build, CI, and release
 
