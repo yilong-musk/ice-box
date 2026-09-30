@@ -44,41 +44,56 @@ import io.nekohasekai.libbox.NetworkInterface as BoxInterface
 class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val monitor by lazy { NetworkMonitor(this) }
+    private var monitorStarted = false
     private var server: CommandServer? = null
     private var tun: ParcelFileDescriptor? = null
     private var phase = "stopped"
+    private var foregroundFailed = false
+
+    /** Set on the main thread in onDestroy. The worker must not publish a live phase after this. */
+    @Volatile
+    private var destroyed = false
     private var memoryTask: java.util.concurrent.ScheduledFuture<*>? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        startForeground(
-            NOTIFICATION_ID,
-            notification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
-        )
+        if (!promoteToForeground()) {
+            return START_NOT_STICKY
+        }
         when (action) {
-            ACTION_STOP -> worker.execute { stopBox(); stopSelf() }
-            ACTION_RELOAD -> worker.execute { startOrReload("reload") }
-            else -> worker.execute {
+            ACTION_STOP -> onWorker { stopBox(); stopSelf() }
+            ACTION_RELOAD -> onWorker { startOrReload("reload") }
+            else -> onWorker {
                 startOrReload(if (action == ACTION_START) "start" else "system start ($action)")
             }
         }
         return START_NOT_STICKY
     }
 
+    /** libbox is only touched on [worker]. After [destroyed], further commands are dropped. */
+    private fun onWorker(block: () -> Unit) {
+        if (destroyed) return
+        runCatching { worker.execute(block) }
+    }
+
     private fun startOrReload(reason: String) {
+        if (destroyed) return
         publish("connecting", null)
         try {
             val configFile = File(sharedDir(this), "config.json")
             if (!configFile.exists()) error("no config written by the host")
+            if (destroyed) return
             val server = server ?: createServer()
+            if (destroyed) return
             val options = OverrideOptions()
             options.excludePackage = StringArray(listOf(packageName))
             server.startOrReloadService(configFile.readText(), options)
+            if (destroyed) return
             publish("connected", null)
             Log.i(NetworkMonitor.TAG, "$reason ok (libbox ${Libbox.version()})")
             scheduleMemoryReports()
         } catch (err: Throwable) {
+            if (destroyed) return
             val message = "${err.javaClass.simpleName}: ${err.message}"
             publish("error", message)
             Log.e(NetworkMonitor.TAG, "ERROR $reason: $message")
@@ -96,41 +111,92 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         })
         Libbox.redirectStderr(File(shared, "stderr.log").path)
         monitor.start()
+        monitorStarted = true
         return Libbox.newCommandServer(this, this).also { server = it }
     }
 
     private fun scheduleMemoryReports() {
-        if (memoryTask != null) return
+        if (memoryTask != null || destroyed) return
         memoryTask = worker.scheduleWithFixedDelay({
-            if (phase == "connected") publish("connected", null)
+            if (!destroyed && phase == "connected") publish("connected", null)
         }, 5, 5, TimeUnit.SECONDS)
     }
 
     private fun publish(next: String, message: String?) {
+        if (destroyed && (next == "connecting" || next == "connected")) return
         phase = next
         writeStatus(this, next, message)
     }
 
     private fun stopBox() {
-        publish("disconnecting", null)
+        if (!destroyed) publish("disconnecting", null)
         memoryTask?.cancel(false)
         memoryTask = null
+        // Leave the CommandServer in place so the next start can reload it.
+        // onDestroy is what closes the object, on this same worker.
         runCatching { server?.closeService() }
         runCatching { tun?.close() }
         tun = null
-        publish("stopped", null)
+        if (!foregroundFailed) publish("stopped", null)
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
+    /** Idempotent. Runs on [worker] only, after [destroyed] is set. */
+    private fun destroyServer() {
+        memoryTask?.cancel(false)
+        memoryTask = null
+        val running = server
+        server = null
+        runCatching { running?.closeService() }
+        runCatching { running?.close() }
+        runCatching { tun?.close() }
+        tun = null
+        if (monitorStarted) {
+            monitor.stop()
+            monitorStarted = false
+        }
+    }
+
     override fun onRevoke() {
-        worker.execute { stopBox(); stopSelf() }
+        onWorker { stopBox(); stopSelf() }
     }
 
     override fun onDestroy() {
-        runCatching { server?.close() }
-        monitor.stop()
-        publish("stopped", null)
+        // Queue the close behind any start already running on the worker.
+        // Publishing "connected" after this flag is set is ignored.
+        destroyed = true
+        runCatching {
+            worker.execute {
+                destroyServer()
+                if (!foregroundFailed) publish("stopped", null)
+            }
+        }
+        worker.shutdown()
         super.onDestroy()
+    }
+
+    /**
+     * `systemExempted` throws SecurityException unless the app is already on
+     * the battery-optimization allowlist, which kills `:tunnel` on the first
+     * connection. `specialUse` is allowed before that exemption. Settings
+     * still offers the exemption so the system is less likely to stop the
+     * tunnel in the background.
+     */
+    private fun promoteToForeground(): Boolean {
+        return try {
+            startForeground(
+                NOTIFICATION_ID,
+                notification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+            true
+        } catch (err: Exception) {
+            Log.e(NetworkMonitor.TAG, "startForeground failed: ${err.message}")
+            foregroundFailed = true
+            publish("error", err.message ?: err.javaClass.simpleName)
+            stopSelf()
+            false
+        }
     }
 
     private fun notification(): Notification {
@@ -264,11 +330,11 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun localDNSTransport(): LocalDNSTransport = LocalResolver(monitor)
 
     override fun serviceStop() {
-        worker.execute { stopBox(); stopSelf() }
+        onWorker { stopBox(); stopSelf() }
     }
 
     override fun serviceReload() {
-        worker.execute { startOrReload("reload (core)") }
+        onWorker { startOrReload("reload (core)") }
     }
 
     override fun getSystemProxyStatus() = SystemProxyStatus()

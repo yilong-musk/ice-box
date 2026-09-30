@@ -1,1 +1,2 @@
 -keep class com.yilongmusk.icebox.tunnel.TunnelPlugin { *; }
+-keep class com.yilongmusk.icebox.tunnel.InstallResultReceiver { *; }

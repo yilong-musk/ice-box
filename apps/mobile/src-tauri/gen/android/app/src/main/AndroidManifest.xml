@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -45,7 +45,7 @@
             android:name=".tunnel.TunnelService"
             android:process=":tunnel"
             android:exported="false"
-            android:foregroundServiceType="systemExempted"
+            android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
@@ -53,6 +53,11 @@
             <meta-data
                 android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
                 android:value="true" />
+            <!-- systemExempted refuses to start until the app is on the battery
+                 allowlist. specialUse can bring the tunnel up on the first tap. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VPN tunnel" />
         </service>
     </application>
 </manifest>

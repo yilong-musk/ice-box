@@ -9,6 +9,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
 import android.system.ErrnoException
 import android.util.Log
 import io.nekohasekai.libbox.ExchangeContext
@@ -36,13 +38,14 @@ class NetworkMonitor(private val context: Context) {
     var defaultNetwork: Network? = null
         private set
 
+    private var lastMetered: Boolean? = null
     private var started = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = update(network)
-        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = update(network)
+        override fun onAvailable(network: Network) = update(network, null)
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = update(network, caps)
         override fun onLost(network: Network) {
-            if (network == defaultNetwork) update(null)
+            if (network == defaultNetwork) update(null, null)
         }
     }
 
@@ -52,7 +55,12 @@ class NetworkMonitor(private val context: Context) {
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
-        connectivity.registerBestMatchingNetworkCallback(request, callback, context.mainExecutor)
+        // API 31+ takes a Handler. Callbacks are delivered on the main looper.
+        connectivity.registerBestMatchingNetworkCallback(
+            request,
+            callback,
+            Handler(Looper.getMainLooper()),
+        )
         started = true
     }
 
@@ -64,17 +72,29 @@ class NetworkMonitor(private val context: Context) {
 
     fun setListener(listener: InterfaceUpdateListener?) {
         this.listener = listener
-        notifyListener(defaultNetwork)
+        notifyListener(defaultNetwork, lastMetered == true)
     }
 
-    private fun update(network: Network?) {
-        if (network == defaultNetwork) return
+    /**
+     * Same [Network] can stay the default while its metered bit flips.
+     * Skipping that update left libbox on the previous metered flag.
+     */
+    private fun update(network: Network?, caps: NetworkCapabilities?) {
+        val resolved = when {
+            network == null -> null
+            caps != null -> caps
+            else -> connectivity.getNetworkCapabilities(network)
+        }
+        val metered = resolved?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
+        if (network == defaultNetwork && (network == null || lastMetered == metered)) return
         defaultNetwork = network
-        Log.i(TAG, "default network: ${network?.let { connectivity.getLinkProperties(it)?.interfaceName }}")
-        notifyListener(network)
+        lastMetered = if (network == null) null else metered
+        val name = network?.let { connectivity.getLinkProperties(it)?.interfaceName }
+        Log.i(TAG, "default network: ${name ?: "none"} metered=$metered")
+        notifyListener(network, metered)
     }
 
-    private fun notifyListener(network: Network?) {
+    private fun notifyListener(network: Network?, metered: Boolean) {
         val listener = listener ?: return
         if (network == null) {
             listener.updateDefaultInterface("", -1, false, false)
@@ -82,8 +102,6 @@ class NetworkMonitor(private val context: Context) {
         }
         val name = connectivity.getLinkProperties(network)?.interfaceName ?: return
         val index = runCatching { NetworkInterface.getByName(name).index }.getOrDefault(-1)
-        val caps = connectivity.getNetworkCapabilities(network)
-        val metered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
         listener.updateDefaultInterface(name, index, metered, false)
     }
 
@@ -99,7 +117,13 @@ class LocalResolver(private val monitor: NetworkMonitor) : LocalDNSTransport {
     override fun raw() = true
 
     override fun exchange(ctx: ExchangeContext, message: ByteArray) {
-        val network = monitor.defaultNetwork ?: error("missing default network")
+        val network = monitor.defaultNetwork
+        if (network == null) {
+            // The tunnel can ask before the first network callback. A thrown
+            // exception here crosses into libbox and kills the process.
+            ctx.errorCode(DNS_SERVFAIL)
+            return
+        }
         val done = CountDownLatch(1)
         val signal = CancellationSignal()
         ctx.onCancel { signal.cancel(); done.countDown() }
@@ -113,7 +137,7 @@ class LocalResolver(private val monitor: NetworkMonitor) : LocalDNSTransport {
 
                 override fun onError(error: DnsResolver.DnsException) {
                     val cause = error.cause
-                    if (cause is ErrnoException) ctx.errnoCode(cause.errno) else ctx.errorCode(2)
+                    if (cause is ErrnoException) ctx.errnoCode(cause.errno) else ctx.errorCode(DNS_SERVFAIL)
                     done.countDown()
                 }
             },
@@ -122,7 +146,11 @@ class LocalResolver(private val monitor: NetworkMonitor) : LocalDNSTransport {
     }
 
     override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
-        val defaultNetwork = monitor.defaultNetwork ?: error("missing default network")
+        val defaultNetwork = monitor.defaultNetwork
+        if (defaultNetwork == null) {
+            ctx.errorCode(DNS_SERVFAIL)
+            return
+        }
         val done = CountDownLatch(1)
         val signal = CancellationSignal()
         ctx.onCancel { signal.cancel(); done.countDown() }
@@ -134,7 +162,7 @@ class LocalResolver(private val monitor: NetworkMonitor) : LocalDNSTransport {
 
             override fun onError(error: DnsResolver.DnsException) {
                 val cause = error.cause
-                if (cause is ErrnoException) ctx.errnoCode(cause.errno) else ctx.errorCode(2)
+                if (cause is ErrnoException) ctx.errnoCode(cause.errno) else ctx.errorCode(DNS_SERVFAIL)
                 done.countDown()
             }
         }
@@ -149,5 +177,9 @@ class LocalResolver(private val monitor: NetworkMonitor) : LocalDNSTransport {
             DnsResolver.getInstance().query(defaultNetwork, domain, DnsResolver.FLAG_NO_RETRY, executor, signal, callback)
         }
         done.await()
+    }
+
+    private companion object {
+        const val DNS_SERVFAIL = 2
     }
 }

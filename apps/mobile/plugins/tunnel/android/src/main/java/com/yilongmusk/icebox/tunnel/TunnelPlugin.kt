@@ -193,7 +193,6 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         }
         try {
             commitInstall(file)
-            file.delete()
             invoke.resolve(JSObject())
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
@@ -263,16 +262,7 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    private fun isUpdateApk(file: File): Boolean {
-        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return false
-        val parent = canonical.parentFile ?: return false
-        val data = activity.dataDir.canonicalPath + File.separator
-        return parent.name == "updates" &&
-            canonical.name == "ice-box-update.apk" &&
-            canonical.path.startsWith(data) &&
-            canonical.isFile &&
-            canonical.length() > 0L
-    }
+    private fun isUpdateApk(file: File): Boolean = isDownloadedUpdateApk(activity, file)
 
     private fun commitInstall(file: File) {
         val installer = activity.packageManager.packageInstaller
@@ -287,10 +277,14 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
                 FileInputStream(file).use { input -> input.copyTo(out) }
                 session.fsync(out)
             }
-            val callback = PendingIntent.getActivity(
+            // The system reports STATUS_PENDING_USER_ACTION on this sender.
+            // InstallResultReceiver starts EXTRA_INTENT; the main activity does not.
+            val callback = PendingIntent.getBroadcast(
                 activity,
                 sessionId,
-                Intent(activity, activity.javaClass),
+                Intent(activity, InstallResultReceiver::class.java).apply {
+                    putExtra(InstallResultReceiver.EXTRA_APK_PATH, file.canonicalPath)
+                },
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             session.commit(callback.intentSender)
