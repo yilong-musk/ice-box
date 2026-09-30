@@ -44,6 +44,9 @@ bash scripts/test-merge-updater-latest.sh
 echo "== android version code =="
 bash scripts/test-android-version-code.sh
 
+echo "== android apk signer lines =="
+bash scripts/test-verify-android-apk.sh
+
 echo "== capture demo home =="
 bash scripts/capture-demo-home.sh
 
