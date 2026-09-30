@@ -8,7 +8,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website typechecks; Vitest; updater fixtures; demo screenshot |
+| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website/mobile typechecks; Vitest; updater fixtures; Android version-code fixtures; demo screenshot |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, and production build |
 
 The local gate omits desktop Rust tests because GTK/WebKit dependencies may be

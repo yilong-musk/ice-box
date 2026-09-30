@@ -2,6 +2,7 @@
 
 //! Basic share links: `socks://`, `socks5://`, `http://`, `https://`, `wireguard://`.
 
+use base64::Engine;
 use serde_json::{json, Value};
 
 use super::{parse_query, query_get, split_host_port, split_userinfo, SkipReason};
@@ -95,7 +96,22 @@ pub fn parse_wireguard(rest: &str) -> Result<Value, SkipReason> {
     let private_key = query_get(&params, "privatekey")
         .or_else(|| query_get(&params, "private_key"))
         .ok_or_else(|| SkipReason::Incomplete("wireguard link missing private key".into()))?;
+    if !is_wireguard_key(private_key) {
+        return Err(SkipReason::Incomplete(
+            "wireguard private key is not a 32-byte key".into(),
+        ));
+    }
+    if !is_wireguard_key(&peer_public_key) {
+        return Err(SkipReason::Incomplete(
+            "wireguard peer public key is not a 32-byte key".into(),
+        ));
+    }
     let preshared_key = query_get(&params, "presharedkey").unwrap_or("");
+    if !preshared_key.is_empty() && !is_wireguard_key(preshared_key) {
+        return Err(SkipReason::Incomplete(
+            "wireguard preshared key is not a 32-byte key".into(),
+        ));
+    }
     let address = query_get(&params, "address").unwrap_or("");
     let mtu = query_get(&params, "mtu").unwrap_or("");
 
@@ -139,6 +155,17 @@ pub fn parse_wireguard(rest: &str) -> Result<Value, SkipReason> {
     Ok(out)
 }
 
+/// sing-box decodes WireGuard keys as standard base64 of exactly 32 bytes.
+/// A shorter placeholder fails the whole service at startup, so skip the node.
+fn is_wireguard_key(value: &str) -> bool {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(value))
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(value))
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value));
+    matches!(decoded, Ok(bytes) if bytes.len() == 32)
+}
+
 fn query_part(rest: &str) -> &str {
     match rest.find('?') {
         Some(pos) => &rest[pos + 1..],
@@ -178,14 +205,17 @@ mod tests {
 
     #[test]
     fn wireguard_full() {
-        let out = parse_wireguard(
-            "pubkey@1.2.3.4:443?privatekey=priv&presharedkey=psk&reserved=0,1,2&address=10.0.0.1%2F32%2C10.0.0.2%2F32&mtu=1420",
-        )
+        let public_key = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+        let private_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let preshared_key = "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=";
+        let out = parse_wireguard(&format!(
+            "{public_key}@1.2.3.4:443?privatekey={private_key}&presharedkey={preshared_key}&reserved=0,1,2&address=10.0.0.1%2F32%2C10.0.0.2%2F32&mtu=1420",
+        ))
         .unwrap();
         assert_eq!(out["type"], "wireguard");
-        assert_eq!(out["peer_public_key"], "pubkey");
-        assert_eq!(out["private_key"], "priv");
-        assert_eq!(out["preshared_key"], "psk");
+        assert_eq!(out["peer_public_key"], public_key);
+        assert_eq!(out["private_key"], private_key);
+        assert_eq!(out["preshared_key"], preshared_key);
         assert_eq!(out["local_address"][0], "10.0.0.1/32");
         assert_eq!(out["local_address"][1], "10.0.0.2/32");
         assert_eq!(out["reserved"], json!([0, 1, 2]));
@@ -194,12 +224,24 @@ mod tests {
 
     #[test]
     fn wireguard_clashmeta_style() {
-        let out =
-            parse_wireguard("1.2.3.4:51820?publickey=pub&privatekey=priv&address=10.0.0.1%2F32")
-                .unwrap();
-        assert_eq!(out["peer_public_key"], "pub");
-        assert_eq!(out["private_key"], "priv");
+        let public_key = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+        let private_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let out = parse_wireguard(&format!(
+            "1.2.3.4:51820?publickey={public_key}&privatekey={private_key}&address=10.0.0.1%2F32"
+        ))
+        .unwrap();
+        assert_eq!(out["peer_public_key"], public_key);
+        assert_eq!(out["private_key"], private_key);
         assert_eq!(out["local_address"][0], "10.0.0.1/32");
+    }
+
+    #[test]
+    fn wireguard_rejects_placeholder_keys() {
+        let err = parse_wireguard(
+            "pubkey@1.2.3.4:443?privatekey=privkey&presharedkey=psk&address=10.0.0.1%2F32",
+        )
+        .unwrap_err();
+        assert!(matches!(err, SkipReason::Incomplete(message) if message.contains("private key")));
     }
 
     #[test]

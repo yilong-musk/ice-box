@@ -1,11 +1,13 @@
 # Mobile Client Design
 
-Status: **in progress**. Phase 0 (Android spike) and Phase 1 (shared groundwork)
-are implemented. Phase 2 (Android MVP) is underway: the phone layout, the
-`apps/mobile` composition root, the Tauri Android project
+Status: **in progress** (iOS deferred). Phase 0 (Android spike), Phase 1
+(shared groundwork), and Phase 2 (Android MVP) are implemented. The phone
+layout, the `apps/mobile` composition root, the Tauri Android project
 (`com.yilongmusk.icebox`, minSdk 34, arm64-v8a plus emulator x86_64), the
 `tunnel` plugin, and the host commands that write subscriptions and
-`config.json` exist. A signed APK does not yet. iOS is deferred; the shared
+`config.json` exist. Daily flows were checked on an Android 14 emulator.
+The release workflow signs one `arm64-v8a` APK with the project keystore and
+publishes it next to the desktop installers. iOS stays deferred; the shared
 architecture is designed so an iOS client
 plugs into it later without reworking the Android client (see
 [iOS (deferred)](#ios-deferred)).
@@ -271,16 +273,20 @@ aliasing `@` to `apps/desktop/src` the way the website does:
 
 - Android builds run on Linux with JDK 17, the Android SDK and NDK, Go, and
   gomobile; the current development environment and the existing Ubuntu CI
-  runners can build them. Device testing uses a physical phone over `adb`.
+  runners can build them. Phase 2 acceptance ran on an Android 14 emulator.
+  A physical phone over `adb` is the check when one is available.
 - `rust-toolchain.toml` adds the Android targets.
-- CI gains an Android job: `cargo check` for the Android targets, the libbox
-  build (cached by version), and an unsigned debug APK. Signed release APKs
-  are built only in the release workflow.
-- `scripts/gate-local.sh` runs the mobile config tests on every host; the
-  Android build step runs only where the SDK is installed.
+- CI runs an Android job: `cargo check` for `aarch64-linux-android` and
+  `x86_64-linux-android`, the arm64 libbox build (cached by the pinned core
+  version), and a debug APK signed with the Android debug key. The `x86_64`
+  libbox is a local emulator artifact. The project release keystore is used
+  only in the release workflow, which publishes one `arm64-v8a` APK.
+- `scripts/gate-local.sh` runs the mobile config tests and the Android
+  version-code fixture on every host. The APK build runs only where the SDK
+  is installed (`scripts/build-android-apk.sh`).
 - `scripts/bump-version.sh` also sets the Android version name and code.
-- `docs/release-process.md` gains an Android section once the first APK
-  ships; desktop releases are unchanged.
+- `docs/release-process.md` describes the keystore and the signed APK.
+  Desktop release steps are unchanged.
 
 ## iOS (deferred)
 
@@ -317,7 +323,7 @@ Items that Android work must not break for iOS:
 |-------|-------|---------------|
 | 0. Android spike | Minimal `VpnService` app with the libbox AAR 1.13.19 in a `:tunnel` process, running a config from `ice-engine` for `Android` | IPv4 and IPv6 traffic through the tunnel; the host process reaches the Clash API; subscription HTTPS fetch works on device; always-on start works |
 | 1. Shared groundwork | Mobile config shape and tests, `ice-app` extraction, `ApiContract` split | Desktop behavior unchanged; `scripts/gate-local.sh` passes |
-| 2. Android MVP | `apps/mobile`, tunnel plugin (Kotlin), VPN service, phone layout | Goals above work on device; signed APK attached to a pre-release |
+| 2. Android MVP | `apps/mobile`, tunnel plugin (Kotlin), VPN service, phone layout | Daily flows on an Android 14 emulator; release workflow publishes one signed arm64-v8a APK |
 | 3. Follow-up | Background refresh, Quick Settings tile, per-app routing, notification speed | Tracked separately |
 | 4. iOS | See [iOS (deferred)](#ios-deferred) | Internal TestFlight build |
 
@@ -360,6 +366,27 @@ Findings that Phase 1 has to absorb:
 - An `arm64-v8a` libbox is about 39 MB uncompressed (about 13 MB deflated).
   The release APK that also carries `x86_64` is about 94 MB only because the
   spike ships both ABIs.
+
+### Phase 2 results
+
+Checked on an Android 14 emulator (API 34, `x86_64`) with the debug app
+`com.yilongmusk.icebox.debug` and libbox 1.13.19. No physical phone was
+available, so this is the Phase 2 acceptance run. The published APK is a
+separate artifact: `release.yml` signs an `arm64-v8a` release build with the
+project keystore and attaches `ice-box_<ver>_android_arm64.apk` to the GitHub
+Release. The keystore is created once, kept offline, and stored in CI
+secrets. It is not in the repository. The first published APK goes out on the
+next tag after those secrets exist.
+
+| Check | Result |
+|-------|--------|
+| Import, refresh, activate, remove | Public URI-list import, refresh, the active switch, and delete all completed. The response had no `subscription-userinfo` header, so usage and expiry stayed empty, as on desktop |
+| Node selection and delay | Selecting a node moved the in-use marker. The list has no selector groups. A delay test while the VPN was up reported failure for an unreachable example node and did not crash |
+| Rule / Global / Direct | All three modes applied. Switching to Direct while the VPN was running reloaded libbox |
+| Start and stop | After VPN consent, Home showed Running, the selected outbound, and a live traffic curve. Logs showed `tun` inbound connections. Disconnect returned Home to Stopped and removed `tun0` |
+| Rules | Disabling one generated rule and adding a custom domain-suffix rule both stuck, and the custom rule reloaded the running core |
+| Logs and Settings | The Logs page showed core lines. Phone Settings shows Appearance and Data only; Ports, Update, TUN, and launch-at-login stay hidden. Language, theme, and debug logs persisted |
+| Invalid node keys | A WireGuard or Reality key that is not 32 bytes is skipped with a warning. One such node no longer rejects the whole config at startup |
 
 ## Risks
 

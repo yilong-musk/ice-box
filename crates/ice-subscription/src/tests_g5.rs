@@ -1285,7 +1285,7 @@ fn g5_16_uri_list_import_and_manager() {
         .expect("reality node");
     assert_eq!(
         reality.outbound["tls"]["reality"]["public_key"],
-        "EYa4ic3GAxqznV61U-Oww-WKsu5wuQQptyS3fw7czM"
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
     );
     assert_eq!(reality.outbound["tls"]["reality"]["short_id"], "c50db39f");
     assert_eq!(reality.outbound["tls"]["server_name"], "www.lamer.com.hk");

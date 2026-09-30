@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Android release APKs are signed with a project keystore that stays out of
+  the repository. The release workflow publishes one arm64-v8a APK beside the
+  desktop installers. Its version code comes from the semantic version, so a
+  newer release installs over the previous one.
+
+### Fixed
+
+- A subscription node whose WireGuard key or Reality public key is not 32
+  bytes is skipped with a warning. One invalid node no longer prevents the
+  core from starting.
+
 ## [0.1.15] - 2026-09-28
 
 ### Changed

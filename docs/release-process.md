@@ -8,10 +8,10 @@ update it whenever the process changes.
 
 A release is a **`vX.Y.Z` tag pushed to `main`**. The tag push triggers
 `.github/workflows/release.yml`, which gates the workspace, builds the macOS
-arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`) and the Windows NSIS `.exe`
-(plus `.exe.sig`), synthesizes `latest.json`, and publishes a GitHub Release with
-the artifacts, the compliance notices, and a short release body that links to the
-full changelog.
+arm64 `.dmg` (plus updater `.app.tar.gz` / `.sig`), the Windows NSIS `.exe`
+(plus `.exe.sig`), and one signed Android `arm64-v8a` APK, synthesizes
+`latest.json`, and publishes a GitHub Release with the artifacts, the
+compliance notices, and a short release body that links to the full changelog.
 
 macOS releases are ad-hoc signed at the bundle level (documented product
 decision: no Developer ID certificate, no notarization). TUN elevation is
@@ -26,15 +26,23 @@ Developer ID signing.
 
 ## Version sources
 
-The version lives in exactly three places and **must stay in sync**:
+The version lives in these places and **must stay in sync**:
 
 | File | Key |
 |------|-----|
 | `Cargo.toml` | `[workspace.package] version` (all crates inherit via `version.workspace = true`) |
 | `apps/desktop/package.json` | `"version"` (also displayed in the app UI and GitHub Pages marketing chrome) |
 | `apps/desktop/src-tauri/tauri.conf.json` | `"version"` (installer metadata) |
+| `apps/mobile/package.json` | `"version"` |
+| `apps/mobile/src-tauri/tauri.conf.json` | `"version"` and `bundle.android.versionCode` |
+| `apps/mobile/src-tauri/gen/android/app/tauri.properties` | `tauri.android.versionName` and `tauri.android.versionCode` (rewritten by the bump script; `tauri android build` regenerates the same values) |
 
 `Cargo.lock` is refreshed automatically by `cargo check`.
+
+The Android version code is `major * 1000000 + minor * 1000 + patch` (the same
+integer Tauri uses when `versionCode` is unset). A pre-release suffix does not
+change it, so do not publish both a pre-release and a final build of the same
+`X.Y.Z`: Android will not treat the second as an upgrade. `0.0.0` is rejected.
 
 ## Updater signing keys (one-time)
 
@@ -66,7 +74,7 @@ secrets (fork PRs would otherwise fail). Only `release.yml` merges
 bash scripts/bump-version.sh 0.1.2
 ```
 
-The script rewrites all three version sources, verifies each pattern was found,
+The script rewrites every version source above, verifies each pattern was found,
 and refreshes `Cargo.lock` (`cargo check --workspace --quiet`).
 
 ### 2. Update the changelog
@@ -125,7 +133,8 @@ Pushing the tag is the point of no return: it triggers the release pipeline.
 |-----|--------|------|
 | `build-macos` | macos-latest | gate + headless acceptance + `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets) → upload DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | gate + headless acceptance + NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`) → upload EXE + `.exe.sig` |
-| `publish` | ubuntu-latest | `needs` both build jobs; downloads artifacts; builds the short release body via `scripts/release-notes.sh`; `scripts/merge-updater-latest.sh` reuses that body as `latest.json` `notes`; creates the GitHub Release |
+| `build-android` | ubuntu-latest | signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release` → upload `ice-box_<ver>_android_arm64.apk` |
+| `publish` | ubuntu-latest | `needs` the three build jobs; downloads artifacts; builds the short release body via `scripts/release-notes.sh`; `scripts/merge-updater-latest.sh` reuses that body as `latest.json` `notes`; creates the GitHub Release |
 
 Published assets:
 
@@ -133,6 +142,7 @@ Published assets:
 - `ice-box.app.tar.gz` and `ice-box.app.tar.gz.sig` (macOS updater payload; exact names follow Tauri)
 - `ice-box_<ver>_x64-setup.exe` (Windows NSIS, first-time install)
 - `ice-box_<ver>_x64-setup.exe.sig` (Windows updater signature)
+- `ice-box_<ver>_android_arm64.apk` (Android arm64-v8a, signed with the project keystore)
 - `latest.json` (`version`, `notes`, `pub_date`, `platforms.darwin-aarch64` /
   `platforms.windows-x86_64`; each `signature` is the **full `.sig` file text**,
   each `url` is `https://github.com/yilong-musk/ice-box/releases/download/<tag>/<asset>`)
@@ -144,7 +154,7 @@ Published assets:
 
 ```bash
 gh run list --workflow release.yml --limit 1   # conclusion: success
-gh release view v0.1.2 --json assets           # dmg, exe, tar.gz, sigs, latest.json
+gh release view v0.1.2 --json assets           # dmg, exe, apk, tar.gz, sigs, latest.json
 gh release view v0.1.2 --json body             # short blurb + CHANGELOG.md link
 ```
 
@@ -211,6 +221,52 @@ Settings → Privacy & Security → Open Anyway (macOS 15+), right-click → Ope
 
 In-app updates after 0.1.5 do not change that decision: they only check minisign
 signatures. Windows NSIS installers remain without Authenticode.
+
+## Android signing (one-time)
+
+Android APKs are signed with one project release keystore. It is not Developer
+ID, Play App Signing, or the minisign updater key. The Tauri updater does not
+support Android, so the APK is a normal GitHub Release asset and is not listed
+in `latest.json`. CI debug APKs are signed with the Android debug key only.
+
+Generate the keystore once, on a machine you control, and keep a copy offline.
+Losing it means installed clients must uninstall before they can take a newer
+build.
+
+```bash
+export ICE_BOX_ANDROID_KEYSTORE_PASSWORD='...'
+export ICE_BOX_ANDROID_KEY_PASSWORD='...'
+bash scripts/generate-android-keystore.sh "$HOME/.local/share/ice-box/ice-box-release.jks"
+```
+
+The script refuses to write the file inside the repository. It uses a JKS
+keystore so the store password and the key password stay independent.
+`keytool` warns that JKS is a proprietary format; that warning is expected.
+Set the GitHub Actions secrets it prints:
+
+| Secret | Value |
+|--------|--------|
+| `ANDROID_KEYSTORE_BASE64` | base64 of the `.jks` file, one line |
+| `ANDROID_KEYSTORE_PASSWORD` | store password |
+| `ANDROID_KEY_ALIAS` | `ice-box`, unless you overrode `ICE_BOX_ANDROID_KEY_ALIAS` |
+| `ANDROID_KEY_PASSWORD` | key password |
+
+`release.yml` fails the Android job when any of those secrets is empty, before
+it spends a build. A local signed build uses the file path instead of the
+base64 secret:
+
+```bash
+export ICE_BOX_ANDROID_KEYSTORE="$HOME/.local/share/ice-box/ice-box-release.jks"
+export ICE_BOX_ANDROID_KEYSTORE_PASSWORD='...'
+export ICE_BOX_ANDROID_KEY_ALIAS=ice-box
+export ICE_BOX_ANDROID_KEY_PASSWORD='...'
+bash scripts/build-android-apk.sh release arm64
+```
+
+`scripts/verify-android-apk.sh --release` rejects an APK signed with the
+Android debug key and an APK that contains any ABI other than `arm64-v8a`.
+The `x86_64` APK is a local emulator artifact (`debug amd64`) and is not
+published.
 
 ## Future milestones
 

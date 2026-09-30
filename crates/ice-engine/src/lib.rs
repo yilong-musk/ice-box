@@ -214,7 +214,10 @@ proxies:
         let endpoints = value["endpoints"].as_array().expect("wireguard endpoint");
         assert_eq!(endpoints[0]["type"], "wireguard");
         assert!(endpoints[0].get("local_address").is_none());
-        assert_eq!(endpoints[0]["peers"][0]["public_key"], "pubkey");
+        assert_eq!(
+            endpoints[0]["peers"][0]["public_key"],
+            "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+        );
         let tags: Vec<&str> = outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
         assert!(tags.contains(&"日本东京01|1023.81 GB"));
         let reality = outbounds
@@ -223,7 +226,7 @@ proxies:
             .expect("reality outbound");
         assert_eq!(
             reality["tls"]["reality"]["public_key"],
-            "EYa4ic3GAxqznV61U-Oww-WKsu5wuQQptyS3fw7czM"
+            "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
         );
         assert_eq!(
             value["route"]["final"], "proxy",

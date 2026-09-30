@@ -13,6 +13,19 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing uses the project keystore. The file and passwords stay
+// outside the repository (CI secrets, or a local path for a release build).
+// Debug builds keep the Android debug key and ignore these variables.
+val releaseKeystorePath = System.getenv("ICE_BOX_ANDROID_KEYSTORE").orEmpty().trim()
+val releaseStorePassword = System.getenv("ICE_BOX_ANDROID_KEYSTORE_PASSWORD").orEmpty()
+val releaseKeyAlias = System.getenv("ICE_BOX_ANDROID_KEY_ALIAS").orEmpty().trim()
+val releaseKeyPassword = System.getenv("ICE_BOX_ANDROID_KEY_PASSWORD").orEmpty()
+val releaseSigningReady =
+    releaseKeystorePath.isNotEmpty() &&
+        releaseStorePassword.isNotEmpty() &&
+        releaseKeyAlias.isNotEmpty() &&
+        releaseKeyPassword.isNotEmpty()
+
 android {
     compileSdk = 36
     namespace = "com.yilongmusk.icebox"
@@ -23,6 +36,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    if (releaseSigningReady) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -37,6 +60,9 @@ android {
             }
         }
         getByName("release") {
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

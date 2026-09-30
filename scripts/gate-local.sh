@@ -41,6 +41,9 @@ echo "== vitest =="
 echo "== merge-updater-latest fixtures =="
 bash scripts/test-merge-updater-latest.sh
 
+echo "== android version code =="
+bash scripts/test-android-version-code.sh
+
 echo "== capture demo home =="
 bash scripts/capture-demo-home.sh
 

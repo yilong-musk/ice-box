@@ -53,6 +53,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== merge-updater-latest fixtures =="
   bash "$ROOT/scripts/test-merge-updater-latest.sh"
 
+  echo "== android version code =="
+  bash "$ROOT/scripts/test-android-version-code.sh"
+
   echo "== vite build =="
   (cd apps/desktop && npm run build)
 
