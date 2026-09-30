@@ -1648,13 +1648,16 @@ mod imp {
             );
             assert!(oversized.len() > MAX_FRAME_BYTES);
             let mut writer = client.try_clone().unwrap();
+            // Arm the deadline before the write. The daemon closes an
+            // oversized frame without a response, and macOS then rejects
+            // SO_RCVTIMEO with EINVAL.
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
             writer.write_all(oversized.as_bytes()).unwrap();
             writer.flush().ok();
 
             // The connection is closed with no response frame.
-            client
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
             let mut buf = String::new();
             let result = client.read_to_string(&mut buf);
             assert!(
