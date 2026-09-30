@@ -36,9 +36,10 @@ phone:
 - logs and the subset of Settings that applies to a phone.
 
 Out of scope for the first release: Google Play, tablet layout, per-app
-routing, Quick Settings tile, speed in the notification, LAN sharing, in-app
-APK installation, and background subscription refresh beyond best effort. The
-design leaves room for each of them.
+routing, Quick Settings tile, speed in the notification, LAN sharing, and
+in-app APK installation. The design leaves room for each of them. The phone
+does not auto-update subscriptions. A profile changes only when the user
+imports or refreshes it.
 
 ## Shared architecture
 
@@ -185,7 +186,7 @@ committed.
 | System proxy / TUN switch | None; the VPN is the only capture | Same |
 | Config apply while running | Write config, `reload`; restart the tunnel on failure | Same |
 | TUN journal and startup recovery | None | None |
-| `WorkerSupervisor` workers | Foreground timer while the activity is resumed, plus a pass on resume; `WorkManager` later | Foreground timers; `BGAppRefreshTask` later |
+| `WorkerSupervisor` workers | None | None |
 | Launch at login | System always-on VPN setting | Connect On Demand (later) |
 | Tray | Persistent VPN notification; Quick Settings tile later | Control Center / widget later |
 | Terminal helpers, reveal data dir | None | None |
@@ -210,9 +211,8 @@ committed.
   Settings explains that switch, asks for a battery-optimization exemption
   when the app is still optimized, and says when Private DNS is in strict
   mode (`private_dns_mode=hostname`) so system DNS bypasses `hijack-dns`.
-- Subscriptions with auto-update refresh on a foreground timer (hourly, same
-  cadence as desktop) and again when the activity resumes. The network fetch
-  does not hold the UI thread. `WorkManager` is still Phase 3.
+- The phone does not auto-update subscriptions. Import and refresh are the
+  only fetches, and those network requests do not hold the UI thread.
 
 ### libbox
 
@@ -333,7 +333,7 @@ Items that Android work must not break for iOS:
 | 0. Android spike | Minimal `VpnService` app with the libbox AAR 1.13.19 in a `:tunnel` process, running a config from `ice-engine` for `Android` | IPv4 and IPv6 traffic through the tunnel; the host process reaches the Clash API; subscription HTTPS fetch works on device; always-on start works |
 | 1. Shared groundwork | Mobile config shape and tests, `ice-app` extraction, `ApiContract` split | Desktop behavior unchanged; `scripts/gate-local.sh` passes |
 | 2. Android MVP | `apps/mobile`, tunnel plugin (Kotlin), VPN service, phone layout | Daily flows on an Android 14 emulator; release workflow publishes one signed arm64-v8a APK |
-| 3. Follow-up | Background refresh, Quick Settings tile, per-app routing, notification speed | Tracked separately |
+| 3. Follow-up | Quick Settings tile, per-app routing, notification speed | Tracked separately |
 | 4. iOS | See [iOS (deferred)](#ios-deferred) | Internal TestFlight build |
 
 Phase 0 is a go/no-go point: if the two-process split or the loopback Clash API

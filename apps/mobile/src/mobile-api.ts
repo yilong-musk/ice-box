@@ -16,7 +16,6 @@ import type {
   RuleOverview,
   SettingsPatch,
   StatusResponse,
-  SubscriptionAutoUpdateInterval,
   SubscriptionMeta,
   TrafficDelta,
   TrafficPoint,
@@ -53,18 +52,13 @@ export const api = {
   saveSettings: (patch: SettingsPatch) => invoke<void>("save_settings", { patch }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
-  addSubscription: (
-    url: string,
-    name?: string,
-    autoUpdate = false,
-    interval: SubscriptionAutoUpdateInterval = "one_hour",
-  ) =>
+  addSubscription: (url: string, name?: string) =>
     invoke<SubscriptionMeta>("add_subscription", {
       req: {
         url,
         name: name ?? null,
-        auto_update: autoUpdate,
-        auto_update_interval: autoUpdate ? interval : null,
+        auto_update: false,
+        auto_update_interval: null,
       },
     }),
   removeSubscription: (id: string) =>
@@ -76,13 +70,10 @@ export const api = {
   updateAllSubscriptions: () => invoke<unknown>("update_all_subscriptions"),
   setSubscriptionActive: (id: string, active: boolean) =>
     invoke<SubscriptionMeta>("set_active_subscription", { req: { id, active } }),
-  setSubscriptionAutoUpdate: (
-    id: string,
-    autoUpdate: boolean,
-    interval: SubscriptionAutoUpdateInterval,
-  ) =>
-    invoke<SubscriptionMeta>("set_auto_update_subscription", {
-      req: { id, auto_update: autoUpdate, auto_update_interval: interval },
+  setSubscriptionAutoUpdate: () =>
+    Promise.reject({
+      code: "sub.auto_update_unsupported",
+      message: "subscription auto-update is not available on the phone",
     }),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) => invoke<ListRulesResponse>("list_rules", { req }),

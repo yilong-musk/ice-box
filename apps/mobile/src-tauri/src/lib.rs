@@ -5,7 +5,6 @@ mod commands;
 mod config;
 mod host;
 mod status;
-mod subscription_watch;
 
 #[cfg(target_os = "android")]
 mod android;
@@ -13,8 +12,6 @@ mod android;
 use std::sync::Mutex;
 
 use tauri::Manager;
-#[cfg(target_os = "android")]
-use tauri::RunEvent;
 
 use crate::host::MobileHost;
 
@@ -31,7 +28,6 @@ pub fn run() {
                 )?;
             }
             app.manage(Mutex::new(MobileHost::new()));
-            app.manage(subscription_watch::start(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -44,7 +40,6 @@ pub fn run() {
             commands::update_subscription,
             commands::update_all_subscriptions,
             commands::set_active_subscription,
-            commands::set_auto_update_subscription,
             commands::list_nodes,
             commands::set_selected_node,
             commands::set_group_selection,
@@ -68,28 +63,6 @@ pub fn run() {
             commands::open_network_settings,
             commands::open_vpn_settings,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Activity onPause / a later onResume. The first onResume is not
-            // delivered; the watcher starts in the foreground instead.
-            #[cfg(target_os = "android")]
-            if let Some(watch) = app.try_state::<subscription_watch::SubscriptionWatch>() {
-                match event {
-                    RunEvent::WindowEvent {
-                        event: tauri::WindowEvent::Suspended,
-                        ..
-                    } => watch.pause(),
-                    RunEvent::WindowEvent {
-                        event: tauri::WindowEvent::Resumed,
-                        ..
-                    } => watch.resume(),
-                    _ => {}
-                }
-            }
-            #[cfg(not(target_os = "android"))]
-            {
-                let _ = (app, event);
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

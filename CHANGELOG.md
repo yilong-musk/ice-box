@@ -15,8 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   browser. The app does not install the APK itself.
 - Phone Settings explains battery-optimization exemption, strict Private DNS,
   and always-on VPN.
-- Subscriptions marked for auto-update refresh while the app is in the
-  foreground and again when it returns to the foreground.
+- The phone does not auto-update subscriptions. A profile changes only when
+  the user imports or refreshes it.
 
 ### Fixed
 

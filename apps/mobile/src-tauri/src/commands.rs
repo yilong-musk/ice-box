@@ -52,14 +52,6 @@ pub struct SetActiveRequest {
 }
 
 #[derive(Deserialize)]
-pub struct SetAutoUpdateRequest {
-    pub id: Uuid,
-    pub auto_update: bool,
-    #[serde(default)]
-    pub auto_update_interval: Option<AutoUpdateInterval>,
-}
-
-#[derive(Deserialize)]
 pub struct SetProxyModeRequest {
     pub mode: ProxyMode,
 }
@@ -266,15 +258,11 @@ pub async fn add_subscription(
     };
     let url = req.url;
     let name = req.name;
-    let auto_update = req.auto_update;
-    let interval = req.auto_update_interval;
+    // The phone does not schedule subscription refreshes. The flags stay on
+    // the request so the shared form can send them; they are not stored.
+    let _ = (req.auto_update, req.auto_update_interval);
     let fetched = run_blocking("add_subscription", move || {
-        SubscriptionManager::open(paths, PLATFORM).fetch_add(
-            &url,
-            name.as_deref(),
-            auto_update,
-            interval,
-        )
+        SubscriptionManager::open(paths, PLATFORM).fetch_add(&url, name.as_deref(), false, None)
     })
     .await?
     .map_err(AppError::from)?;
@@ -375,17 +363,6 @@ pub fn set_active_subscription(
     drop(host);
     notify(&app);
     Ok(meta)
-}
-
-#[tauri::command]
-pub fn set_auto_update_subscription(
-    app: AppHandle,
-    host: State<'_, Mutex<MobileHost>>,
-    tunnel: State<'_, Tunnel<Wry>>,
-    req: SetAutoUpdateRequest,
-) -> Result<serde_json::Value, AppError> {
-    let host = ready(&app, &host, &tunnel)?;
-    host.set_auto_update(req.id, req.auto_update, req.auto_update_interval)
 }
 
 #[tauri::command]

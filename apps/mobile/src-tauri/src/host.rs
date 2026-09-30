@@ -17,8 +17,8 @@ use ice_core::{
     DELAY_TEST_URL,
 };
 use ice_subscription::{
-    read_index, redact_subscription_url_for_ui, AutoUpdateInterval, SubscriptionManager,
-    SubscriptionMeta, SubscriptionPaths,
+    read_index, redact_subscription_url_for_ui, SubscriptionManager, SubscriptionMeta,
+    SubscriptionPaths,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -167,16 +167,6 @@ impl MobileHost {
 
     pub fn set_active(&self, id: Uuid, active: bool) -> Result<Value, AppError> {
         let meta = self.manager()?.set_active(id, active)?;
-        public_meta(&meta)
-    }
-
-    pub fn set_auto_update(
-        &self,
-        id: Uuid,
-        auto_update: bool,
-        interval: Option<AutoUpdateInterval>,
-    ) -> Result<Value, AppError> {
-        let meta = self.manager()?.set_auto_update(id, auto_update, interval)?;
         public_meta(&meta)
     }
 
