@@ -12,7 +12,8 @@ import java.io.File
 /**
  * PackageInstaller does not show the confirmation itself. It delivers
  * [PackageInstaller.STATUS_PENDING_USER_ACTION] here, and the app has to
- * start [PackageInstaller.EXTRA_INTENT].
+ * start [Intent.EXTRA_INTENT]. That constant is public; PackageInstaller
+ * does not expose its own EXTRA_INTENT in the SDK.
  */
 class InstallResultReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -21,7 +22,7 @@ class InstallResultReceiver : BroadcastReceiver() {
             Log.i(TAG, "package install status $status")
             return
         }
-        val confirm = intent.getParcelableExtra(PackageInstaller.EXTRA_INTENT, Intent::class.java)
+        val confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
         if (confirm == null) {
             Log.e(TAG, "package install confirmation intent was missing")
             return
