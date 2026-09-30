@@ -227,6 +227,10 @@ export function Settings({
     }
   }
 
+  /// The phone shell returns once the system installer has the APK and the
+  /// app keeps running, so the busy state has to clear on success. Desktop
+  /// restart usually tears the webview down first; if the call does return,
+  /// the controls should be usable again.
   async function runUpdateInstall() {
     setUpdateError(null);
     setUpdateBusy(true);
@@ -235,6 +239,7 @@ export function Settings({
       await api.installAppUpdate();
     } catch (e) {
       setUpdateError(formatUpdateError(e));
+    } finally {
       setUpdateBusy(false);
       setUpdateProgress(null);
     }

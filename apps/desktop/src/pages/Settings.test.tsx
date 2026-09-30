@@ -572,6 +572,44 @@ describe("Settings", () => {
     expect(openAppDownload).not.toHaveBeenCalled();
   });
 
+  it("re-enables update controls after the phone installer accepts the APK", async () => {
+    phoneShell.value = true;
+    let resolveInstall: () => void = () => {};
+    installAppUpdate.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve;
+        }),
+    );
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.1.16",
+          notes: null,
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+    const install = await view.findByRole("button", {
+      name: t("settings.updateInstall"),
+    });
+    await waitFor(() => expect(install).toBeEnabled());
+
+    fireEvent.click(install);
+    await waitFor(() => expect(install).toBeDisabled());
+    expect(container.textContent).toContain(t("update.installing"));
+
+    await act(async () => {
+      resolveInstall();
+    });
+    await waitFor(() => expect(install).toBeEnabled());
+    expect(container.textContent).not.toContain(t("update.installing"));
+    expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
+  });
+
   it("persists the login item through its own save path", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
