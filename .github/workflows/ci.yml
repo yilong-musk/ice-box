@@ -289,7 +289,13 @@ jobs:
           shared-key: ice-box-${{ runner.os }}-android
           cache-on-failure: true
 
+      # The action's default package list still installs `tools`, which the
+      # current SDK repository no longer ships. cmdline-tools come with the
+      # action; this job installs platforms, build-tools, and the NDK next.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK packages
         run: bash scripts/ci-install-android-sdk.sh
