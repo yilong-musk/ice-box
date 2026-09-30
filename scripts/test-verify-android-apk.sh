@@ -50,4 +50,44 @@ expect_fail \
   "Verified using v2 scheme (APK Signature Scheme v2): true" \
   "no signer certificate"
 
+expect_listing_ok() {
+  local name="$1"
+  local text="$2"
+  if ! printf '%s\n' "$text" | "$SCRIPT" --release-listing-text >/dev/null; then
+    echo "verify-android-apk listing $name: expected success" >&2
+    exit 1
+  fi
+}
+
+expect_listing_fail() {
+  local name="$1"
+  local text="$2"
+  local needle="$3"
+  local err
+  if err="$(printf '%s\n' "$text" | "$SCRIPT" --release-listing-text 2>&1)"; then
+    echo "verify-android-apk listing $name: expected failure" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$err" | grep -q "$needle"; then
+    echo "verify-android-apk listing $name: missing '$needle' in:" >&2
+    printf '%s\n' "$err" >&2
+    exit 1
+  fi
+}
+
+# The arm64 entry is first, then a long tail. A `grep -q` pipeline under
+# pipefail treats that as a missing library because grep closes the pipe.
+arm64_listing="    100  2026-09-30 00:00   lib/arm64-v8a/libice_box_mobile_lib.so"
+i=0
+while [[ "$i" -lt 4000 ]]; do
+  arm64_listing+=$'\n'"    100  2026-09-30 00:00   assets/rule-set/geoip-${i}.srs"
+  i=$((i + 1))
+done
+expect_listing_ok "arm64-with-long-tail" "$arm64_listing"
+expect_listing_fail "missing-arm64" "    100  2026-09-30 00:00   assets/rule-set/geoip-cn.srs" "missing lib/arm64-v8a"
+expect_listing_fail \
+  "x86_64" \
+  $'    100  2026-09-30 00:00   lib/arm64-v8a/libice.so\n    100  2026-09-30 00:00   lib/x86_64/libice.so' \
+  "ABI other than arm64-v8a"
+
 echo "test-verify-android-apk: OK"

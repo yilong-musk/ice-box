@@ -8,29 +8,51 @@
 # key, and the native libraries must be arm64-v8a only.
 #
 # --release-certs-text reads `apksigner verify --print-certs` output on stdin
-# and applies only the release signer checks. scripts/test-verify-android-apk.sh
-# uses it so the signer-line spellings stay covered without an SDK.
+# and applies only the release signer checks. --release-listing-text does the
+# same for `unzip -l` output. scripts/test-verify-android-apk.sh uses both so
+# the checks stay covered without an SDK.
 set -euo pipefail
 
 # apksigner spells the signer line two ways:
 #   Signer #1 certificate DN:  (build-tools 36)
 #   V2 Signer: certificate DN: (the copy on GitHub-hosted runners)
 # Both lines contain "certificate DN:".
+#
+# Match with [[ ]] rather than `grep -q`. Under `set -o pipefail`, grep -q
+# closes the pipe at the first hit and the writer dies with SIGPIPE, so a
+# listing that does contain lib/arm64-v8a/ is reported as missing.
 check_release_certs() {
   local certs="$1"
-  if printf '%s\n' "$certs" | grep -q "CN=Android Debug"; then
+  if [[ "$certs" == *"CN=Android Debug"* ]]; then
     echo "release APK is signed with the Android debug key" >&2
     return 1
   fi
-  if ! printf '%s\n' "$certs" | grep -q "certificate DN:"; then
+  if [[ "$certs" != *"certificate DN:"* ]]; then
     echo "release APK has no signer certificate" >&2
     printf '%s\n' "$certs" >&2
     return 1
   fi
 }
 
+check_release_listing() {
+  local listing="$1"
+  if [[ "$listing" != *"lib/arm64-v8a/"* ]]; then
+    echo "release APK is missing lib/arm64-v8a" >&2
+    return 1
+  fi
+  if [[ "$listing" =~ lib/(x86_64|x86|armeabi-v7a|armeabi)/ ]]; then
+    echo "release APK contains an ABI other than arm64-v8a" >&2
+    return 1
+  fi
+}
+
 if [[ "${1:-}" == "--release-certs-text" ]]; then
   check_release_certs "$(cat)"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--release-listing-text" ]]; then
+  check_release_listing "$(cat)"
   exit 0
 fi
 
@@ -72,15 +94,7 @@ if [[ "$RELEASE" == 1 ]]; then
     exit 1
   fi
   check_release_certs "$certs"
-  listing="$(unzip -l "$APK")"
-  if ! printf '%s\n' "$listing" | grep -q "lib/arm64-v8a/"; then
-    echo "release APK is missing lib/arm64-v8a" >&2
-    exit 1
-  fi
-  if printf '%s\n' "$listing" | grep -qE 'lib/(x86_64|x86|armeabi-v7a|armeabi)/'; then
-    echo "release APK contains an ABI other than arm64-v8a" >&2
-    exit 1
-  fi
+  check_release_listing "$(unzip -l "$APK")"
 fi
 
 echo "verify-android-apk: OK ($APK)"
