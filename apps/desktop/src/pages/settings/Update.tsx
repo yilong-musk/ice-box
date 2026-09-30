@@ -19,6 +19,7 @@ import { APP_VERSION } from "../../lib/appVersion";
 import { t } from "../../lib/i18n";
 import { isErrorCode } from "../../api/errorCodes";
 import { formatInvokeError, type CheckAppUpdateResponse } from "../../api/client";
+import { isPhoneShell } from "@platform/shell";
 
 function invokeErrorCode(err: unknown): string | null {
   if (err && typeof err === "object") {
@@ -49,7 +50,11 @@ export function formatUpdateError(err: unknown): string {
     return t("settings.updateFeedUnavailable");
   }
   if (code === "update.check_failed") {
-    return t("settings.updateCheckFailed");
+    return t(
+      isPhoneShell()
+        ? "settings.updateCheckFailedPhone"
+        : "settings.updateCheckFailed",
+    );
   }
   return formatInvokeError(err);
 }
@@ -65,6 +70,7 @@ export function UpdateCard({
   onCheckAppUpdatesChange,
   onCheck,
   onInstall,
+  onDownload,
 }: {
   checkAppUpdates: boolean;
   busy: boolean;
@@ -76,7 +82,10 @@ export function UpdateCard({
   onCheckAppUpdatesChange: (enabled: boolean) => void;
   onCheck: () => void;
   onInstall: () => void;
+  /** Optional browser download. The phone shell installs the APK itself. */
+  onDownload?: () => void;
 }) {
+  const download = onDownload != null;
   return (
     <Card
       size="sm"
@@ -102,6 +111,11 @@ export function UpdateCard({
               {t("settings.updateAutoCheck")}
             </FieldLabel>
           </Field>
+          {isPhoneShell() ? (
+            <p className="text-xs text-muted-foreground">
+              {t("settings.updatePhoneDesc")}
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             {t("settings.updateCurrent", { version: APP_VERSION })}
           </p>
@@ -116,7 +130,7 @@ export function UpdateCard({
               {t("settings.updateUpToDate")}
             </p>
           ) : null}
-          {updateBusy && updateProgress ? (
+          {!download && updateBusy && updateProgress ? (
             <p className="text-xs text-muted-foreground">
               {formatProgress(
                 updateProgress.downloaded,
@@ -140,9 +154,9 @@ export function UpdateCard({
                 type="button"
                 size="sm"
                 disabled={busy || updateBusy || !loaded}
-                onClick={onInstall}
+                onClick={download ? onDownload : onInstall}
               >
-                {t("settings.updateInstall")}
+                {t(download ? "settings.updateDownload" : "settings.updateInstall")}
               </Button>
             ) : null}
           </div>

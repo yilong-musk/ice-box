@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@platform/api": ["./src/mobile-api.ts"],
+      "@platform/windowChrome": ["./src/window-chrome.ts"],
+      "@platform/shell": ["./src/shell.ts"],
+      "@/*": ["../desktop/src/*"],
+      "@tauri-apps/api/core": ["../desktop/node_modules/@tauri-apps/api/core"],
+      "@tauri-apps/api/event": ["../desktop/node_modules/@tauri-apps/api/event"],
+      "react": ["../desktop/node_modules/@types/react"],
+      "react/*": ["../desktop/node_modules/@types/react/*"],
+      "react-dom": ["../desktop/node_modules/@types/react-dom"],
+      "react-dom/*": ["../desktop/node_modules/@types/react-dom/*"]
+    },
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": [
+    "src",
+    "../desktop/src/App.tsx",
+    "../desktop/src/pages",
+    "../desktop/src/components",
+    "../desktop/src/lib",
+    "../desktop/src/hooks",
+    "../desktop/src/api",
+    "../desktop/src/vite-env.d.ts"
+  ],
+  "exclude": ["../desktop/src/**/*.test.ts", "../desktop/src/**/*.test.tsx"]
+}

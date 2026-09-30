@@ -19,7 +19,7 @@ mod settings;
 
 pub use atomic::{write_bytes_atomic, write_json_atomic};
 pub use build::{
-    build_direct_only_config, build_runtime_config, config_to_pretty_json,
+    build_direct_only_config, build_mobile_config, build_runtime_config, config_to_pretty_json,
     invalidate_geoip_code_cache, minimal_dns_block, restore_runtime_config_from_bak,
     tun_dns_hijack_rule, tun_reserved_rules, validate_config, validate_config_for_intent,
     validate_template, write_runtime_config_bytes, write_runtime_config_file, ConfigError,
@@ -61,12 +61,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureIntent {
-    /// Mixed inbound only. Used by automatic core start and a stopped proxy
-    /// service; never contains a TUN inbound.
+    /// Mixed inbound only on desktop. Used by automatic core start and a
+    /// stopped proxy service. Android and iOS ignore this variant and still
+    /// emit the mobile TUN shape.
     #[default]
     Diagnostic,
     /// Mixed plus TUN inbounds, with the reserved bypass rules first. Used only
-    /// during a TUN capture transition and while TUN is active.
+    /// during a TUN capture transition and while TUN is active. On Android and
+    /// iOS the builders emit TUN for every intent, so this variant does not
+    /// change the mobile shape.
     Tun,
 }
 
@@ -93,8 +96,8 @@ pub fn force_tun_gate_ready() {
 }
 
 /// T0 gate for an explicit [`HostPlatform`]. macOS and Windows are green
-/// (`macos_tun_ready` / `windows_tun_ready`); other platforms are out of
-/// scope for the first release.
+/// (`macos_tun_ready` / `windows_tun_ready`). Android and iOS are green
+/// because capture is the platform VPN. Linux stays closed.
 ///
 /// Host-free controller tests force the gate green via
 /// `force_tun_gate_ready` (`test-hooks` / `cfg(test)` only).
@@ -136,9 +139,9 @@ pub struct LocalTemplate {
     /// Routing mode applied at build time (rule / global / direct).
     #[serde(default)]
     pub proxy_mode: ProxyMode,
-    /// Validated TUN capture parameters. The TUN inbound is emitted only when
-    /// the build intent is [`CaptureIntent::Tun`], never from `tun.enabled`
-    /// alone.
+    /// Validated TUN capture parameters. On desktop the TUN inbound is emitted
+    /// only when the build intent is [`CaptureIntent::Tun`], never from
+    /// `tun.enabled` alone. Android and iOS always emit it.
     #[serde(default)]
     pub tun: TunSettings,
 }
@@ -227,11 +230,20 @@ pub struct BuildInput {
     /// Persisted rule overrides: disabled rules are dropped, custom rules prepended.
     #[serde(default)]
     pub rule_overrides: RuleOverrides,
-    /// Runtime capture intent: `Tun` adds the TUN inbound + reserved bypass
-    /// rules; `Diagnostic` keeps the Mixed-only shape. Never inferred from
-    /// `tun.enabled` alone (`docs/tun.md`).
+    /// Runtime capture intent: on desktop, `Tun` adds the TUN inbound and
+    /// reserved bypass rules, and `Diagnostic` keeps the Mixed-only shape.
+    /// Never inferred from `tun.enabled` alone (`docs/tun.md`). Android and
+    /// iOS ignore this field and always emit the mobile TUN shape.
     #[serde(default)]
     pub capture_intent: CaptureIntent,
+    /// Android package excluded from the VPN so the app's own sockets stay
+    /// off the tunnel. Ignored unless `platform` is [`HostPlatform::Android`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tun_exclude_package: Option<String>,
+    /// Directory the mobile core uses for `cache.db` and `sing-box.log`.
+    /// Ignored on desktop platforms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_root: Option<PathBuf>,
     /// Target OS for DNS / TUN reserved-rule emission. Never inferred from
     /// the compile-time target inside this crate.
     #[serde(default)]
@@ -278,6 +290,8 @@ pub fn build_input_from_nodes(
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
         platform: HostPlatform::MacOs,
     }
 }

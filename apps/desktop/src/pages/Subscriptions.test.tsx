@@ -7,6 +7,12 @@ import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
 
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
+
 const listSubscriptions = vi.fn();
 const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
@@ -79,6 +85,7 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Subscriptions", () => {
   beforeEach(() => {
+    phoneShell.value = false;
     vi.clearAllMocks();
     stateChangedHandler = null;
     listenStateChanged.mockImplementation((handler: () => void) => {
@@ -91,6 +98,21 @@ describe("Subscriptions", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("hides subscription auto-update on the phone", async () => {
+    phoneShell.value = true;
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "a", auto_update: true }),
+    ]);
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    expect(view.queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
+    expect(view.queryByLabelText(t("subs.interval"))).not.toBeInTheDocument();
+    expect(view.getByLabelText(t("common.activate"))).toBeInTheDocument();
   });
 
   it("renders import form", async () => {

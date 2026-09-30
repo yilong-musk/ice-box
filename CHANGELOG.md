@@ -5,6 +5,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-09-30
+
+### Added
+
+- Android client for arm64 phones. It reuses the desktop interface. The host
+  process writes the config, and the VPN service runs the tunnel. The power
+  button connects after the system VPN permission prompt.
+- Android release APKs are signed with a project keystore that stays out of
+  the repository. The release workflow publishes one arm64-v8a APK beside the
+  desktop installers. Its version code comes from the semantic version, so a
+  newer release installs over the previous one. The pinned GeoIP rule-sets
+  ship inside the APK.
+- Phone Settings checks GitHub Releases, downloads the arm64 APK, and hands
+  it to the system installer. The user confirms the install.
+- Phone Settings explains battery-optimization exemption, strict Private DNS,
+  and always-on VPN.
+- The phone does not auto-update subscriptions. A profile changes only when
+  the user imports or refreshes it.
+- A phone-shell window at least 768px wide uses the sidebar. A narrower
+  window keeps the bottom tab bar. Phone capabilities stay in either layout.
+
+### Fixed
+
+- A subscription node whose WireGuard key or Reality public key is not 32
+  bytes is skipped with a warning. One invalid node no longer prevents the
+  core from starting.
+- Importing or refreshing a subscription no longer runs the network request
+  on the Android UI thread.
+- Tunnel status is published atomically, so a torn status file no longer
+  looks like a stopped tunnel. The update card unlocks once the system
+  installer has the APK.
+
 ## [0.1.15] - 2026-09-28
 
 ### Changed

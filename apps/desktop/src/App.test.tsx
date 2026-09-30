@@ -14,6 +14,12 @@ import { APP_VERSION } from "./lib/appVersion";
 import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
+
 const getStatus = vi.fn();
 const getSettings = vi.fn();
 const saveSettings = vi.fn();
@@ -122,6 +128,7 @@ vi.mock("./api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
+    phoneShell.value = false;
     vi.clearAllMocks();
     clearNodesSnapshot();
     getSettings.mockResolvedValue(defaultSettings);
@@ -139,6 +146,7 @@ describe("App", () => {
     });
     installAppUpdate.mockResolvedValue(undefined);
     saveSettings.mockResolvedValue(undefined);
+    window.innerWidth = 1280;
     getStatus.mockResolvedValue({
       core: {
         status: "stopped",
@@ -428,5 +436,46 @@ describe("App", () => {
     });
     expect(setTrayUpdateAvailable).toHaveBeenLastCalledWith(null);
     expect(screen.getByRole("button", { name: t("settings.updateInstall") })).toBeInTheDocument();
+  });
+
+  it("uses a bottom tab bar on the phone shell", async () => {
+    phoneShell.value = true;
+    window.innerWidth = 390;
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("phone-tab-bar")).toBeInTheDocument();
+    });
+    expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await waitFor(() => {
+      expect(checkAppUpdate).toHaveBeenCalled();
+    });
+    expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+  });
+
+  it("uses the sidebar when the phone shell is wide", async () => {
+    phoneShell.value = true;
+    window.innerWidth = 1280;
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("tablet-shell")).toBeInTheDocument();
+    });
+    expect(view.getByTestId("app-brand-row")).toBeInTheDocument();
+    expect(view.queryByTestId("phone-tab-bar")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-titlebar]")).toBeNull();
+    expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
   });
 });

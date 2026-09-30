@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-memory"
+description = "Enables the memory command without any pre-configured scope."
+commands.allow = ["memory"]
+
+[[permission]]
+identifier = "deny-memory"
+description = "Denies the memory command without any pre-configured scope."
+commands.deny = ["memory"]

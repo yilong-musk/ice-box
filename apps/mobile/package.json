@@ -1,0 +1,15 @@
+{
+  "name": "ice-box-mobile",
+  "private": true,
+  "version": "0.1.20",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "predev": "test -e node_modules || ln -s ../desktop/node_modules node_modules",
+    "prebuild": "test -e node_modules || ln -s ../desktop/node_modules node_modules",
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "node ../desktop/node_modules/typescript/bin/tsc -p .",
+    "tauri": "../desktop/node_modules/.bin/tauri"
+  }
+}

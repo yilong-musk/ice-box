@@ -1,0 +1,28 @@
+[package]
+name = "icebox-spike"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Standalone: the spike is not a member of the ice-box workspace.
+[workspace]
+
+[lib]
+name = "icebox_spike"
+crate-type = ["cdylib"]
+
+[dependencies]
+ice-engine = { path = "../../../crates/ice-engine" }
+ice-core = { path = "../../../crates/ice-core" }
+serde_json = "1"
+jni = { version = "0.22", default-features = false }
+# Same as the ice-box workspace lock: 0.7.0 pulls the -android 0.1.x crate,
+# which bundles its Kotlin component as a local Maven repository.
+rustls-platform-verifier = "=0.7.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"

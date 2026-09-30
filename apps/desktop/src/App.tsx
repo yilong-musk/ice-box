@@ -41,6 +41,8 @@ import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
+import { isPhoneShell } from "@platform/shell";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   readLanguagePreference,
   t,
@@ -143,6 +145,7 @@ function AppShell() {
     useState<CheckAppUpdateResponse | null>(null);
   const [focusUpdateNonce, setFocusUpdateNonce] = useState(0);
   useThemePreference();
+  const narrow = useIsMobile();
   const { preference, resolved, setPreference } = useLanguagePreference();
   const bootLanguageRef = useRef(preference);
 
@@ -183,6 +186,7 @@ function AppShell() {
   // checks are on, and nothing once the switch turns them off (Settings clears
   // `availableUpdate` through `publishSidebarUpdate`).
   useEffect(() => {
+    if (isPhoneShell()) return;
     if (typeof api.setTrayUpdateAvailable !== "function") return;
     const version =
       availableUpdate?.available && availableUpdate.version
@@ -195,6 +199,7 @@ function AppShell() {
 
   // Tray prompt → Settings → App Updates, the same landing spot as the arrow.
   useEffect(() => {
+    if (isPhoneShell()) return;
     if (typeof api.listenTrayUpdateClick !== "function") return;
     let cancelled = false;
     let unlisten = () => {};
@@ -262,20 +267,142 @@ function AppShell() {
 
   const current = NAV_ITEMS.find((item) => item.id === tab);
 
+  const pages = (
+    <>
+      {visited.has("home") && (
+        <TabPane active={tab === "home"}>
+          <Home
+            onNavigate={selectTab}
+            active={tab === "home"}
+            onStatus={setGlobalStatus}
+          />
+        </TabPane>
+      )}
+      {visited.has("nodes") && (
+        <TabPane active={tab === "nodes"}>
+          <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+        </TabPane>
+      )}
+      {visited.has("subs") && (
+        <TabPane active={tab === "subs"}>
+          <Subscriptions />
+        </TabPane>
+      )}
+      {visited.has("rules") && (
+        <TabPane active={tab === "rules"}>
+          <Rules onNavigate={selectTab} active={tab === "rules"} />
+        </TabPane>
+      )}
+      {visited.has("logs") && (
+        <TabPane active={tab === "logs"}>
+          <Logs active={tab === "logs"} />
+        </TabPane>
+      )}
+      {visited.has("settings") && (
+        <TabPane active={tab === "settings"}>
+          <Settings
+            active={tab === "settings"}
+            availableUpdate={availableUpdate}
+            onAvailableUpdate={setAvailableUpdate}
+            focusUpdateNonce={focusUpdateNonce}
+          />
+        </TabPane>
+      )}
+    </>
+  );
+
+  const recovery = status?.proxy_recovery_warning?.length ? (
+    <div className="px-4 pt-3">
+      <ErrorAlert>
+        {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
+      </ErrorAlert>
+    </div>
+  ) : null;
+
+  const phone = isPhoneShell();
+
+  if (phone && narrow) {
+    return (
+      <TooltipProvider>
+        <div
+          className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
+          data-testid="phone-shell"
+        >
+          <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+            <img
+              src={logo}
+              alt=""
+              className="size-7 shrink-0 object-contain"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1">
+              <h1 className="font-heading text-sm font-medium tracking-tight">
+                ice-box
+              </h1>
+              <p className="mt-0.5 text-[11px] leading-none text-sidebar-foreground/50 tabular-nums">
+                {APP_VERSION}
+              </p>
+            </div>
+            <h2 className="text-sm font-medium">
+              {current ? t(current.labelKey) : ""}
+            </h2>
+          </header>
+          {recovery}
+          <main
+            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pb-2"
+            data-testid="app-main"
+          >
+            {pages}
+          </main>
+          <nav
+            data-testid="phone-tab-bar"
+            aria-label={t("app.nav.aria")}
+            className="phone-tab-bar grid shrink-0 grid-cols-6 border-t border-sidebar-border bg-sidebar"
+          >
+            {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-label={t(labelKey)}
+                aria-current={tab === id ? "page" : undefined}
+                className={cn(
+                  "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-xs leading-tight",
+                  tab === id
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70",
+                )}
+                onClick={() => selectTab(id)}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="w-full text-center">
+                  {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
+                </span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider>
       <SidebarProvider
         defaultOpen
-        className="flex h-svh w-full flex-col overflow-hidden bg-background text-foreground"
+        className={cn(
+          "flex h-svh w-full flex-col overflow-hidden bg-background text-foreground",
+          phone && "pt-[env(safe-area-inset-top)]",
+        )}
         style={SIDEBAR_PROVIDER_STYLE}
+        data-testid={phone ? "tablet-shell" : undefined}
       >
-        <TitleBar label={current ? t(current.labelKey) : ""} />
+        {phone ? null : <TitleBar label={current ? t(current.labelKey) : ""} />}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
             collapsible="offcanvas"
             side="left"
-            className="top-12! h-[calc(100svh-3rem)]!"
+            className={phone ? undefined : "top-12! h-[calc(100svh-3rem)]!"}
           >
             <SidebarContent>
               <SidebarGroup>
@@ -343,57 +470,23 @@ function AppShell() {
           </Sidebar>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {status?.proxy_recovery_warning?.length ? (
-              <div className="px-4 pt-3">
-                <ErrorAlert>
-                  {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
-                </ErrorAlert>
-              </div>
+            {phone ? (
+              <header className="flex shrink-0 items-center px-4 pt-3">
+                <h2 className="text-sm font-medium">
+                  {current ? t(current.labelKey) : ""}
+                </h2>
+              </header>
             ) : null}
+            {recovery}
 
             <main
-              className="content-main content-fill min-h-0 flex-1 overflow-hidden p-4"
+              className={cn(
+                "content-main content-fill min-h-0 flex-1 overflow-hidden p-4",
+                phone && "pb-[max(1rem,env(safe-area-inset-bottom))]",
+              )}
               data-testid="app-main"
             >
-              {visited.has("home") && (
-                <TabPane active={tab === "home"}>
-                  <Home
-                    onNavigate={selectTab}
-                    active={tab === "home"}
-                    onStatus={setGlobalStatus}
-                  />
-                </TabPane>
-              )}
-              {visited.has("nodes") && (
-                <TabPane active={tab === "nodes"}>
-                  <Nodes onNavigate={selectTab} active={tab === "nodes"} />
-                </TabPane>
-              )}
-              {visited.has("subs") && (
-                <TabPane active={tab === "subs"}>
-                  <Subscriptions />
-                </TabPane>
-              )}
-              {visited.has("rules") && (
-                <TabPane active={tab === "rules"}>
-                  <Rules onNavigate={selectTab} active={tab === "rules"} />
-                </TabPane>
-              )}
-              {visited.has("logs") && (
-                <TabPane active={tab === "logs"}>
-                  <Logs active={tab === "logs"} />
-                </TabPane>
-              )}
-              {visited.has("settings") && (
-                <TabPane active={tab === "settings"}>
-                  <Settings
-                    active={tab === "settings"}
-                    availableUpdate={availableUpdate}
-                    onAvailableUpdate={setAvailableUpdate}
-                    focusUpdateNonce={focusUpdateNonce}
-                  />
-                </TabPane>
-              )}
+              {pages}
             </main>
           </div>
         </div>

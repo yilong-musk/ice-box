@@ -1,0 +1,19 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Prepare, start, stop, and inspect the platform VPN tunnel."
+permissions = [
+  "allow-prepare",
+  "allow-start",
+  "allow-stop",
+  "allow-reload",
+  "allow-status",
+  "allow-shared-dir",
+  "allow-memory",
+  "allow-device-status",
+  "allow-request-battery-exemption",
+  "allow-open-network-settings",
+  "allow-open-vpn-settings",
+  "allow-open-https-url",
+  "allow-install-apk",
+]

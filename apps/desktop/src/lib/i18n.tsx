@@ -60,6 +60,7 @@ const zh = {
   "app.nav.nodes": "节点",
   "app.nav.rules": "规则",
   "app.nav.subs": "订阅",
+  "app.nav.subsTab": "订阅",
   "app.nav.logs": "日志",
   "app.nav.settings": "设置",
   "app.nav.aria": "主导航",
@@ -100,6 +101,11 @@ const zh = {
   "home.power.recorded": "已记录，可恢复系统代理",
   "home.power.tunReady": "将启用 TUN 模式接管流量",
   "home.power.clickToCapture": "点击接管系统代理",
+  "home.power.vpnStart": "连接 VPN",
+  "home.power.vpnStop": "断开 VPN",
+  "home.power.vpnOn": "VPN 已连接",
+  "home.power.vpnOff": "点击连接 VPN",
+  "home.warn.vpnPermission": "连接 VPN 需要系统授权。点击连接后按系统提示允许。",
   "home.warn.proxyOutOfSync": "系统代理未接管或已不同步",
   "home.warn.permissionRequired":
     "启用 TUN 需要系统权限，未修改任何系统配置。点击「安装辅助组件」将弹出系统授权密码框；安装后自动重试，或停用 TUN 改用系统代理。",
@@ -289,8 +295,29 @@ const zh = {
   "settings.updateUpToDate": "已是最新版本",
   "settings.updateAvailable": "发现新版本 {version}",
   "settings.updateInstall": "安装更新",
+  "settings.updateDownload": "下载更新",
+  "settings.updatePhoneDesc":
+    "检查会直接访问 GitHub，不经过 VPN。发现新版本后由应用下载 APK，再交给系统安装器确认。若系统要求，请先允许此应用安装未知应用。",
   "settings.updateCheckFailed":
     "无法检查更新。若 GitHub 无法直连，请先启动代理服务后再试。",
+  "settings.updateCheckFailedPhone":
+    "无法检查更新。检查会直接访问 GitHub，不经过 VPN。",
+  "settings.system": "系统",
+  "settings.systemDesc":
+    "这些开关在系统设置里。用来减少厂商停掉 VPN，并说明私人 DNS 会绕过 DNS 劫持。",
+  "settings.batteryTitle": "电池优化",
+  "settings.batteryDesc":
+    "未忽略电池优化时，部分系统会在后台停掉 VPN。",
+  "settings.batteryAction": "请求忽略电池优化",
+  "settings.privateDnsTitle": "私人 DNS",
+  "settings.privateDnsDesc":
+    "私人 DNS 处于严格模式时，系统 DNS 不经过本应用的 DNS 劫持。",
+  "settings.privateDnsAction": "打开网络设置",
+  "settings.alwaysOnTitle": "始终开启 VPN",
+  "settings.alwaysOnDesc":
+    "在系统里把 ice-box 设为始终开启的 VPN 后，开机和离开界面也会自动连接。",
+  "settings.alwaysOnAction": "打开 VPN 设置",
+  "settings.alwaysOnEnabled": "已设为始终开启的 VPN。",
   "settings.updateFeedUnavailable":
     "未找到 GitHub 上的更新清单。在带自动更新的版本正式发布之前，检查更新会失败。",
 
@@ -472,6 +499,7 @@ const en: Record<MessageKey, string> = {
   "app.nav.nodes": "Nodes",
   "app.nav.rules": "Rules",
   "app.nav.subs": "Subscriptions",
+  "app.nav.subsTab": "Subs",
   "app.nav.logs": "Logs",
   "app.nav.settings": "Settings",
   "app.nav.aria": "Main navigation",
@@ -512,6 +540,12 @@ const en: Record<MessageKey, string> = {
   "home.power.recorded": "Recorded; system proxy can be restored",
   "home.power.tunReady": "Will capture traffic via TUN",
   "home.power.clickToCapture": "Click to capture via system proxy",
+  "home.power.vpnStart": "Connect VPN",
+  "home.power.vpnStop": "Disconnect VPN",
+  "home.power.vpnOn": "VPN is connected",
+  "home.power.vpnOff": "Tap to connect VPN",
+  "home.warn.vpnPermission":
+    "Connecting the VPN needs system permission. Tap connect and allow the system prompt.",
   "home.warn.proxyOutOfSync": "System proxy is not applied or out of sync",
   "home.warn.permissionRequired":
     "Enabling TUN requires system permission; no system configuration was changed. Clicking “Install Helper” opens the system authorization prompt; installation retries automatically, or disable TUN and use the system proxy.",
@@ -703,8 +737,29 @@ const en: Record<MessageKey, string> = {
   "settings.updateUpToDate": "You're up to date",
   "settings.updateAvailable": "Version {version} is available",
   "settings.updateInstall": "Install Update",
+  "settings.updateDownload": "Download Update",
+  "settings.updatePhoneDesc":
+    "The check contacts GitHub directly and does not use the VPN. A newer version is downloaded in the app and handed to the system installer. If Android asks, allow this app to install unknown apps.",
   "settings.updateCheckFailed":
     "Could not check for updates. If GitHub is unreachable, start the proxy service and try again.",
+  "settings.updateCheckFailedPhone":
+    "Could not check for updates. The check contacts GitHub directly and does not use the VPN.",
+  "settings.system": "System",
+  "settings.systemDesc":
+    "These controls live in system settings. They reduce the chance a vendor ROM stops the VPN, and explain when Private DNS bypasses DNS hijacking.",
+  "settings.batteryTitle": "Battery optimization",
+  "settings.batteryDesc":
+    "Some systems stop the VPN in the background unless battery optimization is ignored.",
+  "settings.batteryAction": "Request exemption",
+  "settings.privateDnsTitle": "Private DNS",
+  "settings.privateDnsDesc":
+    "Strict Private DNS sends system DNS around this app's DNS hijacking.",
+  "settings.privateDnsAction": "Open network settings",
+  "settings.alwaysOnTitle": "Always-on VPN",
+  "settings.alwaysOnDesc":
+    "Set ice-box as the always-on VPN to connect at boot and after leaving this screen.",
+  "settings.alwaysOnAction": "Open VPN settings",
+  "settings.alwaysOnEnabled": "This app is the always-on VPN.",
   "settings.updateFeedUnavailable":
     "No update catalog was found on GitHub. Checking for updates fails until an updater-capable release is published.",
 

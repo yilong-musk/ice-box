@@ -112,6 +112,19 @@ export type StatusResponse = {
    * runs the one-time `ensureTunElevation` (single UAC) before persisting
    * the TUN-on next-start desire. Always true on non-Windows hosts. */
   tun_elevation_ready: boolean;
+  /** Whether Settings can offer a menu-bar readout. macOS only; never inferred
+   * from the user agent (an iPhone webview would look like macOS). */
+  tray_display_supported: boolean;
+  /** Mobile VPN consent. Omitted on desktop. */
+  vpn_permission?: "unknown" | "granted" | "denied";
+  /** Mobile tunnel lifecycle. Omitted on desktop. */
+  tunnel_status?: "stopped" | "connecting" | "connected" | "disconnecting" | "error";
+  /** Android only. True when the app is exempt from battery optimization. */
+  battery_unrestricted?: boolean;
+  /** Android only. True when Private DNS is pinned to a hostname. */
+  private_dns_strict?: boolean;
+  /** Android only. True when this app is the system always-on VPN. */
+  always_on_vpn?: boolean;
 };
 
 
@@ -342,7 +355,8 @@ export type ListRulesResponse = {
   items: RuleRow[];
 };
 
-export interface ApiContract {
+/** Shared by the desktop shell and the mobile shell. */
+export interface CoreApi {
   getStatus(): Promise<StatusResponse>;
   listSubscriptions(): Promise<SubscriptionMeta[]>;
   listNodes(): Promise<NodeInfo[]>;
@@ -353,34 +367,13 @@ export interface ApiContract {
   getTrafficSince(cursor?: number | null): Promise<TrafficDelta>;
   listenCoreStatusChanged(handler: () => void): Promise<() => void>;
   listenStateChanged(handler: () => void): Promise<() => void>;
-  listenWindowHidden(handler: () => void): Promise<() => void>;
-  listenWindowShown(handler: () => void): Promise<() => void>;
-  listenTrayUpdateClick(handler: () => void): Promise<() => void>;
   listenTrafficSample(handler: (payload: TrafficPoint) => void): Promise<() => void>;
   start(): Promise<void>;
-  stopSystemProxy(): Promise<void>;
   stop(): Promise<void>;
-  recoverTun(): Promise<UiMessage[]>;
-  installHelper(): Promise<void>;
-  uninstallHelper(): Promise<void>;
-  ensureTunElevation(): Promise<void>;
-  removeTunElevation(): Promise<void>;
   getLogView(n: number): Promise<string[]>;
   getRuntimeConfig(): Promise<string>;
-  revealDataDir(): Promise<void>;
-  copyProxyCommand(): Promise<void>;
-  openProxyTerminal(): Promise<void>;
   getSettings(): Promise<AppSettings>;
-  restoreLaunchProxy(): Promise<void>;
   saveSettings(patch: SettingsPatch): Promise<void>;
-  checkAppUpdate(background?: boolean, startup?: boolean): Promise<CheckAppUpdateResponse>;
-  recordUpdatePrompt(): Promise<void>;
-  recordAppUpdateCheck(): Promise<void>;
-  skipAppUpdate(version: string): Promise<void>;
-  installAppUpdate(): Promise<void>;
-  listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
-  setTrayLanguage(language: "zh" | "en"): Promise<void>;
-  setTrayUpdateAvailable(version: string | null): Promise<void>;
   setProxyMode(mode: ProxyMode): Promise<void>;
   addSubscription(url: string, name?: string, autoUpdate?: boolean, interval?: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
   removeSubscription(id: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
@@ -394,3 +387,43 @@ export interface ApiContract {
   addCustomRule(rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;
   removeCustomRule(fingerprint: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
 }
+
+/** Desktop capture: system proxy, TUN recovery, and the privileged helper. */
+export interface DesktopCaptureApi {
+  stopSystemProxy(): Promise<void>;
+  recoverTun(): Promise<UiMessage[]>;
+  installHelper(): Promise<void>;
+  uninstallHelper(): Promise<void>;
+  ensureTunElevation(): Promise<void>;
+  removeTunElevation(): Promise<void>;
+}
+
+/** Desktop shell: window, tray, updater, data directory, and the proxy terminal. */
+export interface DesktopShellApi {
+  listenWindowHidden(handler: () => void): Promise<() => void>;
+  listenWindowShown(handler: () => void): Promise<() => void>;
+  listenTrayUpdateClick(handler: () => void): Promise<() => void>;
+  revealDataDir(): Promise<void>;
+  copyProxyCommand(): Promise<void>;
+  openProxyTerminal(): Promise<void>;
+  restoreLaunchProxy(): Promise<void>;
+  checkAppUpdate(background?: boolean, startup?: boolean): Promise<CheckAppUpdateResponse>;
+  recordUpdatePrompt(): Promise<void>;
+  recordAppUpdateCheck(): Promise<void>;
+  skipAppUpdate(version: string): Promise<void>;
+  installAppUpdate(): Promise<void>;
+  /** Android: open the release APK in the system browser. No-op on desktop. */
+  openAppDownload(): Promise<void>;
+  /** Android: system prompt to ignore battery optimization. No-op on desktop. */
+  requestBatteryExemption(): Promise<void>;
+  /** Android: open the system network screen. No-op on desktop. */
+  openNetworkSettings(): Promise<void>;
+  /** Android: open the system VPN screen. No-op on desktop. */
+  openVpnSettings(): Promise<void>;
+  listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
+  setTrayLanguage(language: "zh" | "en"): Promise<void>;
+  setTrayUpdateAvailable(version: string | null): Promise<void>;
+}
+
+/** Shared views depend on this full contract. The mobile transport no-ops the desktop-only methods. */
+export interface ApiContract extends CoreApi, DesktopCaptureApi, DesktopShellApi {}

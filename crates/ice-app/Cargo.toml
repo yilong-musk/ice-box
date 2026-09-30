@@ -1,0 +1,11 @@
+[package]
+name = "ice-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared application core for the desktop and mobile shells"
+
+[dependencies]
+ice-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

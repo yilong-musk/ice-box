@@ -20,16 +20,17 @@ import {
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
+import { AndroidSystemCard } from "./settings/Android";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { PortsCard } from "./settings/Ports";
 import { StartupCard } from "./settings/Startup";
 import { TunCard } from "./settings/Tun";
 import { formatUpdateError, UpdateCard } from "./settings/Update";
-import { isMacosHost } from "@platform/windowChrome";
 
 const defaults: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -136,6 +137,21 @@ export function Settings({
   const updateCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!isPhoneShell()) return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void api
+        .getStatus()
+        .then((next) => setStatus(next))
+        .catch(() => {
+          // The next status poll still refreshes the system rows.
+        });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  useEffect(() => {
     if (runtime?.status) {
       setStatus(runtime.status);
     }
@@ -211,6 +227,10 @@ export function Settings({
     }
   }
 
+  /// The phone shell returns once the system installer has the APK and the
+  /// app keeps running, so the busy state has to clear on success. Desktop
+  /// restart usually tears the webview down first; if the call does return,
+  /// the controls should be usable again.
   async function runUpdateInstall() {
     setUpdateError(null);
     setUpdateBusy(true);
@@ -219,6 +239,7 @@ export function Settings({
       await api.installAppUpdate();
     } catch (e) {
       setUpdateError(formatUpdateError(e));
+    } finally {
       setUpdateBusy(false);
       setUpdateProgress(null);
     }
@@ -513,7 +534,7 @@ export function Settings({
             themePreference={themePreference}
             setThemePreference={setThemePreference}
             language={form.language}
-            trayMode={isMacosHost() ? form.tray_display_mode : null}
+            trayMode={status?.tray_display_supported === true ? form.tray_display_mode : null}
             busy={busy}
             loaded={loaded}
             onLanguageChange={(value) => {
@@ -525,15 +546,17 @@ export function Settings({
             }
           />
 
-          <PortsCard
-            form={form}
-            setForm={setForm}
-            fieldErrors={fieldErrors}
-            busy={busy}
-            loaded={loaded}
-            clearFieldError={clearFieldError}
-            setFieldErrors={setFieldErrors}
-          />
+          {isPhoneShell() ? null : (
+            <PortsCard
+              form={form}
+              setForm={setForm}
+              fieldErrors={fieldErrors}
+              busy={busy}
+              loaded={loaded}
+              clearFieldError={clearFieldError}
+              setFieldErrors={setFieldErrors}
+            />
+          )}
 
           {tunUiHidden ? null : (
             <TunCard
@@ -592,6 +615,8 @@ export function Settings({
               onInstall={() => void runUpdateInstall()}
             />
           </div>
+
+          {isPhoneShell() ? <AndroidSystemCard status={status} /> : null}
 
           <DataCard
             form={form}

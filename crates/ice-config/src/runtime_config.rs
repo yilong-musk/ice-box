@@ -19,6 +19,10 @@ pub struct RuntimeConfig {
     pub dns: Value,
     pub inbounds: Vec<Value>,
     pub outbounds: Vec<Arc<Value>>,
+    /// sing-box 1.13 WireGuard endpoints. Empty on configs that have no
+    /// WireGuard node, and omitted from JSON in that case so desktop output
+    /// stays unchanged.
+    pub endpoints: Vec<Value>,
     pub route: Value,
     pub experimental: Value,
 }
@@ -37,11 +41,15 @@ impl RuntimeConfig {
 
 impl Serialize for RuntimeConfig {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("RuntimeConfig", 6)?;
+        let fields = if self.endpoints.is_empty() { 6 } else { 7 };
+        let mut state = serializer.serialize_struct("RuntimeConfig", fields)?;
         state.serialize_field("log", &self.log)?;
         state.serialize_field("dns", &self.dns)?;
         state.serialize_field("inbounds", &self.inbounds)?;
         state.serialize_field("outbounds", &OutboundList(&self.outbounds))?;
+        if !self.endpoints.is_empty() {
+            state.serialize_field("endpoints", &self.endpoints)?;
+        }
         state.serialize_field("route", &self.route)?;
         state.serialize_field("experimental", &self.experimental)?;
         state.end()
@@ -91,6 +99,7 @@ mod tests {
             dns: json!({"final": "local"}),
             inbounds: vec![json!({"type": "mixed", "tag": "mixed-in"})],
             outbounds: vec![Arc::new(json!({"type": "direct", "tag": "direct"}))],
+            endpoints: Vec::new(),
             route: json!({"final": "direct"}),
             experimental: json!({"clash_api": {}}),
         };
@@ -98,5 +107,6 @@ mod tests {
         assert!(text.contains("\"tag\": \"direct\""));
         let value = cfg.to_json_value().expect("value");
         assert_eq!(value["outbounds"][0]["tag"], "direct");
+        assert!(value.get("endpoints").is_none());
     }
 }

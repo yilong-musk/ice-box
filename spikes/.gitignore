@@ -1,0 +1,22 @@
+# Local SDK path (machine-specific).
+local.properties
+
+# Gradle / Kotlin / IDE output
+.gradle/
+.kotlin/
+build/
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# libbox AAR, sources jar, and copied native libraries
+**/libs/
+**/jniLibs/
+
+# Signing material
+key.properties
+keystore.properties
+*.keystore
+*.jks

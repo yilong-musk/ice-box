@@ -19,11 +19,10 @@ import {
 import { Settings } from "./Settings";
 import { RuntimeStoreProvider } from "../lib/runtimeStore";
 
-/** The macOS-only menu bar card is gated on the host classifier; jsdom is not a
- * macOS host, so that one test flips the flag. */
-const hostState = vi.hoisted(() => ({ macos: false }));
-vi.mock("@platform/windowChrome", () => ({
-  isMacosHost: () => hostState.macos,
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
 }));
 
 const getSettings = vi.fn();
@@ -36,6 +35,10 @@ const ensureTunElevation = vi.fn();
 const start = vi.fn();
 const checkAppUpdate = vi.fn();
 const installAppUpdate = vi.fn();
+const openAppDownload = vi.fn();
+const requestBatteryExemption = vi.fn();
+const openNetworkSettings = vi.fn();
+const openVpnSettings = vi.fn();
 const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
 const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
@@ -51,6 +54,11 @@ vi.mock("../api/client", () => ({
     recordAppUpdateCheck: vi.fn(),
     skipAppUpdate: vi.fn(),
     installAppUpdate: (...args: unknown[]) => installAppUpdate(...args),
+    openAppDownload: (...args: unknown[]) => openAppDownload(...args),
+    requestBatteryExemption: (...args: unknown[]) =>
+      requestBatteryExemption(...args),
+    openNetworkSettings: (...args: unknown[]) => openNetworkSettings(...args),
+    openVpnSettings: (...args: unknown[]) => openVpnSettings(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     listenCoreStatusChanged: (...args: unknown[]) =>
       listenCoreStatusChanged(...args),
@@ -108,12 +116,13 @@ const defaultStatus = {
   helper_supported: true,
   launch_at_login_supported: true,
   helper_stale: false,
+  tray_display_supported: false,
 } as const;
 
 describe("Settings", () => {
   beforeEach(() => {
+    phoneShell.value = false;
     vi.clearAllMocks();
-    hostState.macos = false;
     saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
@@ -447,7 +456,7 @@ describe("Settings", () => {
     expect(saveSettings).not.toHaveBeenCalled();
   });
 
-  it("hides the menu bar item setting away from macOS", async () => {
+  it("hides the menu bar item when the platform does not support it", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
 
@@ -457,8 +466,8 @@ describe("Settings", () => {
     expect(view.queryByLabelText(t("settings.tray"))).toBeNull();
   });
 
-  it("persists the menu bar item mode on macOS", async () => {
-    hostState.macos = true;
+  it("persists the menu bar item mode when the platform supports it", async () => {
+    getStatus.mockResolvedValue({ ...defaultStatus, tray_display_supported: true });
     const { container } = render(<Settings />);
     const view = within(container);
 
@@ -483,7 +492,7 @@ describe("Settings", () => {
   });
 
   it("orders the settings cards", async () => {
-    hostState.macos = true;
+    getStatus.mockResolvedValue({ ...defaultStatus, tray_display_supported: true });
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() =>
@@ -504,6 +513,101 @@ describe("Settings", () => {
       t("settings.update"),
       t("settings.data"),
     ]);
+  });
+
+  it("hides desktop-only settings on the phone shell", async () => {
+    phoneShell.value = true;
+    const { container } = render(<Settings />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText(t("settings.appearance"))).toBeInTheDocument();
+    });
+    expect(view.queryByText(t("settings.inbound"))).not.toBeInTheDocument();
+    expect(view.getByText(t("settings.update"))).toBeInTheDocument();
+    expect(view.getByText(t("settings.updatePhoneDesc"))).toBeInTheDocument();
+    expect(
+      view.queryByRole("button", { name: t("settings.updateInstall") }),
+    ).not.toBeInTheDocument();
+    expect(view.getByText(t("settings.system"))).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("settings.alwaysOnAction") })).toBeInTheDocument();
+    expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
+    expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
+  });
+
+  it("explains battery optimization and private DNS, and installs the APK", async () => {
+    phoneShell.value = true;
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      battery_unrestricted: false,
+      private_dns_strict: true,
+      always_on_vpn: false,
+    });
+    openAppDownload.mockResolvedValue(undefined);
+    requestBatteryExemption.mockResolvedValue(undefined);
+    openNetworkSettings.mockResolvedValue(undefined);
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.1.16",
+          notes: null,
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByText(t("settings.batteryTitle"))).toBeInTheDocument();
+    });
+    expect(view.getByText(t("settings.privateDnsTitle"))).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: t("settings.batteryAction") }));
+    await waitFor(() => expect(requestBatteryExemption).toHaveBeenCalled());
+    fireEvent.click(view.getByRole("button", { name: t("settings.privateDnsAction") }));
+    await waitFor(() => expect(openNetworkSettings).toHaveBeenCalled());
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateInstall") }));
+    await waitFor(() => expect(installAppUpdate).toHaveBeenCalled());
+    expect(openAppDownload).not.toHaveBeenCalled();
+  });
+
+  it("re-enables update controls after the phone installer accepts the APK", async () => {
+    phoneShell.value = true;
+    let resolveInstall: () => void = () => {};
+    installAppUpdate.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve;
+        }),
+    );
+    const { container } = render(
+      <Settings
+        availableUpdate={{
+          available: true,
+          version: "0.1.16",
+          notes: null,
+          skipped: false,
+          should_prompt: false,
+        }}
+      />,
+    );
+    const view = within(container);
+    const install = await view.findByRole("button", {
+      name: t("settings.updateInstall"),
+    });
+    await waitFor(() => expect(install).toBeEnabled());
+
+    fireEvent.click(install);
+    await waitFor(() => expect(install).toBeDisabled());
+    expect(container.textContent).toContain(t("update.installing"));
+
+    await act(async () => {
+      resolveInstall();
+    });
+    await waitFor(() => expect(install).toBeEnabled());
+    expect(container.textContent).not.toContain(t("update.installing"));
+    expect(view.getByRole("button", { name: t("settings.updateCheck") })).toBeEnabled();
   });
 
   it("persists the login item through its own save path", async () => {

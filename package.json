@@ -2,7 +2,7 @@
   "name": "ice-box",
   "private": true,
   "license": "GPL-3.0-or-later",
-  "description": "Workspace helper scripts; the desktop app lives in apps/desktop",
+  "description": "Workspace helper scripts for the desktop, Android, and website apps",
   "scripts": {
     "dev": "bash scripts/dev.sh host",
     "dev:host": "bash scripts/dev.sh host",

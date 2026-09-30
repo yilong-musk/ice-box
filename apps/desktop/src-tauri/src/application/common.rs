@@ -201,6 +201,9 @@ pub struct StatusResponse {
     /// Windows). The Settings page hides the Startup card when it cannot, so
     /// the switch never offers an action that can only fail.
     pub launch_at_login_supported: bool,
+    /// Menu-bar readout in Settings. macOS only; the frontend must not infer
+    /// this from the user agent.
+    pub tray_display_supported: bool,
     /// The installed helper's root-owned core differs from the app's bundled
     /// core (app updated): only one core version may exist, so TUN stays
     /// blocked until the helper is refreshed.
@@ -651,6 +654,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         helper_installed: probes.helper_installed,
         helper_supported: cfg!(target_os = "macos"),
         launch_at_login_supported: crate::autostart::SUPPORTED,
+        tray_display_supported: cfg!(target_os = "macos"),
         helper_stale: probes.helper_stale,
         tun_elevation_ready: probes.tun_elevation_ready,
     }))

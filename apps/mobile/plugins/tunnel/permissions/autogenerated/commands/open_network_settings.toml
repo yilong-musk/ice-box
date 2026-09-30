@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-open-network-settings"
+description = "Enables the open_network_settings command without any pre-configured scope."
+commands.allow = ["open_network_settings"]
+
+[[permission]]
+identifier = "deny-open-network-settings"
+description = "Denies the open_network_settings command without any pre-configured scope."
+commands.deny = ["open_network_settings"]

@@ -45,12 +45,16 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   # `npx tsc` resolves the stub npm package `tsc`, not `typescript`.
   (cd apps/desktop && npm run typecheck)
   (cd apps/website && npm run typecheck)
+  (cd apps/mobile && npm run typecheck)
 
   echo "== vitest =="
   (cd apps/desktop && npm test)
 
   echo "== merge-updater-latest fixtures =="
   bash "$ROOT/scripts/test-merge-updater-latest.sh"
+
+  echo "== android version code =="
+  bash "$ROOT/scripts/test-android-version-code.sh"
 
   echo "== vite build =="
   (cd apps/desktop && npm run build)

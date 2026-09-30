@@ -39,10 +39,22 @@ pub fn build_direct_only_config(
     capture_intent: CaptureIntent,
     platform: HostPlatform,
 ) -> Result<Value, ConfigError> {
+    build_direct_only_config_with(template, capture_intent, platform, None, None)
+}
+
+/// Direct-only config with the mobile extras desktop callers leave unset.
+///
+/// `tun_exclude_package` and `shared_root` are ignored unless `platform` is
+/// Android or iOS.
+fn build_direct_only_config_with(
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+    platform: HostPlatform,
+    tun_exclude_package: Option<&str>,
+    shared_root: Option<&Path>,
+) -> Result<Value, ConfigError> {
     validate_template(template)?;
-    if capture_intent == CaptureIntent::Tun {
-        validate_tun_capture(template, platform)?;
-    }
+    prepare_capture(template, platform, capture_intent)?;
 
     let outbounds = vec![
         json!({"type": "direct", "tag": "direct"}),
@@ -50,13 +62,11 @@ pub fn build_direct_only_config(
     ];
 
     // Slice 4c: keep the `clash_mode` rules so a later reload to a real config keeps the
-    // mode switch wired; without proxy outbounds every mode routes direct anyway. A `Tun`
-    // intent prepends the reserved bypass rules so the control path stays direct even in
-    // direct-only fallback.
+    // mode switch wired; without proxy outbounds every mode routes direct anyway. A desktop
+    // `Tun` intent, and every mobile platform, prepend reserved bypass rules so the control
+    // path stays direct even in direct-only fallback.
     let mut rules = Vec::new();
-    if capture_intent == CaptureIntent::Tun {
-        rules.extend(tun_reserved_rules(&template.tun, platform));
-    }
+    prepend_capture_rules(&mut rules, &template.tun, platform, capture_intent);
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
     let route = json!({
@@ -66,33 +76,47 @@ pub fn build_direct_only_config(
         "default_domain_resolver": minimal_default_domain_resolver(platform),
     });
 
-    let mut inbounds = vec![json!({
-        "type": "mixed",
-        "tag": "mixed-in",
-        "listen": if template.allow_lan {
-            "0.0.0.0"
-        } else {
-            template.mixed_listen.as_str()
-        },
-        "listen_port": template.mixed_port,
-    })];
-    if capture_intent == CaptureIntent::Tun {
-        inbounds.push(tun_inbound(&template.tun));
-    }
+    let inbounds = capture_inbounds(template, platform, capture_intent, tun_exclude_package)?;
+    let mut log = json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true });
+    let mut experimental = json!({
+        "clash_api": clash_api_block(template),
+    });
+    apply_shared_root(&mut log, &mut experimental, platform, shared_root);
 
     let config = json!({
-        "log": { "level": GENERATED_LOG_LEVEL, "timestamp": true },
+        "log": log,
         "dns": minimal_dns_block(platform),
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": route,
-        "experimental": {
-            "clash_api": clash_api_block(template),
-        }
+        "experimental": experimental,
     });
 
-    validate_config_for_intent(&config, capture_intent)?;
+    finish_value(&config, platform, capture_intent)?;
     Ok(config)
+}
+
+/// Mobile TUN config.
+///
+/// Desktop platforms are rejected. An empty profile falls back to the
+/// direct-only mobile config, matching the desktop Start path. `shared_root`
+/// may be absent; the caller that owns the shared directory sets it.
+pub fn build_mobile_config(input: &BuildInput) -> Result<Value, ConfigError> {
+    if !input.platform.is_mobile() {
+        return Err(ConfigError::invalid(
+            "mobile config requires HostPlatform::Android or HostPlatform::Ios",
+        ));
+    }
+    if input.profile.nodes.is_empty() {
+        return build_direct_only_config_with(
+            &input.template,
+            input.capture_intent,
+            input.platform,
+            input.tun_exclude_package.as_deref(),
+            input.shared_root.as_deref(),
+        );
+    }
+    Ok(build_runtime_config(input)?.to_json_value()?)
 }
 
 /// Validate listen ports before build.
@@ -279,9 +303,7 @@ fn minimal_default_domain_resolver(platform: HostPlatform) -> String {
 pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigError> {
     validate_template(&input.template)?;
     let capture_intent = input.capture_intent;
-    if capture_intent == CaptureIntent::Tun {
-        validate_tun_capture(&input.template, input.platform)?;
-    }
+    prepare_capture(&input.template, input.platform, capture_intent)?;
 
     if input.profile.nodes.is_empty() {
         return Err(ConfigError::EmptyOutbounds);
@@ -403,13 +425,16 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
     let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
-        if capture_intent == CaptureIntent::Tun {
-            // Reserved bypass rules precede `clash_mode` (`docs/tun.md`):
-            // the control path, private/loopback/link-local/multicast
-            // destinations, and the TUN endpoint are never captured or
-            // sniffed, even in Global/Direct mode.
-            final_rules.extend(tun_reserved_rules(&input.template.tun, input.platform));
-        }
+        // Reserved bypass rules precede `clash_mode` (`docs/tun.md`): the
+        // control path stays direct even in
+        // Global mode. Desktop emits them only for a Tun intent; mobile
+        // always does.
+        prepend_capture_rules(
+            &mut final_rules,
+            &input.template.tun,
+            input.platform,
+            capture_intent,
+        );
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
         let enabled_sub_rules: Vec<Value> = input
@@ -526,40 +551,58 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
 
     validate_route_refs(&route, &tag_set)?;
 
-    let mut inbounds = vec![json!({
-        "type": "mixed",
-        "tag": "mixed-in",
-        "listen": if input.template.allow_lan {
-            "0.0.0.0"
-        } else {
-            input.template.mixed_listen.as_str()
-        },
-        "listen_port": input.template.mixed_port,
-    })];
-    if capture_intent == CaptureIntent::Tun {
-        inbounds.push(tun_inbound(&input.template.tun));
-    }
-
-    let experimental = json!({
+    let endpoints = split_wireguard_endpoints(&mut outbounds)?;
+    let inbounds = capture_inbounds(
+        &input.template,
+        input.platform,
+        capture_intent,
+        input.tun_exclude_package.as_deref(),
+    )?;
+    let mut experimental = json!({
         "clash_api": clash_api_block(&input.template),
     });
+    let mut log = json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true });
+    apply_shared_root(
+        &mut log,
+        &mut experimental,
+        input.platform,
+        input.shared_root.as_deref(),
+    );
 
     let config = RuntimeConfig {
-        log: json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true }),
+        log,
         dns,
         inbounds,
         outbounds,
+        endpoints,
         route,
         experimental,
     };
 
-    validate_runtime_config_for_intent(&config, capture_intent)?;
+    finish_runtime(&config, input.platform, capture_intent)?;
     Ok(config)
 }
 
-/// Gate + TUN parameter validation shared by both builders. `Tun` configs must
-/// not be generated on a platform whose T0 gate is not green, and the emitted
-/// inbound needs a valid explicit interface name (locked macOS schema).
+fn emit_tun(platform: HostPlatform, intent: CaptureIntent) -> bool {
+    platform.is_mobile() || intent == CaptureIntent::Tun
+}
+
+fn prepare_capture(
+    template: &LocalTemplate,
+    platform: HostPlatform,
+    intent: CaptureIntent,
+) -> Result<(), ConfigError> {
+    if emit_tun(platform, intent) {
+        validate_tun_capture(template, platform)?;
+    }
+    Ok(())
+}
+
+/// Gate + TUN parameter validation shared by both builders. Desktop `Tun`
+/// configs must not be generated on a platform whose T0 gate is not green,
+/// and the emitted inbound needs a valid explicit interface name (locked
+/// macOS schema). Mobile omits `interface_name`: libbox hands the TUN options
+/// to the platform VPN.
 fn validate_tun_capture(
     template: &LocalTemplate,
     platform: HostPlatform,
@@ -576,13 +619,370 @@ fn validate_tun_capture(
         .tun
         .validate_for(platform)
         .map_err(|e| ConfigError::TunInvalid(e.message))?;
-    if template.tun.interface_name.is_none() {
+    if !platform.is_mobile() && template.tun.interface_name.is_none() {
         return Err(ConfigError::TunInvalid(
             "tun.interface_name is required to generate a Tun config (platform backend resolves a free name before generation)"
                 .into(),
         ));
     }
     Ok(())
+}
+
+fn prepend_capture_rules(
+    rules: &mut Vec<Value>,
+    tun: &TunSettings,
+    platform: HostPlatform,
+    intent: CaptureIntent,
+) {
+    if platform.is_mobile() {
+        rules.extend(mobile_reserved_rules());
+    } else if intent == CaptureIntent::Tun {
+        rules.extend(tun_reserved_rules(tun, platform));
+    }
+}
+
+/// Reserved rules for a mobile VPN.
+///
+/// Sniff runs first so later domain rules see a domain. Private, link-local,
+/// and multicast destinations stay on the physical network, ahead of DNS
+/// hijack, so a LAN resolver, captive portal, or printer is not captured in
+/// global mode. Public DNS is still hijacked. macOS `process_name` rules and
+/// the Windows peer-reject / UDP-443 rules are desktop TUN only.
+fn mobile_reserved_rules() -> Vec<Value> {
+    vec![
+        json!({ "action": "sniff" }),
+        json!({ "ip_is_private": true, "outbound": "direct" }),
+        json!({
+            "ip_cidr": [
+                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+                "224.0.0.0/4", "ff00::/8",
+                "fe80::/10", "fc00::/7",
+            ],
+            "outbound": "direct"
+        }),
+        json!({ "protocol": "dns", "action": "hijack-dns" }),
+    ]
+}
+
+fn mixed_inbound(template: &LocalTemplate) -> Value {
+    json!({
+        "type": "mixed",
+        "tag": "mixed-in",
+        "listen": if template.allow_lan {
+            "0.0.0.0"
+        } else {
+            template.mixed_listen.as_str()
+        },
+        "listen_port": template.mixed_port,
+    })
+}
+
+fn capture_inbounds(
+    template: &LocalTemplate,
+    platform: HostPlatform,
+    intent: CaptureIntent,
+    exclude_package: Option<&str>,
+) -> Result<Vec<Value>, ConfigError> {
+    let mut inbounds = Vec::new();
+    if !platform.is_mobile() {
+        inbounds.push(mixed_inbound(template));
+    }
+    if emit_tun(platform, intent) {
+        if platform.is_mobile() {
+            inbounds.push(mobile_tun_inbound(
+                &template.tun,
+                platform,
+                exclude_package,
+            )?);
+        } else {
+            inbounds.push(tun_inbound(&template.tun));
+        }
+    }
+    Ok(inbounds)
+}
+
+fn apply_shared_root(
+    log: &mut Value,
+    experimental: &mut Value,
+    platform: HostPlatform,
+    shared_root: Option<&Path>,
+) {
+    if !platform.is_mobile() {
+        return;
+    }
+    let Some(root) = shared_root.filter(|path| !path.as_os_str().is_empty()) else {
+        return;
+    };
+    if let Some(obj) = log.as_object_mut() {
+        obj.insert("output".into(), json!(root.join("sing-box.log")));
+    }
+    if let Some(obj) = experimental.as_object_mut() {
+        obj.insert(
+            "cache_file".into(),
+            json!({
+                "enabled": true,
+                "path": root.join("cache.db"),
+            }),
+        );
+    }
+}
+
+fn finish_value(
+    config: &Value,
+    platform: HostPlatform,
+    intent: CaptureIntent,
+) -> Result<(), ConfigError> {
+    if platform.is_mobile() {
+        let inbounds = config
+            .get("inbounds")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ConfigError::invalid("/inbounds: missing inbounds array"))?;
+        validate_mobile_inbounds(inbounds)?;
+        validate_config(config)
+    } else {
+        validate_config_for_intent(config, intent)
+    }
+}
+
+fn finish_runtime(
+    config: &RuntimeConfig,
+    platform: HostPlatform,
+    intent: CaptureIntent,
+) -> Result<(), ConfigError> {
+    if platform.is_mobile() {
+        validate_mobile_inbounds(&config.inbounds)?;
+        validate_runtime_config(config)
+    } else {
+        validate_runtime_config_for_intent(config, intent)
+    }
+}
+
+fn validate_mobile_inbounds(inbounds: &[Value]) -> Result<(), ConfigError> {
+    let tun_count = inbounds
+        .iter()
+        .filter(|inbound| inbound.get("type").and_then(|v| v.as_str()) == Some("tun"))
+        .count();
+    let mixed_count = inbounds
+        .iter()
+        .filter(|inbound| inbound.get("type").and_then(|v| v.as_str()) == Some("mixed"))
+        .count();
+    if tun_count != 1 {
+        return Err(ConfigError::invalid(
+            "mobile config must contain exactly one tun inbound",
+        ));
+    }
+    if mixed_count != 0 {
+        return Err(ConfigError::invalid(
+            "mobile config must not contain a mixed inbound",
+        ));
+    }
+    Ok(())
+}
+
+/// Address used when a stored WireGuard node has no `local_address`.
+/// sing-box 1.13 requires the endpoint `address` field.
+const WIREGUARD_DEFAULT_ADDRESS: &str = "10.0.0.2/32";
+
+fn split_wireguard_endpoints(outbounds: &mut Vec<Arc<Value>>) -> Result<Vec<Value>, ConfigError> {
+    let mut kept = Vec::with_capacity(outbounds.len());
+    let mut endpoints = Vec::new();
+    for outbound in outbounds.iter() {
+        if outbound.get("type").and_then(|v| v.as_str()) == Some("wireguard") {
+            endpoints.push(wireguard_endpoint(outbound.as_ref())?);
+        } else {
+            kept.push(Arc::clone(outbound));
+        }
+    }
+    *outbounds = kept;
+    Ok(endpoints)
+}
+
+/// Rewrite the subscription parser's pre-1.13 WireGuard outbound into a
+/// sing-box 1.13 endpoint. Selector member tags are left in place: the core
+/// registers endpoints as outbounds.
+fn wireguard_endpoint(outbound: &Value) -> Result<Value, ConfigError> {
+    let tag = outbound
+        .get("tag")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if tag.is_empty() {
+        return Err(ConfigError::invalid("wireguard endpoint is missing a tag"));
+    }
+    let private_key = outbound
+        .get("private_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if private_key.is_empty() {
+        return Err(ConfigError::invalid(format!(
+            "wireguard endpoint {tag} is missing private_key"
+        )));
+    }
+    if outbound
+        .get("peers")
+        .and_then(|v| v.as_array())
+        .is_some_and(|peers| !peers.is_empty())
+    {
+        let mut endpoint = outbound.clone();
+        if let Some(obj) = endpoint.as_object_mut() {
+            for key in [
+                "server",
+                "server_port",
+                "peer_public_key",
+                "local_address",
+                "preshared_key",
+            ] {
+                obj.remove(key);
+            }
+            obj.insert("type".into(), json!("wireguard"));
+            if !obj.contains_key("address") {
+                obj.insert("address".into(), wireguard_address(outbound));
+            }
+        }
+        return Ok(endpoint);
+    }
+
+    let server = outbound
+        .get("server")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let port = outbound
+        .get("server_port")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if server.is_empty() || !(1..=65535).contains(&port) {
+        return Err(ConfigError::invalid(format!(
+            "wireguard endpoint {tag} is missing a peer server"
+        )));
+    }
+    let public_key = outbound
+        .get("peer_public_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if public_key.is_empty() {
+        return Err(ConfigError::invalid(format!(
+            "wireguard endpoint {tag} is missing peer_public_key"
+        )));
+    }
+    let mut peer = json!({
+        "address": server,
+        "port": port,
+        "public_key": public_key,
+        "allowed_ips": ["0.0.0.0/0", "::/0"],
+    });
+    if let Some(preshared) = outbound
+        .get("preshared_key")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+    {
+        peer["pre_shared_key"] = json!(preshared);
+    }
+    if let Some(reserved) = outbound.get("reserved") {
+        peer["reserved"] = reserved.clone();
+    }
+    let mut endpoint = json!({
+        "type": "wireguard",
+        "tag": tag,
+        "private_key": private_key,
+        "address": wireguard_address(outbound),
+        "peers": [peer],
+    });
+    if let Some(mtu) = outbound.get("mtu") {
+        endpoint["mtu"] = mtu.clone();
+    }
+    Ok(endpoint)
+}
+
+fn wireguard_address(outbound: &Value) -> Value {
+    match outbound.get("local_address") {
+        Some(Value::Array(items)) if !items.is_empty() => Value::Array(items.clone()),
+        Some(Value::String(addr)) if !addr.is_empty() => json!([addr]),
+        _ => json!([WIREGUARD_DEFAULT_ADDRESS]),
+    }
+}
+
+fn android_package_name_ok(name: &str) -> bool {
+    let mut parts = name.split('.');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if !android_ident(first) {
+        return false;
+    }
+    let mut more = false;
+    for part in parts {
+        if !android_ident(part) {
+            return false;
+        }
+        more = true;
+    }
+    more && name.len() <= 255
+}
+
+fn android_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// Same physical-network exclusions as the desktop TUN inbound. libbox turns
+/// this into Android `VpnService.Builder.excludeRoute`, so those prefixes
+/// never enter the tunnel.
+const TUN_ROUTE_EXCLUDE_ADDRESS: &[&str] = &[
+    "192.168.0.0/16",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "224.0.0.0/4",
+    "fe80::/10",
+    "fc00::/7",
+];
+
+fn mobile_tun_inbound(
+    tun: &TunSettings,
+    platform: HostPlatform,
+    exclude_package: Option<&str>,
+) -> Result<Value, ConfigError> {
+    let package = android_exclude_package(platform, exclude_package)?;
+    let mut inbound = json!({
+        "type": "tun",
+        "tag": "tun-in",
+        "address": [tun.ipv4_address, tun.ipv6_address],
+        "mtu": tun.mtu,
+        "auto_route": tun.auto_route,
+        "strict_route": tun.strict_route,
+        "stack": tun.stack,
+        "route_exclude_address": TUN_ROUTE_EXCLUDE_ADDRESS,
+    });
+    if let Some(package) = package {
+        inbound["exclude_package"] = json!([package]);
+    }
+    Ok(inbound)
+}
+
+fn android_exclude_package(
+    platform: HostPlatform,
+    package: Option<&str>,
+) -> Result<Option<&str>, ConfigError> {
+    if platform != HostPlatform::Android {
+        return Ok(None);
+    }
+    let Some(package) = package.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !android_package_name_ok(package) {
+        return Err(ConfigError::invalid(format!(
+            "tun_exclude_package is not an Android package name: {package}"
+        )));
+    }
+    Ok(Some(package))
 }
 
 /// DNS hijack rule for a `Tun` config: port-53 traffic is diverted into the
@@ -743,11 +1143,7 @@ fn tun_inbound(tun: &TunSettings) -> Value {
         "auto_route": tun.auto_route,
         "strict_route": tun.strict_route,
         "stack": tun.stack,
-        "route_exclude_address": [
-            "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12",
-            "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4",
-            "fe80::/10", "fc00::/7"
-        ],
+        "route_exclude_address": TUN_ROUTE_EXCLUDE_ADDRESS,
         "loopback_address": ["127.0.0.1", "::1"],
     });
     // `interface_name` is Some here by construction; keep the key absent if a
@@ -978,9 +1374,16 @@ pub fn validate_config(config: &Value) -> Result<(), ConfigError> {
         .get("outbounds")
         .and_then(|v| v.as_array())
         .ok_or_else(|| ConfigError::invalid("/outbounds: missing or not an array"))?;
+    let endpoints = match config.get("endpoints") {
+        None => &[][..],
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| ConfigError::invalid("/endpoints: must be an array"))?,
+    };
     validate_config_parts(
         inbounds,
         outbounds.iter(),
+        endpoints,
         config.pointer("/route/final").and_then(|v| v.as_str()),
         config.pointer("/route/rules").and_then(|v| v.as_array()),
         config
@@ -993,6 +1396,7 @@ pub fn validate_runtime_config(config: &RuntimeConfig) -> Result<(), ConfigError
     validate_config_parts(
         &config.inbounds,
         config.outbounds.iter().map(|o| o.as_ref()),
+        &config.endpoints,
         config.route.get("final").and_then(|v| v.as_str()),
         config.route.get("rules").and_then(|v| v.as_array()),
         config
@@ -1005,6 +1409,7 @@ pub fn validate_runtime_config(config: &RuntimeConfig) -> Result<(), ConfigError
 fn validate_config_parts<'a, I>(
     inbounds: &[Value],
     outbounds: I,
+    endpoints: &[Value],
     route_final: Option<&str>,
     route_rules: Option<&Vec<Value>>,
     clash_controller: Option<&str>,
@@ -1059,6 +1464,23 @@ where
         if !outbound_tags.insert(tag.to_string()) {
             return Err(ConfigError::invalid(format!(
                 "/outbounds/{idx}/tag: duplicate tag {tag}"
+            )));
+        }
+    }
+    for (idx, endpoint) in endpoints.iter().enumerate() {
+        let tag = endpoint
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if tag.is_empty() {
+            return Err(ConfigError::invalid(format!(
+                "/endpoints/{idx}/tag: missing"
+            )));
+        }
+        if !outbound_tags.insert(tag.to_string()) {
+            return Err(ConfigError::invalid(format!(
+                "/endpoints/{idx}/tag: duplicate tag {tag}"
             )));
         }
     }

@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* The Vite root is apps/mobile. Point Tailwind at the shared desktop views,
+   the same way the website demo does, or utility classes are omitted. */
+@source "../../desktop/src";
+@import "../../desktop/src/index.css";
+
+/* Gesture navigation does not report safe-area-inset-bottom on this WebView.
+   MainActivity sets --ice-nav-inset from the real navigation bar height. */
+.phone-tab-bar {
+  padding-bottom: max(env(safe-area-inset-bottom), var(--ice-nav-inset, 0px));
+}

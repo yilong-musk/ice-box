@@ -13,6 +13,7 @@ import {
   type ProxyMode,
   type StatusResponse,
 } from "../api/client";
+import { isPhoneShell } from "@platform/shell";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -424,7 +425,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         ? formatOutbound(selectedTag, nodes)
         : t("common.dash");
 
+  const phone = isPhoneShell();
+  const tunnel = status?.tunnel_status ?? "stopped";
+  const vpnActive =
+    tunnel === "connected" ||
+    tunnel === "connecting" ||
+    tunnel === "disconnecting";
+
   function onToggleProxy() {
+    if (phone) {
+      void run(() => (vpnActive ? api.stop() : api.start()));
+      return;
+    }
     if (proxyOn) {
       void run(() => api.stopSystemProxy());
     } else {
@@ -596,29 +608,47 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     });
   }
 
-  const powerTitle = proxyOn ? t("home.power.stop") : t("home.power.start");
-  const powerSubtitle = busy
-    ? t("home.power.busy")
-    : tunActive
-      ? t("home.power.tunActive", {
-          iface: status?.tun_interface
-            ? t("common.withIface", { iface: status.tun_interface })
-            : "",
-        })
-      : proxyLive
-        ? t("home.power.proxyLive")
-        : proxyOn
-          ? t("home.power.recorded")
-          : configuredTun
-            ? t("home.power.tunReady")
-            : t("home.power.clickToCapture");
+  const powerOn = phone ? vpnActive : proxyOn;
+  const canToggle = phone ? !busy : canToggleProxy;
+  const powerTitle = phone
+    ? vpnActive
+      ? t("home.power.vpnStop")
+      : t("home.power.vpnStart")
+    : proxyOn
+      ? t("home.power.stop")
+      : t("home.power.start");
+  const powerSubtitle = phone
+    ? busy || tunnel === "connecting" || tunnel === "disconnecting"
+      ? t("home.power.busy")
+      : tunnel === "connected"
+        ? t("home.power.vpnOn")
+        : t("home.power.vpnOff")
+    : busy
+      ? t("home.power.busy")
+      : tunActive
+        ? t("home.power.tunActive", {
+            iface: status?.tun_interface
+              ? t("common.withIface", { iface: status.tun_interface })
+              : "",
+          })
+        : proxyLive
+          ? t("home.power.proxyLive")
+          : proxyOn
+            ? t("home.power.recorded")
+            : configuredTun
+              ? t("home.power.tunReady")
+              : t("home.power.clickToCapture");
 
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
 
   return (
     <div className="home-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="home-panel">
-      {proxyAvailable &&
+      {phone && status?.vpn_permission === "denied" && (
+        <WarnAlert className="shrink-0">{t("home.warn.vpnPermission")}</WarnAlert>
+      )}
+      {!phone &&
+        proxyAvailable &&
         running &&
         proxyRecorded &&
         status?.system_proxy_applied === false && (
@@ -626,7 +656,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             {t("home.warn.proxyOutOfSync")}
           </WarnAlert>
         )}
-      {permissionRequired && (
+      {!phone && permissionRequired && (
         <WarnAlert className="shrink-0">
           {status?.helper_supported
             ? t("home.warn.permissionRequired")
@@ -664,7 +694,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </span>
         </WarnAlert>
       )}
-      {recoveryRequired && (
+      {!phone && recoveryRequired && (
         <ErrorAlert className="shrink-0">
           {t("home.warn.recoveryRequired")}
           <span className="mt-2 flex flex-wrap gap-2">
@@ -682,21 +712,26 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       )}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
-      <div className="grid shrink-0 grid-cols-2 items-stretch gap-3">
+      <div
+        className={cn(
+          "grid shrink-0 items-stretch gap-3",
+          phone ? "grid-cols-1" : "grid-cols-2",
+        )}
+      >
         <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
           <CardHeader>
             <CardTitle>{t("home.proxyStatus")}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            {proxyAvailable || configuredTun || tunActive ? (
+            {phone || proxyAvailable || configuredTun || tunActive ? (
               <>
                 <Button
                   type="button"
                   size="lg"
-                  variant={proxyOn ? "default" : "outline"}
-                  className="h-auto w-full justify-start gap-2 py-2"
-                  disabled={!canToggleProxy}
-                  aria-pressed={proxyOn}
+                  variant={powerOn ? "default" : "outline"}
+                  className="h-auto min-h-11 w-full justify-start gap-2 py-2"
+                  disabled={!canToggle}
+                  aria-pressed={powerOn}
                   aria-label={powerTitle}
                   onClick={onToggleProxy}
                 >
@@ -706,7 +741,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     <span
                       className={cn(
                         "block text-xs font-normal",
-                        proxyOn
+                        powerOn
                           ? "text-primary-foreground/80"
                           : "text-muted-foreground",
                       )}
@@ -749,7 +784,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            {!tunUiHidden && (
+            {!phone && !tunUiHidden && (
               <Toggle
                 variant="outline"
                 size="sm"
@@ -803,7 +838,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.tunMode")}
               </Toggle>
             )}
-            {cliProxyEndpoint ? (
+            {!phone && cliProxyEndpoint ? (
               <div className="mt-3 flex w-full gap-2">
                 <Button
                   type="button"

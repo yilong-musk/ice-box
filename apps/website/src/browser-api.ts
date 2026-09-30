@@ -178,6 +178,7 @@ export const api = {
       launch_at_login_supported: true,
       helper_stale: false,
       tun_elevation_ready: true,
+      tray_display_supported: false,
     };
   },
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },
@@ -201,6 +202,10 @@ export const api = {
   async recordAppUpdateCheck(): Promise<void> {},
   async skipAppUpdate(): Promise<void> {},
   async installAppUpdate(): Promise<void> { await delay(); },
+  async openAppDownload(): Promise<void> {},
+  async requestBatteryExemption(): Promise<void> {},
+  async openNetworkSettings(): Promise<void> {},
+  async openVpnSettings(): Promise<void> {},
   async listenAppUpdateProgress(): Promise<() => void> {
     return () => {};
   },

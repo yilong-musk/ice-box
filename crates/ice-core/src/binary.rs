@@ -8,9 +8,8 @@ use crate::error::CoreError;
 
 /// Bundled sing-box version pin (`third_party/sing-box/VERSION`).
 ///
-/// Source of truth lives in `ice-types` and is re-exported by `ice-engine`
-/// (`ENGINE_COMPAT_CORE_VERSION`); the desktop process layer only mirrors it
-/// for packaging checks.
+/// `ice-types::ENGINE_COMPAT_CORE_VERSION` is that file. Desktop packaging
+/// checks read it from here.
 pub const BUNDLED_SINGBOX_VERSION: &str = ice_types::ENGINE_COMPAT_CORE_VERSION;
 
 /// Current packaging target directory name under `third_party/sing-box/`.
@@ -158,7 +157,8 @@ mod tests {
     }
 
     #[test]
-    fn bundled_version_pin_matches_constant() {
-        assert_eq!(BUNDLED_SINGBOX_VERSION, "1.13.19");
+    fn bundled_version_pin_matches_vendor_file() {
+        let pinned = include_str!("../../../third_party/sing-box/VERSION").trim();
+        assert_eq!(BUNDLED_SINGBOX_VERSION, pinned);
     }
 }

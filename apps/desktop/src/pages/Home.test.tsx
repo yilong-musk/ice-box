@@ -6,12 +6,19 @@ import { t, isMessageKey } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
+
 const getStatus = vi.fn();
 const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getTrafficSnapshot = vi.fn();
 const setProxyMode = vi.fn();
 const start = vi.fn();
+const stop = vi.fn();
 const stopSystemProxy = vi.fn();
 const saveSettings = vi.fn();
 const recoverTun = vi.fn();
@@ -43,6 +50,7 @@ vi.mock("../api/client", () => ({
     getTrafficSince: (...args: unknown[]) => getTrafficSnapshot(...args),
     setProxyMode: (...args: unknown[]) => setProxyMode(...args),
     start: (...args: unknown[]) => start(...args),
+    stop: (...args: unknown[]) => stop(...args),
     stopSystemProxy: (...args: unknown[]) => stopSystemProxy(...args),
     saveSettings: (...args: unknown[]) => saveSettings(...args),
     recoverTun: (...args: unknown[]) => recoverTun(...args),
@@ -53,7 +61,6 @@ vi.mock("../api/client", () => ({
     copyProxyCommand: (...args: unknown[]) => copyProxyCommand(...args),
     openProxyTerminal: (...args: unknown[]) => openProxyTerminal(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
-    stop: vi.fn(),
   },
   formatInvokeError: (err: unknown) => String(err),
   formatUiMessage: (msg: unknown) => {
@@ -103,6 +110,7 @@ const tunSettings = {
 
 describe("Home", () => {
   beforeEach(() => {
+    phoneShell.value = false;
     vi.clearAllMocks();
     stateChangedHandler = null;
     listenStateChanged.mockImplementation((handler: () => void) => {
@@ -139,6 +147,7 @@ describe("Home", () => {
     });
     getTrafficSnapshot.mockResolvedValue({ points: [], latest: null, peak: null });
     start.mockResolvedValue(undefined);
+    stop.mockResolvedValue(undefined);
     stopSystemProxy.mockResolvedValue(undefined);
     saveSettings.mockResolvedValue(undefined);
     recoverTun.mockResolvedValue(null);
@@ -1062,6 +1071,75 @@ describe("Home", () => {
     expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(
       t("home.power.clickToCapture"),
     );
+  });
+
+  it("connects and disconnects the VPN from the power button on the phone shell", async () => {
+    phoneShell.value = true;
+    getStatus.mockResolvedValue({
+      core: {
+        status: "stopped",
+        message: null,
+        inbound_host: null,
+        inbound_port: null,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: false,
+      ...tunStatus,
+      tun_ui_hidden: true,
+      tun_available: false,
+      helper_supported: false,
+      launch_at_login_supported: false,
+      vpn_permission: "denied",
+      tunnel_status: "stopped",
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("home.power.vpnStart") })).toBeInTheDocument();
+    });
+    expect(container.textContent).not.toContain(t("home.unsupported"));
+    expect(container.textContent).toContain(t("home.warn.vpnPermission"));
+    expect(view.queryByRole("button", { name: t("home.tunMode") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("home.copyCliProxy") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("home.installHelper") })).not.toBeInTheDocument();
+
+    fireEvent.click(view.getByRole("button", { name: t("home.power.vpnStart") }));
+    await waitFor(() => expect(start).toHaveBeenCalled());
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+  });
+
+  it("stops the VPN when the phone tunnel is connected", async () => {
+    phoneShell.value = true;
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: null,
+        inbound_port: null,
+      },
+      subscription_count: 0,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: false,
+      ...tunStatus,
+      tun_ui_hidden: true,
+      vpn_permission: "granted",
+      tunnel_status: "connected",
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    const power = await view.findByRole("button", { name: t("home.power.vpnStop") });
+    expect(power).toHaveTextContent(t("home.power.vpnOn"));
+    fireEvent.click(power);
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+    expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
   it("shows permission-required state with a system-proxy fallback action", async () => {

@@ -8,7 +8,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website typechecks; Vitest; updater fixtures; demo screenshot |
+| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website/mobile typechecks; Vitest; updater fixtures; Android version-code fixtures; demo screenshot |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, and production build |
 
 The local gate omits desktop Rust tests because GTK/WebKit dependencies may be
@@ -20,6 +20,23 @@ CI runs the full gate on Linux and `GATE_SCOPE=rust` on macOS/Windows; packaging
 jobs build separately. `GATE_SCOPE=frontend` runs only the frontend half.
 The [gate scripts](../scripts/gate.sh) and [CI workflow](../.github/workflows/ci.yml)
 define the exact commands.
+
+## Android builds
+
+A debug APK needs JDK 17, Go, and an Android SDK. Set `ANDROID_HOME`, then
+install the SDK packages and build:
+
+```bash
+bash scripts/ci-install-android-sdk.sh
+bash scripts/build-android-apk.sh debug arm64   # device
+bash scripts/build-android-apk.sh debug amd64   # emulator
+```
+
+`arm64` is the published ABI. `amd64` is the emulator artifact and is not
+released. The APK script downloads the pinned GeoIP rule-sets and packages
+them; the phone copies those files into its files directory before generating
+`config.json`. Daily flows were checked on an Android 14 emulator. A signed
+release build is described in [release-process.md](release-process.md#android-signing-one-time).
 
 `cargo test --lib` does not run `crates/*/tests/`. The local gate explicitly
 includes `ice-tun-sys` integration tests; CI covers all non-desktop integration

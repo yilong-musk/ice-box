@@ -9,19 +9,42 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Resolved paths under Tauri `app_data_dir` (or a test temp root).
+/// Host-private files, plus the shared root the tunnel process reads.
+///
+/// [`AppPaths::new`] sets both roots to the same directory. That is the
+/// desktop layout: every path stays where it is today. Mobile calls
+/// [`AppPaths::with_shared`] so the tunnel can read config, geoip, and the
+/// core log even when the platform maps the two roots to one directory.
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     root: PathBuf,
+    shared: PathBuf,
 }
 
 impl AppPaths {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        Self {
+            shared: root.clone(),
+            root,
+        }
+    }
+
+    /// `root` is host-private (settings, subscriptions, the app log).
+    /// `shared` is what the tunnel process reads (config, geoip, core log).
+    pub fn with_shared(root: impl Into<PathBuf>, shared: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            shared: shared.into(),
+        }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn shared_root(&self) -> &Path {
+        &self.shared
     }
 
     pub fn settings(&self) -> PathBuf {
@@ -34,7 +57,7 @@ impl AppPaths {
     }
 
     pub fn config(&self) -> PathBuf {
-        self.root.join("config.json")
+        self.shared.join("config.json")
     }
 
     /// Per-install Clash API Bearer token (0600 on Unix). Not part of
@@ -44,7 +67,7 @@ impl AppPaths {
     }
 
     pub fn config_bak(&self) -> PathBuf {
-        self.root.join("config.json.bak")
+        self.shared.join("config.json.bak")
     }
 
     pub fn proxy_backup(&self) -> PathBuf {
@@ -84,7 +107,7 @@ impl AppPaths {
 
     /// Bundled `geoip-{code}.srs` rule-sets copied next to the app data (used by route rules).
     pub fn geoip_dir(&self) -> PathBuf {
-        self.root.join("geoip")
+        self.shared.join("geoip")
     }
 
     pub fn subscriptions_index(&self) -> PathBuf {
@@ -103,13 +126,21 @@ impl AppPaths {
         self.logs_dir().join("ice-box.log")
     }
 
+    /// Desktop keeps `logs/sing-box.log`. A distinct shared root matches the
+    /// mobile config generator, which writes `log.output` to `sing-box.log`
+    /// directly under that root.
     pub fn core_log(&self) -> PathBuf {
-        self.logs_dir().join("sing-box.log")
+        if self.shared == self.root {
+            self.logs_dir().join("sing-box.log")
+        } else {
+            self.shared.join("sing-box.log")
+        }
     }
 
-    /// Create `subscriptions/` and `logs/` (and the root itself).
+    /// Create the private root, the shared root, `subscriptions/`, and `logs/`.
     pub fn ensure_dirs(&self) -> io::Result<()> {
         fs::create_dir_all(self.root())?;
+        fs::create_dir_all(self.shared_root())?;
         fs::create_dir_all(self.subscriptions_dir())?;
         fs::create_dir_all(self.logs_dir())?;
         Ok(())
@@ -164,6 +195,39 @@ mod tests {
         assert_eq!(
             p.app_log(),
             PathBuf::from("/tmp/ice-box-data/logs/ice-box.log")
+        );
+        assert_eq!(
+            p.core_log(),
+            PathBuf::from("/tmp/ice-box-data/logs/sing-box.log")
+        );
+        assert_eq!(p.geoip_dir(), PathBuf::from("/tmp/ice-box-data/geoip"));
+    }
+
+    #[test]
+    fn shared_root_keeps_host_files_private_and_core_log_beside_config() {
+        let private = PathBuf::from("/tmp/ice-box-private");
+        let shared = PathBuf::from("/tmp/ice-box-shared");
+        let paths = AppPaths::with_shared(&private, &shared);
+        assert_eq!(paths.settings(), private.join("settings.json"));
+        assert_eq!(
+            paths.subscriptions_index(),
+            private.join("subscriptions/index.json")
+        );
+        assert_eq!(paths.app_log(), private.join("logs/ice-box.log"));
+        assert_eq!(paths.clash_api_secret(), private.join("clash-api.secret"));
+        assert_eq!(paths.config(), shared.join("config.json"));
+        assert_eq!(paths.config_bak(), shared.join("config.json.bak"));
+        assert_eq!(paths.geoip_dir(), shared.join("geoip"));
+        assert_eq!(paths.core_log(), shared.join("sing-box.log"));
+        assert_eq!(paths.shared_root(), shared.as_path());
+    }
+
+    #[test]
+    fn same_shared_root_keeps_the_desktop_core_log() {
+        let paths = AppPaths::with_shared("/tmp/ice-box-data", "/tmp/ice-box-data");
+        assert_eq!(
+            paths.core_log(),
+            PathBuf::from("/tmp/ice-box-data/logs/sing-box.log")
         );
     }
 }

@@ -262,6 +262,7 @@ pub fn parse_vless(rest: &str) -> Result<Value, SkipReason> {
                     "vless reality link missing pbk".into(),
                 ));
             }
+            let pbk = normalize_reality_public_key(pbk)?;
             apply_tls(
                 &mut out,
                 sni,
@@ -269,7 +270,7 @@ pub fn parse_vless(rest: &str) -> Result<Value, SkipReason> {
                 fp,
                 alpn,
                 insecure,
-                Some(pbk),
+                Some(&pbk),
                 Some(sid),
                 Some(spx),
             )?;
@@ -290,6 +291,25 @@ pub fn parse_vless(rest: &str) -> Result<Value, SkipReason> {
         Some(service_name),
     )?;
     Ok(out)
+}
+
+/// sing-box reality wants raw URL-safe base64 of exactly 32 bytes. A shorter
+/// placeholder fails the whole service at startup, so skip that node.
+fn normalize_reality_public_key(value: &str) -> Result<String, SkipReason> {
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(value))
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(value))
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(value));
+    match decoded {
+        Ok(bytes) if bytes.len() == 32 => {
+            Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+        }
+        _ => Err(SkipReason::Incomplete(
+            "vless reality public key is not a 32-byte key".into(),
+        )),
+    }
 }
 
 /// Add a `tls` block; `reality` keys enable sing-box reality instead of utls.
@@ -582,13 +602,14 @@ mod tests {
 
     #[test]
     fn vless_reality_vision() {
-        let out = parse_vless(
-            "uuid@example.com:443?encryption=none&security=reality&sni=apple.com&fp=chrome&pbk=abc123&sid=deadbeef&spx=%2F&flow=xtls-rprx-vision",
-        )
+        let key = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
+        let out = parse_vless(&format!(
+            "uuid@example.com:443?encryption=none&security=reality&sni=apple.com&fp=chrome&pbk={key}&sid=deadbeef&spx=%2F&flow=xtls-rprx-vision",
+        ))
         .unwrap();
         assert_eq!(out["flow"], "xtls-rprx-vision");
         assert_eq!(out["tls"]["reality"]["enabled"], true);
-        assert_eq!(out["tls"]["reality"]["public_key"], "abc123");
+        assert_eq!(out["tls"]["reality"]["public_key"], key);
         assert_eq!(out["tls"]["reality"]["short_id"], "deadbeef");
         assert_eq!(out["tls"]["reality"]["spider_x"], "/");
         assert_eq!(out["tls"]["utls"]["fingerprint"], "chrome");
@@ -597,7 +618,7 @@ mod tests {
     #[test]
     fn vless_reality_without_fp_defaults_to_chrome_utls() {
         let out = parse_vless(
-            "uuid@example.com:443?encryption=none&security=reality&sni=apple.com&pbk=abc123&sid=deadbeef",
+            "uuid@example.com:443?encryption=none&security=reality&sni=apple.com&pbk=AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI&sid=deadbeef",
         )
         .unwrap();
         assert_eq!(out["tls"]["utls"]["fingerprint"], "chrome");
@@ -614,6 +635,28 @@ mod tests {
     #[test]
     fn vless_unsupported_flow_skipped() {
         assert!(parse_vless("uuid@example.com:443?flow=xtls-rprx-splice").is_err());
+    }
+
+    #[test]
+    fn vless_reality_rejects_short_public_key() {
+        let err = parse_vless(
+            "11111111-2222-4333-8444-555555555555@example.com:443?encryption=none&security=reality&pbk=EYa4ic3GAxqznV61U-Oww-WKsu5wuQQptyS3fw7czM&sid=c50db39f&sni=example.com&fp=ios",
+        )
+        .unwrap_err();
+        assert!(matches!(err, SkipReason::Incomplete(message) if message.contains("public key")));
+    }
+
+    #[test]
+    fn vless_reality_normalizes_standard_public_key() {
+        let key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let out = parse_vless(&format!(
+            "11111111-2222-4333-8444-555555555555@example.com:443?encryption=none&security=reality&pbk={key}&sid=c50db39f&sni=example.com&fp=ios",
+        ))
+        .unwrap();
+        assert_eq!(
+            out["tls"]["reality"]["public_key"],
+            "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        );
     }
 
     #[test]
