@@ -631,6 +631,38 @@ pub fn open_app_download(
 }
 
 #[tauri::command]
+pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.app_paths()?
+    };
+    let url = crate::app_update::cached_apk_url(&paths)?;
+    let dest = crate::app_update::update_apk_path(&paths);
+    let download_dest = dest.clone();
+    let handle = app.clone();
+    run_blocking("install_app_update", move || {
+        crate::app_update::download_apk(&url, &download_dest, |downloaded, content_length| {
+            let _ = handle.emit(
+                "app-update://progress",
+                serde_json::json!({
+                    "phase": "progress",
+                    "downloaded": downloaded,
+                    "content_length": content_length,
+                }),
+            );
+        })
+    })
+    .await??;
+    let tunnel = app.state::<Tunnel<Wry>>();
+    tunnel.install_local_apk(&dest).map_err(|err| {
+        log::warn!("apk install handoff failed: {err}");
+        AppError::with_code(ErrorCode::UpdateInstallFailed, "update install failed")
+    })
+}
+
+#[tauri::command]
 pub fn request_battery_exemption(tunnel: State<'_, Tunnel<Wry>>) -> Result<(), AppError> {
     tunnel.request_battery_exemption().map_err(map_tunnel)
 }

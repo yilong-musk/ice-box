@@ -33,6 +33,12 @@ struct UrlRequest<'a> {
     url: &'a str,
 }
 
+#[cfg(target_os = "android")]
+#[derive(Serialize)]
+struct PathRequest<'a> {
+    path: &'a str,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TunnelError {
     #[error("the tunnel plugin is only available on Android")]
@@ -197,6 +203,25 @@ impl<R: Runtime> Tunnel<R> {
         #[cfg(not(target_os = "android"))]
         {
             let _ = url;
+            Err(TunnelError::Unavailable)
+        }
+    }
+
+    /// Hand a downloaded APK to the system installer. The path must be the
+    /// file this app just wrote under its private updates directory.
+    pub fn install_local_apk(&self, path: &std::path::Path) -> Result<(), TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            let path = path.to_string_lossy();
+            let _: serde_json::Value = self
+                .handle
+                .run_mobile_plugin("install_apk", PathRequest { path: &path })
+                .map_err(|err| TunnelError::Plugin(err.to_string()))?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = path;
             Err(TunnelError::Unavailable)
         }
     }

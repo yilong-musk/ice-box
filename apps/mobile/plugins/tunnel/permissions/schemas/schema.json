@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the device_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the install_apk command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-apk",
+          "markdownDescription": "Enables the install_apk command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_apk command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-apk",
+          "markdownDescription": "Denies the install_apk command without any pre-configured scope."
+        },
+        {
           "description": "Enables the memory command without any pre-configured scope.",
           "type": "string",
           "const": "allow-memory",
@@ -439,10 +451,10 @@
           "markdownDescription": "Denies the stop command without any pre-configured scope."
         },
         {
-          "description": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`",
+          "description": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`\n- `allow-install-apk`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`"
+          "markdownDescription": "Prepare, start, stop, and inspect the platform VPN tunnel.\n#### This default permission set includes:\n\n- `allow-prepare`\n- `allow-start`\n- `allow-stop`\n- `allow-reload`\n- `allow-status`\n- `allow-shared-dir`\n- `allow-memory`\n- `allow-device-status`\n- `allow-request-battery-exemption`\n- `allow-open-network-settings`\n- `allow-open-vpn-settings`\n- `allow-open-https-url`\n- `allow-install-apk`"
         }
       ]
     }

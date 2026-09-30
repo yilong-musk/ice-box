@@ -13,6 +13,7 @@ const COMMANDS: &[&str] = &[
     "open_network_settings",
     "open_vpn_settings",
     "open_https_url",
+    "install_apk",
 ];
 
 fn main() {

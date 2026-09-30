@@ -11,8 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the repository. The release workflow publishes one arm64-v8a APK beside the
   desktop installers. Its version code comes from the semantic version, so a
   newer release installs over the previous one.
-- Phone Settings checks GitHub Releases and opens the arm64 APK in the system
-  browser. The app does not install the APK itself.
+- Phone Settings checks GitHub Releases, downloads the arm64 APK, and hands
+  it to the system installer. The user confirms the install.
 - Phone Settings explains battery-optimization exemption, strict Private DNS,
   and always-on VPN.
 - The phone does not auto-update subscriptions. A profile changes only when

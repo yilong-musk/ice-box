@@ -535,7 +535,7 @@ describe("Settings", () => {
     expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
   });
 
-  it("explains battery optimization and private DNS, and downloads the APK", async () => {
+  it("explains battery optimization and private DNS, and installs the APK", async () => {
     phoneShell.value = true;
     getStatus.mockResolvedValue({
       ...defaultStatus,
@@ -567,11 +567,9 @@ describe("Settings", () => {
     await waitFor(() => expect(requestBatteryExemption).toHaveBeenCalled());
     fireEvent.click(view.getByRole("button", { name: t("settings.privateDnsAction") }));
     await waitFor(() => expect(openNetworkSettings).toHaveBeenCalled());
-    fireEvent.click(view.getByRole("button", { name: t("settings.updateDownload") }));
-    await waitFor(() => expect(openAppDownload).toHaveBeenCalled());
-    expect(
-      view.queryByRole("button", { name: t("settings.updateInstall") }),
-    ).not.toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: t("settings.updateInstall") }));
+    await waitFor(() => expect(installAppUpdate).toHaveBeenCalled());
+    expect(openAppDownload).not.toHaveBeenCalled();
   });
 
   it("persists the login item through its own save path", async () => {

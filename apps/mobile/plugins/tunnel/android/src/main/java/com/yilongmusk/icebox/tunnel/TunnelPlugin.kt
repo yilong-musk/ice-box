@@ -4,7 +4,9 @@ package com.yilongmusk.icebox.tunnel
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.net.VpnService
 import android.os.PowerManager
@@ -20,6 +22,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
+import java.io.FileInputStream
 import org.json.JSONObject
 
 @TauriPlugin(
@@ -170,6 +173,32 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         open(invoke, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 
+    @Command
+    fun install_apk(invoke: Invoke) {
+        val path = invoke.getArgs().getString("path").orEmpty()
+        val file = File(path)
+        if (!isUpdateApk(file)) {
+            invoke.reject("refusing path")
+            return
+        }
+        if (!activity.packageManager.canRequestPackageInstalls()) {
+            start(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:${activity.packageName}")
+                },
+            )
+            invoke.reject("install permission required")
+            return
+        }
+        try {
+            commitInstall(file)
+            file.delete()
+            invoke.resolve(JSObject())
+        } catch (err: Exception) {
+            invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
     private fun batteryUnrestricted(): Boolean {
         val manager = activity.getSystemService(PowerManager::class.java) ?: return false
         return manager.isIgnoringBatteryOptimizations(activity.packageName)
@@ -209,6 +238,45 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.resolve(JSObject())
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
+    private fun isUpdateApk(file: File): Boolean {
+        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return false
+        val parent = canonical.parentFile ?: return false
+        val data = activity.dataDir.canonicalPath + File.separator
+        return parent.name == "updates" &&
+            canonical.name == "ice-box-update.apk" &&
+            canonical.path.startsWith(data) &&
+            canonical.isFile &&
+            canonical.length() > 0L
+    }
+
+    private fun commitInstall(file: File) {
+        val installer = activity.packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        params.setSize(file.length())
+        params.setAppPackageName(activity.packageName)
+        params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+        val sessionId = installer.createSession(params)
+        val session = installer.openSession(sessionId)
+        try {
+            session.openWrite("base.apk", 0, file.length()).use { out ->
+                FileInputStream(file).use { input -> input.copyTo(out) }
+                session.fsync(out)
+            }
+            val callback = PendingIntent.getActivity(
+                activity,
+                sessionId,
+                Intent(activity, activity.javaClass),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            session.commit(callback.intentSender)
+        } catch (err: Exception) {
+            session.abandon()
+            throw err
+        } finally {
+            session.close()
         }
     }
 

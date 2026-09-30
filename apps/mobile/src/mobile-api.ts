@@ -18,6 +18,7 @@ import type {
   StatusResponse,
   SubscriptionMeta,
   TrafficDelta,
+  UpdateProgressPayload,
   TrafficPoint,
   TrafficSnapshot,
 } from "../../desktop/src/api/contracts";
@@ -111,12 +112,15 @@ export const api = {
   recordAppUpdateCheck: () => invoke<void>("record_app_update_check"),
   recordUpdatePrompt: noop,
   skipAppUpdate: async () => {},
-  installAppUpdate: noop,
+  installAppUpdate: () => invoke<void>("install_app_update"),
   openAppDownload: () => invoke<void>("open_app_download"),
   requestBatteryExemption: () => invoke<void>("request_battery_exemption"),
   openNetworkSettings: () => invoke<void>("open_network_settings"),
   openVpnSettings: () => invoke<void>("open_vpn_settings"),
-  listenAppUpdateProgress: unlisten,
+  listenAppUpdateProgress: (handler: (payload: UpdateProgressPayload) => void) =>
+    listen<UpdateProgressPayload>("app-update://progress", (event) =>
+      handler(event.payload),
+    ),
   setTrayLanguage: noop,
   setTrayUpdateAvailable: noop,
 } satisfies ApiContract;

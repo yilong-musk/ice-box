@@ -495,9 +495,111 @@ impl HttpFetcher for MockFetcher {
     }
 }
 
+/// Download an HTTPS resource to `dest`, re-checking SSRF rules on every hop.
+/// `allow_host` runs before DNS, so a caller can refuse hosts the subscription
+/// fetch would still accept. A rejected host does not open a connection.
+pub fn download_direct(
+    url: &str,
+    dest: &std::path::Path,
+    max_bytes: u64,
+    allow_host: impl Fn(&str) -> bool,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<(), SubscriptionError> {
+    if !url_is_https(url) {
+        return Err(SubscriptionError::FetchFailed(
+            "update download requires https".into(),
+        ));
+    }
+    let mut current = url.to_string();
+    for hop in 0..=MAX_REDIRECTS {
+        if !url_is_https(&current) {
+            return Err(SubscriptionError::FetchFailed(
+                "refusing https→http redirect downgrade".into(),
+            ));
+        }
+        let host = url::Url::parse(&current)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_string))
+            .ok_or_else(|| {
+                SubscriptionError::FetchFailed("update download URL missing host".into())
+            })?;
+        if !allow_host(&host) {
+            return Err(SubscriptionError::FetchFailed(
+                "update download host is not allowed".into(),
+            ));
+        }
+        validate_subscription_url(&current)?;
+        let (host_header, addrs) = resolve_allowed_fetch_addrs(&current)?;
+        refuse_fake_ip_connect(&addrs)?;
+        let port = url_port(&current)?;
+        let path_query = crate::tls_fetch::url_path_query(&current)?;
+
+        let mut hop_err: Option<SubscriptionError> = None;
+        let mut redirected: Option<String> = None;
+        for addr in addrs {
+            match crate::tls_fetch::tls_download_pinned(
+                crate::tls_fetch::DownloadTarget {
+                    host: &host_header,
+                    port,
+                    ip: addr.ip(),
+                    path_query: &path_query,
+                    log_url: &current,
+                },
+                max_bytes,
+                dest,
+                &mut progress,
+            ) {
+                Ok(crate::tls_fetch::DownloadHop::Redirect(location)) => {
+                    let next = resolve_redirect_url(&current, &location)?;
+                    if url_is_https(&current) && !url_is_https(&next) {
+                        return Err(SubscriptionError::FetchFailed(
+                            "refusing https→http redirect downgrade".into(),
+                        ));
+                    }
+                    redirected = Some(next);
+                    hop_err = None;
+                    break;
+                }
+                Ok(crate::tls_fetch::DownloadHop::Saved) => return Ok(()),
+                Err(err) => hop_err = Some(err),
+            }
+        }
+        if let Some(next) = redirected {
+            if hop == MAX_REDIRECTS {
+                return Err(SubscriptionError::FetchFailed(
+                    "update download: too many redirects".into(),
+                ));
+            }
+            current = next;
+            continue;
+        }
+        return Err(hop_err
+            .unwrap_or_else(|| SubscriptionError::FetchFailed("update download failed".into())));
+    }
+    Err(SubscriptionError::FetchFailed(
+        "update download: too many redirects".into(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_direct_rejects_a_disallowed_host_before_connecting() {
+        let dest = std::env::temp_dir().join("ice-box-download-reject-test.apk");
+        let _ = std::fs::remove_file(&dest);
+        let err = download_direct(
+            "https://example.com/app.apk",
+            &dest,
+            1024,
+            |_| false,
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+        assert!(!dest.exists());
+    }
 
     #[test]
     fn resolve_redirect_relative_and_absolute() {

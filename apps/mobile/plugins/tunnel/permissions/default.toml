@@ -15,4 +15,5 @@ permissions = [
   "allow-open-network-settings",
   "allow-open-vpn-settings",
   "allow-open-https-url",
+  "allow-install-apk",
 ]

@@ -59,6 +59,7 @@ pub fn run() {
             commands::check_app_update,
             commands::record_app_update_check,
             commands::open_app_download,
+            commands::install_app_update,
             commands::request_battery_exemption,
             commands::open_network_settings,
             commands::open_vpn_settings,

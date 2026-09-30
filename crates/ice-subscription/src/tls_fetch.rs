@@ -141,6 +141,203 @@ fn tls_get_pinned_with_config(
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {e}")))
 }
 
+pub(crate) enum DownloadHop {
+    Redirect(String),
+    Saved,
+}
+
+pub(crate) struct DownloadTarget<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub ip: IpAddr,
+    pub path_query: &'a str,
+    pub log_url: &'a str,
+}
+
+/// HTTPS GET that writes a successful body to `dest`. Redirects return the
+/// Location and do not create the file. The body cap is the caller's, so a
+/// release APK can exceed the subscription fetch limit without raising it.
+pub(crate) fn tls_download_pinned(
+    target: DownloadTarget<'_>,
+    max_bytes: u64,
+    dest: &std::path::Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<DownloadHop, SubscriptionError> {
+    let DownloadTarget {
+        host,
+        port,
+        ip,
+        path_query,
+        log_url,
+    } = target;
+    let fail = |detail: String| {
+        SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: {detail}"))
+    };
+    let addr = SocketAddr::new(ip, port);
+    let mut stream = TcpStream::connect_timeout(&addr, FETCH_TIMEOUT)
+        .map_err(|e| fail(format!("connect: {e}")))?;
+    let _ = stream.set_read_timeout(Some(FETCH_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(FETCH_TIMEOUT));
+
+    let server_name = ServerName::try_from(host.to_string())
+        .map_err(|_| fail("invalid TLS server name".into()))?;
+    let config = tls_client_config()?;
+    let mut conn = rustls::ClientConnection::new(config, server_name)
+        .map_err(|e| fail(format!("tls: {e}")))?;
+    let mut tls = rustls::Stream::new(&mut conn, &mut stream);
+
+    let req = format!(
+        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\nAccept-Encoding: identity\r\n\r\n"
+    );
+    tls.write_all(req.as_bytes())
+        .map_err(|e| fail(format!("write: {e}")))?;
+
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let header_end = loop {
+        if buf.len() > MAX_HTTP_HEADER_BYTES {
+            return Err(fail("HTTP headers are too large".into()));
+        }
+        let n = tls.read(&mut tmp).map_err(|e| fail(format!("read: {e}")))?;
+        if n == 0 {
+            return Err(fail("response ended before HTTP headers".into()));
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos;
+        }
+    };
+    let prefetched = buf.split_off(header_end + 4);
+    let header_text =
+        std::str::from_utf8(&buf).map_err(|e| fail(format!("header not utf-8: {e}")))?;
+    let mut lines = header_text.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|part| part.parse().ok())
+        .ok_or_else(|| fail(format!("bad status line: {status_line}")))?;
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((key, value)) = line.split_once(':') {
+            headers.push((key.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let header = |name: &str| -> Option<&str> {
+        headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+
+    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        let location = header("location")
+            .ok_or_else(|| fail(format!("redirect HTTP {status} without Location")))?;
+        return Ok(DownloadHop::Redirect(location.to_string()));
+    }
+    if !(200..300).contains(&status) {
+        return Err(fail(format!("HTTP {status}")));
+    }
+    if header("Transfer-Encoding").is_some_and(|value| value.eq_ignore_ascii_case("chunked")) {
+        return Err(fail("chunked update downloads are not supported".into()));
+    }
+    let content_length = match header("Content-Length") {
+        Some(raw) => {
+            let len: u64 = raw
+                .parse()
+                .map_err(|_| fail(format!("invalid Content-Length: {raw}")))?;
+            if len == 0 || len > max_bytes {
+                return Err(fail(format!("body exceeds {max_bytes} bytes")));
+            }
+            Some(len)
+        }
+        None => None,
+    };
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| fail(format!("create download dir: {e}")))?;
+    }
+    let mut file =
+        std::fs::File::create(dest).map_err(|e| fail(format!("create download: {e}")))?;
+    let mut written: u64 = 0;
+    let take = match content_length {
+        Some(len) => prefetched.len().min(len as usize),
+        None => prefetched.len(),
+    };
+    if let Err(detail) = append_download_chunk(
+        &mut file,
+        &mut written,
+        &prefetched[..take],
+        max_bytes,
+        content_length,
+        progress,
+    ) {
+        let _ = std::fs::remove_file(dest);
+        return Err(fail(detail));
+    }
+    loop {
+        if content_length.is_some_and(|len| written >= len) {
+            break;
+        }
+        let n = match tls.read(&mut tmp) {
+            Ok(n) => n,
+            Err(err) => {
+                let _ = std::fs::remove_file(dest);
+                return Err(fail(format!("read: {err}")));
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        let take = match content_length {
+            Some(len) => n.min((len - written) as usize),
+            None => n,
+        };
+        if let Err(detail) = append_download_chunk(
+            &mut file,
+            &mut written,
+            &tmp[..take],
+            max_bytes,
+            content_length,
+            progress,
+        ) {
+            let _ = std::fs::remove_file(dest);
+            return Err(fail(detail));
+        }
+    }
+    if content_length.is_some_and(|len| written != len) || written == 0 {
+        let _ = std::fs::remove_file(dest);
+        return Err(fail("response truncated".into()));
+    }
+    if let Err(err) = file.sync_all() {
+        let _ = std::fs::remove_file(dest);
+        return Err(fail(format!("sync download: {err}")));
+    }
+    Ok(DownloadHop::Saved)
+}
+
+fn append_download_chunk(
+    file: &mut std::fs::File,
+    written: &mut u64,
+    chunk: &[u8],
+    max_bytes: u64,
+    content_length: Option<u64>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), String> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    let next = written.saturating_add(chunk.len() as u64);
+    if next > max_bytes || content_length.is_some_and(|len| next > len) {
+        return Err(format!("body exceeds {max_bytes} bytes"));
+    }
+    file.write_all(chunk)
+        .map_err(|e| format!("write download: {e}"))?;
+    *written = next;
+    progress(*written, content_length);
+    Ok(())
+}
+
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()

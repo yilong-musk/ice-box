@@ -82,7 +82,7 @@ export function UpdateCard({
   onCheckAppUpdatesChange: (enabled: boolean) => void;
   onCheck: () => void;
   onInstall: () => void;
-  /** Phone shell opens the APK in the system browser instead of installing it. */
+  /** Optional browser download. The phone shell installs the APK itself. */
   onDownload?: () => void;
 }) {
   const download = onDownload != null;
@@ -111,7 +111,7 @@ export function UpdateCard({
               {t("settings.updateAutoCheck")}
             </FieldLabel>
           </Field>
-          {download ? (
+          {isPhoneShell() ? (
             <p className="text-xs text-muted-foreground">
               {t("settings.updatePhoneDesc")}
             </p>

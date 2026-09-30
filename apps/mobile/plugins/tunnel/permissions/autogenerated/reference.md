@@ -16,6 +16,7 @@ Prepare, start, stop, and inspect the platform VPN tunnel.
 - `allow-open-network-settings`
 - `allow-open-vpn-settings`
 - `allow-open-https-url`
+- `allow-install-apk`
 
 ## Permission Table
 
@@ -48,6 +49,32 @@ Enables the device_status command without any pre-configured scope.
 <td>
 
 Denies the device_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:allow-install-apk`
+
+</td>
+<td>
+
+Enables the install_apk command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:deny-install-apk`
+
+</td>
+<td>
+
+Denies the install_apk command without any pre-configured scope.
 
 </td>
 </tr>

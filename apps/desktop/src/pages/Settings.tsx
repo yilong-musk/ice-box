@@ -227,18 +227,6 @@ export function Settings({
     }
   }
 
-  async function runUpdateDownload() {
-    setUpdateError(null);
-    setUpdateBusy(true);
-    try {
-      await api.openAppDownload();
-    } catch (e) {
-      setUpdateError(formatUpdateError(e));
-    } finally {
-      setUpdateBusy(false);
-    }
-  }
-
   async function runUpdateInstall() {
     setUpdateError(null);
     setUpdateBusy(true);
@@ -620,9 +608,6 @@ export function Settings({
               }}
               onCheck={() => void runUpdateCheck()}
               onInstall={() => void runUpdateInstall()}
-              onDownload={
-                isPhoneShell() ? () => void runUpdateDownload() : undefined
-              }
             />
           </div>
 

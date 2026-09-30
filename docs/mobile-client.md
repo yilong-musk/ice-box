@@ -36,8 +36,8 @@ phone:
 - logs and the subset of Settings that applies to a phone.
 
 Out of scope for the first release: Google Play, per-app routing, Quick
-Settings tile, speed in the notification, LAN sharing, and in-app APK
-installation. The design leaves room for each of them. The phone
+Settings tile, speed in the notification, and LAN sharing. The design leaves
+room for each of them. The phone
 does not auto-update subscriptions. A profile changes only when the user
 imports or refreshes it.
 
@@ -253,10 +253,11 @@ a libbox AAR built from the same pinned source tag:
 - Releases attach one `arm64-v8a` APK next to the desktop installers; the
   `x86_64` build is a development artifact and is not published. The Tauri
   updater plugin does not support Android. Phone Settings checks the same
-  GitHub `latest.json` the desktop updater uses and opens the arm64 APK in
-  the system browser. The app does not install the APK itself. The check is
-  a direct request, the same path as a subscription fetch, because the VPN
-  excludes this app.
+  GitHub `latest.json` the desktop updater uses, downloads that arm64 APK
+  inside the app, and hands it to the system package installer. The user
+  confirms the install. The check and the download are direct requests, the
+  same path as a subscription fetch, because the VPN excludes this app.
+  Redirects are limited to GitHub's release hosts.
 - The Android version code is derived from the semantic version, so every
   release installs over the previous one.
 

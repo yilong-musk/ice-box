@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Phone update check. The Tauri updater plugin does not support Android, so
-//! this reads the same GitHub `latest.json` the desktop updater uses and
-//! opens the arm64 APK in the system browser. The app does not install it.
+//! this reads the same GitHub `latest.json` the desktop updater uses, downloads
+//! the arm64 APK, and hands the file to the system installer.
 
 use chrono::{DateTime, Duration, Utc};
 use ice_config::{write_json_atomic, AppError, AppPaths, ErrorCode};
@@ -16,6 +16,12 @@ const CHECK_INTERVAL: Duration = Duration::hours(24);
 
 const ERR_UPDATE_CHECK_FAILED: ErrorCode = ErrorCode::UpdateCheckFailed;
 const ERR_UPDATE_FEED_UNAVAILABLE: ErrorCode = ErrorCode::UpdateFeedUnavailable;
+const ERR_UPDATE_INSTALL_FAILED: ErrorCode = ErrorCode::UpdateInstallFailed;
+
+/// Largest APK this client will download. The arm64 release is far smaller.
+const MAX_APK_BYTES: u64 = 128 * 1024 * 1024;
+
+pub const UPDATE_APK_NAME: &str = "ice-box-update.apk";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct UpdateCheckState {
@@ -243,6 +249,35 @@ pub fn cached_apk_url(paths: &AppPaths) -> Result<String, AppError> {
     })
 }
 
+pub fn update_apk_path(paths: &AppPaths) -> std::path::PathBuf {
+    paths.root().join("updates").join(UPDATE_APK_NAME)
+}
+
+/// GitHub release host, plus the asset CDN hosts a release download redirects to.
+pub fn update_host_allowed(host: &str) -> bool {
+    matches!(
+        host,
+        "github.com"
+            | "release-assets.githubusercontent.com"
+            | "objects.githubusercontent.com"
+            | "github-releases.githubusercontent.com"
+    )
+}
+
+pub fn download_apk(
+    url: &str,
+    dest: &std::path::Path,
+    progress: impl FnMut(u64, Option<u64>),
+) -> Result<(), AppError> {
+    ice_subscription::download_direct(url, dest, MAX_APK_BYTES, update_host_allowed, progress)
+        .map_err(map_download_error)
+}
+
+fn map_download_error(err: ice_subscription::SubscriptionError) -> AppError {
+    log::warn!("apk download failed: {}", err.redacted_display());
+    AppError::with_code(ERR_UPDATE_INSTALL_FAILED, "update download failed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +301,9 @@ mod tests {
         assert!(android_apk_url("0.1.16/../../evil").is_none());
         assert!(android_apk_url("0.1").is_none());
         assert!(android_apk_url("").is_none());
+        assert!(update_host_allowed("github.com"));
+        assert!(update_host_allowed("release-assets.githubusercontent.com"));
+        assert!(!update_host_allowed("example.com"));
     }
 
     #[test]

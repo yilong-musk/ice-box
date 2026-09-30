@@ -297,7 +297,7 @@ const zh = {
   "settings.updateInstall": "安装更新",
   "settings.updateDownload": "下载更新",
   "settings.updatePhoneDesc":
-    "检查会直接访问 GitHub，不经过 VPN。发现新版本后在系统浏览器里下载 APK，再由系统安装器安装。",
+    "检查会直接访问 GitHub，不经过 VPN。发现新版本后由应用下载 APK，再交给系统安装器确认。若系统要求，请先允许此应用安装未知应用。",
   "settings.updateCheckFailed":
     "无法检查更新。若 GitHub 无法直连，请先启动代理服务后再试。",
   "settings.updateCheckFailedPhone":
@@ -739,7 +739,7 @@ const en: Record<MessageKey, string> = {
   "settings.updateInstall": "Install Update",
   "settings.updateDownload": "Download Update",
   "settings.updatePhoneDesc":
-    "The check contacts GitHub directly and does not use the VPN. A newer version opens in the system browser; the system installer installs the APK.",
+    "The check contacts GitHub directly and does not use the VPN. A newer version is downloaded in the app and handed to the system installer. If Android asks, allow this app to install unknown apps.",
   "settings.updateCheckFailed":
     "Could not check for updates. If GitHub is unreachable, start the proxy service and try again.",
   "settings.updateCheckFailedPhone":
