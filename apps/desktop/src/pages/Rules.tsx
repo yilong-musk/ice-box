@@ -151,7 +151,10 @@ export function Rules({ onNavigate, active = true }: Props) {
 
   useEffect(() => {
     overviewRequestRef.current = null;
-    if (!active) nextGeneration();
+    if (!active) {
+      nextGeneration();
+      if (typeof api.releaseRuleSearch === "function") void api.releaseRuleSearch();
+    }
   }, [active, nextGeneration]);
 
   useEffect(() => {

@@ -14,8 +14,8 @@ use ice_config::{
     NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 use ice_core::{
-    proxy_delay, proxy_groups, GroupState, HealthEndpoints, TrafficDelta, TrafficMonitor,
-    TrafficSnapshot, DELAY_TEST_URL,
+    proxy_delay, proxy_group_heads, proxy_selected_now, GroupHead, HealthEndpoints, TrafficDelta,
+    TrafficMonitor, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_subscription::{
     read_index, redact_subscription_url_for_ui, SubscriptionManager, SubscriptionMeta,
@@ -31,8 +31,11 @@ use crate::status::{self, StatusResponse, TunnelPhase, TunnelView, VpnPermission
 pub struct MobileHost {
     paths: Option<AppPaths>,
     traffic: TrafficMonitor,
-    /// Short-lived Clash `GET /proxies`, shared by status and `list_nodes`.
-    groups_cache: Mutex<Option<(Instant, Vec<GroupState>)>>,
+    /// Live group exits (`now` only). Member tags stay on the profile.
+    groups_cache: Mutex<Option<(Instant, Vec<GroupHead>)>>,
+    /// Home's selected exit, so a status poll does not fetch the proxy map.
+    now_cache: Mutex<Option<(Instant, String, String)>>,
+    now_fetch: Mutex<()>,
 }
 
 const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
@@ -43,6 +46,8 @@ impl MobileHost {
             paths: None,
             traffic: TrafficMonitor::new(),
             groups_cache: Mutex::new(None),
+            now_cache: Mutex::new(None),
+            now_fetch: Mutex::new(()),
         }
     }
 
@@ -186,7 +191,7 @@ impl MobileHost {
         let settings = load_settings(&paths.settings())?;
         let selections = load_group_selections(&paths.group_selections());
         let groups = if live {
-            self.cached_groups(&settings)
+            self.cached_group_heads(&settings)
         } else {
             None
         };
@@ -206,9 +211,11 @@ impl MobileHost {
                     "selector" | "urltest" | "fallback" | "loadbalance"
                 );
                 let members = member_tags(&outbound.outbound);
-                let live_group = groups
+                let live_now = groups
                     .as_ref()
-                    .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag));
+                    .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag))
+                    .map(|group| group.now.clone())
+                    .filter(|now| !now.is_empty());
                 let static_now = if ty == "selector" {
                     selections
                         .get(&outbound.tag)
@@ -227,16 +234,8 @@ impl MobileHost {
                 NodeInfo {
                     tag: outbound.tag.clone(),
                     outbound_type: ty,
-                    group_now: live_group
-                        .map(|group| group.now.clone())
-                        .filter(|now| !now.is_empty())
-                        .or(static_now)
-                        .filter(|_| is_group),
-                    group_all: if is_group {
-                        Some(live_group.map(|group| group.all.clone()).unwrap_or(members))
-                    } else {
-                        None
-                    },
+                    group_now: live_now.or(static_now).filter(|_| is_group),
+                    group_all: if is_group { Some(members) } else { None },
                 }
             })
             .collect())
@@ -508,7 +507,7 @@ impl MobileHost {
         ));
     }
 
-    fn cached_groups(&self, settings: &AppSettings) -> Option<Vec<GroupState>> {
+    fn cached_group_heads(&self, settings: &AppSettings) -> Option<Vec<GroupHead>> {
         {
             let slot = self
                 .groups_cache
@@ -521,12 +520,59 @@ impl MobileHost {
             }
         }
         let endpoints = self.endpoints(settings).ok()?;
-        let groups = proxy_groups(&endpoints).ok()?;
+        let groups = proxy_group_heads(&endpoints).ok()?;
         *self
             .groups_cache
             .lock()
             .unwrap_or_else(|err| err.into_inner()) = Some((Instant::now(), groups.clone()));
         Some(groups)
+    }
+
+    /// One group's live exit. Does not fetch or retain the proxy map.
+    fn cached_selected_now(&self, settings: &AppSettings, tag: &str) -> Option<String> {
+        {
+            let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some((at, cached_tag, now)) = slot.as_ref() {
+                if cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty() {
+                    return Some(now.clone());
+                }
+            }
+        }
+        {
+            let slot = self
+                .groups_cache
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if let Some((at, groups)) = slot.as_ref() {
+                if at.elapsed() < PROXY_GROUPS_TTL {
+                    if let Some(now) = groups
+                        .iter()
+                        .find(|group| group.tag == tag)
+                        .map(|group| group.now.clone())
+                        .filter(|now| !now.is_empty())
+                    {
+                        return Some(now);
+                    }
+                }
+            }
+        }
+        let _fetch = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        {
+            let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some((at, cached_tag, now)) = slot.as_ref() {
+                if cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty() {
+                    return Some(now.clone());
+                }
+            }
+        }
+        let endpoints = self.endpoints(settings).ok()?;
+        let now = proxy_selected_now(&endpoints, tag).ok()?;
+        if now.is_empty() {
+            return None;
+        }
+        *self.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), tag.to_string(), now.clone()));
+        Some(now)
     }
 
     /// Home's exit line. Member lists stay on `list_nodes`.
@@ -539,13 +585,6 @@ impl MobileHost {
         };
         let settings = load_settings(&paths.settings()).ok();
         let selections = load_group_selections(&paths.group_selections());
-        let groups = if live {
-            settings
-                .as_ref()
-                .and_then(|settings| self.cached_groups(settings))
-        } else {
-            None
-        };
         let outbounds: Vec<_> = profile.groups.iter().chain(profile.nodes.iter()).collect();
         if outbounds.is_empty() {
             return (false, None);
@@ -588,13 +627,15 @@ impl MobileHost {
         } else {
             None
         };
-        let group_now = groups
-            .as_ref()
-            .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag))
-            .map(|group| group.now.clone())
-            .filter(|now| !now.is_empty())
-            .or(static_now)
-            .filter(|_| is_group);
+        let group_now = if live && is_group {
+            settings
+                .as_ref()
+                .and_then(|settings| self.cached_selected_now(settings, &outbound.tag))
+        } else {
+            None
+        }
+        .or(static_now)
+        .filter(|_| is_group);
         (
             true,
             Some(status::SelectedOutbound {
@@ -635,6 +676,9 @@ impl MobileHost {
 
 fn load_overrides(paths: &AppPaths, profile: &NormalizedProfile) -> RuleOverrides {
     let mut overrides = load_rule_overrides(&paths.rule_overrides());
+    if !overrides.has_legacy_disabled_fingerprints() {
+        return overrides;
+    }
     let mut rules = profile.route.rules.clone();
     rules.extend(overrides.custom.clone());
     if overrides.migrate_legacy_fingerprints(rules.iter()) {

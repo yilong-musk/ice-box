@@ -227,7 +227,22 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       if (!snap) return;
       snapWallRef.current = Date.now();
       setSelectedTag((prev) => (prev === snap.selectedTag ? prev : snap.selectedTag));
-      setNodes((prev) => (nodesEqual(prev, snap.nodes) ? prev : snap.nodes));
+      // The snapshot is the full node list. Home only needs the selected row,
+      // without its member list, to label an in-flight switch.
+      setNodes((prev) => {
+        const node = snap.nodes.find((item) => item.tag === snap.selectedTag);
+        const next = node
+          ? [
+              {
+                tag: node.tag,
+                outbound_type: node.outbound_type,
+                group_now: node.group_now ?? null,
+                group_all: null,
+              },
+            ]
+          : [];
+        return nodesEqual(prev, next) ? prev : next;
+      });
       const current = settingsRef.current;
       if (current && current.selected_tag !== snap.selectedTag) {
         settingsRef.current = { ...current, selected_tag: snap.selectedTag };

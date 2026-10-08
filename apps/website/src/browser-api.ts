@@ -192,6 +192,8 @@ export const api = {
     };
   },
   async setHomeActive(): Promise<void> {},
+  async releaseLogView(): Promise<void> {},
+  async releaseRuleSearch(): Promise<void> {},
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },
   async restoreLaunchProxy(): Promise<void> {
     await delay();

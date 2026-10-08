@@ -127,6 +127,15 @@ impl RuleOverrides {
         }
     }
 
+    /// Older `rules.json` files stored the rule's canonical JSON. Current
+    /// fingerprints are `sha256:…`. Callers skip walking the rule list when
+    /// this is false.
+    pub fn has_legacy_disabled_fingerprints(&self) -> bool {
+        self.disabled
+            .iter()
+            .any(|fingerprint| !fingerprint.starts_with("sha256:"))
+    }
+
     /// Rewrite legacy canonical-JSON fingerprints to SHA-256. Returns true
     /// when the set changed and should be persisted.
     pub fn migrate_legacy_fingerprints<'a>(
@@ -206,6 +215,15 @@ mod tests {
         o.set_disabled(serde_json::to_string(&rule).unwrap(), true);
         assert!(o.is_rule_disabled(&rule));
         assert!(!o.is_rule_disabled(&json!({ "domain": ["b.com"] })));
+        assert!(o.has_legacy_disabled_fingerprints());
+    }
+
+    #[test]
+    fn sha256_fingerprints_do_not_need_a_legacy_walk() {
+        let mut overrides = RuleOverrides::default();
+        let rule = json!({ "domain_suffix": ["a.com"], "outbound": "direct" });
+        overrides.set_rule_disabled(&rule, true);
+        assert!(!overrides.has_legacy_disabled_fingerprints());
     }
 
     #[test]

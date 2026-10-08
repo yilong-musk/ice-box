@@ -16,8 +16,9 @@ pub use binary::{
     binary_in_target_root, current_target_dir, resolve_singbox_binary, BUNDLED_SINGBOX_VERSION,
 };
 pub use clash_api::{
-    get_mode, proxy_delay, proxy_groups, select_group, select_outbound, set_mode, traffic_sample,
-    GroupState, TrafficSample, DELAY_TEST_URL, SELECTOR_TAG,
+    get_mode, proxy_delay, proxy_group_heads, proxy_groups, proxy_selected_now, select_group,
+    select_outbound, set_mode, traffic_sample, GroupHead, GroupState, TrafficSample,
+    DELAY_TEST_URL, SELECTOR_TAG,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use clash_api::{MockClashApi, RecordedRequest};

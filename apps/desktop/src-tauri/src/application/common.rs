@@ -20,8 +20,9 @@ pub(crate) use ice_config::{
     SettingsPatch, TrayDisplayMode, UiMessage,
 };
 pub(crate) use ice_core::{
-    pid_is_alive, proxy_delay, proxy_groups, read_pid, select_group, select_outbound, CoreState,
-    CoreStatus, HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
+    pid_is_alive, proxy_delay, proxy_group_heads, proxy_selected_now, read_pid, select_group,
+    select_outbound, CoreState, CoreStatus, GroupHead, HealthEndpoints, TrafficDelta,
+    TrafficSnapshot, DELAY_TEST_URL,
 };
 pub(crate) use ice_engine::{
     active_subscription, host_platform, redact_subscription_url_for_log,
@@ -333,6 +334,25 @@ impl ProfileCacheEntry {
         *slot = Some(texts.clone());
         texts
     }
+
+    pub(crate) fn clear_keyword_texts(&self) {
+        let mut slot = self
+            .keyword_text
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = None;
+    }
+}
+
+/// Drop the lowercase rule index. It is a few megabytes and is only needed
+/// while the Rules page is searching.
+pub(crate) fn drop_rule_keyword_cache(state: &AppState) {
+    let Ok(cache) = state.profile_cache.lock() else {
+        return;
+    };
+    if let Some(entry) = cache.as_ref() {
+        entry.clear_keyword_texts();
+    }
 }
 
 pub(crate) type LogViewCache = crate::log_view::LogViewReader;
@@ -567,15 +587,23 @@ pub(crate) fn broadcast_state_change(app: &impl AppHost) {
 /// a fresh syscall on every 10s status poll; a core start/stop still resamples.
 const MEMORY_REFRESH: Duration = Duration::from_secs(30);
 
-/// Shared `GET /proxies` result. The Home status poll, the Nodes page, and the
-/// tray each used to parse this document on their own clock.
+/// Shared live group exits (`now` only). Member tags stay on the profile.
+/// Home does not use this document: it reads one group's `now`.
 pub(crate) const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
 
 struct CachedGroups {
     endpoints: HealthEndpoints,
     generation: u64,
     fetched_at: Instant,
-    groups: Arc<Vec<ice_core::GroupState>>,
+    groups: Arc<Vec<GroupHead>>,
+}
+
+struct CachedNow {
+    endpoints: HealthEndpoints,
+    generation: u64,
+    tag: String,
+    fetched_at: Instant,
+    now: String,
 }
 
 struct CachedMemory {
@@ -590,7 +618,12 @@ pub struct LiveCache {
     groups: Mutex<Option<CachedGroups>>,
     /// Single-flight fetch. Never held by a status read that is not refreshing.
     groups_fetch: Mutex<()>,
-    /// Home is the visible tab. Only then does a status poll refresh `/proxies`.
+    selected_now: Mutex<Option<CachedNow>>,
+    /// Single-flight fetch of one group's `now`. Separate from `groups_fetch`
+    /// so Home does not queue behind a full proxy-map read.
+    now_fetch: Mutex<()>,
+    /// Home is the visible tab. Only then does a status poll refresh the
+    /// selected group's `now`.
     home_interest: AtomicBool,
     memory: Mutex<Option<CachedMemory>>,
 }
@@ -603,6 +636,22 @@ impl LiveCache {
     pub(crate) fn home_interest(&self) -> bool {
         self.home_interest.load(Ordering::Relaxed)
     }
+
+    #[cfg(test)]
+    pub(crate) fn seed_group_heads_for_test(
+        &self,
+        endpoints: HealthEndpoints,
+        generation: u64,
+        groups: Vec<GroupHead>,
+        age: Duration,
+    ) {
+        *self.groups.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedGroups {
+            endpoints,
+            generation,
+            fetched_at: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
+            groups: Arc::new(groups),
+        });
+    }
 }
 
 fn groups_match(hit: &CachedGroups, endpoints: &HealthEndpoints, generation: u64) -> bool {
@@ -611,13 +660,13 @@ fn groups_match(hit: &CachedGroups, endpoints: &HealthEndpoints, generation: u64
 
 /// `refresh` fetches when the sample is missing or older than [`PROXY_GROUPS_TTL`].
 /// A generation change never serves the previous core's groups. Fetch failure
-/// keeps the last sample for this core.
+/// keeps the last sample for this core. The sample is group exits only.
 pub(crate) fn load_proxy_groups(
     cache: &LiveCache,
     endpoints: &HealthEndpoints,
     generation: u64,
     refresh: bool,
-) -> Option<Arc<Vec<ice_core::GroupState>>> {
+) -> Option<Arc<Vec<GroupHead>>> {
     let cached = |slot: &Option<CachedGroups>| {
         slot.as_ref()
             .filter(|hit| groups_match(hit, endpoints, generation))
@@ -651,7 +700,7 @@ pub(crate) fn load_proxy_groups(
             }
         }
     }
-    match proxy_groups(endpoints) {
+    match proxy_group_heads(endpoints) {
         Ok(groups) => {
             let groups = Arc::new(groups);
             *cache.groups.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedGroups {
@@ -666,6 +715,96 @@ pub(crate) fn load_proxy_groups(
             tracing::debug!(%error, "clash /proxies refresh failed");
             let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
             cached(&slot)
+        }
+    }
+}
+
+fn now_hit_matches(
+    hit: &CachedNow,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    tag: &str,
+) -> bool {
+    hit.generation == generation && hit.tag == tag && &hit.endpoints == endpoints
+}
+
+fn now_from_groups(groups: &[GroupHead], tag: &str) -> Option<String> {
+    groups
+        .iter()
+        .find(|group| group.tag == tag)
+        .map(|group| group.now.clone())
+        .filter(|now| !now.is_empty())
+}
+
+/// The selected group's live exit.
+///
+/// A fresh group-head sample (Nodes or the tray) is reused. Otherwise Home
+/// fetches `GET /proxies/{tag}` and keeps only `now`. `refresh` is false when
+/// Home is not the visible tab: the last sample for this core is served and
+/// nothing is fetched.
+pub(crate) fn load_selected_now(
+    cache: &LiveCache,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    tag: &str,
+    refresh: bool,
+) -> Option<String> {
+    {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = slot.as_ref() {
+            if groups_match(hit, endpoints, generation)
+                && (hit.fetched_at.elapsed() < PROXY_GROUPS_TTL || !refresh)
+            {
+                if let Some(now) = now_from_groups(&hit.groups, tag) {
+                    return Some(now);
+                }
+            }
+        }
+    }
+    let cached_now = |slot: &Option<CachedNow>| {
+        slot.as_ref()
+            .filter(|hit| now_hit_matches(hit, endpoints, generation, tag))
+            .map(|hit| hit.now.clone())
+            .filter(|now| !now.is_empty())
+    };
+    {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|hit| {
+            now_hit_matches(hit, endpoints, generation, tag)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+        }) {
+            return cached_now(&slot);
+        }
+    }
+    if !refresh {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        return cached_now(&slot);
+    }
+    let _fetch = cache.now_fetch.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|hit| {
+            now_hit_matches(hit, endpoints, generation, tag)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+        }) {
+            return cached_now(&slot);
+        }
+    }
+    match proxy_selected_now(endpoints, tag) {
+        Ok(now) => {
+            *cache.selected_now.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedNow {
+                endpoints: endpoints.clone(),
+                generation,
+                tag: tag.to_string(),
+                fetched_at: Instant::now(),
+                now: now.clone(),
+            });
+            (!now.is_empty()).then_some(now)
+        }
+        Err(error) => {
+            tracing::debug!(%error, "clash proxy now refresh failed");
+            let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+            cached_now(&slot)
         }
     }
 }

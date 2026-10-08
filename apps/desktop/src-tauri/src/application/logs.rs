@@ -101,6 +101,14 @@ fn truncate_helper_core_log(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Drop the parsed log tails. Each source keeps up to a megabyte, and the
+/// Logs page is the only reader.
+pub(crate) fn drop_log_view_cache(state: &AppState) {
+    if let Ok(mut cache) = state.log_view_cache.lock() {
+        *cache = None;
+    }
+}
+
 pub(crate) fn get_log_view_use_case(
     state: &AppState,
     req: LogViewRequest,

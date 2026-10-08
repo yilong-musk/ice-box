@@ -47,6 +47,13 @@ export function Logs({ active = true }: { active?: boolean }) {
   }, [active, isStale, nextGeneration]);
 
   useEffect(() => {
+    if (active) return;
+    setLines([]);
+    lastTextRef.current = "";
+    if (typeof api.releaseLogView === "function") void api.releaseLogView();
+  }, [active]);
+
+  useEffect(() => {
     if (!active) return;
     nextGeneration();
     void refresh();

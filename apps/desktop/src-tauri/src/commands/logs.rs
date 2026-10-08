@@ -3,6 +3,13 @@
 use super::*;
 
 #[tauri::command]
+pub fn release_log_view(app: AppHandle) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        crate::application::drop_log_view_cache(state.inner());
+    }
+}
+
+#[tauri::command]
 pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<String>, AppError> {
     run_blocking("get_log_view", move || {
         let state = app.state::<AppState>();

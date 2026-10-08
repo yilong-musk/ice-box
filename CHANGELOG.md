@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Home no longer keeps the Clash proxy map in memory. The selected group's
+  live exit is one proxy read that stores `now` and drops the member list.
+  The Nodes page and the tray take member names from the profile, which
+  already holds them. Leaving Logs drops the parsed tails, leaving Rules
+  drops the keyword index, and a rules page copies only the visible rows.
+
 ## [0.1.20] - 2026-09-30
 
 ### Added

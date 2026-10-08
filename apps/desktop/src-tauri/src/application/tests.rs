@@ -320,6 +320,32 @@ fn proxy_posture_counts_live_recorded_or_tun_as_engaged() {
 }
 
 #[test]
+fn selected_now_reuses_a_fresh_group_head() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![ice_core::GroupHead {
+            tag: "proxy".into(),
+            now: "hk".into(),
+        }],
+        Duration::from_secs(0),
+    );
+    // A fresh head must answer without opening a Clash connection.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("hk")
+    );
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "missing", false).as_deref(),
+        None
+    );
+}
+
+#[test]
 fn collect_status_snapshots_stopped_core() {
     let state = temp_state_with_node("status");
     let status = collect_status(&state).expect("status");

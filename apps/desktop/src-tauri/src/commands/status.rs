@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// Home is the visible tab. Status polls refresh `GET /proxies` only then,
-/// so Logs and Settings do not parse the node map.
+/// Home is the visible tab. Status polls refresh the selected group's `now`
+/// only then, and they do not read the full proxy map.
 #[tauri::command]
 pub fn set_home_active(app: AppHandle, active: bool) {
     if let Some(state) = app.try_state::<crate::AppState>() {

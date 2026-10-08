@@ -437,6 +437,10 @@ export interface DesktopShellApi {
   setTrayUpdateAvailable(version: string | null): Promise<void>;
   /** Home is visible. Desktop status polls refresh live group `now` only then. */
   setHomeActive(active: boolean): Promise<void>;
+  /** Drop the parsed log tails. The Logs page is the only reader. */
+  releaseLogView(): Promise<void>;
+  /** Drop the lowercase rule index built for keyword search. */
+  releaseRuleSearch(): Promise<void>;
 }
 
 /** Shared views depend on this full contract. The mobile transport no-ops the desktop-only methods. */
