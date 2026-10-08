@@ -28,6 +28,7 @@ const unlisten = async () => () => {};
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
+  setHomeActive: async () => {},
   listSubscriptions: () => invoke<SubscriptionMeta[]>("list_subscriptions"),
   listNodes: () => invoke<NodeInfo[]>("list_nodes"),
   setSelectedNode: (tag: string) =>

@@ -128,6 +128,13 @@ pub struct DeviceGuidance {
 }
 
 #[derive(Clone, Serialize)]
+pub struct SelectedOutbound {
+    pub tag: String,
+    pub outbound_type: String,
+    pub group_now: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
 pub struct StatusResponse {
     revision: u64,
     sampled_at_ms: u64,
@@ -164,6 +171,8 @@ pub struct StatusResponse {
     private_dns_strict: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     always_on_vpn: Option<bool>,
+    has_nodes: bool,
+    selected_outbound: Option<SelectedOutbound>,
 }
 
 pub fn status_response(
@@ -172,6 +181,8 @@ pub fn status_response(
     memory_bytes: Option<u64>,
     subscription_count: usize,
     guidance: Option<DeviceGuidance>,
+    has_nodes: bool,
+    selected_outbound: Option<SelectedOutbound>,
 ) -> StatusResponse {
     let core_status = core_status_for(view.phase);
     let core_message = match view.phase {
@@ -234,6 +245,8 @@ pub fn status_response(
         battery_unrestricted: guidance.map(|item| item.battery_unrestricted),
         private_dns_strict: guidance.map(|item| item.private_dns_strict),
         always_on_vpn: guidance.map(|item| item.always_on_vpn),
+        has_nodes,
+        selected_outbound,
     }
 }
 
@@ -277,6 +290,8 @@ mod tests {
             None,
             Some(4096),
             2,
+            None,
+            false,
             None,
         );
         let json = serde_json::to_value(&status).expect("status");

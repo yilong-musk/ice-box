@@ -4,7 +4,8 @@
 //! tunnel process reads. Plugin calls stay in the commands.
 
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ice_config::{
     load_group_selections, load_rule_overrides, load_settings, redact_config_str, rule_fingerprint,
@@ -13,8 +14,8 @@ use ice_config::{
     NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 use ice_core::{
-    proxy_delay, proxy_groups, HealthEndpoints, TrafficDelta, TrafficMonitor, TrafficSnapshot,
-    DELAY_TEST_URL,
+    proxy_delay, proxy_groups, GroupState, HealthEndpoints, TrafficDelta, TrafficMonitor,
+    TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_subscription::{
     read_index, redact_subscription_url_for_ui, SubscriptionManager, SubscriptionMeta,
@@ -30,13 +31,18 @@ use crate::status::{self, StatusResponse, TunnelPhase, TunnelView, VpnPermission
 pub struct MobileHost {
     paths: Option<AppPaths>,
     traffic: TrafficMonitor,
+    /// Short-lived Clash `GET /proxies`, shared by status and `list_nodes`.
+    groups_cache: Mutex<Option<(Instant, Vec<GroupState>)>>,
 }
+
+const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
 
 impl MobileHost {
     pub fn new() -> Self {
         Self {
             paths: None,
             traffic: TrafficMonitor::new(),
+            groups_cache: Mutex::new(None),
         }
     }
 
@@ -79,12 +85,16 @@ impl MobileHost {
         let count = read_index(&SubscriptionPaths::from_app(&paths))
             .map(|index| index.items.len())
             .unwrap_or(0);
+        let live = view.phase == TunnelPhase::Connected;
+        let (has_nodes, selected_outbound) = self.outbound_summary(live);
         Ok(status::status_response(
             view,
             message,
             memory_bytes,
             count,
             guidance,
+            has_nodes,
+            selected_outbound,
         ))
     }
 
@@ -176,9 +186,7 @@ impl MobileHost {
         let settings = load_settings(&paths.settings())?;
         let selections = load_group_selections(&paths.group_selections());
         let groups = if live {
-            self.endpoints(&settings)
-                .ok()
-                .and_then(|endpoints| proxy_groups(&endpoints).ok())
+            self.cached_groups(&settings)
         } else {
             None
         };
@@ -498,6 +506,103 @@ impl MobileHost {
             HealthEndpoints::new(settings.clash_api_listen.clone(), settings.clash_api_port)
                 .with_secret(secret),
         ));
+    }
+
+    fn cached_groups(&self, settings: &AppSettings) -> Option<Vec<GroupState>> {
+        {
+            let slot = self
+                .groups_cache
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if let Some((at, groups)) = slot.as_ref() {
+                if at.elapsed() < PROXY_GROUPS_TTL {
+                    return Some(groups.clone());
+                }
+            }
+        }
+        let endpoints = self.endpoints(settings).ok()?;
+        let groups = proxy_groups(&endpoints).ok()?;
+        *self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some((Instant::now(), groups.clone()));
+        Some(groups)
+    }
+
+    /// Home's exit line. Member lists stay on `list_nodes`.
+    fn outbound_summary(&self, live: bool) -> (bool, Option<status::SelectedOutbound>) {
+        let Ok(profile) = self.profile() else {
+            return (false, None);
+        };
+        let Ok(paths) = self.paths() else {
+            return (false, None);
+        };
+        let settings = load_settings(&paths.settings()).ok();
+        let selections = load_group_selections(&paths.group_selections());
+        let groups = if live {
+            settings
+                .as_ref()
+                .and_then(|settings| self.cached_groups(settings))
+        } else {
+            None
+        };
+        let outbounds: Vec<_> = profile.groups.iter().chain(profile.nodes.iter()).collect();
+        if outbounds.is_empty() {
+            return (false, None);
+        }
+        let selected = settings
+            .as_ref()
+            .and_then(|settings| settings.selected_tag.as_deref())
+            .and_then(|tag| {
+                outbounds
+                    .iter()
+                    .copied()
+                    .find(|outbound| outbound.tag == tag)
+            })
+            .or_else(|| outbounds.first().copied());
+        let Some(outbound) = selected else {
+            return (false, None);
+        };
+        let ty = outbound
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let is_group = matches!(
+            ty.as_str(),
+            "selector" | "urltest" | "fallback" | "loadbalance"
+        );
+        let static_now = if ty == "selector" {
+            selections
+                .get(&outbound.tag)
+                .cloned()
+                .or_else(|| {
+                    outbound
+                        .outbound
+                        .get("default")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| member_tags(&outbound.outbound).into_iter().next())
+        } else {
+            None
+        };
+        let group_now = groups
+            .as_ref()
+            .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag))
+            .map(|group| group.now.clone())
+            .filter(|now| !now.is_empty())
+            .or(static_now)
+            .filter(|_| is_group);
+        (
+            true,
+            Some(status::SelectedOutbound {
+                tag: outbound.tag.clone(),
+                outbound_type: ty,
+                group_now,
+            }),
+        )
     }
 
     fn endpoints(&self, settings: &AppSettings) -> Result<HealthEndpoints, AppError> {

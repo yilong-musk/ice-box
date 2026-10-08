@@ -143,6 +143,46 @@ describe("runtime listener lifecycle", () => {
     view.unmount();
   });
 
+  it("keeps the same status object when only the clock and probe age change", async () => {
+    const base = {
+      revision: 1,
+      sampled_at_ms: 10,
+      diagnostics: { age_ms: 1, checked_at_ms: 2, stale: false, error: null },
+      subscription_count: 3,
+      memory: { app_bytes: 1, core_bytes: null, total_bytes: 1 },
+    };
+    mocks.getStatus.mockResolvedValue(base);
+    const captured: { store: RuntimeStore | null } = { store: null };
+    function Consumer() {
+      captured.store = useRuntimeStore();
+      return null;
+    }
+    const view = render(<RuntimeStoreProvider><Consumer /></RuntimeStoreProvider>);
+    await act(async () => {});
+    const first = captured.store!.status;
+    expect(first?.revision).toBe(1);
+    mocks.getStatus.mockResolvedValue({
+      ...base,
+      revision: 2,
+      sampled_at_ms: 99,
+      diagnostics: { age_ms: 40, checked_at_ms: 80, stale: false, error: null },
+    });
+    await act(async () => {
+      await captured.store!.refreshStatus();
+    });
+    expect(captured.store!.status).toBe(first);
+    mocks.getStatus.mockResolvedValue({
+      ...base,
+      memory: { app_bytes: 2, core_bytes: null, total_bytes: 2 },
+    });
+    await act(async () => {
+      await captured.store!.refreshStatus();
+    });
+    expect(captured.store!.status).not.toBe(first);
+    expect(captured.store!.status?.memory?.total_bytes).toBe(2);
+    view.unmount();
+  });
+
   it("still rejects responses from an earlier mutation generation", async () => {
     const captured: { store: RuntimeStore | null } = { store: null };
     function Consumer() {

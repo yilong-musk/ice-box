@@ -36,9 +36,10 @@ pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::path::Path;
 #[cfg(target_os = "windows")]
 pub(crate) use std::path::PathBuf;
-pub(crate) use std::sync::atomic::Ordering;
+pub(crate) use std::sync::atomic::{AtomicBool, Ordering};
 pub(crate) use std::sync::mpsc::SyncSender;
 pub(crate) use std::sync::{Arc, Mutex, MutexGuard};
+pub(crate) use std::time::Duration;
 pub(crate) use std::time::{Instant, SystemTime};
 pub(crate) use uuid::Uuid;
 
@@ -138,7 +139,7 @@ pub(crate) fn detach_traffic(state: &AppState) {
 ///
 /// Only the core (sing-box) and the app's main process are measured; WebView
 /// helpers and the privileged helper daemon are out of scope by design.
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct MemoryUsage {
     /// App main process memory; `None` when it cannot be read.
     pub app_bytes: Option<u64>,
@@ -152,7 +153,15 @@ pub struct MemoryUsage {
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Serialize)]
+/// The exit Home shows. Member lists stay on the Nodes page and the tray.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SelectedOutbound {
+    pub tag: String,
+    pub outbound_type: String,
+    pub group_now: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct StatusResponse {
     /// Monotonic publication revision of the entire committed runtime read.
     pub revision: u64,
@@ -214,6 +223,12 @@ pub struct StatusResponse {
     /// the TUN-on next-start desire. Always true on non-Windows hosts (no
     /// task concept there).
     pub tun_elevation_ready: bool,
+    /// The active profile has at least one outbound. Home uses this instead of
+    /// the full node list to choose the empty state.
+    pub has_nodes: bool,
+    /// Resolved exit for the Home row: settings tag, else the first outbound,
+    /// with a strategy group's live `now` when that cache is warm.
+    pub selected_outbound: Option<SelectedOutbound>,
 }
 
 /// Slow consistency fallback. Mutations and window activation invalidate the
@@ -548,18 +563,147 @@ pub(crate) fn broadcast_state_change(app: &impl AppHost) {
     app.state_changed();
 }
 
+/// How long a process-memory sample may be reused. The Home row does not need
+/// a fresh syscall on every 10s status poll; a core start/stop still resamples.
+const MEMORY_REFRESH: Duration = Duration::from_secs(30);
+
+/// Shared `GET /proxies` result. The Home status poll, the Nodes page, and the
+/// tray each used to parse this document on their own clock.
+pub(crate) const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
+
+struct CachedGroups {
+    endpoints: HealthEndpoints,
+    generation: u64,
+    fetched_at: Instant,
+    groups: Arc<Vec<ice_core::GroupState>>,
+}
+
+struct CachedMemory {
+    at: Instant,
+    running: bool,
+    usage: MemoryUsage,
+}
+
+/// Short-lived reads that status, nodes, and the tray share.
+#[derive(Default)]
+pub struct LiveCache {
+    groups: Mutex<Option<CachedGroups>>,
+    /// Single-flight fetch. Never held by a status read that is not refreshing.
+    groups_fetch: Mutex<()>,
+    /// Home is the visible tab. Only then does a status poll refresh `/proxies`.
+    home_interest: AtomicBool,
+    memory: Mutex<Option<CachedMemory>>,
+}
+
+impl LiveCache {
+    pub(crate) fn set_home_interest(&self, active: bool) {
+        self.home_interest.store(active, Ordering::Relaxed);
+    }
+
+    pub(crate) fn home_interest(&self) -> bool {
+        self.home_interest.load(Ordering::Relaxed)
+    }
+}
+
+fn groups_match(hit: &CachedGroups, endpoints: &HealthEndpoints, generation: u64) -> bool {
+    hit.generation == generation && &hit.endpoints == endpoints
+}
+
+/// `refresh` fetches when the sample is missing or older than [`PROXY_GROUPS_TTL`].
+/// A generation change never serves the previous core's groups. Fetch failure
+/// keeps the last sample for this core.
+pub(crate) fn load_proxy_groups(
+    cache: &LiveCache,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    refresh: bool,
+) -> Option<Arc<Vec<ice_core::GroupState>>> {
+    let cached = |slot: &Option<CachedGroups>| {
+        slot.as_ref()
+            .filter(|hit| groups_match(hit, endpoints, generation))
+            .map(|hit| hit.groups.clone())
+    };
+    let fresh = {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_ref()
+            .is_some_and(|hit| {
+                groups_match(hit, endpoints, generation)
+                    && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+            })
+            .then(|| cached(&slot))
+            .flatten()
+    };
+    if fresh.is_some() {
+        return fresh;
+    }
+    if !refresh {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        return cached(&slot);
+    }
+    let _fetch = cache.groups_fetch.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = slot.as_ref() {
+            if groups_match(hit, endpoints, generation)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+            {
+                return Some(hit.groups.clone());
+            }
+        }
+    }
+    match proxy_groups(endpoints) {
+        Ok(groups) => {
+            let groups = Arc::new(groups);
+            *cache.groups.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedGroups {
+                endpoints: endpoints.clone(),
+                generation,
+                fetched_at: Instant::now(),
+                groups: groups.clone(),
+            });
+            Some(groups)
+        }
+        Err(error) => {
+            tracing::debug!(%error, "clash /proxies refresh failed");
+            let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+            cached(&slot)
+        }
+    }
+}
+
 /// Memory of the app process plus the running core, when readable.
 ///
-/// Two lightweight syscalls per status poll, so no caching is needed.
-fn memory_usage(state: &AppState) -> MemoryUsage {
+/// Reused for [`MEMORY_REFRESH`] so a quiet status poll does not syscall.
+/// An unknown core figure while the core is running is not cached: the pid
+/// file often appears on the next poll.
+fn memory_usage(state: &AppState, running: bool) -> MemoryUsage {
+    // Hold the sample lock across the syscalls so parallel status polls share
+    // one reading instead of publishing two revisions for the same moment.
+    let mut slot = state
+        .live_cache
+        .memory
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = slot.as_ref() {
+        if hit.running == running && hit.at.elapsed() < MEMORY_REFRESH {
+            return hit.usage.clone();
+        }
+    }
     let app_bytes = crate::proc_memory::process_memory_bytes(std::process::id()).ok();
     let core_bytes = core_memory_bytes(state);
     let total_bytes = app_bytes.unwrap_or(0) + core_bytes.unwrap_or(0);
-    MemoryUsage {
+    let usage = MemoryUsage {
         app_bytes,
         core_bytes,
         total_bytes,
+    };
+    if !(running && usage.core_bytes.is_none()) {
+        *slot = Some(CachedMemory {
+            at: Instant::now(),
+            running,
+            usage: usage.clone(),
+        });
     }
+    usage
 }
 
 /// Core memory: only while the core is running and its pid file holds a live
@@ -629,6 +773,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         .as_ref()
         .map(|settings| state.capture.status(settings))
         .unwrap_or_else(|| state.capture.status(&ice_config::AppSettings::default()));
+    let (has_nodes, selected_outbound) = super::outbound_summary(state, settings.as_ref(), running);
     Ok(state.runtime_status.publish(StatusResponse {
         revision: 0,
         sampled_at_ms: crate::runtime_status::timestamp_ms(),
@@ -637,7 +782,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         workers: state.workers.statuses(),
         core: core_state,
         subscription_count: count,
-        memory: memory_usage(state),
+        memory: memory_usage(state, running),
         proxy_recovery_warning,
         system_proxy_applied,
         system_proxy_recorded,
@@ -657,6 +802,8 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tray_display_supported: cfg!(target_os = "macos"),
         helper_stale: probes.helper_stale,
         tun_elevation_ready: probes.tun_elevation_ready,
+        has_nodes,
+        selected_outbound,
     }))
 }
 

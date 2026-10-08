@@ -20,18 +20,23 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
     };
     let settings = current_settings(&state.paths)?;
     let selections = load_group_selections(&state.paths.group_selections());
-    let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
+    let core = state.core_snapshot.load();
+    let core_running = core.state.status == CoreStatus::Running;
     let live = if core_running {
         let endpoints = clash_endpoints(&state.paths, &settings)?;
-        proxy_groups(&endpoints).ok()
+        load_proxy_groups(&state.live_cache, &endpoints, core.generation, true)
     } else {
         None
     };
-    let live_by_tag: std::collections::HashMap<_, _> = live
-        .iter()
-        .flatten()
-        .map(|group| (group.tag.as_str(), group))
-        .collect();
+    let live_by_tag: std::collections::HashMap<&str, &ice_core::GroupState> = live
+        .as_ref()
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| (group.tag.as_str(), group))
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(entry
         .profile
         .groups
@@ -88,6 +93,107 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
             }
         })
         .collect())
+}
+
+const STRATEGY_GROUPS: &[&str] = &["selector", "urltest", "fallback", "loadbalance"];
+
+fn outbound_type_name(outbound: &NormalizedOutbound) -> String {
+    outbound
+        .outbound
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn static_group_now(
+    outbound: &NormalizedOutbound,
+    ty: &str,
+    selections: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    if ty != "selector" {
+        return None;
+    }
+    selections
+        .get(&outbound.tag)
+        .cloned()
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("default")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("outbounds")
+                .and_then(|value| value.as_array())
+                .and_then(|members| members.first())
+                .and_then(|member| member.as_str())
+                .map(str::to_string)
+        })
+}
+
+/// Home's one-line exit. Does not clone strategy-group member lists.
+pub(crate) fn outbound_summary(
+    state: &AppState,
+    settings: Option<&AppSettings>,
+    running: bool,
+) -> (bool, Option<SelectedOutbound>) {
+    let Ok(Some(entry)) = cached_profile(state) else {
+        return (false, None);
+    };
+    let outbounds: Vec<&NormalizedOutbound> = entry
+        .profile
+        .groups
+        .iter()
+        .chain(entry.profile.nodes.iter())
+        .collect();
+    if outbounds.is_empty() {
+        return (false, None);
+    }
+    let selected = settings
+        .and_then(|settings| settings.selected_tag.as_deref())
+        .and_then(|tag| {
+            outbounds
+                .iter()
+                .copied()
+                .find(|outbound| outbound.tag == tag)
+        })
+        .or_else(|| outbounds.first().copied());
+    let Some(outbound) = selected else {
+        return (false, None);
+    };
+    let ty = outbound_type_name(outbound);
+    let is_group = STRATEGY_GROUPS.iter().any(|group| *group == ty);
+    let selections = load_group_selections(&state.paths.group_selections());
+    let mut group_now = static_group_now(outbound, &ty, &selections);
+    if running && is_group {
+        if let Some(settings) = settings {
+            if let Ok(endpoints) = clash_endpoints(&state.paths, settings) {
+                let core = state.core_snapshot.load();
+                let refresh = state.live_cache.home_interest();
+                if let Some(groups) =
+                    load_proxy_groups(&state.live_cache, &endpoints, core.generation, refresh)
+                {
+                    if let Some(live) = groups.iter().find(|group| group.tag == outbound.tag) {
+                        if !live.now.is_empty() {
+                            group_now = Some(live.now.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (
+        true,
+        Some(SelectedOutbound {
+            tag: outbound.tag.clone(),
+            outbound_type: ty,
+            group_now: group_now.filter(|_| is_group),
+        }),
+    )
 }
 
 #[derive(Serialize)]

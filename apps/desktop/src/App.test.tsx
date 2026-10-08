@@ -317,10 +317,10 @@ describe("App", () => {
     const { container } = render(<App />);
     const view = within(container);
 
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
     await waitFor(() => {
       expect(listNodes).toHaveBeenCalled();
     });
-    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
     await waitFor(() => {
       expect(view.getByText("proxy-1")).toBeInTheDocument();
     });

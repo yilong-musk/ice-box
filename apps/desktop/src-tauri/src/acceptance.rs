@@ -240,6 +240,7 @@ mod tests {
             launch_proxy_restore_attempted: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
             ),
+            live_cache: crate::application::LiveCache::default(),
         });
 
         let bg = state.clone();

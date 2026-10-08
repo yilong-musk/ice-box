@@ -89,6 +89,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             false,
         )),
+        live_cache: crate::application::LiveCache::default(),
     }
 }
 
@@ -162,6 +163,7 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             false,
         )),
+        live_cache: crate::application::LiveCache::default(),
     }
 }
 
@@ -326,6 +328,14 @@ fn collect_status_snapshots_stopped_core() {
     assert_eq!(status.system_proxy_recorded, None);
     assert_eq!(status.system_proxy_applied, None);
     assert!(!status.system_proxy_available);
+    assert!(status.has_nodes);
+    let outbound = status.selected_outbound.expect("selected outbound");
+    assert_eq!(outbound.tag, "n1");
+    assert_eq!(outbound.outbound_type, "socks");
+    assert_eq!(outbound.group_now, None);
+    let again = collect_status(&state).expect("status");
+    assert_eq!(again.revision, status.revision);
+    assert_eq!(again.sampled_at_ms, status.sampled_at_ms);
     let _ = fs::remove_dir_all(state.paths.root());
 }
 
@@ -381,10 +391,11 @@ fn concurrent_status_reads_do_not_report_a_mutation() {
             })
         })
         .collect();
-    let mut revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    revisions.sort();
-    revisions.dedup();
-    assert_eq!(revisions.len(), 4);
+    let revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(
+        revisions.windows(2).all(|pair| pair[0] == pair[1]),
+        "quiet parallel reads share one committed revision, got {revisions:?}"
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }
 

@@ -28,9 +28,7 @@ import {
   nodesEqual,
   nodesSnapshotRevision,
   readNodesSnapshot,
-  resolveSelectedTag,
   subscribeNodesSnapshot,
-  writeNodesSnapshot,
 } from "../lib/nodes";
 import { TrafficChart } from "../components/TrafficChart";
 import { Button } from "@/components/ui/button";
@@ -85,6 +83,20 @@ function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   });
 }
 
+function formatSelectedOutbound(outbound: {
+  tag: string;
+  outbound_type: string;
+  group_now: string | null;
+}): string {
+  if (GROUP_TYPES.includes(outbound.outbound_type) && outbound.group_now) {
+    return t("home.outboundGroupNow", { tag: outbound.tag, now: outbound.group_now });
+  }
+  return t("home.outboundTyped", {
+    tag: outbound.tag,
+    type: outbound.outbound_type,
+  });
+}
+
 function formatCoreStatus(status: CoreStatus | undefined): string {
   switch (status) {
     case "running":
@@ -130,6 +142,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [copiedCliProxy, setCopiedCliProxy] = useState(false);
   const copiedCliProxyTimerRef = useRef<number | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
+  /** Wall time of the latest node-list snapshot. Compared with `sampled_at_ms`. */
+  const snapWallRef = useRef(0);
+  const homeActiveChainRef = useRef(Promise.resolve());
+
+  const noteStatus = useCallback((next: StatusResponse) => {
+    statusRef.current = next;
+    setStatus(next);
+    onStatus?.(next);
+  }, [onStatus]);
 
   const refresh = useCallback(
     async (
@@ -144,26 +165,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         const statusPromise = wantStatus
           ? api.getStatus()
           : Promise.resolve(null);
-        const nodesPromise = api.listNodes();
         const settingsPromise = wantSettings
           ? api.getSettings()
           : Promise.resolve(null);
 
-        const s = wantStatus ? await statusPromise : null;
-        if (gen !== pollGenRef.current || !activeRef.current) return;
-        if (s) {
-          statusRef.current = s;
-          setStatus(s);
-          onStatus?.(s);
-        }
-
-        const [n, nextSettings] = await Promise.all([
-          nodesPromise,
+        const [s, nextSettings] = await Promise.all([
+          statusPromise,
           settingsPromise,
         ]);
         if (gen !== pollGenRef.current || !activeRef.current) return;
-        const settings = nextSettings ?? settingsRef.current;
-        if (!settings) return;
 
         // A node switch may land while this fetch is in flight. Keep the
         // snapshot selection instead of regressing to stale settings.
@@ -177,6 +187,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             setSettings(settingsRef.current);
             setProxyMode(nextSettings.proxy_mode);
           }
+          if (s) noteStatus(s);
           if (!tunSaveRef.current) {
             setTunOverride(null);
           }
@@ -184,8 +195,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           return;
         }
 
-        const selected = resolveSelectedTag(settings.selected_tag, n);
-        setNodes(n);
+        if (s) noteStatus(s);
+        if (!nextSettings && !settingsRef.current) return;
         if (nextSettings) {
           settingsRef.current = nextSettings;
           setSettings(nextSettings);
@@ -194,14 +205,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         if (!tunSaveRef.current) {
           setTunOverride(null);
         }
-        setSelectedTag(selected);
-        const coreStatus =
-          s?.core.status ?? statusRef.current?.core.status ?? "stopped";
-        writeNodesSnapshot({
-          nodes: n,
-          selectedTag: selected,
-          running: coreStatus === "running",
-        });
         setError(null);
       } catch (e) {
         // Mode switch / power toggle reloads the core; ignore poll failures mid-flight.
@@ -216,12 +219,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         }
       }
     },
-    [],
+    [noteStatus],
   );
 
   useEffect(() => {
     return subscribeNodesSnapshot((snap) => {
       if (!snap) return;
+      snapWallRef.current = Date.now();
       setSelectedTag((prev) => (prev === snap.selectedTag ? prev : snap.selectedTag));
       setNodes((prev) => (nodesEqual(prev, snap.nodes) ? prev : snap.nodes));
       const current = settingsRef.current;
@@ -233,13 +237,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   useEffect(() => {
     if (!runtime?.status) return;
-    statusRef.current = runtime.status;
-    setStatus(runtime.status);
-    onStatus?.(runtime.status);
+    noteStatus(runtime.status);
     if (!tunSaveRef.current) {
       setTunOverride(null);
     }
-  }, [runtime?.status, onStatus]);
+  }, [runtime?.status, noteStatus]);
 
   // The tray menu can start/stop the service and switch the routing mode while
   // this page is on screen. The settings (mode) are otherwise read only on
@@ -256,7 +258,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           return;
         }
         pollGenRef.current += 1;
-        void refresh(pollGenRef.current, { settings: true });
+        void refresh(pollGenRef.current, {
+          settings: true,
+          status: runtimeRef.current == null,
+        });
       })
       .then((off) => {
         if (cancelled) off();
@@ -278,11 +283,31 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   useEffect(() => {
     activeRef.current = active;
-    pollGenRef.current += 1;
-    if (!active) return;
-    const gen = pollGenRef.current;
-    const shareStatus = runtime != null;
-    void refresh(gen, { settings: true, status: !shareStatus });
+    let cancelled = false;
+    const markHome = (visible: boolean) => {
+      if (typeof api.setHomeActive !== "function") return;
+      homeActiveChainRef.current = homeActiveChainRef.current.then(async () => {
+        try {
+          await api.setHomeActive(visible);
+        } catch {
+          // The website demo has no live group cache. Status still carries the exit.
+        }
+      });
+    };
+    markHome(active);
+    void (async () => {
+      await homeActiveChainRef.current;
+      if (cancelled) return;
+      pollGenRef.current += 1;
+      if (!active) return;
+      const gen = pollGenRef.current;
+      const shareStatus = runtimeRef.current != null;
+      if (shareStatus) {
+        await runtimeRef.current?.refreshStatus();
+        if (cancelled || gen !== pollGenRef.current) return;
+      }
+      void refresh(gen, { settings: true, status: !shareStatus });
+    })();
     const id = window.setInterval(() => {
       if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
         return;
@@ -291,14 +316,16 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       const rt = runtimeRef.current;
       if (rt && !rt.visible) return;
       pollGenRef.current += 1;
-      void refresh(pollGenRef.current, { status: !shareStatus });
+      void refresh(pollGenRef.current, { status: rt == null });
     }, RUNTIME_STATUS_FALLBACK_MS);
     return () => {
+      cancelled = true;
       activeRef.current = false;
       pollGenRef.current += 1;
       window.clearInterval(id);
+      markHome(false);
     };
-  }, [active, refresh, runtime != null]);
+  }, [active, refresh]);
 
   const core: CoreState | undefined = status?.core;
   const tunTransitioning =
@@ -416,13 +443,25 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
   const proxyOn = proxyLive || (proxyRecorded && running) || tunActive;
   const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
-  const outboundLabel =
-    nodes.length === 0
-      ? running
-        ? t("home.outboundDirect")
-        : t("common.dash")
-      : selectedTag
-        ? formatOutbound(selectedTag, nodes)
+  const statusOutbound = status?.selected_outbound ?? null;
+  // A selection that lands while a sample is in flight keeps the line. A later
+  // sample (the tray, or the next poll) replaces it once its timestamp is newer.
+  const snapshotWins =
+    nodes.length > 0 &&
+    selectedTag !== "" &&
+    snapWallRef.current > (status?.sampled_at_ms ?? 0) &&
+    selectedTag !== (statusOutbound?.tag ?? "");
+  const hasNodes = snapshotWins
+    ? true
+    : status?.has_nodes === true || statusOutbound != null;
+  const outboundLabel = !hasNodes
+    ? running
+      ? t("home.outboundDirect")
+      : t("common.dash")
+    : snapshotWins && selectedTag
+      ? formatOutbound(selectedTag, nodes)
+      : statusOutbound
+        ? formatSelectedOutbound(statusOutbound)
         : t("common.dash");
 
   const phone = isPhoneShell();
@@ -905,7 +944,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           <CardDescription>{t("home.trafficDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col">
-          {nodes.length === 0 && !running ? (
+          {!hasNodes && !running ? (
             <EmptyState
               framed={false}
               className="my-auto"
@@ -916,7 +955,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             />
           ) : (
             <>
-              {nodes.length === 0 ? (
+              {!hasNodes ? (
                 <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{emptyTitle}</p>

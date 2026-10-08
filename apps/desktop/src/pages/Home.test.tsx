@@ -166,16 +166,14 @@ describe("Home", () => {
       system_proxy_applied: true,
       system_proxy_recorded: true,
       system_proxy_available: true,
-      ...tunStatus,
-    });
-    listNodes.mockResolvedValue([
-      {
+      has_nodes: true,
+      selected_outbound: {
         tag: "Proxies",
         outbound_type: "selector",
         group_now: "HK-1",
-        group_all: ["HK-1", "JP-1"],
       },
-    ]);
+      ...tunStatus,
+    });
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -486,32 +484,46 @@ describe("Home", () => {
   });
 
   it("ignores a poll response that finishes after the pane is deactivated", async () => {
-    let resolveNodes: (value: unknown[]) => void = () => {};
-    listNodes.mockImplementationOnce(
+    let resolveStatus: (value: unknown) => void = () => {};
+    getStatus.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveNodes = resolve;
+          resolveStatus = resolve;
         }),
     );
-    const { rerender } = render(<Home active />);
+    const { container, rerender } = render(<Home active />);
+    const view = within(container);
 
     await waitFor(() => {
-      expect(listNodes).toHaveBeenCalled();
+      expect(getStatus).toHaveBeenCalled();
     });
     rerender(<Home active={false} />);
 
     await act(async () => {
-      resolveNodes([
-        {
+      resolveStatus({
+        core: {
+          status: "running",
+          message: null,
+          inbound_host: "127.0.0.1",
+          inbound_port: 17890,
+        },
+        subscription_count: 1,
+        proxy_recovery_warning: null,
+        system_proxy_applied: true,
+        system_proxy_recorded: true,
+        system_proxy_available: true,
+        has_nodes: true,
+        selected_outbound: {
           tag: "stale-node",
           outbound_type: "trojan",
           group_now: null,
-          group_all: null,
         },
-      ]);
+        ...tunStatus,
+      });
       await Promise.resolve();
     });
 
+    expect(view.queryByText(/stale-node/)).toBeNull();
     expect(readNodesSnapshot()).toBeUndefined();
   });
 
@@ -531,16 +543,24 @@ describe("Home", () => {
 
       expect(getSettings.mock.calls.length).toBe(settingsCalls);
       expect(getStatus.mock.calls.length).toBeGreaterThan(statusCalls);
+      expect(listNodes).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
   it("updates outbound when the shared node snapshot changes", async () => {
-    listNodes.mockResolvedValue([
-      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
-      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
-    ]);
+    getStatus.mockResolvedValue({
+      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: { tag: "node-a", outbound_type: "socks", group_now: null },
+      ...tunStatus,
+    });
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
       mixed_port: 17890,
@@ -595,7 +615,17 @@ describe("Home", () => {
       proxy_mode: "rule",
       tun: tunSettings,
     });
-    listNodes.mockResolvedValue(nodeList);
+    getStatus.mockResolvedValue({
+      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: { tag: "node-a", outbound_type: "socks", group_now: null },
+      ...tunStatus,
+    });
     getSettings.mockResolvedValue(settingsFor("node-a"));
 
     const { container, rerender } = render(<Home active />);
@@ -641,6 +671,55 @@ describe("Home", () => {
     expect(
       view.queryByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
     ).toBeNull();
+  });
+
+  it("lets a later status sample replace the shared node snapshot", async () => {
+    const statusFor = (tag: string, type: string, sampledAt: number) => ({
+      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+      sampled_at_ms: sampledAt,
+      has_nodes: true,
+      selected_outbound: { tag, outbound_type: type, group_now: null },
+      ...tunStatus,
+    });
+    getStatus.mockResolvedValue(statusFor("node-a", "socks", 1_000));
+
+    const { container } = render(<Home />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
+      ).toBeInTheDocument();
+    });
+
+    writeNodesSnapshot({
+      nodes: [
+        { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+        { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      ],
+      selectedTag: "node-b",
+      running: false,
+    });
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
+      ).toBeInTheDocument();
+    });
+
+    getStatus.mockResolvedValue(statusFor("node-c", "trojan", Date.now() + 60_000));
+    await act(async () => {
+      stateChangedHandler?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(
+        view.getByText(t("home.outboundTyped", { tag: "node-c", type: "trojan" })),
+      ).toBeInTheDocument();
+    });
   });
 
   it("switches proxy mode and reverts when it fails", async () => {

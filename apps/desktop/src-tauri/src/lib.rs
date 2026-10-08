@@ -154,6 +154,8 @@ pub struct AppState {
     /// The UI's post-paint capture restore runs once per process (StrictMode
     /// remounts must not enable system proxy / TUN twice).
     pub launch_proxy_restore_attempted: Arc<AtomicBool>,
+    /// Shared Clash group cache, Home interest flag, and the slow memory sample.
+    pub(crate) live_cache: application::LiveCache,
 }
 
 fn acquire_instance_lock(paths: &AppPaths, request_focus: bool) -> Result<std::fs::File, String> {
@@ -265,6 +267,7 @@ pub fn run() {
                 tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
                 launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
+                live_cache: application::LiveCache::default(),
             });
             {
                 let handle = app.handle().clone();
@@ -377,6 +380,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::set_home_active,
             commands::list_subscriptions,
             commands::start,
             commands::restore_launch_proxy,
