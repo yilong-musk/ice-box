@@ -154,10 +154,14 @@ function ChartTooltipContent({
     const [item] = payload
     const key = `${labelKey ?? item?.dataKey ?? item?.name ?? "value"}`
     const itemConfig = getPayloadConfigFromPayload(config, item, key)
+    // Numeric axis values (for example millisecond timestamps) must reach
+    // `labelFormatter`. String labels still resolve category names via config.
     const value =
-      !labelKey && typeof label === "string"
-        ? (config[label]?.label ?? label)
-        : itemConfig?.label
+      typeof label === "number"
+        ? label
+        : !labelKey && typeof label === "string"
+          ? (config[label]?.label ?? label)
+          : itemConfig?.label
 
     if (labelFormatter) {
       return (
