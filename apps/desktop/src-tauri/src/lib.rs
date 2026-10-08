@@ -125,11 +125,11 @@ pub struct AppState {
     /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
     /// the capture state machine, and the recovery journal.
     pub capture: CaptureController,
-    /// mtime-keyed cache of the active profile's nodes and groups. Rule and
-    /// DNS bodies are not kept here; read paths poll every 2-5s and must not
-    /// re-parse a multi-MB profile each time. Invalidated implicitly: the key
-    /// changes when the active subscription, its profile, or settings change
-    /// on disk.
+    /// mtime-keyed cache of the active profile's nodes and groups. Rules, DNS,
+    /// and outbound connection fields are not kept here; read paths poll every
+    /// 2-5s and must not re-parse a multi-MB profile each time. Invalidated
+    /// implicitly: the key changes when the active subscription, its profile,
+    /// or settings change on disk.
     pub profile_cache: Mutex<Option<application::ProfileCacheEntry>>,
     /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
     pub profile_parse_cache: Arc<ice_engine::ProfileCache>,

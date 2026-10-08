@@ -14,8 +14,10 @@ import {
   nodesEqual,
   nodesSnapshotRevision,
   readNodesSnapshot,
+  releaseNodeMemberLists,
   resolveSelectedTag,
   subscribeNodesSnapshot,
+  withoutGroupMembers,
   writeNodesSnapshot,
 } from "./nodes";
 
@@ -236,5 +238,36 @@ describe("applyGroupNowToNodes", () => {
 
   it("updates the named group's live exit", () => {
     expect(applyGroupNowToNodes(nodes, "组", "b")[0]?.group_now).toBe("b");
+  });
+});
+
+describe("releaseNodeMemberLists", () => {
+  it("drops member lists without looking like a node switch", () => {
+    clearNodesSnapshot();
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "组",
+          outbound_type: "selector",
+          group_now: "a",
+          group_all: ["a", "b"],
+        },
+        { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+      ],
+      selectedTag: "a",
+      running: true,
+    });
+    const revision = nodesSnapshotRevision();
+    releaseNodeMemberLists();
+    expect(nodesSnapshotRevision()).toBe(revision);
+    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
+    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("a");
+    expect(readNodesSnapshot()?.selectedTag).toBe("a");
+    releaseNodeMemberLists();
+    expect(nodesSnapshotRevision()).toBe(revision);
+    expect(withoutGroupMembers(readNodesSnapshot()?.nodes ?? [])).toBe(
+      readNodesSnapshot()?.nodes,
+    );
+    clearNodesSnapshot();
   });
 });

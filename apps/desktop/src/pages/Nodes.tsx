@@ -42,7 +42,9 @@ import {
   isGroupType,
   nodesEqual,
   readNodesSnapshot,
+  releaseNodeMemberLists,
   resolveSelectedTag,
+  withoutGroupMembers,
   writeNodesSnapshot,
   type DelayCell,
 } from "../lib/nodes";
@@ -96,6 +98,7 @@ function delayBadge(delay: DelayCell) {
 }
 
 const EMPTY_DELAYS: Record<string, DelayCell> = {};
+const EMPTY_LAYOUT: ReturnType<typeof nodeLayout> = { rows: [], height: 0 };
 /** Probes in flight during one delay test: a few nodes at a time keeps a long
  * list moving without flooding the core or the upstream links. The macOS tray
  * menu's delay test runs the same pool (`MAX_PROBES_IN_FLIGHT` in
@@ -425,7 +428,10 @@ export function Nodes({ onNavigate, active = true }: Props) {
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
   const listVisible = active && (runtime?.visible ?? true);
-  const layout = useMemo(() => nodeLayout(nodes, expandedGroups), [nodes, expandedGroups]);
+  const layout = useMemo(
+    () => (listVisible ? nodeLayout(nodes, expandedGroups) : EMPTY_LAYOUT),
+    [listVisible, nodes, expandedGroups],
+  );
   const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
   const updateViewport = useCallback(() => {
     const el = viewportRef.current;
@@ -507,6 +513,14 @@ export function Nodes({ onNavigate, active = true }: Props) {
       unlisten();
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (active) return;
+    setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
+    setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setNodes((prev) => withoutGroupMembers(prev));
+    releaseNodeMemberLists();
+  }, [active]);
 
   useEffect(() => {
     activeRef.current = active;

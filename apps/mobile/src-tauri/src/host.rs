@@ -18,8 +18,8 @@ use ice_core::{
     TrafficMonitor, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_subscription::{
-    read_index, redact_subscription_url_for_ui, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths,
+    read_index, redact_subscription_url_for_ui, ProfileCache, SubscriptionError,
+    SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -31,6 +31,9 @@ use crate::status::{self, StatusResponse, TunnelPhase, TunnelView, VpnPermission
 pub struct MobileHost {
     paths: Option<AppPaths>,
     traffic: TrafficMonitor,
+    /// Parsed active profile without rules, DNS, or connection fields.
+    /// Status polls reuse it instead of re-reading the subscription file.
+    profile_cache: ProfileCache,
     /// Live group exits (`now` only). Member tags stay on the profile.
     groups_cache: Mutex<Option<(Instant, Vec<GroupHead>)>>,
     /// Home's selected exit, so a status poll does not fetch the proxy map.
@@ -45,6 +48,7 @@ impl MobileHost {
         Self {
             paths: None,
             traffic: TrafficMonitor::new(),
+            profile_cache: ProfileCache::new(),
             groups_cache: Mutex::new(None),
             now_cache: Mutex::new(None),
             now_fetch: Mutex::new(()),
@@ -440,7 +444,7 @@ impl MobileHost {
 
     pub fn set_rule_disabled(&mut self, fingerprint: &str, disabled: bool) -> Result<(), AppError> {
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         match find_rule(&profile, &overrides, fingerprint) {
             Some(rule) => overrides.set_rule_disabled(&rule, disabled),
@@ -459,7 +463,7 @@ impl MobileHost {
             ));
         }
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         let fingerprint = rule_fingerprint(&rule);
         overrides.custom.push(rule);
@@ -469,7 +473,7 @@ impl MobileHost {
 
     pub fn remove_custom_rule(&mut self, fingerprint: &str) -> Result<(), AppError> {
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         overrides.remove_custom(fingerprint);
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
@@ -661,14 +665,35 @@ impl MobileHost {
         ))
     }
 
+    /// Tags, types, and group members. Connection fields stay on disk.
     fn profile(&self) -> Result<Arc<NormalizedProfile>, AppError> {
+        let paths = self.paths()?;
+        let settings = load_settings(&paths.settings())?;
+        let sub_paths = SubscriptionPaths::from_app(paths);
+        let index = read_index(&sub_paths)?;
+        match self.profile_cache.load_resident(
+            &sub_paths,
+            &index,
+            settings.auto_default_rules,
+            PLATFORM,
+        ) {
+            Ok(profile) => Ok(profile),
+            Err(SubscriptionError::NoActiveSubscription) => {
+                Ok(Arc::new(NormalizedProfile::from_nodes_only(vec![])))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Rules and connection fields. Not kept in [`Self::profile_cache`].
+    fn full_profile(&self) -> Result<Arc<NormalizedProfile>, AppError> {
         let paths = self.paths()?;
         let settings = load_settings(&paths.settings())?;
         config::active_profile(paths, settings.auto_default_rules)
     }
 
     fn rules_state(&self) -> Result<(Arc<NormalizedProfile>, RuleOverrides), AppError> {
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let overrides = load_overrides(self.paths()?, &profile);
         Ok((profile, overrides))
     }

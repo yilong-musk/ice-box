@@ -338,13 +338,13 @@ impl RulePage {
     }
 }
 
-/// Cached nodes and groups for the active profile. Rule and DNS bodies are
-/// not retained here; see [`ProfileCacheEntry::rule_page`].
+/// Cached nodes and groups for the active profile. Rule bodies, DNS, and
+/// outbound connection fields are not retained here; see
+/// [`ProfileCacheEntry::rule_page`].
 #[derive(Clone)]
 pub struct ProfileCacheEntry {
     sig: ProfileSig,
     pub profile: Arc<NormalizedProfile>,
-    node_tags: Arc<std::collections::HashSet<String>>,
     rule_page: Arc<Mutex<Option<Arc<RulePage>>>>,
 }
 
@@ -434,9 +434,10 @@ pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
 /// Load the active profile from a mtime-keyed cache. `Ok(None)` when no active
 /// subscription exists.
 ///
-/// The cached profile has nodes, groups, and rule-set metadata. `route.rules`
-/// and `dns` are not retained; config generation re-reads them, and the Rules
-/// page loads them into [`ProfileCacheEntry::rule_page`].
+/// The cached profile has node tags, outbound types, group members, and
+/// rule-set metadata. `route.rules`, `dns`, and connection fields (server,
+/// keys, transport) are not retained; config generation re-reads them, and
+/// the Rules page loads rules into [`ProfileCacheEntry::rule_page`].
 pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntry>, AppError> {
     let sub_paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
@@ -481,7 +482,6 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     };
     let entry = ProfileCacheEntry {
         sig,
-        node_tags: Arc::new(profile.all_outbounds().map(|o| o.tag.clone()).collect()),
         profile,
         rule_page: Arc::new(Mutex::new(None)),
     };
@@ -508,7 +508,11 @@ pub(crate) fn merged_outbounds_opt(
 pub(crate) fn require_known_node_tag(state: &AppState, tag: &str) -> Result<(), AppError> {
     let entry = cached_profile(state)?
         .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))?;
-    if !entry.node_tags.contains(tag) {
+    if !entry
+        .profile
+        .all_outbounds()
+        .any(|outbound| outbound.tag == tag)
+    {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             format!("unknown node tag: {tag}"),

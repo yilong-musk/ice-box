@@ -64,6 +64,30 @@ export function clearNodesSnapshot(): void {
   notifySnapshot();
 }
 
+/** Drop strategy-group member lists. Tags and the live exit stay. */
+export function withoutGroupMembers(nodes: NodeInfo[]): NodeInfo[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.group_all == null) return node;
+    changed = true;
+    return { ...node, group_all: null };
+  });
+  return changed ? next : nodes;
+}
+
+/**
+ * Free member lists kept for the Nodes page. Does not bump the snapshot
+ * revision: Home treats a revision change as a node switch.
+ */
+export function releaseNodeMemberLists(): void {
+  const snap = nodesSnapshot;
+  if (snap == null) return;
+  const nodes = withoutGroupMembers(snap.nodes);
+  if (nodes === snap.nodes) return;
+  nodesSnapshot = { ...snap, nodes };
+  notifySnapshot();
+}
+
 export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;

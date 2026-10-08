@@ -705,6 +705,17 @@ fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
     );
     assert!(entry.profile.dns.is_none());
     assert!(
+        entry.profile.nodes[0].outbound.get("server").is_none(),
+        "status and the tray must not retain node connection fields"
+    );
+    assert_eq!(
+        entry.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
+    assert!(
         !subscription_rules_retained(&state),
         "rules stay on disk until the Rules page reads them"
     );
@@ -731,6 +742,44 @@ fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
     .unwrap();
     assert_eq!(listed.total, 4);
     assert!(subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn config_build_reloads_connection_fields_then_releases_them() {
+    let state = temp_state_with_node("resident-build");
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(entry.profile.nodes[0].outbound.get("server").is_none());
+
+    let settings = ice_config::load_settings(&state.paths.settings()).unwrap();
+    crate::orchestrate::generate_config_with_cache(
+        &state.paths,
+        &settings,
+        None,
+        ice_config::CaptureIntent::Diagnostic,
+        Some(state.profile_parse_cache.as_ref()),
+    )
+    .unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.paths.config()).unwrap()).unwrap();
+    let node = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "n1")
+        .expect("generated node");
+    assert_eq!(node["server"], "1.1.1.1");
+
+    let after = cached_profile(&state).unwrap().unwrap();
+    assert!(after.profile.nodes[0].outbound.get("server").is_none());
+    assert_eq!(
+        after.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }
 

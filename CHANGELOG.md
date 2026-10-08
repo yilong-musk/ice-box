@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   DNS block in memory. Config generation reads them and releases them when
   the build finishes. The Rules page loads its own copy, and leaving that
   page drops the rules, their fingerprints, and the keyword index.
+- The running app no longer keeps each node's server, key, and transport
+  fields in memory. Leaves of one protocol share a single type value. Groups
+  keep their member names and default. Config generation reads the full
+  outbound again and releases it when the build finishes. Leaving Nodes drops
+  those member lists from the page, and the tag set used for delay probes is
+  no longer a second copy of every name. The phone host keeps this slim
+  profile between status polls instead of parsing the subscription again on
+  each one.
 
 ## [0.1.20] - 2026-09-30
 
