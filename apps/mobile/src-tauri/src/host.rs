@@ -268,6 +268,37 @@ impl MobileHost {
         Ok(())
     }
 
+    /// Remember the group exit for a node pick after the tunnel has applied it.
+    pub(crate) fn record_selected_exit(&self, tag: &str) {
+        let Ok(profile) = self.profile() else {
+            return;
+        };
+        if let Some(group) = selection_group_for(&profile, tag) {
+            self.record_group_now(&group, tag);
+        }
+    }
+
+    /// Remember a selector member after the tunnel has applied it.
+    ///
+    /// `list_nodes` prefers a fresh proxy sample over the saved selection, so
+    /// leaving the previous `now` in place shows the old exit for
+    /// [`PROXY_GROUPS_TTL`].
+    pub(crate) fn record_group_now(&self, tag: &str, now: &str) {
+        let _fetch = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        *self.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), tag.to_string(), now.to_string()));
+        let mut groups = self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some((at, heads)) = groups.as_mut() {
+            if let Some(head) = heads.iter_mut().find(|head| head.tag == tag) {
+                head.now = now.to_string();
+                *at = Instant::now();
+            }
+        }
+    }
+
     pub fn set_group_selection(&mut self, group: &str, member: &str) -> Result<(), AppError> {
         let profile = self.profile()?;
         let group_outbound = profile

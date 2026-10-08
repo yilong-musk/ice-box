@@ -725,6 +725,50 @@ impl LiveCache {
         self.home_interest.load(Ordering::Relaxed)
     }
 
+    /// Publish a selector member that Clash has already accepted.
+    ///
+    /// Status, Nodes, and the tray reuse a fresh sample for
+    /// [`PROXY_GROUPS_TTL`]. Without this write they keep the previous `now`
+    /// until that sample expires. Fetch locks are held across the write so an
+    /// in-flight read that started before the switch cannot publish the old
+    /// member afterwards.
+    pub(crate) fn record_group_now(
+        &self,
+        endpoints: &HealthEndpoints,
+        generation: u64,
+        tag: &str,
+        now: &str,
+    ) {
+        let _groups = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _selected = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        {
+            let mut slot = self.groups.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some(hit) = slot.as_mut() {
+                if groups_match(hit, endpoints, generation) {
+                    let mut groups = (*hit.groups).clone();
+                    if let Some(group) = groups.iter_mut().find(|group| group.tag == tag) {
+                        group.now = now.to_string();
+                        hit.groups = Arc::new(groups);
+                        hit.fetched_at = Instant::now();
+                    }
+                }
+            }
+        }
+        *self
+            .selected_now
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(CachedNow {
+            endpoints: endpoints.clone(),
+            generation,
+            tag: tag.to_string(),
+            fetched_at: Instant::now(),
+            now: now.to_string(),
+        });
+    }
+
     #[cfg(test)]
     pub(crate) fn seed_group_heads_for_test(
         &self,

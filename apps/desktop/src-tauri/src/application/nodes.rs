@@ -782,6 +782,11 @@ pub(crate) fn select_node(app: &impl AppHost, state: &AppState, tag: &str) -> Re
             );
             return Err(AppError::from(err));
         }
+        let group = selection_group.as_deref().unwrap_or(ice_core::SELECTOR_TAG);
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, tag);
     }
 
     Ok(())
@@ -870,6 +875,10 @@ pub(crate) fn select_group_member(
     if should_apply_live {
         let endpoints = clash_endpoints(&state.paths, &settings)?;
         select_group(&endpoints, group, member).map_err(AppError::from)?;
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, member);
     } else if !patch_selected_tag_default(&state.paths, group, member)? {
         generate_config_with_cache(
             &state.paths,

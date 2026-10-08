@@ -346,6 +346,46 @@ fn selected_now_reuses_a_fresh_group_head() {
 }
 
 #[test]
+fn record_group_now_replaces_a_fresh_exit_without_a_fetch() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![
+            ice_core::GroupHead {
+                tag: "auto".into(),
+                now: "a".into(),
+            },
+            ice_core::GroupHead {
+                tag: "proxy".into(),
+                now: "hk".into(),
+            },
+        ],
+        Duration::from_secs(0),
+    );
+    cache.record_group_now(&endpoints, 3, "proxy", "jp");
+
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("jp")
+    );
+    let groups =
+        crate::application::load_proxy_groups(&cache, &endpoints, 3, true).expect("cached heads");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].now, "a");
+    assert_eq!(groups[1].tag, "proxy");
+    assert_eq!(groups[1].now, "jp");
+    // A different core generation must not see the patched sample.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 4, "proxy", false).as_deref(),
+        None
+    );
+}
+
+#[test]
 fn collect_status_snapshots_stopped_core() {
     let state = temp_state_with_node("status");
     let status = collect_status(&state).expect("status");

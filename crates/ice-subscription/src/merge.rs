@@ -162,35 +162,37 @@ impl ProfileCache {
         let full =
             self.load_active_with_default_rules(paths, index, auto_default_rules, platform)?;
         drop(full);
-        self.release_rule_bodies();
-        self.resident_if_current(paths, index, auto_default_rules, platform)
+        // Return the slim `Arc` from the same critical section that publishes
+        // it. A config build can replace the cache with a full profile before
+        // a later lookup, and that lookup must not surface as "no subscription".
+        self.release_rule_bodies()
             .ok_or(SubscriptionError::NoActiveSubscription)
     }
 
     /// Drop rule, DNS, and outbound connection payloads from the cached
     /// profile so they are not retained between config rebuilds. Leaf nodes
     /// keep a shared `{"type"}` value. Groups keep `type`, `outbounds`, and
-    /// `default`. No-op when the cache is empty or already resident.
-    pub fn release_rule_bodies(&self) {
+    /// `default`.
+    ///
+    /// Returns the resident profile left in the cache. `None` when the cache
+    /// is empty. Already-resident entries are returned as they are.
+    pub fn release_rule_bodies(&self) -> Option<Arc<NormalizedProfile>> {
         let mut cache = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(entry) = cache.as_mut() else {
-            return;
-        };
-        if entry.rules_released {
-            return;
-        }
-        if let Some(profile) = Arc::get_mut(&mut entry.profile) {
-            retain_resident(profile);
+        let entry = cache.as_mut()?;
+        if !entry.rules_released {
+            if let Some(profile) = Arc::get_mut(&mut entry.profile) {
+                retain_resident(profile);
+            } else {
+                let mut slim = without_rule_bodies(&entry.profile);
+                retain_resident(&mut slim);
+                entry.profile = Arc::new(slim);
+            }
             entry.rules_released = true;
-            return;
         }
-        let mut slim = without_rule_bodies(&entry.profile);
-        retain_resident(&mut slim);
-        entry.profile = Arc::new(slim);
-        entry.rules_released = true;
+        Some(Arc::clone(&entry.profile))
     }
 
     /// The resident `Arc` when the cache matches `index` and rules were
@@ -694,6 +696,81 @@ mod tests {
         assert_eq!(group["outbounds"], serde_json::json!(["a", "b"]));
         assert_eq!(group["default"], "a");
         assert!(group.get("interrupt_exist_connections").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_resident_stays_slim_while_a_full_load_replaces_the_cache() {
+        use crate::store::{load_index, write_subscription_success};
+        use crate::{SubscriptionFormat, SubscriptionMeta};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use uuid::Uuid;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-profile-resident-race-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let meta = SubscriptionMeta {
+            id: Uuid::new_v4(),
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 1,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let mut profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound::new(
+            "n1",
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        )]);
+        profile.route.rules = vec![serde_json::json!({"domain":"example.com","outbound":"direct"})];
+        write_subscription_success(&paths, &meta, "{}", &profile).expect("seed");
+        let index = load_index(&paths).expect("index");
+        let cache = Arc::new(ProfileCache::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let cache = Arc::clone(&cache);
+            let paths = SubscriptionPaths::from_root(&dir);
+            let index = index.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = cache.load_active_with_default_rules(
+                        &paths,
+                        &index,
+                        false,
+                        HostPlatform::MacOs,
+                    );
+                }
+            })
+        };
+
+        for _ in 0..40 {
+            let resident = cache
+                .load_resident(&paths, &index, false, HostPlatform::MacOs)
+                .expect("a full reload must not look like a missing subscription");
+            assert!(resident.route.rules.is_empty());
+            assert!(resident.nodes[0].outbound.get("server").is_none());
+            assert_eq!(resident.nodes[0].tag, "n1");
+        }
+        stop.store(true, Ordering::Relaxed);
+        worker.join().expect("worker");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
