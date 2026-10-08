@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use ice_config::{HostPlatform, NormalizedOutbound, NormalizedProfile};
+use ice_config::{HostPlatform, NormalizedOutbound, NormalizedProfile, NormalizedRoute};
 
 use crate::clash::normalize_dns_on;
 use crate::error::SubscriptionError;
@@ -28,6 +28,25 @@ struct ProfileLoadCache {
     auto_default_rules: bool,
     platform: HostPlatform,
     profile: Arc<NormalizedProfile>,
+    /// `route.rules` and `dns` were dropped. A later full load re-reads disk.
+    rules_released: bool,
+}
+
+impl ProfileLoadCache {
+    fn matches(
+        &self,
+        profile_path: &Path,
+        profile_sig: Option<(SystemTime, u64)>,
+        nodes_sig: Option<(SystemTime, u64)>,
+        auto_default_rules: bool,
+        platform: HostPlatform,
+    ) -> bool {
+        self.profile_path == profile_path
+            && self.profile_sig == profile_sig
+            && self.nodes_sig == nodes_sig
+            && self.auto_default_rules == auto_default_rules
+            && self.platform == platform
+    }
 }
 
 /// Parsed-active-profile cache owned by the host (`AppState`), not a process
@@ -87,11 +106,16 @@ impl ProfileCache {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = cache.as_ref() {
-            if entry.profile_path == profile_path
-                && entry.profile_sig == profile_sig
-                && entry.nodes_sig == nodes_sig
-                && entry.auto_default_rules == auto_default_rules
-                && entry.platform == platform
+            // A released entry has no rules or DNS. Config generation must
+            // re-read the file instead of reusing that resident copy.
+            if !entry.rules_released
+                && entry.matches(
+                    &profile_path,
+                    profile_sig,
+                    nodes_sig,
+                    auto_default_rules,
+                    platform,
+                )
             {
                 return Ok(Arc::clone(&entry.profile));
             }
@@ -110,8 +134,108 @@ impl ProfileCache {
             auto_default_rules,
             platform,
             profile: profile.clone(),
+            rules_released: false,
         });
         Ok(profile)
+    }
+
+    /// Resident profile for UI reads: same identity as a full load, without
+    /// `route.rules` or `dns`. Those stay on disk until a full load or the
+    /// Rules page asks for them.
+    ///
+    /// When this process already holds the full profile alone, the rules and
+    /// DNS allocations are cleared in place. A caller that still holds the
+    /// full `Arc` keeps it; the cache then stores a separate resident copy.
+    pub fn load_resident(
+        &self,
+        paths: &SubscriptionPaths,
+        index: &SubscriptionIndex,
+        auto_default_rules: bool,
+        platform: HostPlatform,
+    ) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
+        if let Some(profile) = self.resident_if_current(paths, index, auto_default_rules, platform)
+        {
+            return Ok(profile);
+        }
+        let full =
+            self.load_active_with_default_rules(paths, index, auto_default_rules, platform)?;
+        drop(full);
+        self.release_rule_bodies();
+        self.resident_if_current(paths, index, auto_default_rules, platform)
+            .ok_or(SubscriptionError::NoActiveSubscription)
+    }
+
+    /// Drop rule and DNS bodies from the cached profile so they are not
+    /// retained between config rebuilds. No-op when the cache is empty or
+    /// already resident.
+    pub fn release_rule_bodies(&self) {
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(entry) = cache.as_mut() else {
+            return;
+        };
+        if entry.rules_released {
+            return;
+        }
+        if let Some(profile) = Arc::get_mut(&mut entry.profile) {
+            profile.route.rules = Vec::new();
+            profile.dns = None;
+            entry.rules_released = true;
+            return;
+        }
+        entry.profile = Arc::new(without_rule_bodies(&entry.profile));
+        entry.rules_released = true;
+    }
+
+    /// The resident `Arc` when the cache matches `index` and rules were
+    /// already released. `None` while a full profile is cached: callers must
+    /// not adopt that allocation into a long-lived UI cache.
+    pub fn resident_if_current(
+        &self,
+        paths: &SubscriptionPaths,
+        index: &SubscriptionIndex,
+        auto_default_rules: bool,
+        platform: HostPlatform,
+    ) -> Option<Arc<NormalizedProfile>> {
+        let meta = active_subscription(index)?;
+        let profile_path = paths.profile(meta.id);
+        let cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.as_ref()?;
+        if entry.rules_released
+            && entry.matches(
+                &profile_path,
+                file_sig(&profile_path),
+                file_sig(&paths.nodes(meta.id)),
+                auto_default_rules,
+                platform,
+            )
+        {
+            Some(Arc::clone(&entry.profile))
+        } else {
+            None
+        }
+    }
+}
+
+/// Copy used when another `Arc` still owns the full profile. Rules and DNS
+/// are not cloned into the resident copy.
+fn without_rule_bodies(full: &NormalizedProfile) -> NormalizedProfile {
+    NormalizedProfile {
+        nodes: full.nodes.clone(),
+        groups: full.groups.clone(),
+        route: NormalizedRoute {
+            rules: Vec::new(),
+            final_outbound: full.route.final_outbound.clone(),
+            rule_sets: full.route.rule_sets.clone(),
+        },
+        dns: None,
+        default_outbound: full.default_outbound.clone(),
+        parse_stats: full.parse_stats.clone(),
     }
 }
 
@@ -276,6 +400,85 @@ mod tests {
             .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
             .expect("invalidated");
         assert_eq!(updated.nodes[0].tag, "n2-longer-tag");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn release_rule_bodies_keeps_nodes_and_reloads_rules() {
+        use crate::store::{load_index, write_subscription_success};
+        use crate::{SubscriptionFormat, SubscriptionMeta};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use uuid::Uuid;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-profile-release-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 1,
+            has_dns: true,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
+            auto_update: false,
+            auto_update_interval: None,
+        };
+        let mut profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+            tag: "n1".into(),
+            outbound: std::sync::Arc::new(
+                serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+            ),
+        }]);
+        profile.route.rules = vec![serde_json::json!({
+            "domain": "example.com",
+            "outbound": "direct"
+        })];
+        profile.dns = Some(serde_json::json!({
+            "servers": [{"type": "udp", "server": "1.1.1.1"}]
+        }));
+        write_subscription_success(&paths, &meta, "{}", &profile).expect("seed");
+        let index = load_index(&paths).expect("index");
+        let cache = ProfileCache::new();
+        let full = cache
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("full");
+        assert_eq!(full.route.rules.len(), 1);
+        assert!(full.dns.is_some());
+        drop(full);
+        cache.release_rule_bodies();
+
+        let resident = cache
+            .load_resident(&paths, &index, false, HostPlatform::MacOs)
+            .expect("resident");
+        assert_eq!(resident.nodes[0].tag, "n1");
+        assert!(resident.route.rules.is_empty());
+        assert!(resident.dns.is_none());
+        assert!(cache
+            .resident_if_current(&paths, &index, false, HostPlatform::MacOs)
+            .is_some());
+
+        let again = cache
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("reloaded");
+        assert_eq!(again.route.rules.len(), 1);
+        assert!(again.dns.is_some());
+        assert!(!Arc::ptr_eq(&resident, &again));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

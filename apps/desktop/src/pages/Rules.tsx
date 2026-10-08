@@ -153,6 +153,9 @@ export function Rules({ onNavigate, active = true }: Props) {
     overviewRequestRef.current = null;
     if (!active) {
       nextGeneration();
+      setRows([]);
+      setOverview(EMPTY_OVERVIEW);
+      setTotal(0);
       if (typeof api.releaseRuleSearch === "function") void api.releaseRuleSearch();
     }
   }, [active, nextGeneration]);

@@ -696,6 +696,45 @@ fn profile_cache_serves_unchanged_and_invalidates_on_update() {
 }
 
 #[test]
+fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
+    let state = temp_state_with_rules("resident-rules", sample_rules());
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(
+        entry.profile.route.rules.is_empty(),
+        "status and the tray must not retain route rules"
+    );
+    assert!(entry.profile.dns.is_none());
+    assert!(
+        !subscription_rules_retained(&state),
+        "rules stay on disk until the Rules page reads them"
+    );
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let still = cached_profile(&state).unwrap().unwrap();
+    assert!(still.profile.route.rules.is_empty());
+
+    drop_rule_keyword_cache(&state);
+    assert!(!subscription_rules_retained(&state));
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn validate_static_group_member_accepts_member() {
     let outbounds = vec![NormalizedOutbound {
         tag: "Proxies".into(),

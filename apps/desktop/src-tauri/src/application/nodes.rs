@@ -265,30 +265,38 @@ pub(crate) fn load_overrides(state: &AppState) -> RuleOverrides {
     if !overrides.has_legacy_disabled_fingerprints() {
         return overrides;
     }
-    if let Ok(Some(entry)) = cached_profile(state) {
-        let mut rules: Vec<_> = entry.profile.route.rules.clone();
-        rules.extend(overrides.custom.clone());
-        if overrides.migrate_legacy_fingerprints(rules.iter()) {
+    if let Ok(rules) = subscription_rules(state) {
+        let custom = overrides.custom.clone();
+        let mut combined: Vec<&serde_json::Value> = rules.iter().collect();
+        combined.extend(custom.iter());
+        if overrides.migrate_legacy_fingerprints(combined) {
             let _ = save_rule_overrides(&state.paths.rule_overrides(), &overrides);
         }
     }
     overrides
 }
 
+pub(crate) fn subscription_rules(
+    state: &AppState,
+) -> Result<Arc<Vec<serde_json::Value>>, AppError> {
+    let Some(entry) = cached_profile(state)? else {
+        return Ok(Arc::new(Vec::new()));
+    };
+    Ok(Arc::clone(&entry.rule_page(state)?.rules))
+}
+
 pub(crate) fn rule_exists(
-    profile: &NormalizedProfile,
+    rules: &[serde_json::Value],
     overrides: &RuleOverrides,
     fingerprint: &str,
 ) -> bool {
-    profile
-        .route
-        .rules
+    rules
         .iter()
-        .any(|r| rule_matches_fingerprint(r, fingerprint))
+        .any(|rule| rule_matches_fingerprint(rule, fingerprint))
         || overrides
             .custom
             .iter()
-            .any(|r| rule_matches_fingerprint(r, fingerprint))
+            .any(|rule| rule_matches_fingerprint(rule, fingerprint))
 }
 
 /// Persist rule overrides then Apply (hot reload when running), like subscription mutations.
@@ -308,15 +316,23 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         .as_ref()
         .map(|entry| entry.profile.as_ref())
         .unwrap_or(&empty);
-    let fingerprints: &[String] = cached
+    let page = cached
         .as_ref()
-        .map(|entry| entry.fingerprints.as_ref())
-        .map_or(&[], |v| v);
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
+        .as_ref()
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
     let overrides = load_overrides(state);
     let mut counts: std::collections::HashMap<&'static str, usize> =
         std::collections::HashMap::new();
     let mut disabled = 0usize;
-    for (idx, rule) in profile.route.rules.iter().enumerate() {
+    for (idx, rule) in rules.iter().enumerate() {
         let fp: std::borrow::Cow<'_, str> = fingerprints
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
@@ -340,7 +356,7 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         .collect();
     types.sort_by(|a, b| b.count.cmp(&a.count).then(a.rule_type.cmp(&b.rule_type)));
     Ok(RuleOverview {
-        total: profile.route.rules.len(),
+        total: rules.len(),
         disabled,
         custom: overrides.custom.len(),
         rule_sets: profile.route.rule_sets.len(),
@@ -355,15 +371,18 @@ pub(crate) fn query_rules(
     req: &ListRulesRequest,
 ) -> Result<ListRulesResponse, AppError> {
     let cached = cached_profile(state)?;
-    let empty = NormalizedProfile::from_nodes_only(vec![]);
-    let profile = cached
+    let page = cached
         .as_ref()
-        .map(|entry| entry.profile.as_ref())
-        .unwrap_or(&empty);
-    let fingerprints: &[String] = cached
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
         .as_ref()
-        .map(|entry| entry.fingerprints.as_ref())
-        .map_or(&[], |v| v);
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
     // Lowercase-serialized rule text is built once per profile version (lazily,
     // only when a keyword is present) instead of per request.
     let keyword_texts = req
@@ -371,7 +390,7 @@ pub(crate) fn query_rules(
         .as_deref()
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .and_then(|_| cached.as_ref().map(|entry| entry.keyword_texts()));
+        .and_then(|_| page.as_ref().map(|page| page.keyword_texts()));
     let overrides = load_overrides(state);
     let limit = req.limit.clamp(1, MAX_RULES_PAGE_SIZE);
     let keyword = req
@@ -410,7 +429,7 @@ pub(crate) fn query_rules(
         }
         hits.push(RuleHit::Custom(idx));
     }
-    for (idx, rule) in profile.route.rules.iter().enumerate() {
+    for (idx, rule) in rules.iter().enumerate() {
         if req.custom == Some(true) {
             continue;
         }
@@ -451,7 +470,7 @@ pub(crate) fn query_rules(
                 }
             }
             RuleHit::Subscription(idx) => {
-                let rule = &profile.route.rules[idx];
+                let rule = &rules[idx];
                 let fingerprint = fingerprints
                     .get(idx)
                     .cloned()
@@ -540,16 +559,14 @@ pub(crate) fn persist_rule_disabled(
     req: &SetRuleDisabledRequest,
 ) -> Result<(), AppError> {
     let mut overrides = load_overrides(state);
-    let profile = active_profile(state)?;
-    if !rule_exists(&profile, &overrides, &req.fingerprint) {
+    let rules = subscription_rules(state)?;
+    if !rule_exists(rules.as_ref(), &overrides, &req.fingerprint) {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "unknown rule fingerprint",
         ));
     }
-    if let Some(rule) = profile
-        .route
-        .rules
+    if let Some(rule) = rules
         .iter()
         .chain(overrides.custom.iter())
         .find(|r| rule_matches_fingerprint(r, &req.fingerprint))

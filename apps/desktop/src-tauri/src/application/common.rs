@@ -294,35 +294,37 @@ struct ProfileSig {
     settings: Option<(SystemTime, u64)>,
 }
 
-/// Cached parse of the active profile plus the per-rule fingerprints (one
-/// serialization per rule per profile version, instead of per poll/request).
-#[derive(Clone)]
-pub struct ProfileCacheEntry {
-    sig: ProfileSig,
-    pub profile: Arc<NormalizedProfile>,
-    node_tags: Arc<std::collections::HashSet<String>>,
-    /// Parallel to `profile.route.rules`.
-    pub fingerprints: Arc<Vec<String>>,
-    /// Lazy lowercase-serialized rule text for keyword search: built once per
-    /// profile version on the first keyword query (10k rules ≈ a few MB), then
-    /// reused. Never allocated for non-keyword reads.
-    keyword_text: Arc<Mutex<Option<Arc<Vec<String>>>>>,
+/// Subscription rules kept only while the Rules page is open.
+pub(crate) struct RulePage {
+    pub(crate) rules: Arc<Vec<serde_json::Value>>,
+    /// Parallel to `rules`.
+    pub(crate) fingerprints: Arc<Vec<String>>,
+    /// Lowercase-serialized rule text for keyword search. Built on the first
+    /// keyword query (10k rules ≈ a few MB), then reused. Never allocated for
+    /// non-keyword reads.
+    keyword_text: Mutex<Option<Arc<Vec<String>>>>,
 }
 
-impl ProfileCacheEntry {
-    /// Lowercase-serialized text of every subscription rule, built lazily.
+impl RulePage {
+    fn from_rules(rules: Vec<serde_json::Value>) -> Self {
+        let fingerprints = Arc::new(rules.iter().map(rule_fingerprint).collect());
+        Self {
+            rules: Arc::new(rules),
+            fingerprints,
+            keyword_text: Mutex::new(None),
+        }
+    }
+
     pub(crate) fn keyword_texts(&self) -> Arc<Vec<String>> {
         let mut slot = self
             .keyword_text
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(texts) = slot.as_ref() {
-            return texts.clone();
+            return Arc::clone(texts);
         }
         let texts: Arc<Vec<String>> = Arc::new(
-            self.profile
-                .route
-                .rules
+            self.rules
                 .iter()
                 .map(|rule| {
                     serde_json::to_string(rule)
@@ -331,28 +333,95 @@ impl ProfileCacheEntry {
                 })
                 .collect(),
         );
-        *slot = Some(texts.clone());
+        *slot = Some(Arc::clone(&texts));
         texts
     }
+}
 
-    pub(crate) fn clear_keyword_texts(&self) {
+/// Cached nodes and groups for the active profile. Rule and DNS bodies are
+/// not retained here; see [`ProfileCacheEntry::rule_page`].
+#[derive(Clone)]
+pub struct ProfileCacheEntry {
+    sig: ProfileSig,
+    pub profile: Arc<NormalizedProfile>,
+    node_tags: Arc<std::collections::HashSet<String>>,
+    rule_page: Arc<Mutex<Option<Arc<RulePage>>>>,
+}
+
+impl ProfileCacheEntry {
+    /// Subscription rules, loaded from disk on the first Rules-page read and
+    /// shared until [`Self::clear_rule_page`].
+    pub(crate) fn rule_page(&self, state: &AppState) -> Result<Arc<RulePage>, AppError> {
         let mut slot = self
-            .keyword_text
+            .rule_page
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(page) = slot.as_ref() {
+            return Ok(Arc::clone(page));
+        }
+        let rules = match read_full_profile(state)? {
+            Some(mut profile) => std::mem::take(&mut profile.route.rules),
+            None => Vec::new(),
+        };
+        let page = Arc::new(RulePage::from_rules(rules));
+        *slot = Some(Arc::clone(&page));
+        Ok(page)
+    }
+
+    pub(crate) fn clear_rule_page(&self) {
+        let mut slot = self
+            .rule_page
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = None;
     }
 }
 
-/// Drop the lowercase rule index. It is a few megabytes and is only needed
-/// while the Rules page is searching.
+/// Drop the Rules-page copy of subscription rules, fingerprints, and the
+/// keyword index. Home and the tray do not need them.
 pub(crate) fn drop_rule_keyword_cache(state: &AppState) {
     let Ok(cache) = state.profile_cache.lock() else {
         return;
     };
     if let Some(entry) = cache.as_ref() {
-        entry.clear_keyword_texts();
+        entry.clear_rule_page();
     }
+}
+
+/// Full profile from disk, including rules and DNS. Does not touch the
+/// long-lived parse cache.
+fn read_full_profile(state: &AppState) -> Result<Option<NormalizedProfile>, AppError> {
+    let sub_paths = SubscriptionPaths::from_app(&state.paths);
+    let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
+    let auto_default_rules = current_settings(&state.paths)
+        .map(|settings| settings.auto_default_rules)
+        .unwrap_or(true);
+    match ice_engine::load_active_profile_with_default_rules(
+        &sub_paths,
+        &index,
+        auto_default_rules,
+        host_platform(),
+    ) {
+        Ok(profile) => Ok(Some(
+            Arc::try_unwrap(profile).unwrap_or_else(|arc| (*arc).clone()),
+        )),
+        Err(SubscriptionError::NoActiveSubscription) => Ok(None),
+        Err(err) => Err(AppError::from(err)),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn subscription_rules_retained(state: &AppState) -> bool {
+    let Ok(cache) = state.profile_cache.lock() else {
+        return false;
+    };
+    cache.as_ref().is_some_and(|entry| {
+        entry
+            .rule_page
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    })
 }
 
 pub(crate) type LogViewCache = crate::log_view::LogViewReader;
@@ -363,8 +432,11 @@ pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Load the active profile from a mtime-keyed cache. `Ok(None)` when no active
-/// subscription exists. Returns the built-in-default-rules-applied profile
-/// (same semantics as `load_active_profile_with_default_rules`).
+/// subscription exists.
+///
+/// The cached profile has nodes, groups, and rule-set metadata. `route.rules`
+/// and `dns` are not retained; config generation re-reads them, and the Rules
+/// page loads them into [`ProfileCacheEntry::rule_page`].
 pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntry>, AppError> {
     let sub_paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
@@ -374,21 +446,34 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
         profile: active.and_then(|m| file_sig(&sub_paths.profile(m.id))),
         settings: file_sig(&state.paths.settings()),
     };
-    if let Ok(cache) = state.profile_cache.lock() {
-        if let Some(entry) = cache.as_ref() {
+    let auto_default_rules = current_settings(&state.paths)
+        .map(|settings| settings.auto_default_rules)
+        .unwrap_or(true);
+    let platform = host_platform();
+    if let Ok(mut cache) = state.profile_cache.lock() {
+        if let Some(entry) = cache.as_mut() {
             if entry.sig == sig {
+                // A config rebuild replaces the parse-cache Arc. Adopt it so
+                // the previous resident copy does not stay alive beside it.
+                if let Some(shared) = state.profile_parse_cache.resident_if_current(
+                    &sub_paths,
+                    &index,
+                    auto_default_rules,
+                    platform,
+                ) {
+                    if !Arc::ptr_eq(&entry.profile, &shared) {
+                        entry.profile = shared;
+                    }
+                }
                 return Ok(Some(entry.clone()));
             }
         }
     }
-    let auto_default_rules = current_settings(&state.paths)
-        .map(|s| s.auto_default_rules)
-        .unwrap_or(true);
-    let profile = match state.profile_parse_cache.load_active_with_default_rules(
+    let profile = match state.profile_parse_cache.load_resident(
         &sub_paths,
         &index,
         auto_default_rules,
-        host_platform(),
+        platform,
     ) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => return Ok(None),
@@ -397,9 +482,8 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     let entry = ProfileCacheEntry {
         sig,
         node_tags: Arc::new(profile.all_outbounds().map(|o| o.tag.clone()).collect()),
-        fingerprints: Arc::new(profile.route.rules.iter().map(rule_fingerprint).collect()),
         profile,
-        keyword_text: Arc::new(Mutex::new(None)),
+        rule_page: Arc::new(Mutex::new(None)),
     };
     if let Ok(mut cache) = state.profile_cache.lock() {
         *cache = Some(entry.clone());

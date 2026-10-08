@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The Nodes page and the tray take member names from the profile, which
   already holds them. Leaving Logs drops the parsed tails, leaving Rules
   drops the keyword index, and a rules page copies only the visible rows.
+- The running app no longer keeps the active subscription's route rules or
+  DNS block in memory. Config generation reads them and releases them when
+  the build finishes. The Rules page loads its own copy, and leaving that
+  page drops the rules, their fingerprints, and the keyword index.
 
 ## [0.1.20] - 2026-09-30
 
