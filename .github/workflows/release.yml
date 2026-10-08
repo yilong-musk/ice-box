@@ -253,7 +253,7 @@ jobs:
         working-directory: apps/desktop
 
       # See ci.yml: do not install the removed `tools` package.
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
