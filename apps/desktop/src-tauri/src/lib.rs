@@ -138,7 +138,7 @@ pub struct AppState {
     pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
-    pub(crate) log_view_cache: Mutex<Option<application::LogViewCache>>,
+    pub(crate) log_view_cache: Mutex<application::LogViewSlot>,
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
@@ -263,7 +263,7 @@ pub fn run() {
                 subscription_watchdog_alive: std::sync::Arc::new(
                     std::sync::atomic::AtomicBool::new(true),
                 ),
-                log_view_cache: Mutex::new(None),
+                log_view_cache: Mutex::new(application::LogViewSlot::default()),
                 helper_probe_cache: Mutex::new(None),
                 tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
@@ -393,7 +393,7 @@ pub fn run() {
             commands::ensure_tun_elevation,
             commands::remove_tun_elevation,
             commands::get_log_view,
-            commands::release_log_view,
+            commands::set_log_view_active,
             commands::get_runtime_config,
             commands::reveal_data_dir,
             commands::copy_proxy_command,

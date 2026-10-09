@@ -336,6 +336,47 @@ describe("TrafficChart", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not lower the peak when a snapshot shares the live cursor", async () => {
+    vi.useFakeTimers();
+    const liveDown = 4 * 1024 * 1024;
+    let onSample: (sample: LiveSample) => void = () => {};
+    listenTrafficSample.mockImplementation(async (handler: (sample: LiveSample) => void) => {
+      onSample = handler;
+      return () => {};
+    });
+    getTrafficSince.mockResolvedValueOnce(snap([{ up: 10, down: 20, t: 1_000 }]));
+    getTrafficSince.mockResolvedValueOnce(
+      snap(
+        [{ up: 10, down: 100, t: 5_000 }],
+        { up: 10, down: 100 },
+        { up: 10, down: 100 },
+      ),
+    );
+    const { container, unmount } = render(<TrafficChart running />);
+    const view = within(container);
+
+    await flushMicrotasks();
+    await act(async () => {
+      onSample({ up: 10, down: liveDown, t: 5_000 });
+    });
+    expect(view.getByText(`↓ ${formatRate(liveDown)}`)).toBeInTheDocument();
+    expect(
+      view.getByText(t("traffic.peak", { rate: formatRate(liveDown), n: 60 })),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(getTrafficSince).toHaveBeenLastCalledWith(5_000);
+    expect(view.getByText(`↓ ${formatRate(liveDown)}`)).toBeInTheDocument();
+    expect(
+      view.getByText(t("traffic.peak", { rate: formatRate(liveDown), n: 60 })),
+    ).toBeInTheDocument();
+    unmount();
+  });
+
   it("replaces the series when the backend generation changes", async () => {
     vi.useFakeTimers();
     getTrafficSince.mockResolvedValueOnce(

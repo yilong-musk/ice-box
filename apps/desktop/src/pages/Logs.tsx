@@ -10,6 +10,10 @@ const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
 
+function documentHidden(): boolean {
+  return document.visibilityState === "hidden";
+}
+
 /** Color the whole line by its compact `LEVEL` prefix. INFO/DEBUG/TRACE stay default. */
 function logLineClass(line: string): string | undefined {
   const space = line.indexOf(" ");
@@ -27,13 +31,29 @@ export function Logs({ active = true }: { active?: boolean }) {
   const [stickToBottom, setStickToBottom] = useState(true);
   const boxRef = useRef<HTMLPreElement | null>(null);
   const lastTextRef = useRef("");
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const logActiveChainRef = useRef(Promise.resolve());
+
+  const queueLogActive = (visible: boolean) => {
+    if (typeof api.setLogViewActive !== "function") return;
+    logActiveChainRef.current = logActiveChainRef.current.then(async () => {
+      try {
+        await api.setLogViewActive(visible);
+      } catch {
+        // The website demo has no parsed log cache.
+      }
+    });
+  };
 
   const refresh = useCallback(async () => {
-    if (!active || document.visibilityState === "hidden") return;
+    if (!activeRef.current || documentHidden()) return;
+    await logActiveChainRef.current;
+    if (!activeRef.current || documentHidden()) return;
     const gen = nextGeneration();
     try {
       const tail = await api.getLogView(VIEW_LINES);
-      if (isStale(gen)) return;
+      if (isStale(gen) || !activeRef.current) return;
       setError(null);
       setLines((prev) => {
         const text = tail.join("\n");
@@ -42,23 +62,35 @@ export function Logs({ active = true }: { active?: boolean }) {
         return tail;
       });
     } catch (e) {
-      if (!isStale(gen)) setError(formatInvokeError(e));
+      if (!isStale(gen) && activeRef.current) setError(formatInvokeError(e));
     }
-  }, [active, isStale, nextGeneration]);
+  }, [isStale, nextGeneration]);
 
   useEffect(() => {
-    if (active) return;
-    setLines([]);
-    lastTextRef.current = "";
-    if (typeof api.releaseLogView === "function") void api.releaseLogView();
-  }, [active]);
+    if (!active) {
+      nextGeneration();
+      setLines([]);
+      lastTextRef.current = "";
+      setError(null);
+    }
+    queueLogActive(active);
+  }, [active, nextGeneration]);
 
   useEffect(() => {
     if (!active) return;
+    let cancelled = false;
+    let timer = 0;
     nextGeneration();
-    void refresh();
-    const id = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(id);
+    void (async () => {
+      await logActiveChainRef.current;
+      if (cancelled || !activeRef.current) return;
+      void refresh();
+      timer = window.setInterval(() => void refresh(), POLL_MS);
+    })();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [active, nextGeneration, refresh]);
 
   useLayoutEffect(() => {

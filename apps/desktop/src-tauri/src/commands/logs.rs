@@ -3,9 +3,9 @@
 use super::*;
 
 #[tauri::command]
-pub fn release_log_view(app: AppHandle) {
+pub fn set_log_view_active(app: AppHandle, active: bool) {
     if let Some(state) = app.try_state::<crate::AppState>() {
-        crate::application::drop_log_view_cache(state.inner());
+        crate::application::set_log_view_retained(state.inner(), active);
     }
 }
 

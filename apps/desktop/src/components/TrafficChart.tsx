@@ -286,9 +286,11 @@ export function TrafficChart({ running, paused = false, className }: Props) {
       setError(null);
     };
 
+    // Same timestamp counts as not newer: a health poll in the same second
+    // must not replace the live label or lower the peak.
     const snapshotIsBehind = (cursor: number | null | undefined) =>
       typeof latestTRef.current === "number" &&
-      (typeof cursor !== "number" || latestTRef.current > cursor);
+      (typeof cursor !== "number" || latestTRef.current >= cursor);
 
     const applyLiveSample = (sample: Point) => {
       if (cancelled || document.visibilityState === "hidden") return;

@@ -36,8 +36,14 @@ pub struct MobileHost {
     profile_cache: ProfileCache,
     /// Live group exits (`now` only). Member tags stay on the profile.
     groups_cache: Mutex<Option<(Instant, Vec<GroupHead>)>>,
+    /// Serializes `GET /proxies` with [`Self::record_group_now`], so a sample
+    /// that started before a selector switch cannot publish the old member
+    /// afterwards.
+    groups_fetch: Mutex<()>,
     /// Home's selected exit, so a status poll does not fetch the proxy map.
     now_cache: Mutex<Option<(Instant, String, String)>>,
+    /// Serializes `GET /proxies/{tag}`. Separate from [`Self::groups_fetch`]
+    /// so Home does not queue behind a full proxy-map read.
     now_fetch: Mutex<()>,
 }
 
@@ -50,6 +56,7 @@ impl MobileHost {
             traffic: TrafficMonitor::new(),
             profile_cache: ProfileCache::new(),
             groups_cache: Mutex::new(None),
+            groups_fetch: Mutex::new(()),
             now_cache: Mutex::new(None),
             now_fetch: Mutex::new(()),
         }
@@ -280,11 +287,15 @@ impl MobileHost {
 
     /// Remember a selector member after the tunnel has applied it.
     ///
-    /// `list_nodes` prefers a fresh proxy sample over the saved selection, so
-    /// leaving the previous `now` in place shows the old exit for
-    /// [`PROXY_GROUPS_TTL`].
+    /// Fetch locks are held across the write. An in-flight `/proxies` read
+    /// publishes first, then this patch replaces its `now`. A sample that
+    /// starts afterwards still wins, so urltest and fallback keep moving.
     pub(crate) fn record_group_now(&self, tag: &str, now: &str) {
-        let _fetch = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        let _groups = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _selected = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
         *self.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
             Some((Instant::now(), tag.to_string(), now.to_string()));
         let mut groups = self
@@ -542,20 +553,61 @@ impl MobileHost {
         ));
     }
 
+    fn fresh_groups(&self) -> Option<Vec<GroupHead>> {
+        let slot = self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let (at, groups) = slot.as_ref()?;
+        (at.elapsed() < PROXY_GROUPS_TTL).then(|| groups.clone())
+    }
+
+    fn fresh_group_now(&self, tag: &str) -> Option<String> {
+        self.fresh_groups()?
+            .into_iter()
+            .find(|group| group.tag == tag)
+            .map(|group| group.now)
+            .filter(|now| !now.is_empty())
+    }
+
+    fn fresh_recorded_now(&self, tag: &str) -> Option<String> {
+        let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
+        let (at, cached_tag, now) = slot.as_ref()?;
+        (cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty())
+            .then(|| now.clone())
+    }
+
+    /// Group sample first, then the exit recorded for a selector switch.
+    fn preferred_cached_now(&self, tag: &str) -> Option<String> {
+        self.fresh_group_now(tag)
+            .or_else(|| self.fresh_recorded_now(tag))
+    }
+
     fn cached_group_heads(&self, settings: &AppSettings) -> Option<Vec<GroupHead>> {
-        {
-            let slot = self
-                .groups_cache
-                .lock()
-                .unwrap_or_else(|err| err.into_inner());
-            if let Some((at, groups)) = slot.as_ref() {
-                if at.elapsed() < PROXY_GROUPS_TTL {
-                    return Some(groups.clone());
-                }
-            }
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
         }
         let endpoints = self.endpoints(settings).ok()?;
-        let groups = proxy_group_heads(&endpoints).ok()?;
+        self.load_group_heads(|| proxy_group_heads(&endpoints).ok())
+    }
+
+    /// Fetch group exits when the sample is missing or older than
+    /// [`PROXY_GROUPS_TTL`]. The fetch lock covers the request and the write.
+    fn load_group_heads(
+        &self,
+        fetch: impl FnOnce() -> Option<Vec<GroupHead>>,
+    ) -> Option<Vec<GroupHead>> {
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
+        }
+        let _fetch = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
+        }
+        let groups = fetch()?;
         *self
             .groups_cache
             .lock()
@@ -564,41 +616,17 @@ impl MobileHost {
     }
 
     /// One group's live exit. Does not fetch or retain the proxy map.
+    ///
+    /// A fresh group sample wins over the recorded exit, so an automatic
+    /// urltest or fallback change is visible before [`PROXY_GROUPS_TTL`].
+    /// The recorded exit still fills the gap when that sample has no row.
     fn cached_selected_now(&self, settings: &AppSettings, tag: &str) -> Option<String> {
-        {
-            let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
-            if let Some((at, cached_tag, now)) = slot.as_ref() {
-                if cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty() {
-                    return Some(now.clone());
-                }
-            }
-        }
-        {
-            let slot = self
-                .groups_cache
-                .lock()
-                .unwrap_or_else(|err| err.into_inner());
-            if let Some((at, groups)) = slot.as_ref() {
-                if at.elapsed() < PROXY_GROUPS_TTL {
-                    if let Some(now) = groups
-                        .iter()
-                        .find(|group| group.tag == tag)
-                        .map(|group| group.now.clone())
-                        .filter(|now| !now.is_empty())
-                    {
-                        return Some(now);
-                    }
-                }
-            }
+        if let Some(now) = self.preferred_cached_now(tag) {
+            return Some(now);
         }
         let _fetch = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
-        {
-            let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
-            if let Some((at, cached_tag, now)) = slot.as_ref() {
-                if cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty() {
-                    return Some(now.clone());
-                }
-            }
+        if let Some(now) = self.preferred_cached_now(tag) {
+            return Some(now);
         }
         let endpoints = self.endpoints(settings).ok()?;
         let now = proxy_selected_now(&endpoints, tag).ok()?;
@@ -969,5 +997,105 @@ pub fn stopped_view() -> TunnelView {
     TunnelView {
         phase: TunnelPhase::Stopped,
         permission: VpnPermission::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod group_cache_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    fn seed_groups(host: &MobileHost, heads: Vec<GroupHead>) {
+        *host
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some((Instant::now(), heads));
+    }
+
+    #[test]
+    fn record_group_now_patches_a_fresh_group_head() {
+        let host = MobileHost::new();
+        seed_groups(
+            &host,
+            vec![
+                GroupHead {
+                    tag: "auto".into(),
+                    now: "a".into(),
+                },
+                GroupHead {
+                    tag: "proxy".into(),
+                    now: "hk".into(),
+                },
+            ],
+        );
+        host.record_group_now("proxy", "jp");
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+        let groups = host.fresh_groups().expect("fresh groups");
+        assert_eq!(groups[0].now, "a");
+        assert_eq!(groups[1].now, "jp");
+    }
+
+    #[test]
+    fn a_fresher_group_sample_wins_over_the_recorded_exit() {
+        let host = MobileHost::new();
+        *host.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), "proxy".into(), "hk".into()));
+        seed_groups(
+            &host,
+            vec![GroupHead {
+                tag: "proxy".into(),
+                now: "jp".into(),
+            }],
+        );
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+    }
+
+    #[test]
+    fn recorded_exit_fills_a_group_sample_that_lacks_the_tag() {
+        let host = MobileHost::new();
+        *host.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), "proxy".into(), "jp".into()));
+        seed_groups(
+            &host,
+            vec![GroupHead {
+                tag: "auto".into(),
+                now: "a".into(),
+            }],
+        );
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+    }
+
+    #[test]
+    fn an_in_flight_group_sample_cannot_overwrite_the_recorded_exit() {
+        let host = Arc::new(MobileHost::new());
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let worker = {
+            let host = Arc::clone(&host);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            thread::spawn(move || {
+                host.load_group_heads(|| {
+                    entered.wait();
+                    release.wait();
+                    Some(vec![GroupHead {
+                        tag: "proxy".into(),
+                        now: "hk".into(),
+                    }])
+                })
+            })
+        };
+        entered.wait();
+        let recorder = {
+            let host = Arc::clone(&host);
+            thread::spawn(move || host.record_group_now("proxy", "jp"))
+        };
+        release.wait();
+        worker.join().expect("fetch");
+        recorder.join().expect("record");
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+        let groups = host.fresh_groups().expect("fresh groups");
+        assert_eq!(groups[0].now, "jp");
     }
 }
