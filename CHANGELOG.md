@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-10-09
+
 ### Changed
 
 - The home traffic chart paints from each live sample. The one-second poll
