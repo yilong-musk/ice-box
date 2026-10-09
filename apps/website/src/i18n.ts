@@ -19,8 +19,10 @@ import {
 const zh = {
   "head.title": "ice-box — 代理，保持简单",
   "head.description":
-    "ice-box — 面向 macOS、Windows 与 Android 的轻量代理客户端。上手简单、启动迅速、运行安静。",
+    "ice-box — 面向 macOS、Windows 与 Android 的轻量代理客户端。上手简单、启动迅速，运行时占用小。",
   "hero.title": "代理，<br><em>保持简单。</em>",
+  "light.kicker": "运行时",
+  "light.title": "运行时内存和 CPU 占用很小。",
   "hero.demo": "在线演示",
   "hero.download": "下载 ↗",
   "demo.windowBar": "实时产品演示",
@@ -34,8 +36,10 @@ export type MarketingKey = keyof typeof zh;
 const en: Record<MarketingKey, string> = {
   "head.title": "ice-box — proxy, kept simple",
   "head.description":
-    "ice-box — a lightweight proxy client for macOS, Windows, and Android. Easy to set up, quick to start, quiet once it runs.",
+    "ice-box — a lightweight proxy client for macOS, Windows, and Android. Easy to set up, quick to start, and light on memory and CPU once it runs.",
   "hero.title": "Proxy,<br><em>kept simple.</em>",
+  "light.kicker": "While it runs",
+  "light.title": "Light on memory and CPU while it runs.",
   "hero.demo": "Live Demo",
   "hero.download": "Download ↗",
   "demo.windowBar": "live product demo",

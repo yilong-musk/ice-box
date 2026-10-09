@@ -9,7 +9,7 @@
 **Proxy, kept simple.**
 
 A lightweight proxy client for macOS, Windows, and Android.<br>
-Easy to set up, quick to start, quiet once it runs — with a bundled [sing-box](https://github.com/SagerNet/sing-box) core underneath.
+Easy to set up, quick to start, quiet once it runs, and light on memory and CPU — with a bundled [sing-box](https://github.com/SagerNet/sing-box) core underneath.
 
 [![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
@@ -18,7 +18,7 @@ Easy to set up, quick to start, quiet once it runs — with a bundled [sing-box]
 [![Core](https://img.shields.io/badge/sing--box-1.13.19-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [Stays light](#stays-light) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
 
 English · [简体中文](README.zh-CN.md)
 
@@ -53,6 +53,10 @@ Grab the installer for your platform from the [latest release](https://github.co
 3. **Start the proxy service.** Press the power button. On macOS and Windows the system proxy is applied, or the TUN adapter comes up when TUN Mode is enabled. On Android the button connects the VPN after the system permission prompt. The traffic chart starts moving.
 
 No subscription yet? ice-box starts in direct-only mode, so the core, the capture, and the UI can be explored before anything is imported.
+
+## Stays light
+
+ice-box stays light on memory and CPU while it runs.
 
 ## Launch at login
 

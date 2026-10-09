@@ -9,7 +9,7 @@
 **代理，保持简单。**
 
 面向 macOS、Windows 与 Android 的轻量代理客户端。<br>
-上手简单、启动迅速、运行安静——内置 [sing-box](https://github.com/SagerNet/sing-box) 内核。
+上手简单、启动迅速、运行安静，运行时内存和 CPU 占用小——内置 [sing-box](https://github.com/SagerNet/sing-box) 内核。
 
 [![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
@@ -18,7 +18,7 @@
 [![Core](https://img.shields.io/badge/sing--box-1.13.19-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**下载**](https://github.com/yilong-musk/ice-box/releases/latest) · [**在线演示**](https://yilong-musk.github.io/ice-box/) · [安装](#安装) · [TUN](#tun-模式) · [文档](#文档) · [更新日志](CHANGELOG.md)
+[**下载**](https://github.com/yilong-musk/ice-box/releases/latest) · [**在线演示**](https://yilong-musk.github.io/ice-box/) · [安装](#安装) · [运行时占用小](#运行时占用小) · [TUN](#tun-模式) · [文档](#文档) · [更新日志](CHANGELOG.md)
 
 [English](README.md) · 简体中文
 
@@ -53,6 +53,10 @@
 3. **启动代理服务。** 按下电源键。在 macOS 与 Windows 上，系统代理随即生效，启用 TUN 模式时则拉起 TUN 网卡。在 Android 上，电源键会在系统授权后连接 VPN。流量图开始滚动。
 
 还没有订阅？ice-box 会以直连模式启动，内核、抓取方式和界面都可以先体验一遍。
+
+## 运行时占用小
+
+运行时的内存和 CPU 占用很小。
 
 ## 开机自启
 
