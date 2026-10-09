@@ -201,6 +201,30 @@ describe("Nodes", () => {
     });
   });
 
+  it("drops group member lists when the pane is hidden", async () => {
+    const members = Array.from({ length: 40 }, (_, i) => `leaf-${i}`);
+    listNodes.mockResolvedValue([
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "leaf-0",
+        group_all: members,
+      },
+      { tag: "leaf-0", outbound_type: "trojan", group_now: null, group_all: null },
+    ]);
+    const { container, rerender } = render(<Nodes active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("选择组")).toBeInTheDocument();
+    });
+    expect(readNodesSnapshot()?.nodes[0]?.group_all).toHaveLength(40);
+
+    rerender(<Nodes active={false} />);
+    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
+    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("leaf-0");
+    expect(view.queryByText("选择组")).toBeNull();
+  });
+
   it("renders later rows when scrolling a freshly loaded long list", async () => {
     listNodes.mockResolvedValue(
       Array.from({ length: 80 }, (_, i) => ({

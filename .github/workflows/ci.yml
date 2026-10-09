@@ -275,9 +275,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Go builds libbox from a sing-box checkout that does not exist yet.
+      # The default module cache looks for a repo go.mod and warns when it
+      # is missing.
       - uses: actions/setup-go@v7
         with:
           go-version: "1.25.x"
+          cache: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -22,6 +22,15 @@ use ice_proxy_sys::{
 };
 use std::path::{Path, PathBuf};
 
+/// Drops cached rule and DNS bodies when a config build finishes.
+struct ReleaseRuleBodies<'a>(&'a ProfileCache);
+
+impl Drop for ReleaseRuleBodies<'_> {
+    fn drop(&mut self) {
+        self.0.release_rule_bodies();
+    }
+}
+
 pub fn repo_third_party_singbox() -> PathBuf {
     // apps/desktop/src-tauri → repo root
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-box")
@@ -332,6 +341,9 @@ pub fn generate_config_with_cache(
             &scratch
         }
     };
+    // Declared before `profile` so it runs after that `Arc` is dropped and can
+    // clear rule and DNS bodies in place.
+    let _release_rules = ReleaseRuleBodies(cache);
     let sub_paths = SubscriptionPaths::from_app(app_paths);
     let index = load_index(&sub_paths).map_err(AppError::from)?;
     let platform = host_platform();

@@ -20,18 +20,25 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
     };
     let settings = current_settings(&state.paths)?;
     let selections = load_group_selections(&state.paths.group_selections());
-    let core_running = state.core_snapshot.load().state.status == CoreStatus::Running;
+    let core = state.core_snapshot.load();
+    let core_running = core.state.status == CoreStatus::Running;
     let live = if core_running {
         let endpoints = clash_endpoints(&state.paths, &settings)?;
-        proxy_groups(&endpoints).ok()
+        load_proxy_groups(&state.live_cache, &endpoints, core.generation, true)
     } else {
         None
     };
-    let live_by_tag: std::collections::HashMap<_, _> = live
-        .iter()
-        .flatten()
-        .map(|group| (group.tag.as_str(), group))
-        .collect();
+    // Member tags come from the profile. The live sample only carries `now`,
+    // so a refresh does not keep a second copy of every group member.
+    let live_now: std::collections::HashMap<&str, &str> = live
+        .as_ref()
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| (group.tag.as_str(), group.now.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(entry
         .profile
         .groups
@@ -47,7 +54,6 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
             let is_group = ["selector", "urltest", "fallback", "loadbalance"]
                 .iter()
                 .any(|g| g == &ty);
-            let live_state = live_by_tag.get(o.tag.as_str()).copied();
             let static_members: Vec<String> = o
                 .outbound
                 .get("outbounds")
@@ -75,19 +81,118 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
             NodeInfo {
                 tag: o.tag.clone(),
                 outbound_type: ty,
-                group_now: live_state
-                    .map(|g| g.now.clone())
-                    .filter(|n| !n.is_empty())
+                group_now: live_now
+                    .get(o.tag.as_str())
+                    .copied()
+                    .filter(|now| !now.is_empty())
+                    .map(str::to_string)
                     .or(static_now)
                     .filter(|_| is_group),
-                group_all: if is_group {
-                    Some(live_state.map(|g| g.all.clone()).unwrap_or(static_members))
-                } else {
-                    None
-                },
+                group_all: if is_group { Some(static_members) } else { None },
             }
         })
         .collect())
+}
+
+const STRATEGY_GROUPS: &[&str] = &["selector", "urltest", "fallback", "loadbalance"];
+
+fn outbound_type_name(outbound: &NormalizedOutbound) -> String {
+    outbound
+        .outbound
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn static_group_now(
+    outbound: &NormalizedOutbound,
+    ty: &str,
+    selections: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    if ty != "selector" {
+        return None;
+    }
+    selections
+        .get(&outbound.tag)
+        .cloned()
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("default")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            outbound
+                .outbound
+                .get("outbounds")
+                .and_then(|value| value.as_array())
+                .and_then(|members| members.first())
+                .and_then(|member| member.as_str())
+                .map(str::to_string)
+        })
+}
+
+/// Home's one-line exit. Does not clone strategy-group member lists.
+pub(crate) fn outbound_summary(
+    state: &AppState,
+    settings: Option<&AppSettings>,
+    running: bool,
+) -> (bool, Option<SelectedOutbound>) {
+    let Ok(Some(entry)) = cached_profile(state) else {
+        return (false, None);
+    };
+    let outbounds: Vec<&NormalizedOutbound> = entry
+        .profile
+        .groups
+        .iter()
+        .chain(entry.profile.nodes.iter())
+        .collect();
+    if outbounds.is_empty() {
+        return (false, None);
+    }
+    let selected = settings
+        .and_then(|settings| settings.selected_tag.as_deref())
+        .and_then(|tag| {
+            outbounds
+                .iter()
+                .copied()
+                .find(|outbound| outbound.tag == tag)
+        })
+        .or_else(|| outbounds.first().copied());
+    let Some(outbound) = selected else {
+        return (false, None);
+    };
+    let ty = outbound_type_name(outbound);
+    let is_group = STRATEGY_GROUPS.iter().any(|group| *group == ty);
+    let selections = load_group_selections(&state.paths.group_selections());
+    let mut group_now = static_group_now(outbound, &ty, &selections);
+    if running && is_group {
+        if let Some(settings) = settings {
+            if let Ok(endpoints) = clash_endpoints(&state.paths, settings) {
+                let core = state.core_snapshot.load();
+                let refresh = state.live_cache.home_interest();
+                if let Some(now) = load_selected_now(
+                    &state.live_cache,
+                    &endpoints,
+                    core.generation,
+                    &outbound.tag,
+                    refresh,
+                ) {
+                    group_now = Some(now);
+                }
+            }
+        }
+    }
+    (
+        true,
+        Some(SelectedOutbound {
+            tag: outbound.tag.clone(),
+            outbound_type: ty,
+            group_now: group_now.filter(|_| is_group),
+        }),
+    )
 }
 
 #[derive(Serialize)]
@@ -155,30 +260,43 @@ pub struct ListRulesResponse {
 
 pub(crate) fn load_overrides(state: &AppState) -> RuleOverrides {
     let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
-    if let Ok(Some(entry)) = cached_profile(state) {
-        let mut rules: Vec<_> = entry.profile.route.rules.clone();
-        rules.extend(overrides.custom.clone());
-        if overrides.migrate_legacy_fingerprints(rules.iter()) {
+    // A current file is only `sha256:` keys. Cloning every rule just to
+    // discover that is what made each rules read duplicate the profile.
+    if !overrides.has_legacy_disabled_fingerprints() {
+        return overrides;
+    }
+    if let Ok(rules) = subscription_rules(state) {
+        let custom = overrides.custom.clone();
+        let mut combined: Vec<&serde_json::Value> = rules.iter().collect();
+        combined.extend(custom.iter());
+        if overrides.migrate_legacy_fingerprints(combined) {
             let _ = save_rule_overrides(&state.paths.rule_overrides(), &overrides);
         }
     }
     overrides
 }
 
+pub(crate) fn subscription_rules(
+    state: &AppState,
+) -> Result<Arc<Vec<serde_json::Value>>, AppError> {
+    let Some(entry) = cached_profile(state)? else {
+        return Ok(Arc::new(Vec::new()));
+    };
+    Ok(Arc::clone(&entry.rule_page(state)?.rules))
+}
+
 pub(crate) fn rule_exists(
-    profile: &NormalizedProfile,
+    rules: &[serde_json::Value],
     overrides: &RuleOverrides,
     fingerprint: &str,
 ) -> bool {
-    profile
-        .route
-        .rules
+    rules
         .iter()
-        .any(|r| rule_matches_fingerprint(r, fingerprint))
+        .any(|rule| rule_matches_fingerprint(rule, fingerprint))
         || overrides
             .custom
             .iter()
-            .any(|r| rule_matches_fingerprint(r, fingerprint))
+            .any(|rule| rule_matches_fingerprint(rule, fingerprint))
 }
 
 /// Persist rule overrides then Apply (hot reload when running), like subscription mutations.
@@ -198,15 +316,23 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         .as_ref()
         .map(|entry| entry.profile.as_ref())
         .unwrap_or(&empty);
-    let fingerprints: &[String] = cached
+    let page = cached
         .as_ref()
-        .map(|entry| entry.fingerprints.as_ref())
-        .map_or(&[], |v| v);
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
+        .as_ref()
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
     let overrides = load_overrides(state);
     let mut counts: std::collections::HashMap<&'static str, usize> =
         std::collections::HashMap::new();
     let mut disabled = 0usize;
-    for (idx, rule) in profile.route.rules.iter().enumerate() {
+    for (idx, rule) in rules.iter().enumerate() {
         let fp: std::borrow::Cow<'_, str> = fingerprints
             .get(idx)
             .map(|fp| std::borrow::Cow::Borrowed(fp.as_str()))
@@ -230,7 +356,7 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         .collect();
     types.sort_by(|a, b| b.count.cmp(&a.count).then(a.rule_type.cmp(&b.rule_type)));
     Ok(RuleOverview {
-        total: profile.route.rules.len(),
+        total: rules.len(),
         disabled,
         custom: overrides.custom.len(),
         rule_sets: profile.route.rule_sets.len(),
@@ -245,15 +371,18 @@ pub(crate) fn query_rules(
     req: &ListRulesRequest,
 ) -> Result<ListRulesResponse, AppError> {
     let cached = cached_profile(state)?;
-    let empty = NormalizedProfile::from_nodes_only(vec![]);
-    let profile = cached
+    let page = cached
         .as_ref()
-        .map(|entry| entry.profile.as_ref())
-        .unwrap_or(&empty);
-    let fingerprints: &[String] = cached
+        .map(|entry| entry.rule_page(state))
+        .transpose()?;
+    let rules: &[serde_json::Value] = page
         .as_ref()
-        .map(|entry| entry.fingerprints.as_ref())
-        .map_or(&[], |v| v);
+        .map(|page| page.rules.as_slice())
+        .unwrap_or(&[]);
+    let fingerprints: &[String] = page
+        .as_ref()
+        .map(|page| page.fingerprints.as_slice())
+        .unwrap_or(&[]);
     // Lowercase-serialized rule text is built once per profile version (lazily,
     // only when a keyword is present) instead of per request.
     let keyword_texts = req
@@ -261,7 +390,7 @@ pub(crate) fn query_rules(
         .as_deref()
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .and_then(|_| cached.as_ref().map(|entry| entry.keyword_texts()));
+        .and_then(|_| page.as_ref().map(|page| page.keyword_texts()));
     let overrides = load_overrides(state);
     let limit = req.limit.clamp(1, MAX_RULES_PAGE_SIZE);
     let keyword = req
@@ -276,12 +405,17 @@ pub(crate) fn query_rules(
         _ => None,
     };
 
-    let mut filtered: Vec<RuleRow> = Vec::new();
-    for rule in &overrides.custom {
+    // Indices only. The page clones rule JSON; the rest of a large
+    // subscription stays as the profile's existing values.
+    enum RuleHit {
+        Custom(usize),
+        Subscription(usize),
+    }
+    let mut hits: Vec<RuleHit> = Vec::new();
+    for (idx, rule) in overrides.custom.iter().enumerate() {
         if req.custom == Some(false) {
             continue;
         }
-        let fp = rule_fingerprint(rule);
         let disabled = overrides.is_rule_disabled(rule);
         if !matches_filter(
             rule_type_of(rule),
@@ -293,16 +427,9 @@ pub(crate) fn query_rules(
         ) {
             continue;
         }
-        filtered.push(RuleRow {
-            index: None,
-            fingerprint: fp,
-            rule: rule.clone(),
-            custom: true,
-            disabled,
-            rule_type: rule_type_of(rule).to_string(),
-        });
+        hits.push(RuleHit::Custom(idx));
     }
-    for (idx, rule) in profile.route.rules.iter().enumerate() {
+    for (idx, rule) in rules.iter().enumerate() {
         if req.custom == Some(true) {
             continue;
         }
@@ -321,19 +448,45 @@ pub(crate) fn query_rules(
                 rule,
             )
         {
-            filtered.push(RuleRow {
-                index: Some(idx),
-                fingerprint: fp.into_owned(),
-                rule: rule.clone(),
-                custom: false,
-                disabled,
-                rule_type: rule_type_of(rule).to_string(),
-            });
+            hits.push(RuleHit::Subscription(idx));
         }
     }
 
-    let total = filtered.len();
-    let items: Vec<RuleRow> = filtered.into_iter().skip(req.offset).take(limit).collect();
+    let total = hits.len();
+    let items: Vec<RuleRow> = hits
+        .iter()
+        .skip(req.offset)
+        .take(limit)
+        .map(|hit| match *hit {
+            RuleHit::Custom(idx) => {
+                let rule = &overrides.custom[idx];
+                RuleRow {
+                    index: None,
+                    fingerprint: rule_fingerprint(rule),
+                    rule: rule.clone(),
+                    custom: true,
+                    disabled: overrides.is_rule_disabled(rule),
+                    rule_type: rule_type_of(rule).to_string(),
+                }
+            }
+            RuleHit::Subscription(idx) => {
+                let rule = &rules[idx];
+                let fingerprint = fingerprints
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| rule_fingerprint(rule));
+                let disabled = overrides.is_disabled(&fingerprint);
+                RuleRow {
+                    index: Some(idx),
+                    fingerprint,
+                    rule: rule.clone(),
+                    custom: false,
+                    disabled,
+                    rule_type: rule_type_of(rule).to_string(),
+                }
+            }
+        })
+        .collect();
     Ok(ListRulesResponse {
         total,
         offset: req.offset,
@@ -406,16 +559,14 @@ pub(crate) fn persist_rule_disabled(
     req: &SetRuleDisabledRequest,
 ) -> Result<(), AppError> {
     let mut overrides = load_overrides(state);
-    let profile = active_profile(state)?;
-    if !rule_exists(&profile, &overrides, &req.fingerprint) {
+    let rules = subscription_rules(state)?;
+    if !rule_exists(rules.as_ref(), &overrides, &req.fingerprint) {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "unknown rule fingerprint",
         ));
     }
-    if let Some(rule) = profile
-        .route
-        .rules
+    if let Some(rule) = rules
         .iter()
         .chain(overrides.custom.iter())
         .find(|r| rule_matches_fingerprint(r, &req.fingerprint))
@@ -631,6 +782,11 @@ pub(crate) fn select_node(app: &impl AppHost, state: &AppState, tag: &str) -> Re
             );
             return Err(AppError::from(err));
         }
+        let group = selection_group.as_deref().unwrap_or(ice_core::SELECTOR_TAG);
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, tag);
     }
 
     Ok(())
@@ -719,6 +875,10 @@ pub(crate) fn select_group_member(
     if should_apply_live {
         let endpoints = clash_endpoints(&state.paths, &settings)?;
         select_group(&endpoints, group, member).map_err(AppError::from)?;
+        let generation = state.core_snapshot.load().generation;
+        state
+            .live_cache
+            .record_group_now(&endpoints, generation, group, member);
     } else if !patch_selected_tag_default(&state.paths, group, member)? {
         generate_config_with_cache(
             &state.paths,

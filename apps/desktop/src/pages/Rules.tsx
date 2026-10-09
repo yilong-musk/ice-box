@@ -151,7 +151,13 @@ export function Rules({ onNavigate, active = true }: Props) {
 
   useEffect(() => {
     overviewRequestRef.current = null;
-    if (!active) nextGeneration();
+    if (!active) {
+      nextGeneration();
+      setRows([]);
+      setOverview(EMPTY_OVERVIEW);
+      setTotal(0);
+      if (typeof api.releaseRuleSearch === "function") void api.releaseRuleSearch();
+    }
   }, [active, nextGeneration]);
 
   useEffect(() => {

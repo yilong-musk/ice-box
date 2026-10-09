@@ -20,8 +20,9 @@ pub(crate) use ice_config::{
     SettingsPatch, TrayDisplayMode, UiMessage,
 };
 pub(crate) use ice_core::{
-    pid_is_alive, proxy_delay, proxy_groups, read_pid, select_group, select_outbound, CoreState,
-    CoreStatus, HealthEndpoints, TrafficDelta, TrafficSnapshot, DELAY_TEST_URL,
+    pid_is_alive, proxy_delay, proxy_group_heads, proxy_selected_now, read_pid, select_group,
+    select_outbound, CoreState, CoreStatus, GroupHead, HealthEndpoints, TrafficDelta,
+    TrafficSnapshot, DELAY_TEST_URL,
 };
 pub(crate) use ice_engine::{
     active_subscription, host_platform, redact_subscription_url_for_log,
@@ -36,9 +37,10 @@ pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::path::Path;
 #[cfg(target_os = "windows")]
 pub(crate) use std::path::PathBuf;
-pub(crate) use std::sync::atomic::Ordering;
+pub(crate) use std::sync::atomic::{AtomicBool, Ordering};
 pub(crate) use std::sync::mpsc::SyncSender;
 pub(crate) use std::sync::{Arc, Mutex, MutexGuard};
+pub(crate) use std::time::Duration;
 pub(crate) use std::time::{Instant, SystemTime};
 pub(crate) use uuid::Uuid;
 
@@ -138,7 +140,7 @@ pub(crate) fn detach_traffic(state: &AppState) {
 ///
 /// Only the core (sing-box) and the app's main process are measured; WebView
 /// helpers and the privileged helper daemon are out of scope by design.
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct MemoryUsage {
     /// App main process memory; `None` when it cannot be read.
     pub app_bytes: Option<u64>,
@@ -152,7 +154,15 @@ pub struct MemoryUsage {
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Serialize)]
+/// The exit Home shows. Member lists stay on the Nodes page and the tray.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SelectedOutbound {
+    pub tag: String,
+    pub outbound_type: String,
+    pub group_now: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct StatusResponse {
     /// Monotonic publication revision of the entire committed runtime read.
     pub revision: u64,
@@ -214,6 +224,12 @@ pub struct StatusResponse {
     /// the TUN-on next-start desire. Always true on non-Windows hosts (no
     /// task concept there).
     pub tun_elevation_ready: bool,
+    /// The active profile has at least one outbound. Home uses this instead of
+    /// the full node list to choose the empty state.
+    pub has_nodes: bool,
+    /// Resolved exit for the Home row: settings tag, else the first outbound,
+    /// with a strategy group's live `now` when that cache is warm.
+    pub selected_outbound: Option<SelectedOutbound>,
 }
 
 /// Slow consistency fallback. Mutations and window activation invalidate the
@@ -278,35 +294,37 @@ struct ProfileSig {
     settings: Option<(SystemTime, u64)>,
 }
 
-/// Cached parse of the active profile plus the per-rule fingerprints (one
-/// serialization per rule per profile version, instead of per poll/request).
-#[derive(Clone)]
-pub struct ProfileCacheEntry {
-    sig: ProfileSig,
-    pub profile: Arc<NormalizedProfile>,
-    node_tags: Arc<std::collections::HashSet<String>>,
-    /// Parallel to `profile.route.rules`.
-    pub fingerprints: Arc<Vec<String>>,
-    /// Lazy lowercase-serialized rule text for keyword search: built once per
-    /// profile version on the first keyword query (10k rules ≈ a few MB), then
-    /// reused. Never allocated for non-keyword reads.
-    keyword_text: Arc<Mutex<Option<Arc<Vec<String>>>>>,
+/// Subscription rules kept only while the Rules page is open.
+pub(crate) struct RulePage {
+    pub(crate) rules: Arc<Vec<serde_json::Value>>,
+    /// Parallel to `rules`.
+    pub(crate) fingerprints: Arc<Vec<String>>,
+    /// Lowercase-serialized rule text for keyword search. Built on the first
+    /// keyword query (10k rules ≈ a few MB), then reused. Never allocated for
+    /// non-keyword reads.
+    keyword_text: Mutex<Option<Arc<Vec<String>>>>,
 }
 
-impl ProfileCacheEntry {
-    /// Lowercase-serialized text of every subscription rule, built lazily.
+impl RulePage {
+    fn from_rules(rules: Vec<serde_json::Value>) -> Self {
+        let fingerprints = Arc::new(rules.iter().map(rule_fingerprint).collect());
+        Self {
+            rules: Arc::new(rules),
+            fingerprints,
+            keyword_text: Mutex::new(None),
+        }
+    }
+
     pub(crate) fn keyword_texts(&self) -> Arc<Vec<String>> {
         let mut slot = self
             .keyword_text
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(texts) = slot.as_ref() {
-            return texts.clone();
+            return Arc::clone(texts);
         }
         let texts: Arc<Vec<String>> = Arc::new(
-            self.profile
-                .route
-                .rules
+            self.rules
                 .iter()
                 .map(|rule| {
                     serde_json::to_string(rule)
@@ -315,9 +333,95 @@ impl ProfileCacheEntry {
                 })
                 .collect(),
         );
-        *slot = Some(texts.clone());
+        *slot = Some(Arc::clone(&texts));
         texts
     }
+}
+
+/// Cached nodes and groups for the active profile. Rule bodies, DNS, and
+/// outbound connection fields are not retained here; see
+/// [`ProfileCacheEntry::rule_page`].
+#[derive(Clone)]
+pub struct ProfileCacheEntry {
+    sig: ProfileSig,
+    pub profile: Arc<NormalizedProfile>,
+    rule_page: Arc<Mutex<Option<Arc<RulePage>>>>,
+}
+
+impl ProfileCacheEntry {
+    /// Subscription rules, loaded from disk on the first Rules-page read and
+    /// shared until [`Self::clear_rule_page`].
+    pub(crate) fn rule_page(&self, state: &AppState) -> Result<Arc<RulePage>, AppError> {
+        let mut slot = self
+            .rule_page
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(page) = slot.as_ref() {
+            return Ok(Arc::clone(page));
+        }
+        let rules = match read_full_profile(state)? {
+            Some(mut profile) => std::mem::take(&mut profile.route.rules),
+            None => Vec::new(),
+        };
+        let page = Arc::new(RulePage::from_rules(rules));
+        *slot = Some(Arc::clone(&page));
+        Ok(page)
+    }
+
+    pub(crate) fn clear_rule_page(&self) {
+        let mut slot = self
+            .rule_page
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = None;
+    }
+}
+
+/// Drop the Rules-page copy of subscription rules, fingerprints, and the
+/// keyword index. Home and the tray do not need them.
+pub(crate) fn drop_rule_keyword_cache(state: &AppState) {
+    let Ok(cache) = state.profile_cache.lock() else {
+        return;
+    };
+    if let Some(entry) = cache.as_ref() {
+        entry.clear_rule_page();
+    }
+}
+
+/// Full profile from disk, including rules and DNS. Does not touch the
+/// long-lived parse cache.
+fn read_full_profile(state: &AppState) -> Result<Option<NormalizedProfile>, AppError> {
+    let sub_paths = SubscriptionPaths::from_app(&state.paths);
+    let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
+    let auto_default_rules = current_settings(&state.paths)
+        .map(|settings| settings.auto_default_rules)
+        .unwrap_or(true);
+    match ice_engine::load_active_profile_with_default_rules(
+        &sub_paths,
+        &index,
+        auto_default_rules,
+        host_platform(),
+    ) {
+        Ok(profile) => Ok(Some(
+            Arc::try_unwrap(profile).unwrap_or_else(|arc| (*arc).clone()),
+        )),
+        Err(SubscriptionError::NoActiveSubscription) => Ok(None),
+        Err(err) => Err(AppError::from(err)),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn subscription_rules_retained(state: &AppState) -> bool {
+    let Ok(cache) = state.profile_cache.lock() else {
+        return false;
+    };
+    cache.as_ref().is_some_and(|entry| {
+        entry
+            .rule_page
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    })
 }
 
 pub(crate) type LogViewCache = crate::log_view::LogViewReader;
@@ -328,8 +432,12 @@ pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Load the active profile from a mtime-keyed cache. `Ok(None)` when no active
-/// subscription exists. Returns the built-in-default-rules-applied profile
-/// (same semantics as `load_active_profile_with_default_rules`).
+/// subscription exists.
+///
+/// The cached profile has node tags, outbound types, group members, and
+/// rule-set metadata. `route.rules`, `dns`, and connection fields (server,
+/// keys, transport) are not retained; config generation re-reads them, and
+/// the Rules page loads rules into [`ProfileCacheEntry::rule_page`].
 pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntry>, AppError> {
     let sub_paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
@@ -339,21 +447,34 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
         profile: active.and_then(|m| file_sig(&sub_paths.profile(m.id))),
         settings: file_sig(&state.paths.settings()),
     };
-    if let Ok(cache) = state.profile_cache.lock() {
-        if let Some(entry) = cache.as_ref() {
+    let auto_default_rules = current_settings(&state.paths)
+        .map(|settings| settings.auto_default_rules)
+        .unwrap_or(true);
+    let platform = host_platform();
+    if let Ok(mut cache) = state.profile_cache.lock() {
+        if let Some(entry) = cache.as_mut() {
             if entry.sig == sig {
+                // A config rebuild replaces the parse-cache Arc. Adopt it so
+                // the previous resident copy does not stay alive beside it.
+                if let Some(shared) = state.profile_parse_cache.resident_if_current(
+                    &sub_paths,
+                    &index,
+                    auto_default_rules,
+                    platform,
+                ) {
+                    if !Arc::ptr_eq(&entry.profile, &shared) {
+                        entry.profile = shared;
+                    }
+                }
                 return Ok(Some(entry.clone()));
             }
         }
     }
-    let auto_default_rules = current_settings(&state.paths)
-        .map(|s| s.auto_default_rules)
-        .unwrap_or(true);
-    let profile = match state.profile_parse_cache.load_active_with_default_rules(
+    let profile = match state.profile_parse_cache.load_resident(
         &sub_paths,
         &index,
         auto_default_rules,
-        host_platform(),
+        platform,
     ) {
         Ok(profile) => profile,
         Err(SubscriptionError::NoActiveSubscription) => return Ok(None),
@@ -361,10 +482,8 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
     };
     let entry = ProfileCacheEntry {
         sig,
-        node_tags: Arc::new(profile.all_outbounds().map(|o| o.tag.clone()).collect()),
-        fingerprints: Arc::new(profile.route.rules.iter().map(rule_fingerprint).collect()),
         profile,
-        keyword_text: Arc::new(Mutex::new(None)),
+        rule_page: Arc::new(Mutex::new(None)),
     };
     if let Ok(mut cache) = state.profile_cache.lock() {
         *cache = Some(entry.clone());
@@ -389,7 +508,11 @@ pub(crate) fn merged_outbounds_opt(
 pub(crate) fn require_known_node_tag(state: &AppState, tag: &str) -> Result<(), AppError> {
     let entry = cached_profile(state)?
         .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))?;
-    if !entry.node_tags.contains(tag) {
+    if !entry
+        .profile
+        .all_outbounds()
+        .any(|outbound| outbound.tag == tag)
+    {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             format!("unknown node tag: {tag}"),
@@ -548,18 +671,310 @@ pub(crate) fn broadcast_state_change(app: &impl AppHost) {
     app.state_changed();
 }
 
+/// How long a process-memory sample may be reused. The Home row does not need
+/// a fresh syscall on every 10s status poll; a core start/stop still resamples.
+const MEMORY_REFRESH: Duration = Duration::from_secs(30);
+
+/// Shared live group exits (`now` only). Member tags stay on the profile.
+/// Home does not use this document: it reads one group's `now`.
+pub(crate) const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
+
+struct CachedGroups {
+    endpoints: HealthEndpoints,
+    generation: u64,
+    fetched_at: Instant,
+    groups: Arc<Vec<GroupHead>>,
+}
+
+struct CachedNow {
+    endpoints: HealthEndpoints,
+    generation: u64,
+    tag: String,
+    fetched_at: Instant,
+    now: String,
+}
+
+struct CachedMemory {
+    at: Instant,
+    running: bool,
+    usage: MemoryUsage,
+}
+
+/// Short-lived reads that status, nodes, and the tray share.
+#[derive(Default)]
+pub struct LiveCache {
+    groups: Mutex<Option<CachedGroups>>,
+    /// Single-flight fetch. Never held by a status read that is not refreshing.
+    groups_fetch: Mutex<()>,
+    selected_now: Mutex<Option<CachedNow>>,
+    /// Single-flight fetch of one group's `now`. Separate from `groups_fetch`
+    /// so Home does not queue behind a full proxy-map read.
+    now_fetch: Mutex<()>,
+    /// Home is the visible tab. Only then does a status poll refresh the
+    /// selected group's `now`.
+    home_interest: AtomicBool,
+    memory: Mutex<Option<CachedMemory>>,
+}
+
+impl LiveCache {
+    pub(crate) fn set_home_interest(&self, active: bool) {
+        self.home_interest.store(active, Ordering::Relaxed);
+    }
+
+    pub(crate) fn home_interest(&self) -> bool {
+        self.home_interest.load(Ordering::Relaxed)
+    }
+
+    /// Publish a selector member that Clash has already accepted.
+    ///
+    /// Status, Nodes, and the tray reuse a fresh sample for
+    /// [`PROXY_GROUPS_TTL`]. Without this write they keep the previous `now`
+    /// until that sample expires. Fetch locks are held across the write so an
+    /// in-flight read that started before the switch cannot publish the old
+    /// member afterwards.
+    pub(crate) fn record_group_now(
+        &self,
+        endpoints: &HealthEndpoints,
+        generation: u64,
+        tag: &str,
+        now: &str,
+    ) {
+        let _groups = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _selected = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        {
+            let mut slot = self.groups.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some(hit) = slot.as_mut() {
+                if groups_match(hit, endpoints, generation) {
+                    let mut groups = (*hit.groups).clone();
+                    if let Some(group) = groups.iter_mut().find(|group| group.tag == tag) {
+                        group.now = now.to_string();
+                        hit.groups = Arc::new(groups);
+                        hit.fetched_at = Instant::now();
+                    }
+                }
+            }
+        }
+        *self
+            .selected_now
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(CachedNow {
+            endpoints: endpoints.clone(),
+            generation,
+            tag: tag.to_string(),
+            fetched_at: Instant::now(),
+            now: now.to_string(),
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_group_heads_for_test(
+        &self,
+        endpoints: HealthEndpoints,
+        generation: u64,
+        groups: Vec<GroupHead>,
+        age: Duration,
+    ) {
+        *self.groups.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedGroups {
+            endpoints,
+            generation,
+            fetched_at: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
+            groups: Arc::new(groups),
+        });
+    }
+}
+
+fn groups_match(hit: &CachedGroups, endpoints: &HealthEndpoints, generation: u64) -> bool {
+    hit.generation == generation && &hit.endpoints == endpoints
+}
+
+/// `refresh` fetches when the sample is missing or older than [`PROXY_GROUPS_TTL`].
+/// A generation change never serves the previous core's groups. Fetch failure
+/// keeps the last sample for this core. The sample is group exits only.
+pub(crate) fn load_proxy_groups(
+    cache: &LiveCache,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    refresh: bool,
+) -> Option<Arc<Vec<GroupHead>>> {
+    let cached = |slot: &Option<CachedGroups>| {
+        slot.as_ref()
+            .filter(|hit| groups_match(hit, endpoints, generation))
+            .map(|hit| hit.groups.clone())
+    };
+    let fresh = {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        slot.as_ref()
+            .is_some_and(|hit| {
+                groups_match(hit, endpoints, generation)
+                    && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+            })
+            .then(|| cached(&slot))
+            .flatten()
+    };
+    if fresh.is_some() {
+        return fresh;
+    }
+    if !refresh {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        return cached(&slot);
+    }
+    let _fetch = cache.groups_fetch.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = slot.as_ref() {
+            if groups_match(hit, endpoints, generation)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+            {
+                return Some(hit.groups.clone());
+            }
+        }
+    }
+    match proxy_group_heads(endpoints) {
+        Ok(groups) => {
+            let groups = Arc::new(groups);
+            *cache.groups.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedGroups {
+                endpoints: endpoints.clone(),
+                generation,
+                fetched_at: Instant::now(),
+                groups: groups.clone(),
+            });
+            Some(groups)
+        }
+        Err(error) => {
+            tracing::debug!(%error, "clash /proxies refresh failed");
+            let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+            cached(&slot)
+        }
+    }
+}
+
+fn now_hit_matches(
+    hit: &CachedNow,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    tag: &str,
+) -> bool {
+    hit.generation == generation && hit.tag == tag && &hit.endpoints == endpoints
+}
+
+fn now_from_groups(groups: &[GroupHead], tag: &str) -> Option<String> {
+    groups
+        .iter()
+        .find(|group| group.tag == tag)
+        .map(|group| group.now.clone())
+        .filter(|now| !now.is_empty())
+}
+
+/// The selected group's live exit.
+///
+/// A fresh group-head sample (Nodes or the tray) is reused. Otherwise Home
+/// fetches `GET /proxies/{tag}` and keeps only `now`. `refresh` is false when
+/// Home is not the visible tab: the last sample for this core is served and
+/// nothing is fetched.
+pub(crate) fn load_selected_now(
+    cache: &LiveCache,
+    endpoints: &HealthEndpoints,
+    generation: u64,
+    tag: &str,
+    refresh: bool,
+) -> Option<String> {
+    {
+        let slot = cache.groups.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = slot.as_ref() {
+            if groups_match(hit, endpoints, generation)
+                && (hit.fetched_at.elapsed() < PROXY_GROUPS_TTL || !refresh)
+            {
+                if let Some(now) = now_from_groups(&hit.groups, tag) {
+                    return Some(now);
+                }
+            }
+        }
+    }
+    let cached_now = |slot: &Option<CachedNow>| {
+        slot.as_ref()
+            .filter(|hit| now_hit_matches(hit, endpoints, generation, tag))
+            .map(|hit| hit.now.clone())
+            .filter(|now| !now.is_empty())
+    };
+    {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|hit| {
+            now_hit_matches(hit, endpoints, generation, tag)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+        }) {
+            return cached_now(&slot);
+        }
+    }
+    if !refresh {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        return cached_now(&slot);
+    }
+    let _fetch = cache.now_fetch.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|hit| {
+            now_hit_matches(hit, endpoints, generation, tag)
+                && hit.fetched_at.elapsed() < PROXY_GROUPS_TTL
+        }) {
+            return cached_now(&slot);
+        }
+    }
+    match proxy_selected_now(endpoints, tag) {
+        Ok(now) => {
+            *cache.selected_now.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedNow {
+                endpoints: endpoints.clone(),
+                generation,
+                tag: tag.to_string(),
+                fetched_at: Instant::now(),
+                now: now.clone(),
+            });
+            (!now.is_empty()).then_some(now)
+        }
+        Err(error) => {
+            tracing::debug!(%error, "clash proxy now refresh failed");
+            let slot = cache.selected_now.lock().unwrap_or_else(|e| e.into_inner());
+            cached_now(&slot)
+        }
+    }
+}
+
 /// Memory of the app process plus the running core, when readable.
 ///
-/// Two lightweight syscalls per status poll, so no caching is needed.
-fn memory_usage(state: &AppState) -> MemoryUsage {
+/// Reused for [`MEMORY_REFRESH`] so a quiet status poll does not syscall.
+/// An unknown core figure while the core is running is not cached: the pid
+/// file often appears on the next poll.
+fn memory_usage(state: &AppState, running: bool) -> MemoryUsage {
+    // Hold the sample lock across the syscalls so parallel status polls share
+    // one reading instead of publishing two revisions for the same moment.
+    let mut slot = state
+        .live_cache
+        .memory
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = slot.as_ref() {
+        if hit.running == running && hit.at.elapsed() < MEMORY_REFRESH {
+            return hit.usage.clone();
+        }
+    }
     let app_bytes = crate::proc_memory::process_memory_bytes(std::process::id()).ok();
     let core_bytes = core_memory_bytes(state);
     let total_bytes = app_bytes.unwrap_or(0) + core_bytes.unwrap_or(0);
-    MemoryUsage {
+    let usage = MemoryUsage {
         app_bytes,
         core_bytes,
         total_bytes,
+    };
+    if !(running && usage.core_bytes.is_none()) {
+        *slot = Some(CachedMemory {
+            at: Instant::now(),
+            running,
+            usage: usage.clone(),
+        });
     }
+    usage
 }
 
 /// Core memory: only while the core is running and its pid file holds a live
@@ -629,6 +1044,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         .as_ref()
         .map(|settings| state.capture.status(settings))
         .unwrap_or_else(|| state.capture.status(&ice_config::AppSettings::default()));
+    let (has_nodes, selected_outbound) = super::outbound_summary(state, settings.as_ref(), running);
     Ok(state.runtime_status.publish(StatusResponse {
         revision: 0,
         sampled_at_ms: crate::runtime_status::timestamp_ms(),
@@ -637,7 +1053,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         workers: state.workers.statuses(),
         core: core_state,
         subscription_count: count,
-        memory: memory_usage(state),
+        memory: memory_usage(state, running),
         proxy_recovery_warning,
         system_proxy_applied,
         system_proxy_recorded,
@@ -657,6 +1073,8 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tray_display_supported: cfg!(target_os = "macos"),
         helper_stale: probes.helper_stale,
         tun_elevation_ready: probes.tun_elevation_ready,
+        has_nodes,
+        selected_outbound,
     }))
 }
 

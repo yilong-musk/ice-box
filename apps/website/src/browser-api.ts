@@ -179,8 +179,21 @@ export const api = {
       helper_stale: false,
       tun_elevation_ready: true,
       tray_display_supported: false,
+      has_nodes: nodes.length > 0,
+      selected_outbound: (() => {
+        const node = nodes.find((item) => item.tag === settings.selected_tag) ?? nodes[0];
+        if (!node) return null;
+        return {
+          tag: node.tag,
+          outbound_type: node.outbound_type,
+          group_now: node.group_now,
+        };
+      })(),
     };
   },
+  async setHomeActive(): Promise<void> {},
+  async setLogViewActive(): Promise<void> {},
+  async releaseRuleSearch(): Promise<void> {},
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },
   async restoreLaunchProxy(): Promise<void> {
     await delay();

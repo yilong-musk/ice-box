@@ -275,13 +275,14 @@ mod tests {
             subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 true,
             )),
-            log_view_cache: Mutex::new(None),
+            log_view_cache: Mutex::new(crate::application::LogViewSlot::default()),
             helper_probe_cache: Mutex::new(None),
             tun_task_cache: Mutex::new(None),
             clash_live_mode_cache: Mutex::new(true),
             launch_proxy_restore_attempted: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
             ),
+            live_cache: crate::application::LiveCache::default(),
         })
     }
 

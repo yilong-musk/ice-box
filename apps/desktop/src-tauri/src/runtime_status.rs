@@ -28,7 +28,7 @@ pub(crate) fn timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProbeFreshness {
     pub checked_at_ms: Option<u64>,
     pub age_ms: Option<u64>,
@@ -85,9 +85,30 @@ pub struct RuntimeReadModel {
     pub(crate) probe_refresh: Mutex<()>,
 }
 
+/// Clock and probe-age fields move on every read. They are not a new
+/// committed view, and neither is a memory figure that was already published.
+fn same_committed_view(previous: &StatusResponse, next: &StatusResponse) -> bool {
+    let mut previous = previous.clone();
+    let mut next = next.clone();
+    previous.revision = 0;
+    next.revision = 0;
+    previous.sampled_at_ms = 0;
+    next.sampled_at_ms = 0;
+    previous.diagnostics.checked_at_ms = None;
+    next.diagnostics.checked_at_ms = None;
+    previous.diagnostics.age_ms = None;
+    next.diagnostics.age_ms = None;
+    previous == next
+}
+
 impl RuntimeReadModel {
     pub(crate) fn publish(&self, mut status: StatusResponse) -> StatusResponse {
         let mut slot = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = slot.as_ref() {
+            if same_committed_view(previous, &status) {
+                return previous.clone();
+            }
+        }
         status.revision = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
         *slot = Some(status.clone());
         status

@@ -4,7 +4,8 @@
 //! tunnel process reads. Plugin calls stay in the commands.
 
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ice_config::{
     load_group_selections, load_rule_overrides, load_settings, redact_config_str, rule_fingerprint,
@@ -13,12 +14,12 @@ use ice_config::{
     NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 use ice_core::{
-    proxy_delay, proxy_groups, HealthEndpoints, TrafficDelta, TrafficMonitor, TrafficSnapshot,
-    DELAY_TEST_URL,
+    proxy_delay, proxy_group_heads, proxy_selected_now, GroupHead, HealthEndpoints, TrafficDelta,
+    TrafficMonitor, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_subscription::{
-    read_index, redact_subscription_url_for_ui, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths,
+    read_index, redact_subscription_url_for_ui, ProfileCache, SubscriptionError,
+    SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -30,13 +31,34 @@ use crate::status::{self, StatusResponse, TunnelPhase, TunnelView, VpnPermission
 pub struct MobileHost {
     paths: Option<AppPaths>,
     traffic: TrafficMonitor,
+    /// Parsed active profile without rules, DNS, or connection fields.
+    /// Status polls reuse it instead of re-reading the subscription file.
+    profile_cache: ProfileCache,
+    /// Live group exits (`now` only). Member tags stay on the profile.
+    groups_cache: Mutex<Option<(Instant, Vec<GroupHead>)>>,
+    /// Serializes `GET /proxies` with [`Self::record_group_now`], so a sample
+    /// that started before a selector switch cannot publish the old member
+    /// afterwards.
+    groups_fetch: Mutex<()>,
+    /// Home's selected exit, so a status poll does not fetch the proxy map.
+    now_cache: Mutex<Option<(Instant, String, String)>>,
+    /// Serializes `GET /proxies/{tag}`. Separate from [`Self::groups_fetch`]
+    /// so Home does not queue behind a full proxy-map read.
+    now_fetch: Mutex<()>,
 }
+
+const PROXY_GROUPS_TTL: Duration = Duration::from_secs(10);
 
 impl MobileHost {
     pub fn new() -> Self {
         Self {
             paths: None,
             traffic: TrafficMonitor::new(),
+            profile_cache: ProfileCache::new(),
+            groups_cache: Mutex::new(None),
+            groups_fetch: Mutex::new(()),
+            now_cache: Mutex::new(None),
+            now_fetch: Mutex::new(()),
         }
     }
 
@@ -79,12 +101,16 @@ impl MobileHost {
         let count = read_index(&SubscriptionPaths::from_app(&paths))
             .map(|index| index.items.len())
             .unwrap_or(0);
+        let live = view.phase == TunnelPhase::Connected;
+        let (has_nodes, selected_outbound) = self.outbound_summary(live);
         Ok(status::status_response(
             view,
             message,
             memory_bytes,
             count,
             guidance,
+            has_nodes,
+            selected_outbound,
         ))
     }
 
@@ -176,9 +202,7 @@ impl MobileHost {
         let settings = load_settings(&paths.settings())?;
         let selections = load_group_selections(&paths.group_selections());
         let groups = if live {
-            self.endpoints(&settings)
-                .ok()
-                .and_then(|endpoints| proxy_groups(&endpoints).ok())
+            self.cached_group_heads(&settings)
         } else {
             None
         };
@@ -198,9 +222,11 @@ impl MobileHost {
                     "selector" | "urltest" | "fallback" | "loadbalance"
                 );
                 let members = member_tags(&outbound.outbound);
-                let live_group = groups
+                let live_now = groups
                     .as_ref()
-                    .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag));
+                    .and_then(|groups| groups.iter().find(|group| group.tag == outbound.tag))
+                    .map(|group| group.now.clone())
+                    .filter(|now| !now.is_empty());
                 let static_now = if ty == "selector" {
                     selections
                         .get(&outbound.tag)
@@ -219,16 +245,8 @@ impl MobileHost {
                 NodeInfo {
                     tag: outbound.tag.clone(),
                     outbound_type: ty,
-                    group_now: live_group
-                        .map(|group| group.now.clone())
-                        .filter(|now| !now.is_empty())
-                        .or(static_now)
-                        .filter(|_| is_group),
-                    group_all: if is_group {
-                        Some(live_group.map(|group| group.all.clone()).unwrap_or(members))
-                    } else {
-                        None
-                    },
+                    group_now: live_now.or(static_now).filter(|_| is_group),
+                    group_all: if is_group { Some(members) } else { None },
                 }
             })
             .collect())
@@ -255,6 +273,41 @@ impl MobileHost {
             save_group_selections(&paths.group_selections(), &selections)?;
         }
         Ok(())
+    }
+
+    /// Remember the group exit for a node pick after the tunnel has applied it.
+    pub(crate) fn record_selected_exit(&self, tag: &str) {
+        let Ok(profile) = self.profile() else {
+            return;
+        };
+        if let Some(group) = selection_group_for(&profile, tag) {
+            self.record_group_now(&group, tag);
+        }
+    }
+
+    /// Remember a selector member after the tunnel has applied it.
+    ///
+    /// Fetch locks are held across the write. An in-flight `/proxies` read
+    /// publishes first, then this patch replaces its `now`. A sample that
+    /// starts afterwards still wins, so urltest and fallback keep moving.
+    pub(crate) fn record_group_now(&self, tag: &str, now: &str) {
+        let _groups = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _selected = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        *self.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), tag.to_string(), now.to_string()));
+        let mut groups = self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some((at, heads)) = groups.as_mut() {
+            if let Some(head) = heads.iter_mut().find(|head| head.tag == tag) {
+                head.now = now.to_string();
+                *at = Instant::now();
+            }
+        }
     }
 
     pub fn set_group_selection(&mut self, group: &str, member: &str) -> Result<(), AppError> {
@@ -433,7 +486,7 @@ impl MobileHost {
 
     pub fn set_rule_disabled(&mut self, fingerprint: &str, disabled: bool) -> Result<(), AppError> {
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         match find_rule(&profile, &overrides, fingerprint) {
             Some(rule) => overrides.set_rule_disabled(&rule, disabled),
@@ -452,7 +505,7 @@ impl MobileHost {
             ));
         }
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         let fingerprint = rule_fingerprint(&rule);
         overrides.custom.push(rule);
@@ -462,7 +515,7 @@ impl MobileHost {
 
     pub fn remove_custom_rule(&mut self, fingerprint: &str) -> Result<(), AppError> {
         let paths = self.paths()?.clone();
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
         overrides.remove_custom(fingerprint);
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
@@ -500,6 +553,162 @@ impl MobileHost {
         ));
     }
 
+    fn fresh_groups(&self) -> Option<Vec<GroupHead>> {
+        let slot = self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let (at, groups) = slot.as_ref()?;
+        (at.elapsed() < PROXY_GROUPS_TTL).then(|| groups.clone())
+    }
+
+    fn fresh_group_now(&self, tag: &str) -> Option<String> {
+        self.fresh_groups()?
+            .into_iter()
+            .find(|group| group.tag == tag)
+            .map(|group| group.now)
+            .filter(|now| !now.is_empty())
+    }
+
+    fn fresh_recorded_now(&self, tag: &str) -> Option<String> {
+        let slot = self.now_cache.lock().unwrap_or_else(|err| err.into_inner());
+        let (at, cached_tag, now) = slot.as_ref()?;
+        (cached_tag == tag && at.elapsed() < PROXY_GROUPS_TTL && !now.is_empty())
+            .then(|| now.clone())
+    }
+
+    /// Group sample first, then the exit recorded for a selector switch.
+    fn preferred_cached_now(&self, tag: &str) -> Option<String> {
+        self.fresh_group_now(tag)
+            .or_else(|| self.fresh_recorded_now(tag))
+    }
+
+    fn cached_group_heads(&self, settings: &AppSettings) -> Option<Vec<GroupHead>> {
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
+        }
+        let endpoints = self.endpoints(settings).ok()?;
+        self.load_group_heads(|| proxy_group_heads(&endpoints).ok())
+    }
+
+    /// Fetch group exits when the sample is missing or older than
+    /// [`PROXY_GROUPS_TTL`]. The fetch lock covers the request and the write.
+    fn load_group_heads(
+        &self,
+        fetch: impl FnOnce() -> Option<Vec<GroupHead>>,
+    ) -> Option<Vec<GroupHead>> {
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
+        }
+        let _fetch = self
+            .groups_fetch
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(groups) = self.fresh_groups() {
+            return Some(groups);
+        }
+        let groups = fetch()?;
+        *self
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some((Instant::now(), groups.clone()));
+        Some(groups)
+    }
+
+    /// One group's live exit. Does not fetch or retain the proxy map.
+    ///
+    /// A fresh group sample wins over the recorded exit, so an automatic
+    /// urltest or fallback change is visible before [`PROXY_GROUPS_TTL`].
+    /// The recorded exit still fills the gap when that sample has no row.
+    fn cached_selected_now(&self, settings: &AppSettings, tag: &str) -> Option<String> {
+        if let Some(now) = self.preferred_cached_now(tag) {
+            return Some(now);
+        }
+        let _fetch = self.now_fetch.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(now) = self.preferred_cached_now(tag) {
+            return Some(now);
+        }
+        let endpoints = self.endpoints(settings).ok()?;
+        let now = proxy_selected_now(&endpoints, tag).ok()?;
+        if now.is_empty() {
+            return None;
+        }
+        *self.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), tag.to_string(), now.clone()));
+        Some(now)
+    }
+
+    /// Home's exit line. Member lists stay on `list_nodes`.
+    fn outbound_summary(&self, live: bool) -> (bool, Option<status::SelectedOutbound>) {
+        let Ok(profile) = self.profile() else {
+            return (false, None);
+        };
+        let Ok(paths) = self.paths() else {
+            return (false, None);
+        };
+        let settings = load_settings(&paths.settings()).ok();
+        let selections = load_group_selections(&paths.group_selections());
+        let outbounds: Vec<_> = profile.groups.iter().chain(profile.nodes.iter()).collect();
+        if outbounds.is_empty() {
+            return (false, None);
+        }
+        let selected = settings
+            .as_ref()
+            .and_then(|settings| settings.selected_tag.as_deref())
+            .and_then(|tag| {
+                outbounds
+                    .iter()
+                    .copied()
+                    .find(|outbound| outbound.tag == tag)
+            })
+            .or_else(|| outbounds.first().copied());
+        let Some(outbound) = selected else {
+            return (false, None);
+        };
+        let ty = outbound
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let is_group = matches!(
+            ty.as_str(),
+            "selector" | "urltest" | "fallback" | "loadbalance"
+        );
+        let static_now = if ty == "selector" {
+            selections
+                .get(&outbound.tag)
+                .cloned()
+                .or_else(|| {
+                    outbound
+                        .outbound
+                        .get("default")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| member_tags(&outbound.outbound).into_iter().next())
+        } else {
+            None
+        };
+        let group_now = if live && is_group {
+            settings
+                .as_ref()
+                .and_then(|settings| self.cached_selected_now(settings, &outbound.tag))
+        } else {
+            None
+        }
+        .or(static_now)
+        .filter(|_| is_group);
+        (
+            true,
+            Some(status::SelectedOutbound {
+                tag: outbound.tag.clone(),
+                outbound_type: ty,
+                group_now,
+            }),
+        )
+    }
+
     fn endpoints(&self, settings: &AppSettings) -> Result<HealthEndpoints, AppError> {
         let secret = ice_config::ensure_clash_api_secret(&self.paths()?.clash_api_secret())?;
         Ok(
@@ -515,14 +724,35 @@ impl MobileHost {
         ))
     }
 
+    /// Tags, types, and group members. Connection fields stay on disk.
     fn profile(&self) -> Result<Arc<NormalizedProfile>, AppError> {
+        let paths = self.paths()?;
+        let settings = load_settings(&paths.settings())?;
+        let sub_paths = SubscriptionPaths::from_app(paths);
+        let index = read_index(&sub_paths)?;
+        match self.profile_cache.load_resident(
+            &sub_paths,
+            &index,
+            settings.auto_default_rules,
+            PLATFORM,
+        ) {
+            Ok(profile) => Ok(profile),
+            Err(SubscriptionError::NoActiveSubscription) => {
+                Ok(Arc::new(NormalizedProfile::from_nodes_only(vec![])))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Rules and connection fields. Not kept in [`Self::profile_cache`].
+    fn full_profile(&self) -> Result<Arc<NormalizedProfile>, AppError> {
         let paths = self.paths()?;
         let settings = load_settings(&paths.settings())?;
         config::active_profile(paths, settings.auto_default_rules)
     }
 
     fn rules_state(&self) -> Result<(Arc<NormalizedProfile>, RuleOverrides), AppError> {
-        let profile = self.profile()?;
+        let profile = self.full_profile()?;
         let overrides = load_overrides(self.paths()?, &profile);
         Ok((profile, overrides))
     }
@@ -530,6 +760,9 @@ impl MobileHost {
 
 fn load_overrides(paths: &AppPaths, profile: &NormalizedProfile) -> RuleOverrides {
     let mut overrides = load_rule_overrides(&paths.rule_overrides());
+    if !overrides.has_legacy_disabled_fingerprints() {
+        return overrides;
+    }
     let mut rules = profile.route.rules.clone();
     rules.extend(overrides.custom.clone());
     if overrides.migrate_legacy_fingerprints(rules.iter()) {
@@ -764,5 +997,105 @@ pub fn stopped_view() -> TunnelView {
     TunnelView {
         phase: TunnelPhase::Stopped,
         permission: VpnPermission::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod group_cache_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    fn seed_groups(host: &MobileHost, heads: Vec<GroupHead>) {
+        *host
+            .groups_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some((Instant::now(), heads));
+    }
+
+    #[test]
+    fn record_group_now_patches_a_fresh_group_head() {
+        let host = MobileHost::new();
+        seed_groups(
+            &host,
+            vec![
+                GroupHead {
+                    tag: "auto".into(),
+                    now: "a".into(),
+                },
+                GroupHead {
+                    tag: "proxy".into(),
+                    now: "hk".into(),
+                },
+            ],
+        );
+        host.record_group_now("proxy", "jp");
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+        let groups = host.fresh_groups().expect("fresh groups");
+        assert_eq!(groups[0].now, "a");
+        assert_eq!(groups[1].now, "jp");
+    }
+
+    #[test]
+    fn a_fresher_group_sample_wins_over_the_recorded_exit() {
+        let host = MobileHost::new();
+        *host.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), "proxy".into(), "hk".into()));
+        seed_groups(
+            &host,
+            vec![GroupHead {
+                tag: "proxy".into(),
+                now: "jp".into(),
+            }],
+        );
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+    }
+
+    #[test]
+    fn recorded_exit_fills_a_group_sample_that_lacks_the_tag() {
+        let host = MobileHost::new();
+        *host.now_cache.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), "proxy".into(), "jp".into()));
+        seed_groups(
+            &host,
+            vec![GroupHead {
+                tag: "auto".into(),
+                now: "a".into(),
+            }],
+        );
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+    }
+
+    #[test]
+    fn an_in_flight_group_sample_cannot_overwrite_the_recorded_exit() {
+        let host = Arc::new(MobileHost::new());
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let worker = {
+            let host = Arc::clone(&host);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            thread::spawn(move || {
+                host.load_group_heads(|| {
+                    entered.wait();
+                    release.wait();
+                    Some(vec![GroupHead {
+                        tag: "proxy".into(),
+                        now: "hk".into(),
+                    }])
+                })
+            })
+        };
+        entered.wait();
+        let recorder = {
+            let host = Arc::clone(&host);
+            thread::spawn(move || host.record_group_now("proxy", "jp"))
+        };
+        release.wait();
+        worker.join().expect("fetch");
+        recorder.join().expect("record");
+        assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
+        let groups = host.fresh_groups().expect("fresh groups");
+        assert_eq!(groups[0].now, "jp");
     }
 }

@@ -125,10 +125,11 @@ pub struct AppState {
     /// TUN capture runtime controller (`docs/tun.md`): owns the active backend,
     /// the capture state machine, and the recovery journal.
     pub capture: CaptureController,
-    /// mtime-keyed cache of the parsed active profile (+ rule fingerprints);
-    /// read paths poll every 2-5s and must not re-parse a multi-MB profile
-    /// each time. Invalidated implicitly: the key changes when the active
-    /// subscription, its profile, or `auto_default_rules` changes on disk.
+    /// mtime-keyed cache of the active profile's nodes and groups. Rules, DNS,
+    /// and outbound connection fields are not kept here; read paths poll every
+    /// 2-5s and must not re-parse a multi-MB profile each time. Invalidated
+    /// implicitly: the key changes when the active subscription, its profile,
+    /// or settings change on disk.
     pub profile_cache: Mutex<Option<application::ProfileCacheEntry>>,
     /// ice-subscription parse cache (SUB-6). Shared with CaptureController.
     pub profile_parse_cache: Arc<ice_engine::ProfileCache>,
@@ -137,7 +138,7 @@ pub struct AppState {
     pub subscription_watchdog_alive: Arc<AtomicBool>,
     /// Change-detected merged log view: re-read only when a source file's
     /// size/mtime (or the requested line count) changes.
-    pub(crate) log_view_cache: Mutex<Option<application::LogViewCache>>,
+    pub(crate) log_view_cache: Mutex<application::LogViewSlot>,
     /// Memoized helper-daemon reachability probe (TTL'd, invalidated by
     /// install/uninstall); avoids a socket roundtrip on every status poll.
     pub helper_probe_cache: Mutex<Option<(Instant, bool)>>,
@@ -154,6 +155,8 @@ pub struct AppState {
     /// The UI's post-paint capture restore runs once per process (StrictMode
     /// remounts must not enable system proxy / TUN twice).
     pub launch_proxy_restore_attempted: Arc<AtomicBool>,
+    /// Shared Clash group cache, Home interest flag, and the slow memory sample.
+    pub(crate) live_cache: application::LiveCache,
 }
 
 fn acquire_instance_lock(paths: &AppPaths, request_focus: bool) -> Result<std::fs::File, String> {
@@ -260,11 +263,12 @@ pub fn run() {
                 subscription_watchdog_alive: std::sync::Arc::new(
                     std::sync::atomic::AtomicBool::new(true),
                 ),
-                log_view_cache: Mutex::new(None),
+                log_view_cache: Mutex::new(application::LogViewSlot::default()),
                 helper_probe_cache: Mutex::new(None),
                 tun_task_cache: Mutex::new(None),
                 clash_live_mode_cache: Mutex::new(true),
                 launch_proxy_restore_attempted: Arc::new(AtomicBool::new(false)),
+                live_cache: application::LiveCache::default(),
             });
             {
                 let handle = app.handle().clone();
@@ -377,6 +381,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::set_home_active,
             commands::list_subscriptions,
             commands::start,
             commands::restore_launch_proxy,
@@ -388,6 +393,7 @@ pub fn run() {
             commands::ensure_tun_elevation,
             commands::remove_tun_elevation,
             commands::get_log_view,
+            commands::set_log_view_active,
             commands::get_runtime_config,
             commands::reveal_data_dir,
             commands::copy_proxy_command,
@@ -408,6 +414,7 @@ pub fn run() {
             commands::set_group_selection,
             commands::test_node_delay,
             commands::get_rule_overview,
+            commands::release_rule_keyword_cache,
             commands::list_rules,
             commands::set_rule_disabled,
             commands::add_custom_rule,

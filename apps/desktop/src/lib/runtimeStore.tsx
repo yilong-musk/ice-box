@@ -15,6 +15,25 @@ import { api, type StatusResponse } from "../api/client";
 
 const STATUS_FALLBACK_MS = 10_000;
 
+/** Probe timestamps move on every read. Memory is part of the view, so a real
+ * change still updates the Home row. */
+export function statusViewEqual(
+  previous: StatusResponse | null,
+  next: StatusResponse | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+  const view = (status: StatusResponse) => {
+    const diagnostics = status.diagnostics
+      ? { ...status.diagnostics, age_ms: null, checked_at_ms: null }
+      : null;
+    const { revision: _revision, sampled_at_ms: _sampled, diagnostics: _diagnostics, ...rest } =
+      status;
+    return { ...rest, diagnostics };
+  };
+  return JSON.stringify(view(previous)) === JSON.stringify(view(next));
+}
+
 export type RuntimeStore = {
   status: StatusResponse | null;
   visible: boolean;
@@ -61,7 +80,7 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
       const next = await api.getStatus();
       // Mutation generations and request ordering guard different races.
       if (gen !== genRef.current || request !== requestRef.current) return null;
-      setStatus(next);
+      setStatus((prev) => (statusViewEqual(prev, next) ? prev : next));
       return next;
     } catch {
       return null;

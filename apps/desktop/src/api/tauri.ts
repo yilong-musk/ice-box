@@ -7,6 +7,10 @@ import type { ApiContract, AppErrorPayload, AppSettings, CheckAppUpdateResponse,
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
+  setHomeActive: (active: boolean) => invoke<void>("set_home_active", { active }),
+  setLogViewActive: (active: boolean) =>
+    invoke<void>("set_log_view_active", { active }),
+  releaseRuleSearch: () => invoke<void>("release_rule_keyword_cache"),
   listSubscriptions: () => invoke<SubscriptionMeta[]>("list_subscriptions"),
   listNodes: () => invoke<NodeInfo[]>("list_nodes"),
   setSelectedNode: (tag: string) =>

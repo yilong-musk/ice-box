@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// Home is the visible tab. Status polls refresh the selected group's `now`
+/// only then, and they do not read the full proxy map.
+#[tauri::command]
+pub fn set_home_active(app: AppHandle, active: bool) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        state.live_cache.set_home_interest(active);
+    }
+}
+
 #[tauri::command]
 pub async fn get_status(app: AppHandle) -> Result<StatusResponse, AppError> {
     run_blocking("get_status", move || {

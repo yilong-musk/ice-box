@@ -6,10 +6,12 @@ import { t } from "../lib/i18n";
 import { Logs } from "./Logs";
 
 const getLogView = vi.fn();
+const setLogViewActive = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getLogView: (...args: unknown[]) => getLogView(...args),
+    setLogViewActive: (...args: unknown[]) => setLogViewActive(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -25,6 +27,7 @@ const baseTail = [
 describe("Logs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setLogViewActive.mockResolvedValue(undefined);
     getLogView.mockImplementation(async () => [...baseTail]);
   });
 
@@ -144,6 +147,30 @@ describe("Logs", () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     expect(scrollTop).toBe(2000);
+  });
+
+  it("drops a read that finishes after the page is left", async () => {
+    let resolveTail: (lines: string[]) => void = () => {};
+    getLogView.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveTail = resolve;
+        }),
+    );
+    const { container, rerender } = render(<Logs active />);
+    await waitFor(() => {
+      expect(getLogView).toHaveBeenCalled();
+    });
+
+    rerender(<Logs active={false} />);
+    await act(async () => {
+      resolveTail(["ERROR 08-23 13:47:09 late line that should not appear"]);
+      await Promise.resolve();
+    });
+
+    expect(container).not.toHaveTextContent("late line that should not appear");
+    expect(container).toHaveTextContent(t("logs.empty"));
+    expect(setLogViewActive).toHaveBeenCalledWith(false);
   });
 
   it("stops forcing scroll once the user scrolls up", async () => {

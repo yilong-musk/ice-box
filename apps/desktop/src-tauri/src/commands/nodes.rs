@@ -12,6 +12,13 @@ pub async fn list_nodes(app: AppHandle) -> Result<Vec<NodeInfo>, AppError> {
 }
 
 #[tauri::command]
+pub fn release_rule_keyword_cache(app: AppHandle) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        crate::application::drop_rule_keyword_cache(state.inner());
+    }
+}
+
+#[tauri::command]
 pub async fn get_rule_overview(app: AppHandle) -> Result<RuleOverview, AppError> {
     run_blocking("get_rule_overview", move || {
         let state = app.state::<AppState>();

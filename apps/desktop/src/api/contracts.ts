@@ -55,6 +55,14 @@ export type MemoryUsage = {
 };
 
 
+/** Home's current exit. Member lists stay on the Nodes page. */
+export type SelectedOutbound = {
+  tag: string;
+  outbound_type: string;
+  group_now: string | null;
+};
+
+
 export type StatusResponse = {
   /** Optional for compatibility with older IPC fixtures and clients. */
   revision?: number;
@@ -125,6 +133,10 @@ export type StatusResponse = {
   private_dns_strict?: boolean;
   /** Android only. True when this app is the system always-on VPN. */
   always_on_vpn?: boolean;
+  /** Active profile has at least one outbound. Omitted by older fixtures. */
+  has_nodes?: boolean;
+  /** Resolved exit for the Home row. */
+  selected_outbound?: SelectedOutbound | null;
 };
 
 
@@ -423,6 +435,12 @@ export interface DesktopShellApi {
   listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
   setTrayLanguage(language: "zh" | "en"): Promise<void>;
   setTrayUpdateAvailable(version: string | null): Promise<void>;
+  /** Home is visible. Desktop status polls refresh live group `now` only then. */
+  setHomeActive(active: boolean): Promise<void>;
+  /** Logs page visibility. Closing it drops the parsed tails; a later read does not rebuild them. */
+  setLogViewActive(active: boolean): Promise<void>;
+  /** Drop the lowercase rule index built for keyword search. */
+  releaseRuleSearch(): Promise<void>;
 }
 
 /** Shared views depend on this full contract. The mobile transport no-ops the desktop-only methods. */

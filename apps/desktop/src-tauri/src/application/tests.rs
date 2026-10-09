@@ -82,13 +82,14 @@ fn temp_state_with_node(label: &str) -> AppState {
         profile_cache: Mutex::new(None),
         profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        log_view_cache: Mutex::new(None),
+        log_view_cache: Mutex::new(LogViewSlot::default()),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
         clash_live_mode_cache: Mutex::new(true),
         launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             false,
         )),
+        live_cache: crate::application::LiveCache::default(),
     }
 }
 
@@ -155,13 +156,14 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         profile_cache: Mutex::new(None),
         profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        log_view_cache: Mutex::new(None),
+        log_view_cache: Mutex::new(LogViewSlot::default()),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
         clash_live_mode_cache: Mutex::new(true),
         launch_proxy_restore_attempted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             false,
         )),
+        live_cache: crate::application::LiveCache::default(),
     }
 }
 
@@ -318,6 +320,72 @@ fn proxy_posture_counts_live_recorded_or_tun_as_engaged() {
 }
 
 #[test]
+fn selected_now_reuses_a_fresh_group_head() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![ice_core::GroupHead {
+            tag: "proxy".into(),
+            now: "hk".into(),
+        }],
+        Duration::from_secs(0),
+    );
+    // A fresh head must answer without opening a Clash connection.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("hk")
+    );
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "missing", false).as_deref(),
+        None
+    );
+}
+
+#[test]
+fn record_group_now_replaces_a_fresh_exit_without_a_fetch() {
+    use std::time::Duration;
+
+    let cache = crate::application::LiveCache::default();
+    let endpoints = ice_core::HealthEndpoints::new("127.0.0.1", 9);
+    cache.seed_group_heads_for_test(
+        endpoints.clone(),
+        3,
+        vec![
+            ice_core::GroupHead {
+                tag: "auto".into(),
+                now: "a".into(),
+            },
+            ice_core::GroupHead {
+                tag: "proxy".into(),
+                now: "hk".into(),
+            },
+        ],
+        Duration::from_secs(0),
+    );
+    cache.record_group_now(&endpoints, 3, "proxy", "jp");
+
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 3, "proxy", true).as_deref(),
+        Some("jp")
+    );
+    let groups =
+        crate::application::load_proxy_groups(&cache, &endpoints, 3, true).expect("cached heads");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].now, "a");
+    assert_eq!(groups[1].tag, "proxy");
+    assert_eq!(groups[1].now, "jp");
+    // A different core generation must not see the patched sample.
+    assert_eq!(
+        crate::application::load_selected_now(&cache, &endpoints, 4, "proxy", false).as_deref(),
+        None
+    );
+}
+
+#[test]
 fn collect_status_snapshots_stopped_core() {
     let state = temp_state_with_node("status");
     let status = collect_status(&state).expect("status");
@@ -326,6 +394,14 @@ fn collect_status_snapshots_stopped_core() {
     assert_eq!(status.system_proxy_recorded, None);
     assert_eq!(status.system_proxy_applied, None);
     assert!(!status.system_proxy_available);
+    assert!(status.has_nodes);
+    let outbound = status.selected_outbound.expect("selected outbound");
+    assert_eq!(outbound.tag, "n1");
+    assert_eq!(outbound.outbound_type, "socks");
+    assert_eq!(outbound.group_now, None);
+    let again = collect_status(&state).expect("status");
+    assert_eq!(again.revision, status.revision);
+    assert_eq!(again.sampled_at_ms, status.sampled_at_ms);
     let _ = fs::remove_dir_all(state.paths.root());
 }
 
@@ -381,10 +457,11 @@ fn concurrent_status_reads_do_not_report_a_mutation() {
             })
         })
         .collect();
-    let mut revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    revisions.sort();
-    revisions.dedup();
-    assert_eq!(revisions.len(), 4);
+    let revisions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(
+        revisions.windows(2).all(|pair| pair[0] == pair[1]),
+        "quiet parallel reads share one committed revision, got {revisions:?}"
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }
 
@@ -655,6 +732,94 @@ fn profile_cache_serves_unchanged_and_invalidates_on_update() {
     .unwrap();
     let updated = merged_outbounds_opt(&state).unwrap().unwrap();
     assert_eq!(updated[0].tag, "n2", "stale cache must not be served");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn resident_profile_omits_rules_until_the_rules_page_loads_them() {
+    let state = temp_state_with_rules("resident-rules", sample_rules());
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(
+        entry.profile.route.rules.is_empty(),
+        "status and the tray must not retain route rules"
+    );
+    assert!(entry.profile.dns.is_none());
+    assert!(
+        entry.profile.nodes[0].outbound.get("server").is_none(),
+        "status and the tray must not retain node connection fields"
+    );
+    assert_eq!(
+        entry.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
+    assert!(
+        !subscription_rules_retained(&state),
+        "rules stay on disk until the Rules page reads them"
+    );
+
+    let overview = rule_overview(&state).unwrap();
+    assert_eq!(overview.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let still = cached_profile(&state).unwrap().unwrap();
+    assert!(still.profile.route.rules.is_empty());
+
+    drop_rule_keyword_cache(&state);
+    assert!(!subscription_rules_retained(&state));
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: None,
+            rule_type: None,
+            disabled: None,
+            custom: None,
+            offset: 0,
+            limit: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 4);
+    assert!(subscription_rules_retained(&state));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn config_build_reloads_connection_fields_then_releases_them() {
+    let state = temp_state_with_node("resident-build");
+    let entry = cached_profile(&state).unwrap().unwrap();
+    assert!(entry.profile.nodes[0].outbound.get("server").is_none());
+
+    let settings = ice_config::load_settings(&state.paths.settings()).unwrap();
+    crate::orchestrate::generate_config_with_cache(
+        &state.paths,
+        &settings,
+        None,
+        ice_config::CaptureIntent::Diagnostic,
+        Some(state.profile_parse_cache.as_ref()),
+    )
+    .unwrap();
+
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.paths.config()).unwrap()).unwrap();
+    let node = config["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "n1")
+        .expect("generated node");
+    assert_eq!(node["server"], "1.1.1.1");
+
+    let after = cached_profile(&state).unwrap().unwrap();
+    assert!(after.profile.nodes[0].outbound.get("server").is_none());
+    assert_eq!(
+        after.profile.nodes[0]
+            .outbound
+            .get("type")
+            .and_then(|value| value.as_str()),
+        Some("socks")
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }
 

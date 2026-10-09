@@ -390,6 +390,7 @@ pub fn set_selected_node(
     let mut host = ready(&app, &host, &tunnel)?;
     host.set_selected_node(&req.tag)?;
     apply_config(&mut host, &tunnel)?;
+    host.record_selected_exit(&req.tag);
     drop(host);
     notify(&app);
     Ok(())
@@ -405,6 +406,7 @@ pub fn set_group_selection(
     let mut host = ready(&app, &host, &tunnel)?;
     host.set_group_selection(&req.group, &req.member)?;
     apply_config(&mut host, &tunnel)?;
+    host.record_group_now(&req.group, &req.member);
     drop(host);
     notify(&app);
     Ok(())

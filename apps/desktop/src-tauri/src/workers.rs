@@ -117,7 +117,7 @@ struct Worker {
     restarts: Arc<AtomicU64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkerStatus {
     pub name: &'static str,
     pub alive: bool,

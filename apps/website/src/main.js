@@ -54,6 +54,10 @@ root.innerHTML = `
         </div>
       </div>
     </section>
+    <section class="light page-wrap" id="light">
+      <p class="light-kicker"></p>
+      <h2></h2>
+    </section>
     <section class="demo-section page-wrap" id="demo"><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small></small></strong><span>${displayVersion}</span></div><iframe src="./demo.html"></iframe></div></section>
   </main>
   <footer class="site-footer page-wrap"><span>© 2026 ice-box</span><a href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">github.com/yilong-musk/ice-box ↗</a></footer>
@@ -61,6 +65,8 @@ root.innerHTML = `
 
 const parts = {
   headline: root.querySelector(".hero-copy h1"),
+  lightKicker: root.querySelector(".light-kicker"),
+  lightTitle: root.querySelector(".light h2"),
   demoLabel: root.querySelector(".button-label"),
   download: root.querySelector(".text-link"),
   windowBar: root.querySelector(".window-bar small"),
@@ -75,6 +81,8 @@ function applyCopy(next) {
   language = next;
   applyMarketingLanguage(language);
   parts.headline.innerHTML = marketingText("hero.title", language);
+  parts.lightKicker.textContent = marketingText("light.kicker", language);
+  parts.lightTitle.textContent = marketingText("light.title", language);
   parts.demoLabel.textContent = marketingText("hero.demo", language);
   parts.download.textContent = marketingText("hero.download", language);
   parts.windowBar.textContent = marketingText("demo.windowBar", language);

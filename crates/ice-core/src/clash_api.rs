@@ -283,6 +283,80 @@ fn proxy_groups_filter(proxies: std::collections::HashMap<String, ProxyInfo>) ->
     groups
 }
 
+/// One strategy group's live exit. Member tags stay on the profile: the Clash
+/// document repeats them, and keeping that copy is what held the node list
+/// in the app after a status or tray refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupHead {
+    pub tag: String,
+    pub now: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProxyHead {
+    #[serde(rename = "type")]
+    r#type: String,
+    #[serde(default)]
+    now: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProxiesHeadResponse {
+    proxies: std::collections::HashMap<String, ProxyHead>,
+}
+
+fn is_strategy_group_type(ty: &str) -> bool {
+    matches!(
+        ty.to_ascii_lowercase().as_str(),
+        "selector" | "urltest" | "fallback" | "loadbalance"
+    )
+}
+
+/// Live `now` of each strategy group (`GET /proxies`).
+///
+/// `all` is not deserialized. Callers that need member tags read them from
+/// the profile, which already owns that list.
+pub fn proxy_group_heads(endpoints: &HealthEndpoints) -> Result<Vec<GroupHead>, CoreError> {
+    let body = clash_get(endpoints, "/proxies")?;
+    group_heads_from_body(&body)
+}
+
+fn group_heads_from_body(body: &str) -> Result<Vec<GroupHead>, CoreError> {
+    let parsed: ProxiesHeadResponse =
+        serde_json::from_str(body).map_err(|e| clash_api_err("/proxies", format!("parse: {e}")))?;
+    Ok(group_heads_filter(parsed.proxies))
+}
+
+fn group_heads_filter(proxies: std::collections::HashMap<String, ProxyHead>) -> Vec<GroupHead> {
+    let mut groups: Vec<GroupHead> = proxies
+        .into_iter()
+        .filter_map(|(tag, info)| {
+            if !is_strategy_group_type(&info.r#type) {
+                return None;
+            }
+            Some(GroupHead { tag, now: info.now })
+        })
+        .collect();
+    groups.sort_by(|a, b| a.tag.cmp(&b.tag));
+    groups
+}
+
+/// Live `now` of one proxy (`GET /proxies/{tag}`).
+///
+/// Home asks for the selected group only. The object still carries `all`;
+/// that field is left unread so the member list is not allocated.
+pub fn proxy_selected_now(endpoints: &HealthEndpoints, tag: &str) -> Result<String, CoreError> {
+    let path = format!("/proxies/{}", percent_encode_path(tag));
+    let body = clash_get(endpoints, &path)?;
+    selected_now_from_body(&path, &body)
+}
+
+fn selected_now_from_body(path: &str, body: &str) -> Result<String, CoreError> {
+    let parsed: ProxyHead =
+        serde_json::from_str(body).map_err(|e| clash_api_err(path, format!("parse: {e}")))?;
+    Ok(parsed.now)
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrafficSample {
     pub up: u64,
@@ -730,6 +804,44 @@ mod tests {
         assert_eq!(groups[1].tag, "proxy");
         assert_eq!(groups[1].now, "node-a");
         assert_eq!(groups[1].all, vec!["node-a", "node-b", "direct"]);
+    }
+
+    #[test]
+    fn group_heads_keep_the_exit_and_drop_member_lists() {
+        let heads = super::group_heads_from_body(
+            r#"{
+                "proxies": {
+                    "proxy": {"type":"Selector","now":"node-a","all":["node-a","node-b","direct"]},
+                    "auto": {"type":"URLTest","now":"node-b","all":["node-a","node-b"]},
+                    "direct": {"type":"Direct","now":"","all":[]},
+                    "node-a": {"type":"Shadowsocks"}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            heads,
+            vec![
+                super::GroupHead {
+                    tag: "auto".into(),
+                    now: "node-b".into(),
+                },
+                super::GroupHead {
+                    tag: "proxy".into(),
+                    now: "node-a".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_now_ignores_the_member_list() {
+        let now = super::selected_now_from_body(
+            "/proxies/proxy",
+            r#"{"type":"Selector","now":"node-a","all":["node-a","node-b","direct"]}"#,
+        )
+        .unwrap();
+        assert_eq!(now, "node-a");
     }
 
     #[test]

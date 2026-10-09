@@ -5,6 +5,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-10-09
+
+### Changed
+
+- The home traffic chart paints from each live sample. The one-second poll
+  hydrates, catches up after the window is shown, and skips a redraw when
+  the snapshot matches the series already on screen.
+- Home no longer keeps the Clash proxy map in memory. The selected group's
+  live exit is one proxy read that stores `now` and drops the member list.
+  A selector switch replaces that cached exit immediately, so Home, the Nodes
+  page, and the tray show the new member without waiting for the sample to
+  expire. The Nodes page and the tray take member names from the profile,
+  which already holds them. Leaving Logs drops the parsed tails, leaving
+  Rules drops the keyword index, and a rules page copies only the visible
+  rows.
+- The running app no longer keeps the active subscription's route rules or
+  DNS block in memory. Config generation reads them and releases them when
+  the build finishes. The Rules page loads its own copy, and leaving that
+  page drops the rules, their fingerprints, and the keyword index.
+- The running app no longer keeps each node's server, key, and transport
+  fields in memory. Leaves of one protocol share a single type value. Groups
+  keep their member names and default. Config generation reads the full
+  outbound again and releases it when the build finishes. Leaving Nodes drops
+  those member lists from the page, and the tag set used for delay probes is
+  no longer a second copy of every name. The phone host keeps this slim
+  profile between status polls instead of parsing the subscription again on
+  each one.
+
 ## [0.1.20] - 2026-09-30
 
 ### Added
