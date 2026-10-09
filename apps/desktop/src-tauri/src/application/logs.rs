@@ -103,18 +103,10 @@ fn truncate_helper_core_log(state: &AppState) -> Result<(), AppError> {
 
 /// Parsed log tails. Retained only while the Logs page is open. Each source
 /// keeps up to a megabyte, and that page is the only reader.
+#[derive(Default)]
 pub(crate) struct LogViewSlot {
     active: bool,
     reader: Option<LogViewCache>,
-}
-
-impl Default for LogViewSlot {
-    fn default() -> Self {
-        Self {
-            active: false,
-            reader: None,
-        }
-    }
 }
 
 impl LogViewSlot {
@@ -186,6 +178,21 @@ pub(crate) fn get_log_view_use_case(
     )
 }
 
+pub(crate) fn get_runtime_config_use_case(state: &AppState) -> Result<String, AppError> {
+    let path = state.paths.config();
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("read config: {e}")))?;
+    redact_config_str(&raw).map_err(|e| {
+        AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("redact runtime config: {e}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,19 +242,4 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
-}
-
-pub(crate) fn get_runtime_config_use_case(state: &AppState) -> Result<String, AppError> {
-    let path = state.paths.config();
-    if !path.exists() {
-        return Ok(String::new());
-    }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("read config: {e}")))?;
-    redact_config_str(&raw).map_err(|e| {
-        AppError::new(
-            ErrorCode::ConfigInvalid,
-            format!("redact runtime config: {e}"),
-        )
-    })
 }
