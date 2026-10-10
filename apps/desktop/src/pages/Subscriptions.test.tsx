@@ -177,6 +177,33 @@ describe("Subscriptions", () => {
     expect(clearNodesSnapshot).toHaveBeenCalled();
   });
 
+  it("draws each subscription as its own outlined row", async () => {
+    const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: true }),
+      sampleMeta({ id: secondId, name: "sub-b", active: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-b")).toBeInTheDocument();
+    });
+
+    const list = view.getByRole("list", { name: t("subs.listAria") });
+    expect(list).toHaveClass("gap-3");
+    expect(list.querySelector("[data-slot=item-separator]")).toBeNull();
+
+    const rows = list.querySelectorAll("[data-slot=item]");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute("data-variant", "outline");
+    expect(rows[0]).toHaveClass("bg-muted", "border-foreground/30");
+    expect(rows[0]).not.toHaveClass("border-border");
+    expect(rows[1]).toHaveAttribute("data-variant", "outline");
+    expect(rows[1]).toHaveClass("bg-muted", "border-border");
+    expect(rows[1]).not.toHaveClass("border-foreground/30");
+  });
+
   it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
     listSubscriptions.mockResolvedValue([
       sampleMeta({ name: "sub-a", active: true }),

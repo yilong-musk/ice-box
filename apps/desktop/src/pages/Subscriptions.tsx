@@ -38,7 +38,6 @@ import {
   ItemFooter,
   ItemGroup,
   ItemHeader,
-  ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -208,175 +207,176 @@ export function Subscriptions({ active = true }: Props) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label={t("subs.listAria")} className="gap-0">
-                {items.map((s, index) => {
+              <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
+                {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
                   const traffic = subscriptionTrafficView(
                     s.userinfo,
                     s.provider_info,
                   );
                   return (
-                    <div key={s.id}>
-                      {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                      <Item
-                        size="sm"
-                        variant={s.active ? "muted" : "default"}
-                      >
-                        <ItemHeader>
-                          <ItemTitle title={s.name}>
-                            <span className="truncate">{s.name}</span>
-                            {s.source === "file" ? (
-                              <Label className="shrink-0 text-muted-foreground">
-                                {t("subs.fileBadge")}
-                              </Label>
-                            ) : null}
-                            {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
-                          </ItemTitle>
-                          <ItemActions className="flex-nowrap">
+                    <Item
+                      key={s.id}
+                      size="sm"
+                      variant="outline"
+                      className={
+                        s.active ? "border-foreground/30 bg-muted" : "bg-muted"
+                      }
+                    >
+                      <ItemHeader>
+                        <ItemTitle title={s.name}>
+                          <span className="truncate">{s.name}</span>
+                          {s.source === "file" ? (
+                            <Label className="shrink-0 text-muted-foreground">
+                              {t("subs.fileBadge")}
+                            </Label>
+                          ) : null}
+                          {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
+                        </ItemTitle>
+                        <ItemActions className="flex-nowrap">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            title={t("subs.share")}
+                            onClick={() => setShareTarget(s)}
+                          >
+                            <Share />
+                            {t("subs.share")}
+                          </Button>
+                          {s.source === "file" ? null : (
                             <Button
                               type="button"
                               size="sm"
-                              variant="outline"
-                              title={t("subs.share")}
-                              onClick={() => setShareTarget(s)}
+                              disabled={busy}
+                              onClick={() =>
+                                void run(() => api.updateSubscription(s.id), true)
+                              }
                             >
-                              <Share />
-                              {t("subs.share")}
+                              {updating ? t("common.updating") : t("common.update")}
                             </Button>
-                            {s.source === "file" ? null : (
-                              <Button
-                                type="button"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() =>
-                                  void run(() => api.updateSubscription(s.id), true)
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() => setPendingDelete(s)}
+                          >
+                            {t("common.delete")}
+                          </Button>
+                        </ItemActions>
+                      </ItemHeader>
+                      <ItemContent className="min-w-0">
+                        <ItemDescription>
+                          {subscriptionSummary(s)}
+                        </ItemDescription>
+                        {traffic ? (
+                          <ItemDescription
+                            className="tabular-nums"
+                            data-testid={`sub-traffic-${s.id}`}
+                          >
+                            {traffic.usage}
+                            {traffic.usage && traffic.expiry ? " · " : null}
+                            {traffic.expiry ? (
+                              <span
+                                className={
+                                  traffic.expired
+                                    ? "text-destructive"
+                                    : undefined
                                 }
                               >
-                                {updating ? t("common.updating") : t("common.update")}
-                              </Button>
-                            )}
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              disabled={busy}
-                              onClick={() => setPendingDelete(s)}
-                            >
-                              {t("common.delete")}
-                            </Button>
-                          </ItemActions>
-                        </ItemHeader>
-                        <ItemContent className="min-w-0">
-                          <ItemDescription>
-                            {subscriptionSummary(s)}
+                                {traffic.expiry}
+                              </span>
+                            ) : null}
                           </ItemDescription>
-                          {traffic ? (
-                            <ItemDescription
-                              className="tabular-nums"
-                              data-testid={`sub-traffic-${s.id}`}
-                            >
-                              {traffic.usage}
-                              {traffic.usage && traffic.expiry ? " · " : null}
-                              {traffic.expiry ? (
-                                <span
-                                  className={
-                                    traffic.expired
-                                      ? "text-destructive"
-                                      : undefined
-                                  }
-                                >
-                                  {traffic.expiry}
-                                </span>
-                              ) : null}
-                            </ItemDescription>
-                          ) : null}
-                          {s.last_error ? (
-                            <ItemDescription className="text-destructive">
-                              {formatUiMessage(s.last_error)}
-                            </ItemDescription>
-                          ) : null}
-                          {warnings.length > 0 ? (
-                            <ItemDescription className="text-warn">
-                              {warnings.map(formatUiMessage).join("；")}
-                            </ItemDescription>
-                          ) : null}
-                        </ItemContent>
-                        <ItemFooter>
+                        ) : null}
+                        {s.last_error ? (
+                          <ItemDescription className="text-destructive">
+                            {formatUiMessage(s.last_error)}
+                          </ItemDescription>
+                        ) : null}
+                        {warnings.length > 0 ? (
+                          <ItemDescription className="text-warn">
+                            {warnings.map(formatUiMessage).join("；")}
+                          </ItemDescription>
+                        ) : null}
+                      </ItemContent>
+                      <ItemFooter>
+                        <Field orientation="horizontal" className="w-auto gap-1.5">
+                          <Switch
+                            id={`sub-active-${s.id}`}
+                            size="sm"
+                            checked={!!s.active}
+                            disabled={busy}
+                            aria-label={t("common.activate")}
+                            onCheckedChange={(checked) =>
+                              void run(() =>
+                                api.setSubscriptionActive(s.id, checked),
+                              )
+                            }
+                          />
+                          <FieldLabel
+                            htmlFor={`sub-active-${s.id}`}
+                            className="text-muted-foreground"
+                          >
+                            {t("common.activate")}
+                          </FieldLabel>
+                        </Field>
+                        {phone || s.source === "file" ? null : (
                           <Field orientation="horizontal" className="w-auto gap-1.5">
                             <Switch
-                              id={`sub-active-${s.id}`}
+                              id={`sub-auto-${s.id}`}
                               size="sm"
-                              checked={!!s.active}
+                              checked={!!s.auto_update}
                               disabled={busy}
-                              aria-label={t("common.activate")}
+                              aria-label={t("subs.autoUpdate")}
                               onCheckedChange={(checked) =>
                                 void run(() =>
-                                  api.setSubscriptionActive(s.id, checked),
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    checked,
+                                    s.auto_update_interval ?? "one_hour",
+                                  ),
                                 )
                               }
                             />
                             <FieldLabel
-                              htmlFor={`sub-active-${s.id}`}
+                              htmlFor={`sub-auto-${s.id}`}
                               className="text-muted-foreground"
                             >
-                              {t("common.activate")}
+                              {t("subs.autoUpdate")}
                             </FieldLabel>
+                            <NativeSelect
+                              size="sm"
+                              className="w-auto"
+                              aria-label={t("subs.interval")}
+                              value={s.auto_update_interval ?? "one_hour"}
+                              disabled={busy || !s.auto_update}
+                              onChange={(e) =>
+                                void run(() =>
+                                  api.setSubscriptionAutoUpdate(
+                                    s.id,
+                                    s.auto_update,
+                                    e.target
+                                      .value as SubscriptionAutoUpdateInterval,
+                                  ),
+                                )
+                              }
+                            >
+                              {AUTO_UPDATE_INTERVALS.map((interval) => (
+                                <NativeSelectOption
+                                  key={interval}
+                                  value={interval}
+                                >
+                                  {intervalLabel(interval)}
+                                </NativeSelectOption>
+                              ))}
+                            </NativeSelect>
                           </Field>
-                          {phone || s.source === "file" ? null : (
-                            <Field orientation="horizontal" className="w-auto gap-1.5">
-                              <Switch
-                                id={`sub-auto-${s.id}`}
-                                size="sm"
-                                checked={!!s.auto_update}
-                                disabled={busy}
-                                aria-label={t("subs.autoUpdate")}
-                                onCheckedChange={(checked) =>
-                                  void run(() =>
-                                    api.setSubscriptionAutoUpdate(
-                                      s.id,
-                                      checked,
-                                      s.auto_update_interval ?? "one_hour",
-                                    ),
-                                  )
-                                }
-                              />
-                              <FieldLabel
-                                htmlFor={`sub-auto-${s.id}`}
-                                className="text-muted-foreground"
-                              >
-                                {t("subs.autoUpdate")}
-                              </FieldLabel>
-                              <NativeSelect
-                                size="sm"
-                                className="w-auto"
-                                aria-label={t("subs.interval")}
-                                value={s.auto_update_interval ?? "one_hour"}
-                                disabled={busy || !s.auto_update}
-                                onChange={(e) =>
-                                  void run(() =>
-                                    api.setSubscriptionAutoUpdate(
-                                      s.id,
-                                      s.auto_update,
-                                      e.target
-                                        .value as SubscriptionAutoUpdateInterval,
-                                    ),
-                                  )
-                                }
-                              >
-                                {AUTO_UPDATE_INTERVALS.map((interval) => (
-                                  <NativeSelectOption
-                                    key={interval}
-                                    value={interval}
-                                  >
-                                    {intervalLabel(interval)}
-                                  </NativeSelectOption>
-                                ))}
-                              </NativeSelect>
-                            </Field>
-                          )}
-                        </ItemFooter>
-                      </Item>
-                    </div>
+                        )}
+                      </ItemFooter>
+                    </Item>
                   );
                 })}
               </ItemGroup>
