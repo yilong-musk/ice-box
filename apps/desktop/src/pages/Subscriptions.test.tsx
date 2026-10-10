@@ -17,6 +17,8 @@ const listSubscriptions = vi.fn();
 const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
 const listenStateChanged = vi.fn();
+const subscriptionShare = vi.fn();
+const exportSubscriptionSingbox = vi.fn();
 
 vi.mock("../lib/nodes", () => ({
   clearNodesSnapshot: vi.fn(),
@@ -33,6 +35,9 @@ vi.mock("../api/client", () => ({
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
+    subscriptionShare: (...args: unknown[]) => subscriptionShare(...args),
+    exportSubscriptionSingbox: (...args: unknown[]) =>
+      exportSubscriptionSingbox(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -529,6 +534,108 @@ describe("Subscriptions", () => {
         "22222222-2222-2222-2222-222222222222",
         true,
       );
+    });
+  });
+
+  it("copies the subscription link and the sing-box config from the share dialog", async () => {
+    const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    subscriptionShare.mockImplementation(async (id: string, kind: string) => {
+      if (kind === "url") return `https://example.com/real?token=${id}`;
+      return `{"outbounds":[{"tag":"${id}"}]}`;
+    });
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a" }),
+      sampleMeta({ id: secondId, name: "sub-b", active: false, url: "https://example.com/redacted" }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-b")).toBeInTheDocument();
+    });
+    const rowB = view.getByText("sub-b").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(rowB).getByRole("button", { name: t("subs.share") }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(t("subs.shareTitle", { name: "sub-b" }))).toBeInTheDocument();
+    expect(subscriptionShare).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") }));
+    await waitFor(() => {
+      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "url");
+      expect(writeText).toHaveBeenCalledWith(`https://example.com/real?token=${secondId}`);
+    });
+    expect(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") })).toHaveTextContent(
+      t("subs.shareCopied"),
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }));
+    await waitFor(() => {
+      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "singbox");
+      expect(writeText).toHaveBeenCalledWith(`{"outbounds":[{"tag":"${secondId}"}]}`);
+    });
+    expect(
+      within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }),
+    ).toHaveTextContent(t("subs.shareCopied"));
+  });
+
+  it("exports the sing-box config from the share dialog", async () => {
+    exportSubscriptionSingbox.mockResolvedValue("cancelled");
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    const exportButton = within(dialog).getByRole("button", {
+      name: t("subs.shareExportSingbox"),
+    });
+
+    fireEvent.click(exportButton);
+    await waitFor(() => {
+      expect(exportSubscriptionSingbox).toHaveBeenCalledWith(
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "sub-a",
+        t("subs.shareExportSingbox"),
+      );
+    });
+    expect(exportButton).toHaveTextContent(t("subs.shareExportSingbox"));
+
+    exportSubscriptionSingbox.mockResolvedValue("saved");
+    fireEvent.click(exportButton);
+    await waitFor(() => {
+      expect(exportButton).toHaveTextContent(t("subs.shareExported"));
+    });
+  });
+
+  it("shows a failure when sharing cannot be copied", async () => {
+    document.execCommand = () => false;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    subscriptionShare.mockResolvedValue("https://example.com/a?token=secret");
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(t("subs.shareCopyFailed"));
     });
   });
 });

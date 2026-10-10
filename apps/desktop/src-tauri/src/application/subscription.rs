@@ -208,6 +208,61 @@ pub(crate) fn set_active_subscription_use_case(
     Ok(value)
 }
 
+#[derive(Deserialize)]
+pub struct SubscriptionShareRequest {
+    pub id: Uuid,
+    pub kind: SubscriptionShareKind,
+}
+
+#[derive(Deserialize)]
+pub struct ExportSubscriptionRequest {
+    pub id: Uuid,
+    pub name: String,
+    pub title: String,
+}
+
+/// Suggested file name for a sing-box export. Path characters are replaced so
+/// the save dialog cannot be pointed at another directory by the name alone.
+pub(crate) fn singbox_export_filename(name: &str) -> String {
+    let mut cleaned = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_control() || ch == '\u{7f}' {
+            continue;
+        }
+        if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            cleaned.push('_');
+            continue;
+        }
+        cleaned.push(ch);
+    }
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        return "sing-box.json".to_string();
+    }
+    if has_json_extension(trimmed) {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}.json")
+    }
+}
+
+fn has_json_extension(name: &str) -> bool {
+    name.get(name.len().saturating_sub(5)..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".json"))
+}
+
+/// Unredacted subscription URL, or a portable sing-box document.
+///
+/// The list command keeps URLs redacted. This is the explicit share action;
+/// the returned text must not be logged.
+pub(crate) fn subscription_share_use_case(
+    state: &AppState,
+    req: SubscriptionShareRequest,
+) -> Result<String, AppError> {
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
+}
+
 pub(crate) fn set_auto_update_subscription_use_case(
     state: &AppState,
     req: SetAutoUpdateRequest,
@@ -225,4 +280,20 @@ pub(crate) fn set_auto_update_subscription_use_case(
     );
     serde_json::to_value(meta)
         .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::singbox_export_filename;
+
+    #[test]
+    fn export_filename_is_a_json_basename() {
+        assert_eq!(singbox_export_filename("a/b:c"), "a_b_c.json");
+        assert_eq!(singbox_export_filename("  "), "sing-box.json");
+        assert_eq!(singbox_export_filename("node.json"), "node.json");
+        assert_eq!(singbox_export_filename("Node.JSON"), "Node.JSON");
+        assert_eq!(singbox_export_filename("日本"), "日本.json");
+        assert_eq!(singbox_export_filename(".hidden."), "hidden.json");
+        assert_eq!(singbox_export_filename("foo\nbar"), "foobar.json");
+    }
 }

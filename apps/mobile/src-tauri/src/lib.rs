@@ -40,6 +40,7 @@ pub fn run() {
             commands::update_subscription,
             commands::update_all_subscriptions,
             commands::set_active_subscription,
+            commands::subscription_share,
             commands::list_nodes,
             commands::set_selected_node,
             commands::set_group_selection,

@@ -198,6 +198,15 @@ const zh = {
   "subs.deleteTitle": "删除订阅",
   "subs.deleteConfirm": "确认删除订阅「{name}」？",
   "subs.unknownError": "未知错误",
+  "subs.share": "分享",
+  "subs.shareTitle": "分享「{name}」",
+  "subs.shareDesc": "复制订阅链接，复制 sing-box 配置，或把配置导出成文件。",
+  "subs.shareCopyUrl": "复制订阅链接",
+  "subs.shareCopySingbox": "复制 sing-box 配置",
+  "subs.shareExportSingbox": "导出 sing-box 配置",
+  "subs.shareCopied": "已复制",
+  "subs.shareExported": "已导出",
+  "subs.shareCopyFailed": "复制失败",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "已保存，但应用失败：{detail}",
@@ -641,6 +650,15 @@ const en: Record<MessageKey, string> = {
   "subs.deleteTitle": "Delete Subscription",
   "subs.deleteConfirm": "Delete subscription “{name}”?",
   "subs.unknownError": "Unknown error",
+  "subs.share": "Share",
+  "subs.shareTitle": "Share “{name}”",
+  "subs.shareDesc": "Copy the subscription link, copy a sing-box config, or export that config to a file.",
+  "subs.shareCopyUrl": "Copy subscription link",
+  "subs.shareCopySingbox": "Copy sing-box config",
+  "subs.shareExportSingbox": "Export sing-box config",
+  "subs.shareCopied": "Copied",
+  "subs.shareExported": "Exported",
+  "subs.shareCopyFailed": "Copy failed",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "Saved, but applying failed: {detail}",

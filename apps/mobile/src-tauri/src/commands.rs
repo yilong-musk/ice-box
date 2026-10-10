@@ -6,7 +6,9 @@
 use std::sync::Mutex;
 
 use ice_config::{AppError, AppPaths, ErrorCode, ProxyMode, SettingsPatch};
-use ice_subscription::{AutoUpdateInterval, SubscriptionManager};
+use ice_subscription::{
+    subscription_share_text, AutoUpdateInterval, SubscriptionManager, SubscriptionShareKind,
+};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_tunnel::{Tunnel, TunnelError};
@@ -43,6 +45,12 @@ pub struct AddSubscriptionRequest {
 #[derive(Deserialize)]
 pub struct IdRequest {
     pub id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct SubscriptionShareRequest {
+    pub id: Uuid,
+    pub kind: SubscriptionShareKind,
 }
 
 #[derive(Deserialize)]
@@ -233,6 +241,25 @@ pub fn stop(
     drop(host);
     notify(&app);
     Ok(())
+}
+
+/// Unredacted subscription URL, or a portable sing-box document.
+/// The list command keeps URLs redacted; do not log the returned text.
+#[tauri::command]
+pub async fn subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<String, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    run_blocking("subscription_share", move || {
+        subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
+    })
+    .await?
 }
 
 #[tauri::command]

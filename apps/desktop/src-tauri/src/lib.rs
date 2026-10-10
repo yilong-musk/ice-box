@@ -205,6 +205,7 @@ pub fn run() {
     let login_item_launch = autostart::is_autostart_launch();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(move |app| {
@@ -409,6 +410,8 @@ pub fn run() {
             commands::update_all_subscriptions,
             commands::set_active_subscription,
             commands::set_auto_update_subscription,
+            commands::subscription_share,
+            commands::export_subscription_singbox,
             commands::list_nodes,
             commands::set_selected_node,
             commands::set_group_selection,

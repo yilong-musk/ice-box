@@ -393,6 +393,10 @@ export interface CoreApi {
   updateAllSubscriptions(): Promise<unknown>;
   setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta>;
   setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
+  /** Full subscription URL, or a portable sing-box document. The list keeps URLs redacted. */
+  subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string>;
+  /** Write that sing-box document to a file. `"cancelled"` when the save dialog is dismissed. */
+  exportSubscriptionSingbox(id: string, name: string, title: string): Promise<"saved" | "cancelled">;
   getRuleOverview(): Promise<RuleOverview>;
   listRules(req: ListRulesRequest): Promise<ListRulesResponse>;
   setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean; apply_warning?: AppErrorPayload }>;

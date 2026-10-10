@@ -11,6 +11,7 @@ mod fetch;
 mod limits;
 mod merge;
 mod prune;
+mod share;
 mod store;
 mod tls_fetch;
 mod uri;
@@ -39,6 +40,7 @@ pub use merge::{
     active_subscription, list_profile_outbounds, load_active_profile,
     load_active_profile_with_default_rules, resolve_selected_tag, short_id, ProfileCache,
 };
+pub use share::{subscription_share_text, SubscriptionShareKind};
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
     commit_subscription_success, load_index, mark_refreshed_in_index, mark_subscription_refreshed,

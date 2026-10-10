@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Share } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -19,6 +20,7 @@ import {
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,6 +88,7 @@ export function Subscriptions() {
   const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
     null,
   );
+  const [shareTarget, setShareTarget] = useState<SubscriptionMeta | null>(null);
   const activeIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -348,6 +351,16 @@ export function Subscriptions() {
                             <Button
                               type="button"
                               size="sm"
+                              variant="outline"
+                              title={t("subs.share")}
+                              onClick={() => setShareTarget(s)}
+                            >
+                              <Share />
+                              {t("subs.share")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
                               disabled={busy}
                               onClick={() =>
                                 void run(() => api.updateSubscription(s.id), true)
@@ -484,6 +497,12 @@ export function Subscriptions() {
           )}
         </CardContent>
       </Card>
+      <ShareSubscriptionDialog
+        subscription={shareTarget}
+        onOpenChange={(open) => {
+          if (!open) setShareTarget(null);
+        }}
+      />
       <ConfirmDialog
         open={pendingDelete !== null}
         title={t("subs.deleteTitle")}

@@ -136,6 +136,12 @@ export const api = {
     invoke<SubscriptionMeta>("set_auto_update_subscription", {
       req: { id, auto_update: autoUpdate, auto_update_interval: interval },
     }),
+  subscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<string>("subscription_share", { req: { id, kind } }),
+  exportSubscriptionSingbox: (id: string, name: string, title: string) =>
+    invoke<"saved" | "cancelled">("export_subscription_singbox", {
+      req: { id, name, title },
+    }),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) =>
     invoke<ListRulesResponse>("list_rules", { req }),

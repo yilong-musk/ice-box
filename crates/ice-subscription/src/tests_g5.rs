@@ -4,10 +4,11 @@ use super::{
     detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
     parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
-    write_subscription_error, AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate,
-    HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionError, SubscriptionFormat,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionUserInfo,
-    CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
+    subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
+    FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
+    SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
+    SubscriptionPaths, SubscriptionShareKind, SubscriptionUserInfo, CLASH_SUPPORTED_TYPES,
+    MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -1458,6 +1459,57 @@ fn html_page_is_an_unknown_subscription_not_a_panic() {
     let err = normalize_raw_body("<HTML><BODY>proxies: []</BODY></HTML>", HostPlatform::Ios)
         .expect_err("html");
     assert!(matches!(err, SubscriptionError::UnknownFormat));
+}
+
+#[test]
+fn share_returns_the_full_url_and_a_singbox_document() {
+    let paths = temp_subs("share");
+    let body = r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#;
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr
+        .add(
+            "https://example.com/s?token=secret",
+            Some("shared"),
+            false,
+            None,
+        )
+        .unwrap();
+
+    let url = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Url).unwrap();
+    assert_eq!(url, "https://example.com/s?token=secret");
+
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|outbound| outbound["tag"] == "n1"));
+    assert!(value.get("inbounds").is_none());
+    assert_eq!(
+        value["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|outbound| outbound["tag"] == "n1")
+            .unwrap()["server"],
+        "1.1.1.1"
+    );
+
+    let missing = subscription_share_text(&paths, Uuid::nil(), SubscriptionShareKind::Url);
+    assert!(matches!(missing, Err(SubscriptionError::NotFound)));
+    let _ = fs::remove_dir_all(paths.root());
 }
 
 #[test]

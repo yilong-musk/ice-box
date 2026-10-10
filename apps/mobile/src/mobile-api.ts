@@ -3,6 +3,7 @@
 /** Phone transport. Core commands match the desktop names; desktop-only methods do nothing. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { saveTextFile, singboxExportFilename } from "../../desktop/src/lib/saveFile";
 import type {
   ApiContract,
   AppErrorPayload,
@@ -79,6 +80,15 @@ export const api = {
       code: "sub.auto_update_unsupported",
       message: "subscription auto-update is not available on the phone",
     }),
+  subscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<string>("subscription_share", { req: { id, kind } }),
+  exportSubscriptionSingbox: async (id: string, name: string) => {
+    const text = await invoke<string>("subscription_share", {
+      req: { id, kind: "singbox" },
+    });
+    saveTextFile(singboxExportFilename(name), text);
+    return "saved" as const;
+  },
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) => invoke<ListRulesResponse>("list_rules", { req }),
   setRuleDisabled: (fingerprint: string, disabled: boolean) =>
