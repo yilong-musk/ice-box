@@ -3,7 +3,7 @@
 use super::{
     detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
-    parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
+    parse_uri_list_profile, read_profile, resolve_selected_tag, set_active, set_auto_update,
     subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
     FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
     SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
@@ -379,7 +379,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
 }
 
 #[test]
-fn fetch_all_caps_network_concurrency() {
+fn fetch_ids_caps_network_concurrency() {
     let paths = temp_subs("fetch-pool");
     let fetcher = ConcurrencyFetcher {
         active: Arc::new(AtomicUsize::new(0)),
@@ -388,12 +388,15 @@ fn fetch_all_caps_network_concurrency() {
     let max_active = Arc::clone(&fetcher.max_active);
     let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
     let count = super::MAX_FETCH_CONCURRENCY + 4;
+    let mut ids = Vec::with_capacity(count);
     for index in 0..count {
-        mgr.add(&format!("https://example.com/{index}"), None, false, None)
+        let meta = mgr
+            .add(&format!("https://example.com/{index}"), None, false, None)
             .expect("add subscription");
+        ids.push(meta.id);
     }
 
-    let updates = mgr.fetch_all();
+    let updates = mgr.fetch_ids(ids);
     assert_eq!(updates.len(), count);
     for (_, update) in &updates {
         let update = update.as_ref().expect("fetch succeeded");
@@ -405,11 +408,11 @@ fn fetch_all_caps_network_concurrency() {
     }
     assert!(
         max_active.load(Ordering::SeqCst) > 1,
-        "fetch_all should retain useful parallelism"
+        "fetch_ids should retain useful parallelism"
     );
     assert!(
         max_active.load(Ordering::SeqCst) <= super::MAX_FETCH_CONCURRENCY,
-        "fetch_all exceeded its worker limit"
+        "fetch_ids exceeded its worker limit"
     );
     assert!(
         mgr.apply_all(updates)
@@ -700,11 +703,17 @@ fn provider_info_entries_are_recorded_and_persisted() {
     let meta = mgr
         .add("https://example.com/s", Some("s"), false, None)
         .unwrap();
-    assert_eq!(meta.node_count, 3, "info entries stay in the node list");
+    assert_eq!(
+        meta.node_count, 1,
+        "info entries are omitted from the node list"
+    );
     assert_eq!(
         meta.provider_info,
         vec!["Traffic: 11.84 GB | 150 GB", "Expire: 2026-09-26"]
     );
+    let stored = read_profile(&paths, meta.id).unwrap();
+    assert_eq!(stored.nodes.len(), 1);
+    assert_eq!(stored.nodes[0].tag, "🇭🇰 香港实验性 IEPL 专线 1");
     let disk_meta: SubscriptionMeta =
         serde_json::from_str(&fs::read_to_string(paths.meta(meta.id)).unwrap()).unwrap();
     assert_eq!(disk_meta.provider_info, meta.provider_info);
@@ -752,9 +761,6 @@ fn fetch_auto_only_fetches_flagged_subscriptions() {
     assert_eq!(auto[0].0, a.id);
     assert!(auto[0].1.is_ok());
     assert_ne!(b.id, a.id);
-
-    let all = mgr.fetch_all();
-    assert_eq!(all.len(), 2);
     let _ = fs::remove_dir_all(paths.root());
 }
 
@@ -1551,7 +1557,6 @@ fn file_import_persists_a_singbox_document_and_skips_refresh() {
         mode: MockFetchMode::Fail("should not fetch a file subscription".into()),
     };
     let refreshing = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
-    assert!(refreshing.fetch_all().is_empty());
     assert!(refreshing.fetch_auto().is_empty());
     let auto = refreshing
         .set_auto_update(meta.id, true, Some(AutoUpdateInterval::OneHour))

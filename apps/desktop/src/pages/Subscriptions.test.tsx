@@ -14,7 +14,6 @@ vi.mock("@platform/shell", () => ({
 }));
 
 const listSubscriptions = vi.fn();
-const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
 const listenStateChanged = vi.fn();
 const subscriptionShare = vi.fn();
@@ -29,8 +28,6 @@ vi.mock("../api/client", () => ({
     listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
     addSubscription: vi.fn(),
     importSubscriptionFile: vi.fn(),
-    updateAllSubscriptions: (...args: unknown[]) =>
-      updateAllSubscriptions(...args),
     updateSubscription: vi.fn(),
     setSubscriptionActive: vi.fn(),
     setSubscriptionAutoUpdate: vi.fn(),
@@ -91,6 +88,9 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Subscriptions", () => {
   beforeEach(() => {
+    const actions = document.createElement("div");
+    actions.dataset.titlebarActions = "";
+    document.body.appendChild(actions);
     phoneShell.value = false;
     vi.clearAllMocks();
     stateChangedHandler = null;
@@ -103,6 +103,7 @@ describe("Subscriptions", () => {
   });
 
   afterEach(() => {
+    document.querySelector("[data-titlebar-actions]")?.remove();
     vi.unstubAllGlobals();
   });
 
@@ -125,7 +126,7 @@ describe("Subscriptions", () => {
     const { container } = render(<Subscriptions />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
     expect(view.queryByPlaceholderText(t("subs.urlPlaceholder"))).not.toBeInTheDocument();
     expect(view.getByText(t("subs.emptyTitle"))).toBeInTheDocument();
@@ -133,7 +134,7 @@ describe("Subscriptions", () => {
     expect(container.querySelector(".sub-list")).toBeNull();
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
     const dialog = await screen.findByRole("dialog");
     expect(
       within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
@@ -199,41 +200,14 @@ describe("Subscriptions", () => {
     expect(clearNodesSnapshot).not.toHaveBeenCalled();
   });
 
-  it("shows partial update failures from updateAllSubscriptions", async () => {
+  it("shows 更新中 on the row update button while updating", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta()]);
-    updateAllSubscriptions.mockResolvedValue({
-      results: [
-        {
-          id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-          ok: false,
-          error: "network down",
-        },
-      ],
-    });
-
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByText("sub-a")).toBeInTheDocument();
-    });
-
-    view.getByRole("button", { name: t("subs.updateAll") }).click();
-
-    await waitFor(() => {
-      expect(view.getByRole("alert")).toHaveTextContent(
-        t("subs.partialUpdateFailed", { details: "x" }).split("x")[0],
-      );
-      expect(view.getByText(/network down/)).toBeInTheDocument();
-    });
-  });
-
-  it("shows 更新中 on update buttons while updating", async () => {
-    listSubscriptions.mockResolvedValue([sampleMeta()]);
-    let resolveUpdate: (v: unknown) => void = () => {};
-    updateAllSubscriptions.mockReturnValue(
-      new Promise((resolve) => {
-        resolveUpdate = resolve;
-      }),
+    let resolveUpdate: () => void = () => {};
+    vi.mocked(api.updateSubscription).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = () => resolve(sampleMeta());
+        }),
     );
 
     const { container } = render(<Subscriptions />);
@@ -242,19 +216,15 @@ describe("Subscriptions", () => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("subs.updateAll") }).click();
+    view.getByRole("button", { name: t("common.update") }).click();
 
     await waitFor(() => {
-      const updatingButtons = view.getAllByRole("button", { name: t("common.updating") });
-      expect(updatingButtons.length).toBeGreaterThanOrEqual(2);
-      for (const btn of updatingButtons) {
-        expect(btn).toBeDisabled();
-      }
+      expect(view.getByRole("button", { name: t("common.updating") })).toBeDisabled();
     });
 
-    resolveUpdate({ results: [] });
+    resolveUpdate();
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("subs.updateAll") })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("common.update") })).toBeEnabled();
     });
   });
 
@@ -428,20 +398,18 @@ describe("Subscriptions", () => {
       auto_update: true,
     });
 
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
+    render(<Subscriptions />);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
-    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
     const dialog = await screen.findByRole("dialog");
     const importSwitch = within(dialog).getByLabelText(t("subs.autoUpdate"));
-    expect(importSwitch).not.toBeChecked();
-    fireEvent.click(importSwitch);
     expect(importSwitch).toBeChecked();
 
     const interval = within(dialog).getByLabelText(t("subs.interval"));
     expect(interval).toBeEnabled();
+    expect(interval).toHaveValue("twelve_hours");
     fireEvent.change(interval, { target: { value: "six_hours" } });
 
     fireEvent.change(
@@ -472,12 +440,11 @@ describe("Subscriptions", () => {
       outbounds: [{ type: "socks", tag: "n1", server: "1.1.1.1", server_port: 1 }],
     });
 
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
+    render(<Subscriptions />);
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
-    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importFromFile") }));
     const input = within(dialog).getByLabelText(t("subs.importFileLabel"));
@@ -507,7 +474,6 @@ describe("Subscriptions", () => {
     const row = view.getByText("local").closest("[data-slot=item]") as HTMLElement;
     expect(within(row).queryByRole("button", { name: t("common.update") })).not.toBeInTheDocument();
     expect(within(row).queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
-    expect(view.getByRole("button", { name: t("subs.updateAll") })).toBeDisabled();
 
     fireEvent.click(within(row).getByRole("button", { name: t("subs.share") }));
     const dialog = await screen.findByRole("alertdialog");

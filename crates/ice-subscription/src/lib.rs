@@ -157,6 +157,7 @@ pub struct SubscriptionMeta {
     /// Usage / expiry entries the provider embeds in the proxy list
     /// (`Traffic: 11.84 GB | 150 GB`, `剩余流量：1023.64 GB`), verbatim and in
     /// list order. Empty when the subscription carries no such entries.
+    /// The matching proxies are omitted from the node list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_info: Vec<String>,
     /// Refresh this subscription on a background schedule when enabled.
@@ -293,13 +294,14 @@ pub(crate) fn meta_from_profile(
     name: String,
     url: String,
     format: SubscriptionFormat,
-    profile: &NormalizedProfile,
+    profile: &mut NormalizedProfile,
     active: bool,
     etag: Option<String>,
     last_modified: Option<String>,
     auto_update: bool,
     auto_update_interval: Option<AutoUpdateInterval>,
 ) -> SubscriptionMeta {
+    let provider_info = userinfo::detach_provider_info_nodes(profile);
     SubscriptionMeta {
         id,
         name,
@@ -316,7 +318,7 @@ pub(crate) fn meta_from_profile(
         etag,
         last_modified,
         userinfo: None,
-        provider_info: provider_info_lines(&profile.nodes),
+        provider_info,
         auto_update,
         auto_update_interval,
         source: SubscriptionSource::Remote,
@@ -327,7 +329,7 @@ pub(crate) fn meta_from_fetched_profile(
     current: &SubscriptionMeta,
     fetched: &FetchResponse,
     format: SubscriptionFormat,
-    profile: &NormalizedProfile,
+    profile: &mut NormalizedProfile,
 ) -> SubscriptionMeta {
     let mut meta = meta_from_profile(
         current.id,

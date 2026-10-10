@@ -64,15 +64,6 @@ pub async fn update_subscription(
 }
 
 #[tauri::command]
-pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Value, AppError> {
-    run_blocking("update_all_subscriptions", move || {
-        let state = app.state::<AppState>();
-        update_all_subscriptions_use_case(&app, state.inner())
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn set_active_subscription(
     app: AppHandle,
     req: SetActiveRequest,

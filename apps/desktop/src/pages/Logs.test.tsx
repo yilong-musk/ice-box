@@ -374,6 +374,76 @@ describe("Logs", () => {
       await waitFor(() => {
         expect(within(container).getByRole("alert")).toHaveTextContent(t("logs.copyFailed"));
       });
+      expect(within(container).queryByTestId("log-copy-hint")).toBeNull();
+    });
+
+    it("shows a capsule after a successful copy and hides it", async () => {
+      vi.useFakeTimers();
+      const view = render(<Logs />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const pre = view.container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const hint = within(view.container).getByTestId("log-copy-hint");
+      expect(hint).toHaveTextContent(t("logs.copied"));
+      expect(hint).toHaveAttribute("role", "status");
+      expect(within(view.container).queryByRole("alert")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1599);
+      });
+      expect(within(view.container).getByTestId("log-copy-hint")).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(within(view.container).queryByTestId("log-copy-hint")).toBeNull();
+    });
+
+    it("replaces a copy failure with the capsule after a later success", async () => {
+      writeText.mockRejectedValueOnce(new Error("denied"));
+      document.execCommand = () => false;
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(container).getByRole("alert")).toHaveTextContent(t("logs.copyFailed"));
+      });
+
+      writeText.mockResolvedValueOnce(undefined);
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 8);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(container).getByTestId("log-copy-hint")).toHaveTextContent(t("logs.copied"));
+      });
+      expect(within(container).queryByRole("alert")).toBeNull();
+    });
+
+    it("hides the capsule when the log page is left", async () => {
+      const view = await renderLines();
+      const pre = view.container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(view.container).getByTestId("log-copy-hint")).toBeInTheDocument();
+      });
+
+      view.rerender(<Logs active={false} />);
+      await waitFor(() => {
+        expect(within(view.container).queryByTestId("log-copy-hint")).toBeNull();
+      });
     });
   });
 });

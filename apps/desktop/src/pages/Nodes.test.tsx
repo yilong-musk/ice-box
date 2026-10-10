@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Nodes } from "./Nodes";
@@ -33,6 +33,9 @@ vi.mock("../api/client", () => ({
 
 describe("Nodes", () => {
   beforeEach(() => {
+    const actions = document.createElement("div");
+    actions.dataset.titlebarActions = "";
+    document.body.appendChild(actions);
     vi.clearAllMocks();
     stateChangedHandler = null;
     listenStateChanged.mockImplementation((handler: () => void) => {
@@ -83,6 +86,10 @@ describe("Nodes", () => {
     }));
   });
 
+  afterEach(() => {
+    document.querySelector("[data-titlebar-actions]")?.remove();
+  });
+
   it("renders node list from backend", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
@@ -93,7 +100,7 @@ describe("Nodes", () => {
     });
     expect(container.querySelector(".node-table")).toBeNull();
     expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
-    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
     const nodeList = view.getByRole("list", { name: t("nodes.listAria") });
     const scrollArea = nodeList.closest('[data-slot="scroll-area"]');
     expect(
@@ -646,7 +653,7 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
 
     expect(await view.findByText(t("nodes.noTestable"))).toBeInTheDocument();
     expect(testNodeDelay).not.toHaveBeenCalled();
@@ -683,7 +690,7 @@ describe("Nodes", () => {
       await waitFor(() => {
         expect(view.getAllByText("…").length).toBeGreaterThan(0);
       });
-      fireEvent.click(view.getByRole("button", { name: t("common.cancel") }));
+      fireEvent.click(screen.getByRole("button", { name: t("common.cancel") }));
       await waitFor(() => {
         expect(view.queryAllByText("…")).toHaveLength(0);
       });
@@ -700,7 +707,7 @@ describe("Nodes", () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
-    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
 
     await waitFor(() => {
       expect(testNodeDelay).toHaveBeenCalledTimes(2);
@@ -710,7 +717,7 @@ describe("Nodes", () => {
     expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
     expect(testNodeDelay).not.toHaveBeenCalledWith("自动组");
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
+      expect(screen.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
     });
 
     const titles = [
@@ -747,10 +754,9 @@ describe("Nodes", () => {
           pending.set(tag, resolve);
         }),
     );
-    const { container } = render(<Nodes />);
-    const view = within(container);
+    render(<Nodes />);
 
-    fireEvent.click(await view.findByRole("button", { name: t("nodes.batchTest") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
 
     // Both leaves are claimed before either probe returns: the run does not
     // wait for one node before starting the next.
@@ -764,7 +770,7 @@ describe("Nodes", () => {
       pending.get("node-b")?.({ tag: "node-b", delay_ms: 20 });
     });
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
+      expect(screen.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
     });
   });
 });

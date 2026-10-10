@@ -233,6 +233,10 @@ describe("App", () => {
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.subs") }));
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
+    const importButton = screen.getByRole("button", { name: t("subs.importTitle") });
+    expect(importButton).toHaveAttribute("data-variant", "outline");
+    expect(importButton.closest("[data-titlebar-actions]")).not.toBeNull();
+    expect(view.getByTestId("subs-panel").contains(importButton)).toBe(false);
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.settings") }));
     expect(view.getByTestId("settings-panel")).toBeInTheDocument();
@@ -325,8 +329,19 @@ describe("App", () => {
       expect(view.getByText("proxy-1")).toBeInTheDocument();
     });
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
+    const actions = container.querySelector("[data-titlebar] [data-titlebar-actions]");
+    expect(actions).not.toBeNull();
+    expect(actions).toHaveClass("not-empty:pr-7");
+    const batch = within(actions as HTMLElement).getByRole("button", {
+      name: t("nodes.batchTest"),
+    });
+    expect(batch).toHaveAttribute("data-variant", "outline");
+    expect(view.getByTestId("nodes-panel").contains(batch)).toBe(false);
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.home") }));
+    expect(
+      container.querySelector("[data-titlebar-actions] button"),
+    ).toBeNull();
     const panel = view.getByTestId("nodes-panel");
     expect(panel.parentElement).toHaveAttribute("data-active", "false");
 
@@ -334,6 +349,9 @@ describe("App", () => {
     expect(view.getByText("proxy-1")).toBeInTheDocument();
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
     expect(panel.parentElement).toHaveAttribute("data-active", "true");
+    expect(
+      within(actions as HTMLElement).getByRole("button", { name: t("nodes.batchTest") }),
+    ).toBeInTheDocument();
   });
 
   it("shows a sidebar upgrade icon when a background check finds a version", async () => {

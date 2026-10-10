@@ -321,7 +321,6 @@ export const api = {
   },
   async removeSubscription(id: string): Promise<{ ok: boolean }> { await delay(); const index = subscriptions.findIndex((sub) => sub.id === id); if (index >= 0) subscriptions.splice(index, 1); return { ok: true }; },
   async updateSubscription(): Promise<SubscriptionMeta> { await delay(220); return subscriptions[0]; },
-  async updateAllSubscriptions(): Promise<void> { await delay(220); },
   async setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.active = active; return sub; },
   async setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.auto_update = autoUpdate; sub.auto_update_interval = autoUpdate ? interval : null; return sub; },
   async subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string> {

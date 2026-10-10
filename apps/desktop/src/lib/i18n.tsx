@@ -161,7 +161,6 @@ const zh = {
   "nodes.noTestable": "当前没有可测的出口",
 
   // --- subscriptions page ---
-  "subs.partialUpdateFailed": "部分订阅更新失败：{details}",
   "subs.url": "订阅链接",
   "subs.urlPlaceholder": "订阅 URL（https 优先）",
   "subs.name": "名称",
@@ -188,7 +187,6 @@ const zh = {
   "subs.title": "订阅",
   "subs.emptyHint": "尚未导入订阅",
   "subs.count": "{n} 条",
-  "subs.updateAll": "全部更新",
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅链接或 sing-box 配置文件。",
@@ -207,7 +205,6 @@ const zh = {
   "subs.trafficNeverExpires": "长期有效",
   "subs.deleteTitle": "删除订阅",
   "subs.deleteConfirm": "确认删除订阅「{name}」？",
-  "subs.unknownError": "未知错误",
   "subs.share": "分享",
   "subs.shareTitle": "分享「{name}」",
   "subs.shareDesc": "复制订阅链接，复制 sing-box 配置，或把配置导出成文件。",
@@ -242,6 +239,7 @@ const zh = {
 
   // --- logs page ---
   "logs.empty": "（空）",
+  "logs.copied": "已复制",
   "logs.copyFailed": "复制失败",
 
   // --- settings page ---
@@ -623,7 +621,6 @@ const en: Record<MessageKey, string> = {
   "nodes.noTestable": "No testable exits",
 
   // --- subscriptions page ---
-  "subs.partialUpdateFailed": "Some subscriptions failed to update: {details}",
   "subs.url": "Subscription URL",
   "subs.urlPlaceholder": "Subscription URL (https preferred)",
   "subs.name": "Name",
@@ -651,7 +648,6 @@ const en: Record<MessageKey, string> = {
   "subs.title": "Subscriptions",
   "subs.emptyHint": "No subscriptions yet",
   "subs.count": "{n} items",
-  "subs.updateAll": "Update All",
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL or a sing-box config file.",
@@ -670,7 +666,6 @@ const en: Record<MessageKey, string> = {
   "subs.trafficNeverExpires": "Never expires",
   "subs.deleteTitle": "Delete Subscription",
   "subs.deleteConfirm": "Delete subscription “{name}”?",
-  "subs.unknownError": "Unknown error",
   "subs.share": "Share",
   "subs.shareTitle": "Share “{name}”",
   "subs.shareDesc": "Copy the subscription link, copy a sing-box config, or export that config to a file.",
@@ -705,6 +700,7 @@ const en: Record<MessageKey, string> = {
 
   // --- logs page ---
   "logs.empty": "(empty)",
+  "logs.copied": "Copied",
   "logs.copyFailed": "Copy failed",
 
   // --- settings page ---

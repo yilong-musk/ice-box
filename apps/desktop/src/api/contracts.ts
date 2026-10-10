@@ -394,7 +394,6 @@ export interface CoreApi {
   importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta>;
   removeSubscription(id: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
   updateSubscription(id: string): Promise<SubscriptionMeta>;
-  updateAllSubscriptions(): Promise<unknown>;
   setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta>;
   setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
   /** Full subscription URL, or a portable sing-box document. The list keeps URLs redacted. */

@@ -80,9 +80,9 @@ function ImportSubscriptionDialog({
   const [mode, setMode] = useState<ImportMode>("url");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
-  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(true);
   const [autoUpdateInterval, setAutoUpdateInterval] =
-    useState<SubscriptionAutoUpdateInterval>("one_hour");
+    useState<SubscriptionAutoUpdateInterval>("twelve_hours");
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
@@ -92,8 +92,8 @@ function ImportSubscriptionDialog({
     setMode("url");
     setUrl("");
     setName("");
-    setAutoUpdate(false);
-    setAutoUpdateInterval("one_hour");
+    setAutoUpdate(true);
+    setAutoUpdateInterval("twelve_hours");
     setFile(null);
     setFileError(null);
     setReading(false);

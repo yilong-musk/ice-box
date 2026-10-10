@@ -391,28 +391,6 @@ pub async fn update_subscription(
 }
 
 #[tauri::command]
-pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Value, AppError> {
-    let paths = {
-        let host = app.state::<Mutex<MobileHost>>();
-        let tunnel = app.state::<Tunnel<Wry>>();
-        let guard = ready(&app, &host, &tunnel)?;
-        guard.subscription_paths()?
-    };
-    let fetched = run_blocking("update_all_subscriptions", move || {
-        SubscriptionManager::open(paths, PLATFORM).fetch_all()
-    })
-    .await?;
-    let host = app.state::<Mutex<MobileHost>>();
-    let tunnel = app.state::<Tunnel<Wry>>();
-    let mut guard = ready(&app, &host, &tunnel)?;
-    let report = guard.apply_updates(fetched)?;
-    apply_config(&mut guard, &tunnel)?;
-    drop(guard);
-    notify(&app);
-    Ok(report)
-}
-
-#[tauri::command]
 pub fn set_active_subscription(
     app: AppHandle,
     host: State<'_, Mutex<MobileHost>>,

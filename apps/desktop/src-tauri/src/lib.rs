@@ -408,7 +408,6 @@ pub fn run() {
             commands::import_subscription_file,
             commands::remove_subscription,
             commands::update_subscription,
-            commands::update_all_subscriptions,
             commands::set_active_subscription,
             commands::set_auto_update_subscription,
             commands::subscription_share,

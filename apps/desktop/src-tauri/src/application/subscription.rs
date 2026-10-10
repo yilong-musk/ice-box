@@ -201,40 +201,6 @@ pub(crate) fn update_subscription_use_case(
     Ok(value)
 }
 
-pub(crate) fn update_all_subscriptions_use_case(
-    app: &impl AppHost,
-    state: &AppState,
-) -> Result<serde_json::Value, AppError> {
-    // Fetches (parallel, up to one FETCH_TIMEOUT) run without the orchestrate lock so a
-    // long batch doesn't queue Start/Stop/Settings behind it. The lock is re-acquired for
-    // the disk phase + Apply step so a concurrent add/remove/set_active cannot interleave
-    // with the subscription writes (atomic file renames keep readers consistent, and
-    // `apply_update` refuses to resurrect a subscription removed mid-flight).
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
-    let fetched = mgr.fetch_all();
-
-    let _orch = lock_orchestrate(state)?;
-    let results = mgr.apply_all(fetched);
-    let settings = current_settings(&state.paths)?;
-    let apply_warning = apply_after_subscription_change(app, state, &settings);
-    let summary: Vec<_> = results
-        .into_iter()
-        .map(|(id, r)| {
-            serde_json::json!({
-                "id": id,
-                "ok": r.is_ok(),
-                "error": r.err().map(|e| e.to_string()),
-            })
-        })
-        .collect();
-    let mut value = serde_json::json!({ "results": summary });
-    attach_apply_warning(&mut value, apply_warning);
-    drop(_orch);
-    broadcast_state_change(app);
-    Ok(value)
-}
-
 pub(crate) fn set_active_subscription_use_case(
     app: &impl AppHost,
     state: &AppState,

@@ -118,6 +118,11 @@ function TitleBar({ label }: { label: string }) {
         >
           <h2 className="text-sm font-medium">{label}</h2>
         </div>
+        {/* pr-7 matches the node list: page padding plus the small card padding. */}
+        <div
+          data-titlebar-actions
+          className="flex h-full shrink-0 items-center gap-2 not-empty:pr-7"
+        />
         <WindowControls />
       </header>
     </div>
@@ -285,7 +290,7 @@ function AppShell() {
       )}
       {visited.has("subs") && (
         <TabPane active={tab === "subs"}>
-          <Subscriptions />
+          <Subscriptions active={tab === "subs"} />
         </TabPane>
       )}
       {visited.has("rules") && (
@@ -346,6 +351,10 @@ function AppShell() {
             <h2 className="text-sm font-medium">
               {current ? t(current.labelKey) : ""}
             </h2>
+            <div
+              data-titlebar-actions
+              className="flex shrink-0 items-center gap-2 not-empty:pr-3"
+            />
           </header>
           {recovery}
           <main
@@ -475,6 +484,10 @@ function AppShell() {
                 <h2 className="text-sm font-medium">
                   {current ? t(current.labelKey) : ""}
                 </h2>
+                <div
+                  data-titlebar-actions
+                  className="ml-auto flex shrink-0 items-center gap-2 not-empty:pr-3"
+                />
               </header>
             ) : null}
             {recovery}

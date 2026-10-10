@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { api, formatInvokeError } from "../api/client";
 import { ErrorAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -11,6 +12,7 @@ import { alignLogRows, type LogRow } from "../lib/logRows";
 const POLL_MS = 2000;
 const VIEW_LINES = 500;
 const STICK_THRESHOLD_PX = 40;
+const COPY_HINT_MS = 1600;
 
 function documentHidden(): boolean {
   return document.visibilityState === "hidden";
@@ -52,8 +54,11 @@ export function Logs({ active = true }: { active?: boolean }) {
   const [lines, setLines] = useState<LogRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [copyHintVisible, setCopyHintVisible] = useState(false);
+  const [copyHintNonce, setCopyHintNonce] = useState(0);
   const [stickToBottom, setStickToBottom] = useState(true);
   const boxRef = useRef<HTMLPreElement | null>(null);
+  const copyHintTimerRef = useRef<number | null>(null);
   const lastTextRef = useRef("");
   const stickToBottomRef = useRef(stickToBottom);
   stickToBottomRef.current = stickToBottom;
@@ -97,6 +102,11 @@ export function Logs({ active = true }: { active?: boolean }) {
       lastTextRef.current = "";
       setError(null);
       setCopyFailed(false);
+      setCopyHintVisible(false);
+      if (copyHintTimerRef.current !== null) {
+        window.clearTimeout(copyHintTimerRef.current);
+        copyHintTimerRef.current = null;
+      }
     }
     queueLogActive(active);
   }, [active, nextGeneration]);
@@ -153,10 +163,26 @@ export function Logs({ active = true }: { active?: boolean }) {
       const gen = ++generation;
       void copyText(text).then(
         () => {
-          if (!cancelled && gen === generation) setCopyFailed(false);
+          if (cancelled || gen !== generation) return;
+          if (copyHintTimerRef.current !== null) {
+            window.clearTimeout(copyHintTimerRef.current);
+          }
+          setCopyFailed(false);
+          setCopyHintNonce((nonce) => nonce + 1);
+          setCopyHintVisible(true);
+          copyHintTimerRef.current = window.setTimeout(() => {
+            copyHintTimerRef.current = null;
+            setCopyHintVisible(false);
+          }, COPY_HINT_MS);
         },
         () => {
-          if (!cancelled && gen === generation) setCopyFailed(true);
+          if (cancelled || gen !== generation) return;
+          if (copyHintTimerRef.current !== null) {
+            window.clearTimeout(copyHintTimerRef.current);
+            copyHintTimerRef.current = null;
+          }
+          setCopyHintVisible(false);
+          setCopyFailed(true);
         },
       );
     };
@@ -165,6 +191,10 @@ export function Logs({ active = true }: { active?: boolean }) {
     document.addEventListener("mouseup", onMouseUp);
     return () => {
       cancelled = true;
+      if (copyHintTimerRef.current !== null) {
+        window.clearTimeout(copyHintTimerRef.current);
+        copyHintTimerRef.current = null;
+      }
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("mouseup", onMouseUp);
     };
@@ -191,11 +221,22 @@ export function Logs({ active = true }: { active?: boolean }) {
 
   return (
     <div
-      className="logs-panel flex min-h-0 flex-1 flex-col overflow-hidden gap-3"
+      className="logs-panel relative flex min-h-0 flex-1 flex-col overflow-hidden gap-3"
       data-testid="logs-panel"
     >
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {copyFailed && <ErrorAlert className="shrink-0">{t("logs.copyFailed")}</ErrorAlert>}
+      {copyHintVisible && (
+        <div
+          key={copyHintNonce}
+          role="status"
+          data-testid="log-copy-hint"
+          className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 animate-in fade-in-0 slide-in-from-bottom-2 items-center gap-1.5 rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background shadow-lg duration-200"
+        >
+          <Check className="size-3" aria-hidden="true" />
+          {t("logs.copied")}
+        </div>
+      )}
       {/* Anchoring would scroll when a row leaves the top, and Chromium would drag the selection with it. */}
       <pre
         ref={boxRef}

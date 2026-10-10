@@ -13,22 +13,19 @@ import { useGenerationGuard } from "../lib/generationGuard";
 import {
   extractApplyWarning,
   formatApplyWarning,
-  extractUpdateResults,
-  formatUpdateFailures,
   subscriptionTrafficView,
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -69,7 +66,12 @@ function activeSubscriptionId(items: SubscriptionMeta[]): string | null {
   return items.find((item) => item.active)?.id ?? null;
 }
 
-export function Subscriptions() {
+type Props = {
+  /** When false the page stays mounted but its title-bar action is hidden. */
+  active?: boolean;
+};
+
+export function Subscriptions({ active = true }: Props) {
   useLanguagePreference();
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
@@ -77,7 +79,6 @@ export function Subscriptions() {
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [updateFailures, setUpdateFailures] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
@@ -139,17 +140,11 @@ export function Subscriptions() {
     if (isUpdate) setUpdating(true);
     setError(null);
     setWarning(null);
-    setUpdateFailures(null);
     try {
       const result = await action();
       const applyWarning = extractApplyWarning(result);
       if (applyWarning) {
         setWarning(formatApplyWarning(applyWarning));
-      }
-      const results = extractUpdateResults(result);
-      if (results) {
-        const failures = formatUpdateFailures(results);
-        if (failures) setUpdateFailures(failures);
       }
       await refresh();
       return true;
@@ -162,8 +157,6 @@ export function Subscriptions() {
       setBusy(false);
     }
   }
-
-  const hasRemote = items.some((item) => item.source !== "file");
 
   function subscriptionSummary(s: SubscriptionMeta): string {
     const parts = [
@@ -181,49 +174,28 @@ export function Subscriptions() {
 
   return (
     <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="subs-panel">
+      {active ? (
+        <TitlebarActions>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setError(null);
+              setImportOpen(true);
+            }}
+          >
+            {t("subs.importTitle")}
+          </Button>
+        </TitlebarActions>
+      ) : null}
       {error && !importOpen && (
         <ErrorAlert className="shrink-0">{error}</ErrorAlert>
       )}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
-      {updateFailures && (
-        <ErrorAlert className="shrink-0">
-          {t("subs.partialUpdateFailed", { details: updateFailures })}
-        </ErrorAlert>
-      )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0">
-          <CardTitle>{t("subs.title")}</CardTitle>
-          <CardDescription>
-            {items.length === 0
-              ? t("subs.emptyHint")
-              : t("subs.count", { n: items.length })}
-          </CardDescription>
-          <CardAction className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={busy}
-              onClick={() => {
-                setError(null);
-                setImportOpen(true);
-              }}
-            >
-              {t("subs.importTitle")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || !hasRemote}
-              onClick={() =>
-                void run(() => api.updateAllSubscriptions(), true)
-              }
-            >
-              {updating ? t("common.updating") : t("subs.updateAll")}
-            </Button>
-          </CardAction>
-        </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {items.length === 0 ? (
             <div className="my-auto flex flex-col items-start gap-1">

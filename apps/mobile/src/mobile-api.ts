@@ -76,7 +76,6 @@ export const api = {
     }),
   updateSubscription: (id: string) =>
     invoke<SubscriptionMeta>("update_subscription", { req: { id } }),
-  updateAllSubscriptions: () => invoke<unknown>("update_all_subscriptions"),
   setSubscriptionActive: (id: string, active: boolean) =>
     invoke<SubscriptionMeta>("set_active_subscription", { req: { id, active } }),
   setSubscriptionAutoUpdate: () =>

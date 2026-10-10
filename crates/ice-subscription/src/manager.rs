@@ -250,7 +250,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             fetched,
         } = add;
         match normalize_raw_body(&fetched.body, self.platform) {
-            Ok((format, profile)) => {
+            Ok((format, mut profile)) => {
                 if source == SubscriptionSource::File && format != SubscriptionFormat::SingBox {
                     return Err(SubscriptionError::InvalidSingBox(
                         "not a sing-box configuration",
@@ -268,7 +268,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     ),
                     url,
                     format,
-                    &profile,
+                    &mut profile,
                     make_active,
                     fetched.etag,
                     fetched.last_modified,
@@ -352,8 +352,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             return mark_subscription_refreshed(&self.paths, upd.meta.id, upd.fetched.userinfo);
         }
         match normalize_raw_body(&upd.fetched.body, self.platform) {
-            Ok((format, profile)) => {
-                let updated = meta_from_fetched_profile(&current, &upd.fetched, format, &profile);
+            Ok((format, mut profile)) => {
+                let updated =
+                    meta_from_fetched_profile(&current, &upd.fetched, format, &mut profile);
                 write_subscription_success(&self.paths, &updated, &upd.fetched.body, &profile)?;
                 Ok(updated)
             }
@@ -364,26 +365,8 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         }
     }
 
-    /// Fetch in parallel without the orchestrate lock. Completed bodies are
-    /// spooled to an anonymous temporary file; subscription storage is unchanged.
-    pub fn fetch_all(&self) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
-    where
-        F: Sync,
-    {
-        let ids: Vec<Uuid> = load_index(&self.paths)
-            .map(|i| {
-                i.items
-                    .into_iter()
-                    .filter(|m| m.source != SubscriptionSource::File)
-                    .map(|m| m.id)
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.fetch_ids(ids)
-    }
-
     /// Network phase of updating the subscriptions with `auto_update` enabled. Same parallel
-    /// fetch as [`SubscriptionManager::fetch_all`], but only touches the flagged entries so a
+    /// fetch as [`SubscriptionManager::fetch_ids`], but only touches the flagged entries so a
     /// background refresh never re-fetches subscriptions the user did not opt into.
     pub fn fetch_auto(&self) -> Vec<(Uuid, Result<FetchedUpdate, SubscriptionError>)>
     where
@@ -466,7 +449,8 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             .collect()
     }
 
-    /// Disk phase of [`SubscriptionManager::fetch_all`]: persists each fetched update
+    /// Disk phase of a batch fetch ([`SubscriptionManager::fetch_ids`] or
+    /// [`SubscriptionManager::fetch_auto`]): persists each fetched update
     /// serially so `index.json` writes never interleave. Under the orchestrate lock this
     /// cannot race with add/remove/set_active. The index is loaded once and written once
     /// (per-item updates used to re-read and fsync `index.json` twice per subscription).
@@ -515,9 +499,13 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                         continue;
                     }
                     match normalize_raw_body(&upd.fetched.body, self.platform) {
-                        Ok((format, profile)) => {
-                            let updated =
-                                meta_from_fetched_profile(&current, &upd.fetched, format, &profile);
+                        Ok((format, mut profile)) => {
+                            let updated = meta_from_fetched_profile(
+                                &current,
+                                &upd.fetched,
+                                format,
+                                &mut profile,
+                            );
                             if let Err(err) = commit_subscription_success(
                                 &self.paths,
                                 &updated,
@@ -548,15 +536,6 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             }
         }
         out
-    }
-
-    /// Update every subscription. Network fetches run in parallel, disk writes stay
-    /// serialized so `index.json` updates never interleave.
-    pub fn update_all(&self) -> Vec<(Uuid, Result<SubscriptionMeta, SubscriptionError>)>
-    where
-        F: Sync,
-    {
-        self.apply_all(self.fetch_all())
     }
 
     pub fn remove(&self, id: Uuid) -> Result<(), SubscriptionError> {

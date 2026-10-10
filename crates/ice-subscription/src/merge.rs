@@ -379,27 +379,40 @@ pub fn load_active_profile_with_default_rules(
     ProfileCache::new().load_active_with_default_rules(paths, index, auto_default_rules, platform)
 }
 
-/// Resolve `selected_tag`: keep if present in outbounds/groups, else default_outbound or first tag.
+/// Resolve `selected_tag`: keep it when it is still a real outbound, otherwise
+/// `default_outbound`, the first group, or the first leaf. Provider info
+/// entries (quota / expiry lines) are never selected.
 pub fn resolve_selected_tag(selected: Option<&str>, profile: &NormalizedProfile) -> Option<String> {
     let tags: Vec<String> = profile.all_tags();
     if tags.is_empty() {
         return None;
     }
+    let selectable = |tag: &str| {
+        tags.iter().any(|candidate| candidate == tag)
+            && !crate::userinfo::is_provider_info_name(tag.trim())
+    };
     if let Some(sel) = selected {
-        if tags.iter().any(|t| t == sel) {
+        if selectable(sel) {
             return Some(sel.to_string());
         }
     }
     if let Some(def) = &profile.default_outbound {
-        if tags.iter().any(|t| t == def) {
+        if selectable(def) {
             return Some(def.clone());
         }
     }
     profile
         .groups
-        .first()
-        .map(|g| g.tag.clone())
-        .or_else(|| profile.nodes.first().map(|n| n.tag.clone()))
+        .iter()
+        .find(|group| selectable(&group.tag))
+        .map(|group| group.tag.clone())
+        .or_else(|| {
+            profile
+                .nodes
+                .iter()
+                .find(|node| selectable(&node.tag))
+                .map(|node| node.tag.clone())
+        })
 }
 
 /// List outbounds for UI: groups first, then leaf nodes.
@@ -438,6 +451,28 @@ mod tests {
             resolve_selected_tag(Some("Proxies"), &profile).as_deref(),
             Some("Proxies")
         );
+    }
+
+    #[test]
+    fn resolve_selected_skips_provider_info_nodes() {
+        let profile = NormalizedProfile::from_nodes_only(vec![
+            NormalizedOutbound {
+                tag: "剩余流量：1 GB".into(),
+                outbound: std::sync::Arc::new(serde_json::json!({
+                    "type": "trojan",
+                    "tag": "剩余流量：1 GB",
+                })),
+            },
+            NormalizedOutbound {
+                tag: "hk".into(),
+                outbound: std::sync::Arc::new(serde_json::json!({"type": "trojan", "tag": "hk"})),
+            },
+        ]);
+        assert_eq!(
+            resolve_selected_tag(Some("剩余流量：1 GB"), &profile).as_deref(),
+            Some("hk")
+        );
+        assert_eq!(resolve_selected_tag(None, &profile).as_deref(), Some("hk"));
     }
 
     #[test]

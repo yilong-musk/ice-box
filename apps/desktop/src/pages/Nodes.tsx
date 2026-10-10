@@ -8,15 +8,11 @@ import {
   type NodeInfo,
 } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
+import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Item,
   ItemActions,
@@ -733,6 +729,29 @@ export function Nodes({ onNavigate, active = true }: Props) {
 
   return (
     <div className="nodes-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="nodes-panel">
+      {active ? (
+        <TitlebarActions>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!running || busy || nodes.length === 0}
+            onClick={() => void onBatchTest()}
+          >
+            {t("nodes.batchTest")}
+          </Button>
+          {busy && batchProgress ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onCancelBatch}
+            >
+              {t("common.cancel")}
+            </Button>
+          ) : null}
+        </TitlebarActions>
+      ) : null}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       {!running && nodes.length > 0 && (
@@ -742,28 +761,6 @@ export function Nodes({ onNavigate, active = true }: Props) {
       )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0">
-          <CardAction className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={!running || busy || nodes.length === 0}
-              onClick={() => void onBatchTest()}
-            >
-              {t("nodes.batchTest")}
-            </Button>
-            {busy && batchProgress ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={onCancelBatch}
-              >
-                {t("common.cancel")}
-              </Button>
-            ) : null}
-          </CardAction>
-        </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">
