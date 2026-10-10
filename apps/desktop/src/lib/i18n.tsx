@@ -222,6 +222,7 @@ const zh = {
 
   // --- logs page ---
   "logs.empty": "（空）",
+  "logs.copyFailed": "复制失败",
 
   // --- settings page ---
   "settings.appearance": "外观",
@@ -664,6 +665,7 @@ const en: Record<MessageKey, string> = {
 
   // --- logs page ---
   "logs.empty": "(empty)",
+  "logs.copyFailed": "Copy failed",
 
   // --- settings page ---
   "settings.appearance": "Appearance",
