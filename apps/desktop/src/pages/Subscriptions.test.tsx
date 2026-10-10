@@ -14,9 +14,10 @@ vi.mock("@platform/shell", () => ({
 }));
 
 const listSubscriptions = vi.fn();
-const updateAllSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
 const listenStateChanged = vi.fn();
+const subscriptionShare = vi.fn();
+const exportSubscriptionSingbox = vi.fn();
 
 vi.mock("../lib/nodes", () => ({
   clearNodesSnapshot: vi.fn(),
@@ -26,13 +27,15 @@ vi.mock("../api/client", () => ({
   api: {
     listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
     addSubscription: vi.fn(),
-    updateAllSubscriptions: (...args: unknown[]) =>
-      updateAllSubscriptions(...args),
+    importSubscriptionFile: vi.fn(),
     updateSubscription: vi.fn(),
     setSubscriptionActive: vi.fn(),
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
+    subscriptionShare: (...args: unknown[]) => subscriptionShare(...args),
+    exportSubscriptionSingbox: (...args: unknown[]) =>
+      exportSubscriptionSingbox(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -85,6 +88,9 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Subscriptions", () => {
   beforeEach(() => {
+    const actions = document.createElement("div");
+    actions.dataset.titlebarActions = "";
+    document.body.appendChild(actions);
     phoneShell.value = false;
     vi.clearAllMocks();
     stateChangedHandler = null;
@@ -97,6 +103,7 @@ describe("Subscriptions", () => {
   });
 
   afterEach(() => {
+    document.querySelector("[data-titlebar-actions]")?.remove();
     vi.unstubAllGlobals();
   });
 
@@ -115,20 +122,26 @@ describe("Subscriptions", () => {
     expect(view.getByLabelText(t("common.activate"))).toBeInTheDocument();
   });
 
-  it("renders import form", async () => {
+  it("opens the import dialog from the subscription list", async () => {
     const { container } = render(<Subscriptions />);
     const view = within(container);
     await waitFor(() => {
-      expect(
-        view.getByPlaceholderText(t("subs.urlPlaceholder")),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
+    expect(view.queryByPlaceholderText(t("subs.urlPlaceholder"))).not.toBeInTheDocument();
     expect(view.getByText(t("subs.emptyTitle"))).toBeInTheDocument();
-    expect(
-      view.getByText(t("subs.emptyDesc")),
-    ).toBeInTheDocument();
+    expect(view.getByText(t("subs.emptyDesc"))).toBeInTheDocument();
     expect(container.querySelector(".sub-list")).toBeNull();
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: t("subs.importFromFile") }),
+    ).toBeInTheDocument();
   });
 
   it("re-reads the active subscription after a tray switch", async () => {
@@ -164,6 +177,33 @@ describe("Subscriptions", () => {
     expect(clearNodesSnapshot).toHaveBeenCalled();
   });
 
+  it("draws each subscription as its own outlined row", async () => {
+    const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: true }),
+      sampleMeta({ id: secondId, name: "sub-b", active: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-b")).toBeInTheDocument();
+    });
+
+    const list = view.getByRole("list", { name: t("subs.listAria") });
+    expect(list).toHaveClass("gap-3");
+    expect(list.querySelector("[data-slot=item-separator]")).toBeNull();
+
+    const rows = list.querySelectorAll("[data-slot=item]");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute("data-variant", "outline");
+    expect(rows[0]).toHaveClass("bg-muted", "border-foreground/30");
+    expect(rows[0]).not.toHaveClass("border-border");
+    expect(rows[1]).toHaveAttribute("data-variant", "outline");
+    expect(rows[1]).toHaveClass("bg-muted", "border-border");
+    expect(rows[1]).not.toHaveClass("border-foreground/30");
+  });
+
   it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
     listSubscriptions.mockResolvedValue([
       sampleMeta({ name: "sub-a", active: true }),
@@ -187,41 +227,14 @@ describe("Subscriptions", () => {
     expect(clearNodesSnapshot).not.toHaveBeenCalled();
   });
 
-  it("shows partial update failures from updateAllSubscriptions", async () => {
+  it("shows 更新中 on the row update button while updating", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta()]);
-    updateAllSubscriptions.mockResolvedValue({
-      results: [
-        {
-          id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-          ok: false,
-          error: "network down",
-        },
-      ],
-    });
-
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByText("sub-a")).toBeInTheDocument();
-    });
-
-    view.getByRole("button", { name: t("subs.updateAll") }).click();
-
-    await waitFor(() => {
-      expect(view.getByRole("alert")).toHaveTextContent(
-        t("subs.partialUpdateFailed", { details: "x" }).split("x")[0],
-      );
-      expect(view.getByText(/network down/)).toBeInTheDocument();
-    });
-  });
-
-  it("shows 更新中 on update buttons while updating", async () => {
-    listSubscriptions.mockResolvedValue([sampleMeta()]);
-    let resolveUpdate: (v: unknown) => void = () => {};
-    updateAllSubscriptions.mockReturnValue(
-      new Promise((resolve) => {
-        resolveUpdate = resolve;
-      }),
+    let resolveUpdate: () => void = () => {};
+    vi.mocked(api.updateSubscription).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = () => resolve(sampleMeta());
+        }),
     );
 
     const { container } = render(<Subscriptions />);
@@ -230,19 +243,15 @@ describe("Subscriptions", () => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("subs.updateAll") }).click();
+    view.getByRole("button", { name: t("common.update") }).click();
 
     await waitFor(() => {
-      const updatingButtons = view.getAllByRole("button", { name: t("common.updating") });
-      expect(updatingButtons.length).toBeGreaterThanOrEqual(2);
-      for (const btn of updatingButtons) {
-        expect(btn).toBeDisabled();
-      }
+      expect(view.getByRole("button", { name: t("common.updating") })).toBeDisabled();
     });
 
-    resolveUpdate({ results: [] });
+    resolveUpdate();
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("subs.updateAll") })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("common.update") })).toBeEnabled();
     });
   });
 
@@ -416,25 +425,25 @@ describe("Subscriptions", () => {
       auto_update: true,
     });
 
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
+    render(<Subscriptions />);
     await waitFor(() => {
-      expect(view.getByLabelText(t("subs.autoUpdate"))).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
-    const importSwitch = view.getByLabelText(t("subs.autoUpdate"));
-    expect(importSwitch).not.toBeChecked();
-    fireEvent.click(importSwitch);
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    const importSwitch = within(dialog).getByLabelText(t("subs.autoUpdate"));
     expect(importSwitch).toBeChecked();
 
-    const interval = view.getByLabelText(t("subs.interval"));
+    const interval = within(dialog).getByLabelText(t("subs.interval"));
     expect(interval).toBeEnabled();
+    expect(interval).toHaveValue("twelve_hours");
     fireEvent.change(interval, { target: { value: "six_hours" } });
 
     fireEvent.change(
-      view.getByPlaceholderText(t("subs.urlPlaceholder")),
+      within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
       { target: { value: "https://example.com/new" } },
     );
-    fireEvent.click(view.getByRole("button", { name: t("subs.importAction") }));
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importAction") }));
 
     await waitFor(() => {
       expect(add).toHaveBeenCalledWith(
@@ -445,9 +454,59 @@ describe("Subscriptions", () => {
       );
     });
     await waitFor(() => {
-      expect(importSwitch).not.toBeChecked();
-      expect(interval).toBeDisabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("imports a sing-box config file from the import dialog", async () => {
+    listSubscriptions.mockResolvedValue([]);
+    const importFile = vi.mocked(api.importSubscriptionFile).mockResolvedValue(
+      sampleMeta({ name: "tokyo", source: "file" }),
+    );
+    const content = JSON.stringify({
+      outbounds: [{ type: "socks", tag: "n1", server: "1.1.1.1", server_port: 1 }],
+    });
+
+    render(<Subscriptions />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importFromFile") }));
+    const input = within(dialog).getByLabelText(t("subs.importFileLabel"));
+    const file = new File([content], "tokyo.json", { type: "application/json" });
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importAction") }));
+
+    await waitFor(() => {
+      expect(importFile).toHaveBeenCalledWith(content, "tokyo");
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("hides refresh and the subscription link for a file import", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "local", source: "file", auto_update: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("local")).toBeInTheDocument();
+    });
+    expect(view.getByText(t("subs.fileBadge"))).toBeInTheDocument();
+    const row = view.getByText("local").closest("[data-slot=item]") as HTMLElement;
+    expect(within(row).queryByRole("button", { name: t("common.update") })).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
+
+    fireEvent.click(within(row).getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByRole("button", { name: t("subs.shareCopyUrl") })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") })).toBeInTheDocument();
+    expect(within(dialog).getByText(t("subs.shareDescFile"))).toBeInTheDocument();
   });
 
   it("toggles auto-update per subscription via setSubscriptionAutoUpdate", async () => {
@@ -529,6 +588,108 @@ describe("Subscriptions", () => {
         "22222222-2222-2222-2222-222222222222",
         true,
       );
+    });
+  });
+
+  it("copies the subscription link and the sing-box config from the share dialog", async () => {
+    const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    subscriptionShare.mockImplementation(async (id: string, kind: string) => {
+      if (kind === "url") return `https://example.com/real?token=${id}`;
+      return `{"outbounds":[{"tag":"${id}"}]}`;
+    });
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a" }),
+      sampleMeta({ id: secondId, name: "sub-b", active: false, url: "https://example.com/redacted" }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-b")).toBeInTheDocument();
+    });
+    const rowB = view.getByText("sub-b").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(rowB).getByRole("button", { name: t("subs.share") }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(t("subs.shareTitle", { name: "sub-b" }))).toBeInTheDocument();
+    expect(subscriptionShare).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") }));
+    await waitFor(() => {
+      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "url");
+      expect(writeText).toHaveBeenCalledWith(`https://example.com/real?token=${secondId}`);
+    });
+    expect(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") })).toHaveTextContent(
+      t("subs.shareCopied"),
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }));
+    await waitFor(() => {
+      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "singbox");
+      expect(writeText).toHaveBeenCalledWith(`{"outbounds":[{"tag":"${secondId}"}]}`);
+    });
+    expect(
+      within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }),
+    ).toHaveTextContent(t("subs.shareCopied"));
+  });
+
+  it("exports the sing-box config from the share dialog", async () => {
+    exportSubscriptionSingbox.mockResolvedValue("cancelled");
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    const exportButton = within(dialog).getByRole("button", {
+      name: t("subs.shareExportSingbox"),
+    });
+
+    fireEvent.click(exportButton);
+    await waitFor(() => {
+      expect(exportSubscriptionSingbox).toHaveBeenCalledWith(
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "sub-a",
+        t("subs.shareExportSingbox"),
+      );
+    });
+    expect(exportButton).toHaveTextContent(t("subs.shareExportSingbox"));
+
+    exportSubscriptionSingbox.mockResolvedValue("saved");
+    fireEvent.click(exportButton);
+    await waitFor(() => {
+      expect(exportButton).toHaveTextContent(t("subs.shareExported"));
+    });
+  });
+
+  it("shows a failure when sharing cannot be copied", async () => {
+    document.execCommand = () => false;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    subscriptionShare.mockResolvedValue("https://example.com/a?token=secret");
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(t("subs.shareCopyFailed"));
     });
   });
 });

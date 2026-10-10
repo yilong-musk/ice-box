@@ -19,6 +19,7 @@ import type {
   UiMessage,
 } from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
+import { saveTextFile, singboxExportFilename } from "../../../apps/desktop/src/lib/saveFile";
 
 export type {
   AppErrorPayload,
@@ -140,6 +141,10 @@ let trafficTick = 0;
 
 const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+function demoSingboxConfig(): string {
+  return "{\n  \"outbounds\": [\n    { \"type\": \"selector\", \"tag\": \"proxy\", \"outbounds\": [\"direct\"] }\n  ],\n  \"route\": { \"final\": \"proxy\" }\n}";
+}
 
 export const api = {
   async getStatus(): Promise<StatusResponse> {
@@ -303,12 +308,33 @@ export const api = {
   async openProxyTerminal(): Promise<void> { await delay(); },
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },
-  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null }; subscriptions.push(sub); return sub; },
+  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null, source: "remote" as const }; subscriptions.push(sub); return sub; },
+  async importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta> {
+    await delay(180);
+    const trimmed = content.trim();
+    if (!trimmed.startsWith("{") || (!trimmed.includes("\"outbounds\"") && !trimmed.includes("\"endpoints\""))) {
+      throw { code: "sub.parse_failed", message: "invalid sing-box subscription: not a sing-box configuration" };
+    }
+    const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url: "", name: name || "Imported file", auto_update: false, auto_update_interval: null, source: "file" as const, format: "sing_box" };
+    subscriptions.push(sub);
+    return sub;
+  },
   async removeSubscription(id: string): Promise<{ ok: boolean }> { await delay(); const index = subscriptions.findIndex((sub) => sub.id === id); if (index >= 0) subscriptions.splice(index, 1); return { ok: true }; },
   async updateSubscription(): Promise<SubscriptionMeta> { await delay(220); return subscriptions[0]; },
-  async updateAllSubscriptions(): Promise<void> { await delay(220); },
   async setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.active = active; return sub; },
   async setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.auto_update = autoUpdate; sub.auto_update_interval = autoUpdate ? interval : null; return sub; },
+  async subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string> {
+    await delay();
+    const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
+    if (kind === "url") return sub.url;
+    return demoSingboxConfig();
+  },
+  async exportSubscriptionSingbox(id: string, name: string): Promise<"saved" | "cancelled"> {
+    await delay();
+    const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
+    saveTextFile(singboxExportFilename(name || sub.name), demoSingboxConfig());
+    return "saved";
+  },
   async getRuleOverview(): Promise<RuleOverview> { await delay(); return { total: ruleRows.length, disabled: ruleRows.filter((row) => row.disabled).length, custom: 0, rule_sets: 2, types: [{ rule_type: "domain", count: 2 }, { rule_type: "geoip", count: 1 }] }; },
   async listRules(req: ListRulesRequest): Promise<ListRulesResponse> { await delay(); const keyword = req.keyword?.toLowerCase() ?? ""; const filtered = ruleRows.filter((row) => JSON.stringify(row.rule).toLowerCase().includes(keyword)); return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) }; },
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },

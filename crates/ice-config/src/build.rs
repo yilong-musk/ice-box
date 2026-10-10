@@ -14,7 +14,9 @@ use crate::is_loopback_host;
 use crate::runtime_config::{tagged_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
 use crate::settings::{clash_mode_name, TunSettings};
-use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
+use crate::{
+    tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate, NormalizedProfile,
+};
 use ice_types::is_plausible_clash_api_secret;
 
 /// Connection routes are INFO. The Logs page filters to those plus
@@ -1643,6 +1645,146 @@ pub fn restore_runtime_config_from_bak(
     let bytes = fs::read(bak_path)?;
     write_bytes_atomic(config_path, &bytes)?;
     Ok(true)
+}
+
+/// Portable sing-box document for one subscription.
+///
+/// Outbounds, WireGuard endpoints, route, and DNS travel with the copy.
+/// Local inbounds, the Clash API, and log paths stay behind: they belong to
+/// this install. `geosite` and `geoip` rules are omitted because sing-box
+/// 1.13 rejects those fields, and the bundled replacements are files on this
+/// machine. Credentials are left intact so the copy can be imported elsewhere.
+pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, ConfigError> {
+    if profile.nodes.is_empty() {
+        return Err(ConfigError::EmptyOutbounds);
+    }
+
+    let mut tag_set: HashSet<String> = profile.all_tags().into_iter().collect();
+    let mut outbounds: Vec<Arc<Value>> = Vec::new();
+    for node in &profile.nodes {
+        outbounds.push(tagged_outbound(&node.outbound, &node.tag));
+    }
+    for group in &profile.groups {
+        outbounds.push(tagged_outbound(&group.outbound, &group.tag));
+    }
+    ensure_builtin_outbound(
+        &mut outbounds,
+        &mut tag_set,
+        "direct",
+        json!({"type": "direct", "tag": "direct"}),
+    );
+    ensure_builtin_outbound(
+        &mut outbounds,
+        &mut tag_set,
+        "block",
+        json!({"type": "block", "tag": "block"}),
+    );
+    if profile.groups.is_empty() {
+        let node_tags: Vec<String> = profile.nodes.iter().map(|n| n.tag.clone()).collect();
+        let proxy_default = node_tags[0].clone();
+        outbounds.push(Arc::new(json!({
+            "type": "selector",
+            "tag": "proxy",
+            "outbounds": node_tags,
+            "default": proxy_default,
+        })));
+        tag_set.insert("proxy".into());
+    }
+
+    let final_outbound = {
+        let candidate = profile.route.final_outbound.as_str();
+        if candidate == "direct" || candidate == "block" || tag_set.contains(candidate) {
+            candidate.to_string()
+        } else if tag_set.contains("proxy") {
+            "proxy".to_string()
+        } else {
+            "direct".to_string()
+        }
+    };
+
+    let set_tags: HashSet<&str> = profile
+        .route
+        .rule_sets
+        .iter()
+        .filter_map(|set| set.get("tag").and_then(|value| value.as_str()))
+        .collect();
+    let rules: Vec<Value> = profile
+        .route
+        .rules
+        .iter()
+        .filter(|rule| share_rule_is_portable(rule, &tag_set, &set_tags))
+        .cloned()
+        .collect();
+
+    let mut route = json!({ "final": final_outbound });
+    if !rules.is_empty() {
+        route
+            .as_object_mut()
+            .expect("route object")
+            .insert("rules".into(), Value::Array(rules));
+    }
+    if !profile.route.rule_sets.is_empty() {
+        route.as_object_mut().expect("route object").insert(
+            "rule_set".into(),
+            Value::Array(profile.route.rule_sets.clone()),
+        );
+    }
+
+    let dns = if let Some(raw) = &profile.dns {
+        let mut dns = raw.clone();
+        if let Some(obj) = dns.as_object_mut() {
+            obj.remove("__ice_dns_listen");
+        }
+        ice_config_guard::retain_allowed_dns_servers(&mut dns);
+        if dns_block_is_usable(&dns) {
+            if dns_has_local_server(&dns) {
+                route
+                    .as_object_mut()
+                    .expect("route object")
+                    .insert("default_domain_resolver".into(), json!("local"));
+            }
+            Some(dns)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    validate_route_refs(&route, &tag_set)?;
+    let endpoints = split_wireguard_endpoints(&mut outbounds)?;
+
+    let mut root = serde_json::Map::new();
+    if let Some(dns) = dns {
+        root.insert("dns".into(), dns);
+    }
+    root.insert(
+        "outbounds".into(),
+        Value::Array(
+            outbounds
+                .into_iter()
+                .map(|item| item.as_ref().clone())
+                .collect(),
+        ),
+    );
+    if !endpoints.is_empty() {
+        root.insert("endpoints".into(), Value::Array(endpoints));
+    }
+    root.insert("route".into(), route);
+    Ok(serde_json::to_string_pretty(&Value::Object(root))?)
+}
+
+/// Rules that sing-box 1.13 can load without this machine's bundled files.
+fn share_rule_is_portable(rule: &Value, tags: &HashSet<String>, set_tags: &HashSet<&str>) -> bool {
+    if rule.get("geosite").is_some() || rule.get("geoip").is_some() {
+        return false;
+    }
+    if let Some(outbound) = rule.get("outbound").and_then(|value| value.as_str()) {
+        if outbound != "direct" && outbound != "block" && !tags.contains(outbound) {
+            return false;
+        }
+    }
+    rule_set_refs_are_known(rule, set_tags)
 }
 
 #[derive(Debug, thiserror::Error)]

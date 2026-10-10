@@ -22,7 +22,7 @@ use ice_subscription::{
     SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::config::{self, PLATFORM};
@@ -159,24 +159,6 @@ impl MobileHost {
         public_meta(&meta)
     }
 
-    pub fn apply_updates(
-        &self,
-        fetched: Vec<(
-            Uuid,
-            Result<ice_subscription::FetchedUpdate, ice_subscription::SubscriptionError>,
-        )>,
-    ) -> Result<Value, AppError> {
-        let results = self.manager()?.apply_all(fetched);
-        let items: Vec<Value> = results
-            .into_iter()
-            .map(|(id, result)| match result {
-                Ok(_) => json!({ "id": id, "ok": true }),
-                Err(err) => json!({ "id": id, "ok": false, "error": err.to_string() }),
-            })
-            .collect();
-        Ok(Value::Array(items))
-    }
-
     pub fn note_subscription_error(
         &self,
         id: Uuid,
@@ -228,24 +210,17 @@ impl MobileHost {
                     .map(|group| group.now.clone())
                     .filter(|now| !now.is_empty());
                 let static_now = if ty == "selector" {
-                    selections
-                        .get(&outbound.tag)
-                        .cloned()
-                        .or_else(|| {
-                            outbound
-                                .outbound
-                                .get("default")
-                                .and_then(|v| v.as_str())
-                                .map(str::to_string)
-                        })
-                        .or_else(|| members.first().cloned())
+                    selector_member_now(&selections, &outbound.tag, &outbound.outbound, &members)
                 } else {
                     None
                 };
                 NodeInfo {
                     tag: outbound.tag.clone(),
                     outbound_type: ty,
-                    group_now: live_now.or(static_now).filter(|_| is_group),
+                    group_now: live_now
+                        .filter(|now| members.iter().any(|member| member == now))
+                        .or(static_now)
+                        .filter(|_| is_group),
                     group_all: if is_group { Some(members) } else { None },
                 }
             })
@@ -675,18 +650,9 @@ impl MobileHost {
             ty.as_str(),
             "selector" | "urltest" | "fallback" | "loadbalance"
         );
+        let members = member_tags(&outbound.outbound);
         let static_now = if ty == "selector" {
-            selections
-                .get(&outbound.tag)
-                .cloned()
-                .or_else(|| {
-                    outbound
-                        .outbound
-                        .get("default")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                })
-                .or_else(|| member_tags(&outbound.outbound).into_iter().next())
+            selector_member_now(&selections, &outbound.tag, &outbound.outbound, &members)
         } else {
             None
         };
@@ -694,6 +660,7 @@ impl MobileHost {
             settings
                 .as_ref()
                 .and_then(|settings| self.cached_selected_now(settings, &outbound.tag))
+                .filter(|now| members.iter().any(|member| member == now))
         } else {
             None
         }
@@ -785,6 +752,29 @@ fn public_meta(meta: &SubscriptionMeta) -> Result<Value, AppError> {
         );
     }
     Ok(value)
+}
+
+/// Selector exit that is still a member. A saved pick of a removed info
+/// entry falls through to the group's default, then its first real member.
+fn selector_member_now(
+    selections: &std::collections::HashMap<String, String>,
+    tag: &str,
+    outbound: &Value,
+    members: &[String],
+) -> Option<String> {
+    let listed = |candidate: &str| members.iter().any(|member| member == candidate);
+    selections
+        .get(tag)
+        .filter(|selected| listed(selected))
+        .cloned()
+        .or_else(|| {
+            outbound
+                .get("default")
+                .and_then(|value| value.as_str())
+                .filter(|value| listed(value))
+                .map(str::to_string)
+        })
+        .or_else(|| members.first().cloned())
 }
 
 fn member_tags(outbound: &Value) -> Vec<String> {

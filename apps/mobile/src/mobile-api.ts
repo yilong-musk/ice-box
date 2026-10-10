@@ -3,6 +3,7 @@
 /** Phone transport. Core commands match the desktop names; desktop-only methods do nothing. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { saveTextFile, singboxExportFilename } from "../../desktop/src/lib/saveFile";
 import type {
   ApiContract,
   AppErrorPayload,
@@ -65,13 +66,16 @@ export const api = {
         auto_update_interval: null,
       },
     }),
+  importSubscriptionFile: (content: string, name?: string) =>
+    invoke<SubscriptionMeta>("import_subscription_file", {
+      req: { content, name: name ?? null },
+    }),
   removeSubscription: (id: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>("remove_subscription", {
       req: { id },
     }),
   updateSubscription: (id: string) =>
     invoke<SubscriptionMeta>("update_subscription", { req: { id } }),
-  updateAllSubscriptions: () => invoke<unknown>("update_all_subscriptions"),
   setSubscriptionActive: (id: string, active: boolean) =>
     invoke<SubscriptionMeta>("set_active_subscription", { req: { id, active } }),
   setSubscriptionAutoUpdate: () =>
@@ -79,6 +83,15 @@ export const api = {
       code: "sub.auto_update_unsupported",
       message: "subscription auto-update is not available on the phone",
     }),
+  subscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<string>("subscription_share", { req: { id, kind } }),
+  exportSubscriptionSingbox: async (id: string, name: string) => {
+    const text = await invoke<string>("subscription_share", {
+      req: { id, kind: "singbox" },
+    });
+    saveTextFile(singboxExportFilename(name), text);
+    return "saved" as const;
+  },
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) => invoke<ListRulesResponse>("list_rules", { req }),
   setRuleDisabled: (fingerprint: string, disabled: boolean) =>

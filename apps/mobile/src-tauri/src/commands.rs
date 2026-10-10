@@ -6,7 +6,9 @@
 use std::sync::Mutex;
 
 use ice_config::{AppError, AppPaths, ErrorCode, ProxyMode, SettingsPatch};
-use ice_subscription::{AutoUpdateInterval, SubscriptionManager};
+use ice_subscription::{
+    subscription_share_text, AutoUpdateInterval, SubscriptionManager, SubscriptionShareKind,
+};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_tunnel::{Tunnel, TunnelError};
@@ -41,8 +43,20 @@ pub struct AddSubscriptionRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ImportSubscriptionFileRequest {
+    pub content: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct IdRequest {
     pub id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct SubscriptionShareRequest {
+    pub id: Uuid,
+    pub kind: SubscriptionShareKind,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +249,25 @@ pub fn stop(
     Ok(())
 }
 
+/// Unredacted subscription URL, or a portable sing-box document.
+/// The list command keeps URLs redacted; do not log the returned text.
+#[tauri::command]
+pub async fn subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<String, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    run_blocking("subscription_share", move || {
+        subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
+    })
+    .await?
+}
+
 #[tauri::command]
 pub fn list_subscriptions(
     app: AppHandle,
@@ -270,6 +303,35 @@ pub async fn add_subscription(
     let tunnel = app.state::<Tunnel<Wry>>();
     let mut guard = ready(&app, &host, &tunnel)?;
     let meta = guard.apply_added(fetched)?;
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
+    notify(&app);
+    Ok(meta)
+}
+
+#[tauri::command]
+pub async fn import_subscription_file(
+    app: AppHandle,
+    req: ImportSubscriptionFileRequest,
+) -> Result<serde_json::Value, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let content = req.content;
+    let name = req.name;
+    let prepared = run_blocking("import_subscription_file", move || {
+        SubscriptionManager::open(paths, PLATFORM)
+            .prepare_file_import(&content, name.as_deref())
+            .map_err(AppError::from)
+    })
+    .await??;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let meta = guard.apply_added(prepared)?;
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
     notify(&app);
@@ -326,28 +388,6 @@ pub async fn update_subscription(
     drop(guard);
     notify(&app);
     Ok(meta)
-}
-
-#[tauri::command]
-pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Value, AppError> {
-    let paths = {
-        let host = app.state::<Mutex<MobileHost>>();
-        let tunnel = app.state::<Tunnel<Wry>>();
-        let guard = ready(&app, &host, &tunnel)?;
-        guard.subscription_paths()?
-    };
-    let fetched = run_blocking("update_all_subscriptions", move || {
-        SubscriptionManager::open(paths, PLATFORM).fetch_all()
-    })
-    .await?;
-    let host = app.state::<Mutex<MobileHost>>();
-    let tunnel = app.state::<Tunnel<Wry>>();
-    let mut guard = ready(&app, &host, &tunnel)?;
-    let report = guard.apply_updates(fetched)?;
-    apply_config(&mut guard, &tunnel)?;
-    drop(guard);
-    notify(&app);
-    Ok(report)
 }
 
 #[tauri::command]

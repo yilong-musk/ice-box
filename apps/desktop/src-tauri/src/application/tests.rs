@@ -45,6 +45,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         provider_info: vec![],
         auto_update: false,
         auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
     };
     let nodes = vec![NormalizedOutbound {
         tag: "n1".into(),
@@ -124,6 +125,7 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         provider_info: vec![],
         auto_update: false,
         auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
     };
     let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
         tag: "n1".into(),

@@ -115,6 +115,10 @@ export const api = {
         auto_update_interval: autoUpdate ? interval : null,
       },
     }),
+  importSubscriptionFile: (content: string, name?: string) =>
+    invoke<SubscriptionMeta>("import_subscription_file", {
+      req: { content, name: name ?? null },
+    }),
   removeSubscription: (id: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>(
       "remove_subscription",
@@ -122,8 +126,6 @@ export const api = {
     ),
   updateSubscription: (id: string) =>
     invoke<SubscriptionMeta>("update_subscription", { req: { id } }),
-  updateAllSubscriptions: () =>
-    invoke<unknown>("update_all_subscriptions"),
   setSubscriptionActive: (id: string, active: boolean) =>
     invoke<SubscriptionMeta>("set_active_subscription", {
       req: { id, active },
@@ -135,6 +137,12 @@ export const api = {
   ) =>
     invoke<SubscriptionMeta>("set_auto_update_subscription", {
       req: { id, auto_update: autoUpdate, auto_update_interval: interval },
+    }),
+  subscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<string>("subscription_share", { req: { id, kind } }),
+  exportSubscriptionSingbox: (id: string, name: string, title: string) =>
+    invoke<"saved" | "cancelled">("export_subscription_singbox", {
+      req: { id, name, title },
     }),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) =>

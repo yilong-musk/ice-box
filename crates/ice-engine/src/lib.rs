@@ -26,11 +26,11 @@ pub use ice_subscription::{
     normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox, parse_singbox_profile,
     parse_subscription, read_index, read_profile, recover_subscription_dirs,
     redact_subscription_url_for_log, redact_subscription_url_for_ui, remove_subscription,
-    resolve_selected_tag, set_active, set_auto_update, set_enabled, write_subscription_error,
-    write_subscription_success, AutoUpdateInterval, DirectFetcher, FetchResponse, HttpFetcher,
-    MemorySubscriptionManager, MockFetchMode, MockFetcher, ProfileCache, SubscriptionError,
-    SubscriptionFormat, SubscriptionIndex, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths,
+    resolve_selected_tag, set_active, set_auto_update, set_enabled, subscription_share_text,
+    write_subscription_error, write_subscription_success, AutoUpdateInterval, DirectFetcher,
+    FetchResponse, HttpFetcher, MemorySubscriptionManager, MockFetchMode, MockFetcher,
+    ProfileCache, SubscriptionError, SubscriptionFormat, SubscriptionIndex, SubscriptionManager,
+    SubscriptionMeta, SubscriptionPaths, SubscriptionShareKind, SubscriptionSource,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 

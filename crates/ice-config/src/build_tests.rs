@@ -1868,6 +1868,117 @@ fn build_mobile_config_rejects_desktop_platforms() {
 }
 
 #[test]
+fn share_singbox_config_is_a_portable_document() {
+    let shared = share_singbox_config(&NormalizedProfile {
+        nodes: vec![NormalizedOutbound::new(
+            "n1",
+            json!({
+                "type": "vmess",
+                "tag": "n1",
+                "server": "1.2.3.4",
+                "uuid": "real-uuid"
+            }),
+        )],
+        groups: Vec::new(),
+        route: NormalizedRoute {
+            rules: vec![
+                json!({"domain": ["example.com"], "outbound": "proxy"}),
+                json!({"geoip": ["cn"], "outbound": "direct"}),
+                json!({"geosite": ["cn"], "outbound": "direct"}),
+                json!({"domain": ["missing.example"], "outbound": "gone"}),
+            ],
+            final_outbound: "proxy".into(),
+            rule_sets: Vec::new(),
+        },
+        dns: Some(json!({
+            "__ice_dns_listen": "127.0.0.1:53",
+            "servers": [{"type": "local", "tag": "local"}],
+            "final": "local"
+        })),
+        default_outbound: None,
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("share");
+    let value: Value = serde_json::from_str(&shared).expect("json");
+    assert!(value.get("inbounds").is_none());
+    assert!(value.get("experimental").is_none());
+    assert!(value.get("log").is_none());
+    assert!(value.get("dns").unwrap().get("__ice_dns_listen").is_none());
+    assert_eq!(value["route"]["default_domain_resolver"], "local");
+    assert_eq!(value["route"]["final"], "proxy");
+    let rules = value["route"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["domain"][0], "example.com");
+    let tags: Vec<&str> = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    assert!(tags.contains(&"n1"));
+    assert!(tags.contains(&"proxy"));
+    assert!(tags.contains(&"direct"));
+    assert!(tags.contains(&"block"));
+    let node = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "n1")
+        .unwrap();
+    assert_eq!(node["uuid"], "real-uuid");
+
+    let grouped = share_singbox_config(&NormalizedProfile {
+        nodes: vec![socks("n1")],
+        groups: vec![NormalizedOutbound::new(
+            "G",
+            json!({"type": "selector", "tag": "G", "outbounds": ["n1"]}),
+        )],
+        route: NormalizedRoute {
+            rules: Vec::new(),
+            final_outbound: "G".into(),
+            rule_sets: Vec::new(),
+        },
+        dns: None,
+        default_outbound: Some("G".into()),
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("grouped");
+    let grouped: Value = serde_json::from_str(&grouped).unwrap();
+    assert!(grouped["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|outbound| outbound["tag"] != "proxy"));
+    assert_eq!(grouped["route"]["final"], "G");
+
+    let wireguard = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
+        NormalizedOutbound::new(
+            "wg",
+            json!({
+                "type": "wireguard",
+                "tag": "wg",
+                "server": "1.2.3.4",
+                "server_port": 51820,
+                "private_key": "priv",
+                "peer_public_key": "pub"
+            }),
+        ),
+    ]))
+    .expect("wireguard");
+    let wireguard: Value = serde_json::from_str(&wireguard).unwrap();
+    assert!(wireguard["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|outbound| outbound["type"] != "wireguard"));
+    assert_eq!(wireguard["endpoints"][0]["type"], "wireguard");
+    assert_eq!(wireguard["endpoints"][0]["private_key"], "priv");
+
+    let empty = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![]));
+    assert!(matches!(empty, Err(ConfigError::EmptyOutbounds)));
+}
+
+#[test]
 fn example_minimal_direct_passes_elevated_guard() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let raw = std::fs::read_to_string(repo.join("configs/examples/minimal-direct.json"))

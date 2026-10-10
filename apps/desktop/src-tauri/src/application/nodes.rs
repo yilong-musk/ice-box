@@ -64,27 +64,15 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
                         .collect()
                 })
                 .unwrap_or_default();
-            let static_now = if ty == "selector" {
-                selections
-                    .get(&o.tag)
-                    .cloned()
-                    .or_else(|| {
-                        o.outbound
-                            .get("default")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    })
-                    .or_else(|| static_members.first().cloned())
-            } else {
-                None
-            };
+            let static_now = static_group_now(o, &ty, &selections);
+            let listed = |tag: &str| static_members.iter().any(|member| member == tag);
             NodeInfo {
                 tag: o.tag.clone(),
                 outbound_type: ty,
                 group_now: live_now
                     .get(o.tag.as_str())
                     .copied()
-                    .filter(|now| !now.is_empty())
+                    .filter(|now| !now.is_empty() && listed(now))
                     .map(str::to_string)
                     .or(static_now)
                     .filter(|_| is_group),
@@ -115,12 +103,14 @@ fn static_group_now(
     }
     selections
         .get(&outbound.tag)
+        .filter(|selected| lists_member(outbound, selected))
         .cloned()
         .or_else(|| {
             outbound
                 .outbound
                 .get("default")
                 .and_then(|value| value.as_str())
+                .filter(|value| lists_member(outbound, value))
                 .map(str::to_string)
         })
         .or_else(|| {
@@ -132,6 +122,14 @@ fn static_group_now(
                 .and_then(|member| member.as_str())
                 .map(str::to_string)
         })
+}
+
+fn lists_member(outbound: &NormalizedOutbound, tag: &str) -> bool {
+    outbound
+        .outbound
+        .get("outbounds")
+        .and_then(|value| value.as_array())
+        .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)))
 }
 
 /// Home's one-line exit. Does not clone strategy-group member lists.
@@ -179,7 +177,9 @@ pub(crate) fn outbound_summary(
                     core.generation,
                     &outbound.tag,
                     refresh,
-                ) {
+                )
+                .filter(|now| lists_member(outbound, now))
+                {
                     group_now = Some(now);
                 }
             }

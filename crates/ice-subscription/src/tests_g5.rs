@@ -3,10 +3,11 @@
 use super::{
     detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
-    parse_uri_list_profile, resolve_selected_tag, set_active, set_auto_update,
-    write_subscription_error, AutoUpdateInterval, DirectFetcher, FetchResponse, FetchedUpdate,
-    HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionError, SubscriptionFormat,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionUserInfo,
+    parse_uri_list_profile, read_profile, resolve_selected_tag, set_active, set_auto_update,
+    subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
+    FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
+    SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
+    SubscriptionPaths, SubscriptionShareKind, SubscriptionSource, SubscriptionUserInfo,
     CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
@@ -378,7 +379,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
 }
 
 #[test]
-fn fetch_all_caps_network_concurrency() {
+fn fetch_ids_caps_network_concurrency() {
     let paths = temp_subs("fetch-pool");
     let fetcher = ConcurrencyFetcher {
         active: Arc::new(AtomicUsize::new(0)),
@@ -387,12 +388,15 @@ fn fetch_all_caps_network_concurrency() {
     let max_active = Arc::clone(&fetcher.max_active);
     let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
     let count = super::MAX_FETCH_CONCURRENCY + 4;
+    let mut ids = Vec::with_capacity(count);
     for index in 0..count {
-        mgr.add(&format!("https://example.com/{index}"), None, false, None)
+        let meta = mgr
+            .add(&format!("https://example.com/{index}"), None, false, None)
             .expect("add subscription");
+        ids.push(meta.id);
     }
 
-    let updates = mgr.fetch_all();
+    let updates = mgr.fetch_ids(ids);
     assert_eq!(updates.len(), count);
     for (_, update) in &updates {
         let update = update.as_ref().expect("fetch succeeded");
@@ -404,11 +408,11 @@ fn fetch_all_caps_network_concurrency() {
     }
     assert!(
         max_active.load(Ordering::SeqCst) > 1,
-        "fetch_all should retain useful parallelism"
+        "fetch_ids should retain useful parallelism"
     );
     assert!(
         max_active.load(Ordering::SeqCst) <= super::MAX_FETCH_CONCURRENCY,
-        "fetch_all exceeded its worker limit"
+        "fetch_ids exceeded its worker limit"
     );
     assert!(
         mgr.apply_all(updates)
@@ -699,11 +703,17 @@ fn provider_info_entries_are_recorded_and_persisted() {
     let meta = mgr
         .add("https://example.com/s", Some("s"), false, None)
         .unwrap();
-    assert_eq!(meta.node_count, 3, "info entries stay in the node list");
+    assert_eq!(
+        meta.node_count, 1,
+        "info entries are omitted from the node list"
+    );
     assert_eq!(
         meta.provider_info,
         vec!["Traffic: 11.84 GB | 150 GB", "Expire: 2026-09-26"]
     );
+    let stored = read_profile(&paths, meta.id).unwrap();
+    assert_eq!(stored.nodes.len(), 1);
+    assert_eq!(stored.nodes[0].tag, "🇭🇰 香港实验性 IEPL 专线 1");
     let disk_meta: SubscriptionMeta =
         serde_json::from_str(&fs::read_to_string(paths.meta(meta.id)).unwrap()).unwrap();
     assert_eq!(disk_meta.provider_info, meta.provider_info);
@@ -751,9 +761,6 @@ fn fetch_auto_only_fetches_flagged_subscriptions() {
     assert_eq!(auto[0].0, a.id);
     assert!(auto[0].1.is_ok());
     assert_ne!(b.id, a.id);
-
-    let all = mgr.fetch_all();
-    assert_eq!(all.len(), 2);
     let _ = fs::remove_dir_all(paths.root());
 }
 
@@ -1461,10 +1468,119 @@ fn html_page_is_an_unknown_subscription_not_a_panic() {
 }
 
 #[test]
+fn share_returns_the_full_url_and_a_singbox_document() {
+    let paths = temp_subs("share");
+    let body = r#"{"outbounds":[{"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}]}"#;
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr
+        .add(
+            "https://example.com/s?token=secret",
+            Some("shared"),
+            false,
+            None,
+        )
+        .unwrap();
+
+    let url = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Url).unwrap();
+    assert_eq!(url, "https://example.com/s?token=secret");
+
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|outbound| outbound["tag"] == "n1"));
+    assert!(value.get("inbounds").is_none());
+    assert_eq!(
+        value["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|outbound| outbound["tag"] == "n1")
+            .unwrap()["server"],
+        "1.1.1.1"
+    );
+
+    let missing = subscription_share_text(&paths, Uuid::nil(), SubscriptionShareKind::Url);
+    assert!(matches!(missing, Err(SubscriptionError::NotFound)));
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
 fn clash_shaped_garbage_does_not_panic() {
     let result = std::panic::catch_unwind(|| {
         normalize_raw_body("proxies: *not yaml*\n", HostPlatform::MacOs)
     });
     assert!(result.is_ok(), "a parser panic must become an error");
     assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn file_import_persists_a_singbox_document_and_skips_refresh() {
+    let paths = temp_subs("file-import");
+    let body = "\u{feff}{\"outbounds\":[{\"type\":\"socks\",\"tag\":\"n1\",\"server\":\"1.1.1.1\",\"server_port\":1}]}";
+    let mgr = SubscriptionManager::open(clone_paths(&paths), HostPlatform::MacOs);
+    let meta = mgr.import_file(body, Some("  tokyo\n")).unwrap();
+    assert_eq!(meta.name, "tokyo");
+    assert_eq!(meta.source, SubscriptionSource::File);
+    assert!(!meta.auto_update);
+    assert!(meta.auto_update_interval.is_none());
+    assert!(meta.url.is_empty());
+    assert!(meta.active);
+    assert_eq!(meta.node_count, 1);
+    assert_eq!(meta.format, SubscriptionFormat::SingBox);
+
+    let stored = load_index(&paths).unwrap();
+    assert_eq!(stored.items[0].source, SubscriptionSource::File);
+
+    let clash = "proxies:\n  - {name: a, server: 1.1.1.1, port: 443, type: trojan, password: p}\n";
+    let rejected = mgr.import_file(clash, Some("clash")).unwrap_err();
+    assert!(matches!(rejected, SubscriptionError::InvalidSingBox(_)));
+    assert_eq!(load_index(&paths).unwrap().items.len(), 1);
+
+    let update = mgr.fetch_update(meta.id).unwrap_err();
+    assert!(matches!(update, SubscriptionError::FetchFailed(_)));
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Fail("should not fetch a file subscription".into()),
+    };
+    let refreshing = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    assert!(refreshing.fetch_auto().is_empty());
+    let auto = refreshing
+        .set_auto_update(meta.id, true, Some(AutoUpdateInterval::OneHour))
+        .unwrap_err();
+    assert!(matches!(auto, SubscriptionError::FetchFailed(_)));
+
+    let share = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Url).unwrap_err();
+    assert!(matches!(share, SubscriptionError::FetchFailed(_)));
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    assert!(json.contains("n1"));
+
+    let legacy = serde_json::json!({
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "old",
+        "url": "https://example.com/s",
+        "active": false,
+        "format": "sing_box",
+        "node_count": 0,
+        "last_updated": null,
+        "last_error": null,
+        "etag": null,
+        "last_modified": null,
+    });
+    let old: SubscriptionMeta = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.source, SubscriptionSource::Remote);
+    let _ = fs::remove_dir_all(paths.root());
 }

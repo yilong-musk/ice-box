@@ -11,6 +11,7 @@ mod fetch;
 mod limits;
 mod merge;
 mod prune;
+mod share;
 mod store;
 mod tls_fetch;
 mod uri;
@@ -39,6 +40,7 @@ pub use merge::{
     active_subscription, list_profile_outbounds, load_active_profile,
     load_active_profile_with_default_rules, resolve_selected_tag, short_id, ProfileCache,
 };
+pub use share::{subscription_share_text, SubscriptionShareKind};
 pub use store::{
     apply_error_to_index, apply_success_to_index, clear_error_in_index, clear_subscription_error,
     commit_subscription_success, load_index, mark_refreshed_in_index, mark_subscription_refreshed,
@@ -72,6 +74,16 @@ pub enum SubscriptionFormat {
     /// Proxy share-link list (`vless://`, `trojan://`, `hysteria2://`, ...).
     UriList,
     Unknown,
+}
+
+/// Where a subscription body came from. File imports have no remote URL and
+/// are left out of network refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionSource {
+    #[default]
+    Remote,
+    File,
 }
 
 /// Refresh cadence offered for per-subscription auto-update.
@@ -145,6 +157,7 @@ pub struct SubscriptionMeta {
     /// Usage / expiry entries the provider embeds in the proxy list
     /// (`Traffic: 11.84 GB | 150 GB`, `剩余流量：1023.64 GB`), verbatim and in
     /// list order. Empty when the subscription carries no such entries.
+    /// The matching proxies are omitted from the node list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_info: Vec<String>,
     /// Refresh this subscription on a background schedule when enabled.
@@ -154,6 +167,9 @@ pub struct SubscriptionMeta {
     /// [`AutoUpdateInterval::default_duration`] for legacy entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update_interval: Option<AutoUpdateInterval>,
+    /// Missing on subscriptions saved before file import existed.
+    #[serde(default)]
+    pub source: SubscriptionSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -278,13 +294,14 @@ pub(crate) fn meta_from_profile(
     name: String,
     url: String,
     format: SubscriptionFormat,
-    profile: &NormalizedProfile,
+    profile: &mut NormalizedProfile,
     active: bool,
     etag: Option<String>,
     last_modified: Option<String>,
     auto_update: bool,
     auto_update_interval: Option<AutoUpdateInterval>,
 ) -> SubscriptionMeta {
+    let provider_info = userinfo::detach_provider_info_nodes(profile);
     SubscriptionMeta {
         id,
         name,
@@ -301,9 +318,10 @@ pub(crate) fn meta_from_profile(
         etag,
         last_modified,
         userinfo: None,
-        provider_info: provider_info_lines(&profile.nodes),
+        provider_info,
         auto_update,
         auto_update_interval,
+        source: SubscriptionSource::Remote,
     }
 }
 
@@ -311,7 +329,7 @@ pub(crate) fn meta_from_fetched_profile(
     current: &SubscriptionMeta,
     fetched: &FetchResponse,
     format: SubscriptionFormat,
-    profile: &NormalizedProfile,
+    profile: &mut NormalizedProfile,
 ) -> SubscriptionMeta {
     let mut meta = meta_from_profile(
         current.id,
@@ -331,6 +349,7 @@ pub(crate) fn meta_from_fetched_profile(
     // A successful fetch that omits the header keeps the last counters the
     // provider reported; a conditional (304) response may still refresh them.
     meta.userinfo = fetched.userinfo.or(current.userinfo);
+    meta.source = current.source;
     meta
 }
 
