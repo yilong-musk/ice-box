@@ -66,6 +66,10 @@ export const api = {
         auto_update_interval: null,
       },
     }),
+  importSubscriptionFile: (content: string, name?: string) =>
+    invoke<SubscriptionMeta>("import_subscription_file", {
+      req: { content, name: name ?? null },
+    }),
   removeSubscription: (id: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>("remove_subscription", {
       req: { id },

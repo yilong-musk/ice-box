@@ -7,8 +7,8 @@ use super::{
     subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
     FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
     SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths, SubscriptionShareKind, SubscriptionUserInfo, CLASH_SUPPORTED_TYPES,
-    MAX_CLASH_PROXIES, MAX_URI_LINES,
+    SubscriptionPaths, SubscriptionShareKind, SubscriptionSource, SubscriptionUserInfo,
+    CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -1519,4 +1519,63 @@ fn clash_shaped_garbage_does_not_panic() {
     });
     assert!(result.is_ok(), "a parser panic must become an error");
     assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn file_import_persists_a_singbox_document_and_skips_refresh() {
+    let paths = temp_subs("file-import");
+    let body = "\u{feff}{\"outbounds\":[{\"type\":\"socks\",\"tag\":\"n1\",\"server\":\"1.1.1.1\",\"server_port\":1}]}";
+    let mgr = SubscriptionManager::open(clone_paths(&paths), HostPlatform::MacOs);
+    let meta = mgr.import_file(body, Some("  tokyo\n")).unwrap();
+    assert_eq!(meta.name, "tokyo");
+    assert_eq!(meta.source, SubscriptionSource::File);
+    assert!(!meta.auto_update);
+    assert!(meta.auto_update_interval.is_none());
+    assert!(meta.url.is_empty());
+    assert!(meta.active);
+    assert_eq!(meta.node_count, 1);
+    assert_eq!(meta.format, SubscriptionFormat::SingBox);
+
+    let stored = load_index(&paths).unwrap();
+    assert_eq!(stored.items[0].source, SubscriptionSource::File);
+
+    let clash = "proxies:\n  - {name: a, server: 1.1.1.1, port: 443, type: trojan, password: p}\n";
+    let rejected = mgr.import_file(clash, Some("clash")).unwrap_err();
+    assert!(matches!(rejected, SubscriptionError::InvalidSingBox(_)));
+    assert_eq!(load_index(&paths).unwrap().items.len(), 1);
+
+    let update = mgr.fetch_update(meta.id).unwrap_err();
+    assert!(matches!(update, SubscriptionError::FetchFailed(_)));
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Fail("should not fetch a file subscription".into()),
+    };
+    let refreshing = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    assert!(refreshing.fetch_all().is_empty());
+    assert!(refreshing.fetch_auto().is_empty());
+    let auto = refreshing
+        .set_auto_update(meta.id, true, Some(AutoUpdateInterval::OneHour))
+        .unwrap_err();
+    assert!(matches!(auto, SubscriptionError::FetchFailed(_)));
+
+    let share = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Url).unwrap_err();
+    assert!(matches!(share, SubscriptionError::FetchFailed(_)));
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    assert!(json.contains("n1"));
+
+    let legacy = serde_json::json!({
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "old",
+        "url": "https://example.com/s",
+        "active": false,
+        "format": "sing_box",
+        "node_count": 0,
+        "last_updated": null,
+        "last_error": null,
+        "etag": null,
+        "last_modified": null,
+    });
+    let old: SubscriptionMeta = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.source, SubscriptionSource::Remote);
+    let _ = fs::remove_dir_all(paths.root());
 }

@@ -11,7 +11,6 @@ import {
 } from "../api/client";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
-  isInsecureSubscriptionUrl,
   extractApplyWarning,
   formatApplyWarning,
   extractUpdateResults,
@@ -20,6 +19,7 @@ import {
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
@@ -31,9 +31,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import {
   Item,
   ItemActions,
@@ -75,11 +74,7 @@ export function Subscriptions() {
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
-  const [url, setUrl] = useState("");
-  const [name, setName] = useState("");
-  const [autoUpdate, setAutoUpdate] = useState(false);
-  const [autoUpdateInterval, setAutoUpdateInterval] =
-    useState<SubscriptionAutoUpdateInterval>("one_hour");
+  const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [updateFailures, setUpdateFailures] = useState<string | null>(null);
@@ -91,7 +86,7 @@ export function Subscriptions() {
   const [shareTarget, setShareTarget] = useState<SubscriptionMeta | null>(null);
   const activeIdRef = useRef<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (keepError = false) => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
@@ -104,7 +99,7 @@ export function Subscriptions() {
       }
       activeIdRef.current = nextActive;
       setItems(next);
-      setError(null);
+      if (!keepError) setError(null);
     } catch (e) {
       if (!isStale(gen)) setError(formatInvokeError(e));
     }
@@ -136,7 +131,7 @@ export function Subscriptions() {
     };
   }, [refresh]);
 
-  async function run(action: () => Promise<unknown>, isUpdate = false) {
+  async function run(action: () => Promise<unknown>, isUpdate = false): Promise<boolean> {
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();
     nextGeneration();
@@ -157,16 +152,18 @@ export function Subscriptions() {
         if (failures) setUpdateFailures(failures);
       }
       await refresh();
+      return true;
     } catch (e) {
       setError(formatInvokeError(e));
-      await refresh();
+      await refresh(true);
+      return false;
     } finally {
       setUpdating(false);
       setBusy(false);
     }
   }
 
-  const httpWarn = isInsecureSubscriptionUrl(url);
+  const hasRemote = items.some((item) => item.source !== "file");
 
   function subscriptionSummary(s: SubscriptionMeta): string {
     const parts = [
@@ -184,115 +181,15 @@ export function Subscriptions() {
 
   return (
     <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="subs-panel">
-      {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      {error && !importOpen && (
+        <ErrorAlert className="shrink-0">{error}</ErrorAlert>
+      )}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
       {updateFailures && (
         <ErrorAlert className="shrink-0">
           {t("subs.partialUpdateFailed", { details: updateFailures })}
         </ErrorAlert>
       )}
-
-      <Card size="sm" className="shrink-0">
-        <CardContent className="flex flex-col gap-3">
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const u = url.trim();
-              if (!u) return;
-              void run(async () => {
-                await api.addSubscription(
-                  u,
-                  name.trim() || undefined,
-                  phone ? false : autoUpdate,
-                  autoUpdateInterval,
-                );
-                setUrl("");
-                setName("");
-                setAutoUpdate(false);
-                setAutoUpdateInterval("one_hour");
-              });
-            }}
-          >
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="sub-url">{t("subs.url")}</FieldLabel>
-                <Input
-                  id="sub-url"
-                  type="url"
-                  placeholder={t("subs.urlPlaceholder")}
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  disabled={busy}
-                  required
-                />
-              </Field>
-              <div className="flex flex-wrap items-end gap-2">
-                <div className="flex flex-wrap items-end gap-4">
-                  <Field className="w-48">
-                    <FieldLabel htmlFor="sub-name">{t("subs.name")}</FieldLabel>
-                    <Input
-                      id="sub-name"
-                      type="text"
-                      placeholder={t("subs.namePlaceholder")}
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      disabled={busy}
-                    />
-                  </Field>
-                  {phone ? null : (
-                    <Field orientation="horizontal" className="w-auto gap-1.5">
-                      <Switch
-                        id="sub-auto-update"
-                        size="sm"
-                        checked={autoUpdate}
-                        disabled={busy}
-                        aria-label={t("subs.autoUpdate")}
-                        onCheckedChange={setAutoUpdate}
-                      />
-                      <FieldLabel
-                        htmlFor="sub-auto-update"
-                        className="text-muted-foreground"
-                      >
-                        {t("subs.autoUpdate")}
-                      </FieldLabel>
-                      <NativeSelect
-                        size="sm"
-                        className="w-auto"
-                        aria-label={t("subs.interval")}
-                        value={autoUpdateInterval}
-                        disabled={busy || !autoUpdate}
-                        onChange={(e) =>
-                          setAutoUpdateInterval(
-                            e.target.value as SubscriptionAutoUpdateInterval,
-                          )
-                        }
-                      >
-                        {AUTO_UPDATE_INTERVALS.map((interval) => (
-                          <NativeSelectOption key={interval} value={interval}>
-                            {intervalLabel(interval)}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </Field>
-                  )}
-                </div>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="ml-auto"
-                  disabled={busy || !url.trim()}
-                >
-                  {t("subs.importAction")}
-                </Button>
-              </div>
-            </FieldGroup>
-          </form>
-          {httpWarn ? (
-            <WarnAlert>{t("subs.httpWarn")}</WarnAlert>
-          ) : null}
-        </CardContent>
-      </Card>
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
@@ -306,8 +203,19 @@ export function Subscriptions() {
             <Button
               type="button"
               size="sm"
+              disabled={busy}
+              onClick={() => {
+                setError(null);
+                setImportOpen(true);
+              }}
+            >
+              {t("subs.importTitle")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
               variant="outline"
-              disabled={busy || items.length === 0}
+              disabled={busy || !hasRemote}
               onClick={() =>
                 void run(() => api.updateAllSubscriptions(), true)
               }
@@ -345,6 +253,11 @@ export function Subscriptions() {
                         <ItemHeader>
                           <ItemTitle title={s.name}>
                             <span className="truncate">{s.name}</span>
+                            {s.source === "file" ? (
+                              <Label className="shrink-0 text-muted-foreground">
+                                {t("subs.fileBadge")}
+                              </Label>
+                            ) : null}
                             {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                           </ItemTitle>
                           <ItemActions className="flex-nowrap">
@@ -358,16 +271,18 @@ export function Subscriptions() {
                               <Share />
                               {t("subs.share")}
                             </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={busy}
-                              onClick={() =>
-                                void run(() => api.updateSubscription(s.id), true)
-                              }
-                            >
-                              {updating ? t("common.updating") : t("common.update")}
-                            </Button>
+                            {s.source === "file" ? null : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() =>
+                                  void run(() => api.updateSubscription(s.id), true)
+                                }
+                              >
+                                {updating ? t("common.updating") : t("common.update")}
+                              </Button>
+                            )}
                             <Button
                               type="button"
                               size="sm"
@@ -435,7 +350,7 @@ export function Subscriptions() {
                               {t("common.activate")}
                             </FieldLabel>
                           </Field>
-                          {phone ? null : (
+                          {phone || s.source === "file" ? null : (
                             <Field orientation="horizontal" className="w-auto gap-1.5">
                               <Switch
                                 id={`sub-auto-${s.id}`}
@@ -497,6 +412,29 @@ export function Subscriptions() {
           )}
         </CardContent>
       </Card>
+      <ImportSubscriptionDialog
+        open={importOpen}
+        busy={busy}
+        error={error}
+        onOpenChange={setImportOpen}
+        onImportUrl={async (url, name, autoUpdate, interval) => {
+          const ok = await run(async () => {
+            await api.addSubscription(
+              url,
+              name,
+              phone ? false : autoUpdate,
+              interval,
+            );
+          });
+          if (ok) setImportOpen(false);
+        }}
+        onImportFile={async (content, name) => {
+          const ok = await run(async () => {
+            await api.importSubscriptionFile(content, name);
+          });
+          if (ok) setImportOpen(false);
+        }}
+      />
       <ShareSubscriptionDialog
         subscription={shareTarget}
         onOpenChange={(open) => {

@@ -22,7 +22,7 @@ use crate::url::validate_subscription_url;
 use crate::{
     meta_from_fetched_profile, meta_from_profile, normalize_raw_body, resolve_subscription_name,
     AutoUpdateInterval, SubscriptionFormat, SubscriptionIndex, SubscriptionMeta,
-    MAX_FETCH_CONCURRENCY,
+    SubscriptionSource, MAX_BODY_BYTES, MAX_FETCH_CONCURRENCY,
 };
 
 /// Disk-backed subscription manager.
@@ -105,6 +105,7 @@ pub struct FetchedAdd {
     pub name: Option<String>,
     pub auto_update: bool,
     pub auto_update_interval: Option<AutoUpdateInterval>,
+    pub source: SubscriptionSource,
     pub fetched: FetchResponse,
 }
 
@@ -181,8 +182,60 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             name: name.map(str::to_string),
             auto_update,
             auto_update_interval,
+            source: SubscriptionSource::Remote,
             fetched,
         })
+    }
+
+    /// Parse a local sing-box document. No network and no disk writes.
+    ///
+    /// The body is not logged. Callers drop it after this returns; the copy
+    /// that must be persisted lives on [`FetchedAdd`].
+    pub fn prepare_file_import(
+        &self,
+        body: &str,
+        name: Option<&str>,
+    ) -> Result<FetchedAdd, SubscriptionError> {
+        let body = body.strip_prefix('\u{feff}').unwrap_or(body);
+        if body.len() > MAX_BODY_BYTES {
+            return Err(SubscriptionError::ParseFailed(format!(
+                "body exceeds {MAX_BODY_BYTES} bytes"
+            )));
+        }
+        if body.trim().is_empty() {
+            return Err(SubscriptionError::UnknownFormat);
+        }
+        let (format, _) = normalize_raw_body(body, self.platform)?;
+        if format != SubscriptionFormat::SingBox {
+            return Err(SubscriptionError::InvalidSingBox(
+                "not a sing-box configuration",
+            ));
+        }
+        Ok(FetchedAdd {
+            id: Uuid::new_v4(),
+            url: String::new(),
+            name: bounded_import_name(name),
+            auto_update: false,
+            auto_update_interval: None,
+            source: SubscriptionSource::File,
+            fetched: FetchResponse {
+                body: body.to_string(),
+                not_modified: false,
+                etag: None,
+                last_modified: None,
+                userinfo: None,
+                content_disposition: None,
+            },
+        })
+    }
+
+    /// Import a local sing-box document: parse → write success files.
+    pub fn import_file(
+        &self,
+        body: &str,
+        name: Option<&str>,
+    ) -> Result<SubscriptionMeta, SubscriptionError> {
+        self.apply_add(self.prepare_file_import(body, name)?)
     }
 
     /// Disk phase of an add: normalize + persist (or leave no success artifacts on failure).
@@ -193,10 +246,16 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             name,
             auto_update,
             auto_update_interval,
+            source,
             fetched,
         } = add;
         match normalize_raw_body(&fetched.body, self.platform) {
             Ok((format, profile)) => {
+                if source == SubscriptionSource::File && format != SubscriptionFormat::SingBox {
+                    return Err(SubscriptionError::InvalidSingBox(
+                        "not a sing-box configuration",
+                    ));
+                }
                 let index = load_index(&self.paths)?;
                 let make_active = index.items.iter().all(|m| !m.active);
                 let mut meta = meta_from_profile(
@@ -216,6 +275,11 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     auto_update,
                     auto_update_interval,
                 );
+                meta.source = source;
+                if source == SubscriptionSource::File {
+                    meta.auto_update = false;
+                    meta.auto_update_interval = None;
+                }
                 meta.userinfo = fetched.userinfo;
                 write_subscription_success(&self.paths, &meta, &fetched.body, &profile)?;
                 Ok(meta)
@@ -250,6 +314,12 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             .ok_or_else(|| {
                 SubscriptionError::ParseFailed(format!("subscription {id} not found"))
             })?;
+
+        if meta.source == SubscriptionSource::File {
+            return Err(SubscriptionError::FetchFailed(
+                "file subscription has no remote URL".into(),
+            ));
+        }
 
         validate_subscription_url(&meta.url)?;
 
@@ -301,7 +371,13 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         F: Sync,
     {
         let ids: Vec<Uuid> = load_index(&self.paths)
-            .map(|i| i.items.into_iter().map(|m| m.id).collect())
+            .map(|i| {
+                i.items
+                    .into_iter()
+                    .filter(|m| m.source != SubscriptionSource::File)
+                    .map(|m| m.id)
+                    .collect()
+            })
             .unwrap_or_default();
         self.fetch_ids(ids)
     }
@@ -317,7 +393,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             .map(|i| {
                 i.items
                     .into_iter()
-                    .filter(|m| m.auto_update)
+                    .filter(|m| m.auto_update && m.source != SubscriptionSource::File)
                     .map(|m| m.id)
                     .collect()
             })
@@ -510,6 +586,25 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
     }
 }
 
+/// Display names are stored in the index. Cap them so a file name cannot bloat it.
+fn bounded_import_name(name: Option<&str>) -> Option<String> {
+    let trimmed = name?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(200)
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 /// In-memory placeholder kept for early shell wiring (prefer `SubscriptionManager::open`).
 #[derive(Debug, Default)]
 pub struct MemorySubscriptionManager {
@@ -545,6 +640,7 @@ impl MemorySubscriptionManager {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         self.index.items.push(meta.clone());
         meta

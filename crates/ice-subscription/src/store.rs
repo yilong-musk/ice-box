@@ -484,6 +484,11 @@ pub fn set_auto_update(
         index.items.iter_mut().find(|m| m.id == id).ok_or_else(|| {
             SubscriptionError::ParseFailed(format!("subscription {id} not found"))
         })?;
+    if auto_update && meta.source == crate::SubscriptionSource::File {
+        return Err(SubscriptionError::FetchFailed(
+            "file subscription has no remote URL".into(),
+        ));
+    }
     meta.auto_update = auto_update;
     if auto_update_interval.is_some() {
         meta.auto_update_interval = auto_update_interval;
@@ -564,6 +569,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),
@@ -613,6 +619,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
@@ -663,6 +670,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let kept = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
@@ -727,6 +735,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),

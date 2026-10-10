@@ -475,6 +475,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let node = |tag: &str| NormalizedOutbound {
             tag: tag.into(),
@@ -554,6 +555,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let mut profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),
@@ -643,6 +645,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile {
             nodes: vec![
@@ -734,6 +737,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let mut profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound::new(
             "n1",

@@ -89,6 +89,7 @@ function ShareSubscriptionDialog({
   }
 
   const open = subscription !== null;
+  const fileSource = subscription?.source === "file";
 
   return (
     <AlertDialogPrimitive.Root
@@ -121,21 +122,23 @@ function ShareSubscriptionDialog({
               data-slot="alert-dialog-description"
               className="text-sm text-muted-foreground"
             >
-              {t("subs.shareDesc")}
+              {fileSource ? t("subs.shareDescFile") : t("subs.shareDesc")}
             </AlertDialogPrimitive.Description>
           </div>
           {error ? <ErrorAlert>{error}</ErrorAlert> : null}
           <div className="flex flex-col gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={copying !== null}
-              aria-label={t("subs.shareCopyUrl")}
-              onClick={() => void copy("url")}
-            >
-              {copied === "url" ? t("subs.shareCopied") : t("subs.shareCopyUrl")}
-            </Button>
+            {fileSource ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={copying !== null}
+                aria-label={t("subs.shareCopyUrl")}
+                onClick={() => void copy("url")}
+              >
+                {copied === "url" ? t("subs.shareCopied") : t("subs.shareCopyUrl")}
+              </Button>
+            )}
             <Button
               type="button"
               size="sm"

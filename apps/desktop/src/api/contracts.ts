@@ -221,6 +221,8 @@ export type SubscriptionMeta = {
   provider_info: string[];
   auto_update: boolean;
   auto_update_interval: SubscriptionAutoUpdateInterval | null;
+  /** Absent on older backends. File imports have no remote URL and cannot refresh. */
+  source?: "remote" | "file";
 };
 
 
@@ -388,6 +390,8 @@ export interface CoreApi {
   saveSettings(patch: SettingsPatch): Promise<void>;
   setProxyMode(mode: ProxyMode): Promise<void>;
   addSubscription(url: string, name?: string, autoUpdate?: boolean, interval?: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
+  /** Import a sing-box JSON document. The body is not a subscription URL. */
+  importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta>;
   removeSubscription(id: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
   updateSubscription(id: string): Promise<SubscriptionMeta>;
   updateAllSubscriptions(): Promise<unknown>;

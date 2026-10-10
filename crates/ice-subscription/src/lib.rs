@@ -76,6 +76,16 @@ pub enum SubscriptionFormat {
     Unknown,
 }
 
+/// Where a subscription body came from. File imports have no remote URL and
+/// are left out of network refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionSource {
+    #[default]
+    Remote,
+    File,
+}
+
 /// Refresh cadence offered for per-subscription auto-update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,6 +166,9 @@ pub struct SubscriptionMeta {
     /// [`AutoUpdateInterval::default_duration`] for legacy entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update_interval: Option<AutoUpdateInterval>,
+    /// Missing on subscriptions saved before file import existed.
+    #[serde(default)]
+    pub source: SubscriptionSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -306,6 +319,7 @@ pub(crate) fn meta_from_profile(
         provider_info: provider_info_lines(&profile.nodes),
         auto_update,
         auto_update_interval,
+        source: SubscriptionSource::Remote,
     }
 }
 
@@ -333,6 +347,7 @@ pub(crate) fn meta_from_fetched_profile(
     // A successful fetch that omits the header keeps the last counters the
     // provider reported; a conditional (304) response may still refresh them.
     meta.userinfo = fetched.userinfo.or(current.userinfo);
+    meta.source = current.source;
     meta
 }
 

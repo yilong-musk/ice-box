@@ -43,6 +43,12 @@ pub struct AddSubscriptionRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ImportSubscriptionFileRequest {
+    pub content: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct IdRequest {
     pub id: Uuid,
 }
@@ -297,6 +303,35 @@ pub async fn add_subscription(
     let tunnel = app.state::<Tunnel<Wry>>();
     let mut guard = ready(&app, &host, &tunnel)?;
     let meta = guard.apply_added(fetched)?;
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
+    notify(&app);
+    Ok(meta)
+}
+
+#[tauri::command]
+pub async fn import_subscription_file(
+    app: AppHandle,
+    req: ImportSubscriptionFileRequest,
+) -> Result<serde_json::Value, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let content = req.content;
+    let name = req.name;
+    let prepared = run_blocking("import_subscription_file", move || {
+        SubscriptionManager::open(paths, PLATFORM)
+            .prepare_file_import(&content, name.as_deref())
+            .map_err(AppError::from)
+    })
+    .await??;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let meta = guard.apply_added(prepared)?;
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
     notify(&app);

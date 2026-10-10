@@ -308,7 +308,17 @@ export const api = {
   async openProxyTerminal(): Promise<void> { await delay(); },
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },
-  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null }; subscriptions.push(sub); return sub; },
+  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null, source: "remote" as const }; subscriptions.push(sub); return sub; },
+  async importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta> {
+    await delay(180);
+    const trimmed = content.trim();
+    if (!trimmed.startsWith("{") || (!trimmed.includes("\"outbounds\"") && !trimmed.includes("\"endpoints\""))) {
+      throw { code: "sub.parse_failed", message: "invalid sing-box subscription: not a sing-box configuration" };
+    }
+    const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url: "", name: name || "Imported file", auto_update: false, auto_update_interval: null, source: "file" as const, format: "sing_box" };
+    subscriptions.push(sub);
+    return sub;
+  },
   async removeSubscription(id: string): Promise<{ ok: boolean }> { await delay(); const index = subscriptions.findIndex((sub) => sub.id === id); if (index >= 0) subscriptions.splice(index, 1); return { ok: true }; },
   async updateSubscription(): Promise<SubscriptionMeta> { await delay(220); return subscriptions[0]; },
   async updateAllSubscriptions(): Promise<void> { await delay(220); },

@@ -28,6 +28,18 @@ pub async fn add_subscription(
 }
 
 #[tauri::command]
+pub async fn import_subscription_file(
+    app: AppHandle,
+    req: ImportSubscriptionFileRequest,
+) -> Result<serde_json::Value, AppError> {
+    run_blocking("import_subscription_file", move || {
+        let state = app.state::<AppState>();
+        import_subscription_file_use_case(&app, state.inner(), req)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn remove_subscription(
     app: AppHandle,
     req: IdRequest,

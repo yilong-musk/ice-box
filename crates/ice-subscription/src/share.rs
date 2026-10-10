@@ -31,7 +31,14 @@ pub fn subscription_share_text(
         .find(|item| item.id == id)
         .ok_or(SubscriptionError::NotFound)?;
     match kind {
-        SubscriptionShareKind::Url => Ok(meta.url.clone()),
+        SubscriptionShareKind::Url => {
+            if meta.source == crate::SubscriptionSource::File {
+                return Err(SubscriptionError::FetchFailed(
+                    "file subscription has no remote URL".into(),
+                ));
+            }
+            Ok(meta.url.clone())
+        }
         SubscriptionShareKind::Singbox => {
             let profile = read_profile(paths, id)?;
             ice_config::share_singbox_config(&profile).map_err(map_share_error)

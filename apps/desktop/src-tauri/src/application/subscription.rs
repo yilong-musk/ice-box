@@ -13,6 +13,12 @@ pub struct AddSubscriptionRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ImportSubscriptionFileRequest {
+    pub content: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct IdRequest {
     pub id: Uuid,
 }
@@ -95,6 +101,46 @@ pub(crate) fn add_subscription_use_case(
     let apply_warning = apply_after_subscription_change(app, state, &settings);
     if let Some(w) = &apply_warning {
         tracing::warn!(code = %w.code, error = %w.message, "add_subscription: apply warning");
+    }
+    let mut value = serde_json::to_value(meta)
+        .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
+    attach_apply_warning(&mut value, apply_warning);
+    drop(_orch);
+    broadcast_state_change(app);
+    Ok(value)
+}
+
+pub(crate) fn import_subscription_file_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: ImportSubscriptionFileRequest,
+) -> Result<serde_json::Value, AppError> {
+    let bytes = req.content.len();
+    let name = req.name;
+    let content = req.content;
+    tracing::info!(bytes, name = ?name, "import_subscription_file: start");
+    // Parse before the orchestrate lock. The body is not logged.
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let mgr = SubscriptionManager::open(paths, host_platform());
+    let prepared = mgr
+        .prepare_file_import(&content, name.as_deref())
+        .map_err(|e| {
+            tracing::warn!(bytes, error = %e.redacted_display(), code = %e.code().as_str(), "import_subscription_file: parse failed");
+            AppError::from(e)
+        })?;
+    drop(content);
+
+    let _orch = lock_orchestrate(state)?;
+    let meta = mgr.apply_add(prepared).map_err(|e| {
+        tracing::warn!(bytes, error = %e.redacted_display(), code = %e.code().as_str(), "import_subscription_file: apply failed");
+        AppError::from(e)
+    })?;
+    tracing::info!(id = %meta.id, name = %meta.name, nodes = meta.node_count, format = ?meta.format, "import_subscription_file: imported");
+
+    let settings = current_settings(&state.paths)?;
+    let apply_warning = apply_after_subscription_change(app, state, &settings);
+    if let Some(w) = &apply_warning {
+        tracing::warn!(code = %w.code, error = %w.message, "import_subscription_file: apply warning");
     }
     let mut value = serde_json::to_value(meta)
         .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;

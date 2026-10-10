@@ -28,6 +28,7 @@ vi.mock("../api/client", () => ({
   api: {
     listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
     addSubscription: vi.fn(),
+    importSubscriptionFile: vi.fn(),
     updateAllSubscriptions: (...args: unknown[]) =>
       updateAllSubscriptions(...args),
     updateSubscription: vi.fn(),
@@ -120,20 +121,26 @@ describe("Subscriptions", () => {
     expect(view.getByLabelText(t("common.activate"))).toBeInTheDocument();
   });
 
-  it("renders import form", async () => {
+  it("opens the import dialog from the subscription list", async () => {
     const { container } = render(<Subscriptions />);
     const view = within(container);
     await waitFor(() => {
-      expect(
-        view.getByPlaceholderText(t("subs.urlPlaceholder")),
-      ).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
+    expect(view.queryByPlaceholderText(t("subs.urlPlaceholder"))).not.toBeInTheDocument();
     expect(view.getByText(t("subs.emptyTitle"))).toBeInTheDocument();
-    expect(
-      view.getByText(t("subs.emptyDesc")),
-    ).toBeInTheDocument();
+    expect(view.getByText(t("subs.emptyDesc"))).toBeInTheDocument();
     expect(container.querySelector(".sub-list")).toBeNull();
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();
+
+    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: t("subs.importFromFile") }),
+    ).toBeInTheDocument();
   });
 
   it("re-reads the active subscription after a tray switch", async () => {
@@ -424,22 +431,24 @@ describe("Subscriptions", () => {
     const { container } = render(<Subscriptions />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText(t("subs.autoUpdate"))).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
     });
-    const importSwitch = view.getByLabelText(t("subs.autoUpdate"));
+    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    const importSwitch = within(dialog).getByLabelText(t("subs.autoUpdate"));
     expect(importSwitch).not.toBeChecked();
     fireEvent.click(importSwitch);
     expect(importSwitch).toBeChecked();
 
-    const interval = view.getByLabelText(t("subs.interval"));
+    const interval = within(dialog).getByLabelText(t("subs.interval"));
     expect(interval).toBeEnabled();
     fireEvent.change(interval, { target: { value: "six_hours" } });
 
     fireEvent.change(
-      view.getByPlaceholderText(t("subs.urlPlaceholder")),
+      within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
       { target: { value: "https://example.com/new" } },
     );
-    fireEvent.click(view.getByRole("button", { name: t("subs.importAction") }));
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importAction") }));
 
     await waitFor(() => {
       expect(add).toHaveBeenCalledWith(
@@ -450,9 +459,61 @@ describe("Subscriptions", () => {
       );
     });
     await waitFor(() => {
-      expect(importSwitch).not.toBeChecked();
-      expect(interval).toBeDisabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("imports a sing-box config file from the import dialog", async () => {
+    listSubscriptions.mockResolvedValue([]);
+    const importFile = vi.mocked(api.importSubscriptionFile).mockResolvedValue(
+      sampleMeta({ name: "tokyo", source: "file" }),
+    );
+    const content = JSON.stringify({
+      outbounds: [{ type: "socks", tag: "n1", server: "1.1.1.1", server_port: 1 }],
+    });
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importFromFile") }));
+    const input = within(dialog).getByLabelText(t("subs.importFileLabel"));
+    const file = new File([content], "tokyo.json", { type: "application/json" });
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importAction") }));
+
+    await waitFor(() => {
+      expect(importFile).toHaveBeenCalledWith(content, "tokyo");
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("hides refresh and the subscription link for a file import", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "local", source: "file", auto_update: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("local")).toBeInTheDocument();
+    });
+    expect(view.getByText(t("subs.fileBadge"))).toBeInTheDocument();
+    const row = view.getByText("local").closest("[data-slot=item]") as HTMLElement;
+    expect(within(row).queryByRole("button", { name: t("common.update") })).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("subs.updateAll") })).toBeDisabled();
+
+    fireEvent.click(within(row).getByRole("button", { name: t("subs.share") }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).queryByRole("button", { name: t("subs.shareCopyUrl") })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") })).toBeInTheDocument();
+    expect(within(dialog).getByText(t("subs.shareDescFile"))).toBeInTheDocument();
   });
 
   it("toggles auto-update per subscription via setSubscriptionAutoUpdate", async () => {

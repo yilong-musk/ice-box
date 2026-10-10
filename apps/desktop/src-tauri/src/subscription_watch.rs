@@ -208,6 +208,7 @@ mod tests {
             provider_info: vec![],
             auto_update,
             auto_update_interval: interval,
+            source: ice_engine::SubscriptionSource::Remote,
         }
     }
 

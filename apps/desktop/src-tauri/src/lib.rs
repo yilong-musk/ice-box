@@ -405,6 +405,7 @@ pub fn run() {
             commands::set_tray_update_available,
             commands::set_proxy_mode,
             commands::add_subscription,
+            commands::import_subscription_file,
             commands::remove_subscription,
             commands::update_subscription,
             commands::update_all_subscriptions,

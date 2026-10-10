@@ -36,6 +36,7 @@ pub fn run() {
             commands::stop,
             commands::list_subscriptions,
             commands::add_subscription,
+            commands::import_subscription_file,
             commands::remove_subscription,
             commands::update_subscription,
             commands::update_all_subscriptions,
