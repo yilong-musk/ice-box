@@ -16,7 +16,7 @@ vi.mock("@platform/shell", () => ({
 const listSubscriptions = vi.fn();
 const removeSubscription = vi.fn();
 const listenStateChanged = vi.fn();
-const subscriptionShare = vi.fn();
+const copySubscriptionShare = vi.fn();
 const exportSubscriptionSingbox = vi.fn();
 
 vi.mock("../lib/nodes", () => ({
@@ -33,7 +33,7 @@ vi.mock("../api/client", () => ({
     setSubscriptionAutoUpdate: vi.fn(),
     removeSubscription: (...args: unknown[]) => removeSubscription(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
-    subscriptionShare: (...args: unknown[]) => subscriptionShare(...args),
+    copySubscriptionShare: (...args: unknown[]) => copySubscriptionShare(...args),
     exportSubscriptionSingbox: (...args: unknown[]) =>
       exportSubscriptionSingbox(...args),
   },
@@ -593,15 +593,7 @@ describe("Subscriptions", () => {
 
   it("copies the subscription link and the sing-box config from the share dialog", async () => {
     const secondId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    subscriptionShare.mockImplementation(async (id: string, kind: string) => {
-      if (kind === "url") return `https://example.com/real?token=${id}`;
-      return `{"outbounds":[{"tag":"${id}"}]}`;
-    });
+    copySubscriptionShare.mockResolvedValue(undefined);
     listSubscriptions.mockResolvedValue([
       sampleMeta({ name: "sub-a" }),
       sampleMeta({ id: secondId, name: "sub-b", active: false, url: "https://example.com/redacted" }),
@@ -617,12 +609,11 @@ describe("Subscriptions", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(t("subs.shareTitle", { name: "sub-b" }))).toBeInTheDocument();
-    expect(subscriptionShare).not.toHaveBeenCalled();
+    expect(copySubscriptionShare).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") }));
     await waitFor(() => {
-      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "url");
-      expect(writeText).toHaveBeenCalledWith(`https://example.com/real?token=${secondId}`);
+      expect(copySubscriptionShare).toHaveBeenCalledWith(secondId, "url");
     });
     expect(within(dialog).getByRole("button", { name: t("subs.shareCopyUrl") })).toHaveTextContent(
       t("subs.shareCopied"),
@@ -630,8 +621,7 @@ describe("Subscriptions", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }));
     await waitFor(() => {
-      expect(subscriptionShare).toHaveBeenCalledWith(secondId, "singbox");
-      expect(writeText).toHaveBeenCalledWith(`{"outbounds":[{"tag":"${secondId}"}]}`);
+      expect(copySubscriptionShare).toHaveBeenCalledWith(secondId, "singbox");
     });
     expect(
       within(dialog).getByRole("button", { name: t("subs.shareCopySingbox") }),
@@ -691,12 +681,10 @@ describe("Subscriptions", () => {
   });
 
   it("shows a failure when sharing cannot be copied", async () => {
-    document.execCommand = () => false;
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    copySubscriptionShare.mockRejectedValue({
+      code: "config.invalid",
+      message: "clipboard unavailable",
     });
-    subscriptionShare.mockResolvedValue("https://example.com/a?token=secret");
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
 
     const { container } = render(<Subscriptions />);

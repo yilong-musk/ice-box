@@ -6,6 +6,8 @@ import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.PendingIntent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
@@ -306,6 +308,35 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
             } finally {
                 lock.release()
             }
+        }
+    }
+
+    /**
+     * System clipboard. The WebView clipboard API drops the user gesture
+     * after the share text is read from disk. The bytes are not logged.
+     */
+    @Command
+    fun copy_text(invoke: Invoke) {
+        val args = invoke.getArgs()
+        val content = if (args.has("content") && !args.isNull("content")) {
+            args.getString("content")
+        } else {
+            ""
+        }
+        if (content.toByteArray(Charsets.UTF_8).size > MAX_EXPORT_BYTES) {
+            invoke.reject("export is too large")
+            return
+        }
+        val clipboard = activity.getSystemService(ClipboardManager::class.java)
+        if (clipboard == null) {
+            invoke.reject("clipboard unavailable")
+            return
+        }
+        try {
+            clipboard.setPrimaryClip(ClipData.newPlainText("ice-box", content))
+            invoke.resolve(JSObject())
+        } catch (_: Exception) {
+            invoke.reject("clipboard unavailable")
         }
     }
 

@@ -272,6 +272,33 @@ pub async fn subscription_share(
     .await?
 }
 
+/// Copy a subscription URL or sing-box document onto the system clipboard.
+/// The text is not logged and is not returned to the webview.
+#[tauri::command]
+pub fn copy_subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<(), AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let text = subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)?;
+    let tunnel = app.state::<Tunnel<Wry>>();
+    tunnel.copy_text(&text).map_err(map_clipboard)
+}
+
+fn map_clipboard(err: TunnelError) -> AppError {
+    match &err {
+        TunnelError::Plugin(message) if message.contains("clipboard unavailable") => {
+            AppError::new(ErrorCode::ConfigInvalid, "clipboard unavailable")
+        }
+        _ => map_tunnel(err),
+    }
+}
+
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Write `content` through the system save dialog.

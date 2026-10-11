@@ -207,6 +207,27 @@ impl<R: Runtime> Tunnel<R> {
         }
     }
 
+    /// Write `content` to the system clipboard. Do not log `content`.
+    pub fn copy_text(&self, content: &str) -> Result<(), TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Serialize)]
+            struct CopyTextRequest<'a> {
+                content: &'a str,
+            }
+            let _: serde_json::Value = self
+                .handle
+                .run_mobile_plugin("copy_text", CopyTextRequest { content })
+                .map_err(|err| TunnelError::Plugin(err.to_string()))?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = content;
+            Err(TunnelError::Unavailable)
+        }
+    }
+
     /// Show the system save dialog and write `content` to the chosen URI.
     /// `"cancelled"` when the dialog is dismissed. Do not log `content`.
     pub fn save_text_document(&self, filename: &str, content: &str) -> Result<String, TunnelError> {

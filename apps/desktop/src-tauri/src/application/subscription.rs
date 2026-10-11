@@ -275,6 +275,18 @@ pub(crate) fn subscription_share_use_case(
     subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
 }
 
+/// Copy the share payload with the system clipboard.
+///
+/// The webview clipboard needs the original click, and this text is only
+/// available after a disk read. The returned text is not logged.
+pub(crate) fn copy_subscription_share_use_case(
+    state: &AppState,
+    req: SubscriptionShareRequest,
+) -> Result<(), AppError> {
+    let text = subscription_share_use_case(state, req)?;
+    crate::proxy_terminal::copy_to_clipboard(&text)
+}
+
 pub(crate) fn set_auto_update_subscription_use_case(
     state: &AppState,
     req: SetAutoUpdateRequest,

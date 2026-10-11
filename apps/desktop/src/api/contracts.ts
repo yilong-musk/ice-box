@@ -398,6 +398,8 @@ export interface CoreApi {
   setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
   /** Full subscription URL, or a portable sing-box document. The list keeps URLs redacted. */
   subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string>;
+  /** Copy that payload with the system clipboard. The text does not return to the page. */
+  copySubscriptionShare(id: string, kind: "url" | "singbox"): Promise<void>;
   /** Write that sing-box document to a file. `"cancelled"` when the save dialog is dismissed. */
   exportSubscriptionSingbox(id: string, name: string, title: string): Promise<"saved" | "cancelled">;
   getRuleOverview(): Promise<RuleOverview>;

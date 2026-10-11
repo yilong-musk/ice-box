@@ -1704,22 +1704,30 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         "block",
         json!({"type": "block", "tag": "block"}),
     );
-    if profile.groups.is_empty() {
+    // A flat node list gets a selector. `proxy` is the usual tag; a node that
+    // already uses it keeps that name and the selector takes the next free one.
+    let selector_tag = if profile.groups.is_empty() {
+        let tag = fresh_share_tag(&tag_set, "proxy");
         let node_tags: Vec<String> = profile.nodes.iter().map(|n| n.tag.clone()).collect();
         let proxy_default = node_tags[0].clone();
         outbounds.push(Arc::new(json!({
             "type": "selector",
-            "tag": "proxy",
+            "tag": tag.clone(),
             "outbounds": node_tags,
             "default": proxy_default,
         })));
-        tag_set.insert("proxy".into());
-    }
+        tag_set.insert(tag.clone());
+        Some(tag)
+    } else {
+        None
+    };
 
     let final_outbound = {
         let candidate = profile.route.final_outbound.as_str();
         if candidate == "direct" || candidate == "block" || tag_set.contains(candidate) {
             candidate.to_string()
+        } else if let Some(tag) = selector_tag {
+            tag
         } else if tag_set.contains("proxy") {
             "proxy".to_string()
         } else {
@@ -1788,6 +1796,20 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
     }
     root.insert("route".into(), route);
     Ok(serde_json::to_string_pretty(&Value::Object(root))?)
+}
+
+/// `preferred`, or `preferred-2`, `preferred-3`, … when that tag is taken.
+fn fresh_share_tag(tags: &HashSet<String>, preferred: &str) -> String {
+    if !tags.contains(preferred) {
+        return preferred.to_string();
+    }
+    for n in 2..u32::MAX {
+        let candidate = format!("{preferred}-{n}");
+        if !tags.contains(&candidate) {
+            return candidate;
+        }
+    }
+    format!("{preferred}-fallback")
 }
 
 /// Rules that sing-box 1.13 can load without this machine's bundled files.

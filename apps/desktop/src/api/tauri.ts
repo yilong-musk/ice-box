@@ -140,6 +140,8 @@ export const api = {
     }),
   subscriptionShare: (id: string, kind: "url" | "singbox") =>
     invoke<string>("subscription_share", { req: { id, kind } }),
+  copySubscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<void>("copy_subscription_share", { req: { id, kind } }),
   exportSubscriptionSingbox: (id: string, name: string, title: string) =>
     invoke<"saved" | "cancelled">("export_subscription_singbox", {
       req: { id, name, title },

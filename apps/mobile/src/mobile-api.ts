@@ -85,6 +85,8 @@ export const api = {
     }),
   subscriptionShare: (id: string, kind: "url" | "singbox") =>
     invoke<string>("subscription_share", { req: { id, kind } }),
+  copySubscriptionShare: (id: string, kind: "url" | "singbox") =>
+    invoke<void>("copy_subscription_share", { req: { id, kind } }),
   exportSubscriptionSingbox: async (id: string, name: string) => {
     const text = await invoke<string>("subscription_share", {
       req: { id, kind: "singbox" },

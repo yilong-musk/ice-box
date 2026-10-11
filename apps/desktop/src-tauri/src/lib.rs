@@ -411,6 +411,7 @@ pub fn run() {
             commands::set_active_subscription,
             commands::set_auto_update_subscription,
             commands::subscription_share,
+            commands::copy_subscription_share,
             commands::export_subscription_singbox,
             commands::list_nodes,
             commands::set_selected_node,

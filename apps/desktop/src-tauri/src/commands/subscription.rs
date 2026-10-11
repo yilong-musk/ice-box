@@ -87,6 +87,19 @@ pub async fn subscription_share(
     .await
 }
 
+/// Copy a subscription URL or sing-box document. The text stays in this process.
+#[tauri::command]
+pub async fn copy_subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<(), AppError> {
+    run_blocking("copy_subscription_share", move || {
+        let state = app.state::<AppState>();
+        copy_subscription_share_use_case(state.inner(), req)
+    })
+    .await
+}
+
 /// Save one subscription's sing-box document through the native save dialog.
 ///
 /// `"cancelled"` when the dialog is dismissed. The document is not logged.

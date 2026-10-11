@@ -7,7 +7,6 @@ import { api, formatInvokeError, type SubscriptionMeta } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { ErrorAlert } from "@/components/StatusAlert";
 import { t, useLanguagePreference } from "@/lib/i18n";
-import { copyText } from "@/lib/logCopy";
 
 type ShareKind = "url" | "singbox" | "export";
 
@@ -15,6 +14,12 @@ type ShareSubscriptionDialogProps = {
   subscription: SubscriptionMeta | null;
   onOpenChange: (open: boolean) => void;
 };
+
+function clipboardUnavailable(err: unknown): boolean {
+  if (!err || typeof err !== "object" || !("message" in err)) return false;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" && message.includes("clipboard unavailable");
+}
 
 function ShareSubscriptionDialog({
   subscription,
@@ -43,13 +48,12 @@ function ShareSubscriptionDialog({
     setCopying(kind);
     setError(null);
     try {
-      const text = await api.subscriptionShare(subscription.id, kind);
-      await copyText(text);
+      await api.copySubscriptionShare(subscription.id, kind);
       markDone(kind);
     } catch (err) {
       setCopied(null);
       setError(
-        err instanceof Error && err.message === "clipboard unavailable"
+        clipboardUnavailable(err)
           ? t("subs.shareCopyFailed")
           : formatInvokeError(err),
       );

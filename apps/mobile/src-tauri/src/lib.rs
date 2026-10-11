@@ -41,6 +41,7 @@ pub fn run() {
             commands::update_subscription,
             commands::set_active_subscription,
             commands::subscription_share,
+            commands::copy_subscription_share,
             commands::save_text_document,
             commands::list_nodes,
             commands::set_selected_node,

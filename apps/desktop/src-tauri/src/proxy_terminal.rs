@@ -197,6 +197,14 @@ pub(crate) fn copy_shell_proxy_command(host: &str, port: u16) -> Result<(), AppE
     ))
 }
 
+/// Write `text` with the system clipboard. The text is not logged.
+///
+/// A failure is always `clipboard unavailable`, so a caller can tell a
+/// clipboard miss from a rejected subscription payload.
+pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), AppError> {
+    copy_text(text).map_err(|_| AppError::new(ErrorCode::ConfigInvalid, "clipboard unavailable"))
+}
+
 fn copy_text(text: &str) -> Result<(), AppError> {
     #[cfg(windows)]
     {

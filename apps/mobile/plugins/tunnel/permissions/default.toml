@@ -12,6 +12,7 @@ permissions = [
   "allow-memory",
   "allow-device-status",
   "allow-request-battery-exemption",
+  "allow-copy-text",
   "allow-save-text-document",
   "allow-open-network-settings",
   "allow-open-vpn-settings",

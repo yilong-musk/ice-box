@@ -2021,6 +2021,42 @@ fn share_singbox_config_is_a_portable_document() {
     let kept = with_local_set["route"]["rules"].as_array().unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0]["domain"][0], "example.com");
+
+    let named_proxy = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
+        socks("proxy"),
+        socks("n2"),
+    ]))
+    .expect("node named proxy");
+    let named_proxy: Value = serde_json::from_str(&named_proxy).unwrap();
+    let outbounds = named_proxy["outbounds"].as_array().unwrap();
+    let tags: Vec<&str> = outbounds
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    let mut unique = tags.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        tags.len(),
+        unique.len(),
+        "share tags must be unique: {tags:?}"
+    );
+    let selectors: Vec<_> = outbounds
+        .iter()
+        .filter(|outbound| outbound["type"] == "selector")
+        .collect();
+    assert_eq!(selectors.len(), 1);
+    assert_ne!(selectors[0]["tag"], "proxy");
+    assert!(selectors[0]["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member == "proxy"));
+    let node = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(node["type"], "socks");
 }
 
 #[test]

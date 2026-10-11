@@ -19,6 +19,7 @@ import type {
   UiMessage,
 } from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
+import { copyText } from "../../../apps/desktop/src/lib/logCopy";
 import { saveTextFile, singboxExportFilename } from "../../../apps/desktop/src/lib/saveFile";
 
 export type {
@@ -328,6 +329,11 @@ export const api = {
     const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
     if (kind === "url") return sub.url;
     return demoSingboxConfig();
+  },
+  async copySubscriptionShare(id: string, kind: "url" | "singbox"): Promise<void> {
+    await delay();
+    const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
+    await copyText(kind === "url" ? sub.url : demoSingboxConfig());
   },
   async exportSubscriptionSingbox(id: string, name: string): Promise<"saved" | "cancelled"> {
     await delay();
