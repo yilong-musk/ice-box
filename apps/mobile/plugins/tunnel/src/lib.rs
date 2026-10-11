@@ -207,6 +207,36 @@ impl<R: Runtime> Tunnel<R> {
         }
     }
 
+    /// Show the system save dialog and write `content` to the chosen URI.
+    /// `"cancelled"` when the dialog is dismissed. Do not log `content`.
+    pub fn save_text_document(&self, filename: &str, content: &str) -> Result<String, TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Serialize)]
+            struct SaveTextRequest<'a> {
+                filename: &'a str,
+                content: &'a str,
+            }
+            #[derive(Deserialize)]
+            struct SaveTextResponse {
+                outcome: String,
+            }
+            let response: SaveTextResponse = self
+                .handle
+                .run_mobile_plugin("save_text_document", SaveTextRequest { filename, content })
+                .map_err(|err| TunnelError::Plugin(err.to_string()))?;
+            return match response.outcome.as_str() {
+                "saved" | "cancelled" => Ok(response.outcome),
+                _ => Err(TunnelError::Plugin("unexpected save result".into())),
+            };
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (filename, content);
+            Err(TunnelError::Unavailable)
+        }
+    }
+
     /// Hand a downloaded APK to the system installer. The path must be the
     /// file this app just wrote under its private updates directory.
     pub fn install_local_apk(&self, path: &std::path::Path) -> Result<(), TunnelError> {

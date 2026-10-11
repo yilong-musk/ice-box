@@ -3,7 +3,7 @@
 /** Phone transport. Core commands match the desktop names; desktop-only methods do nothing. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { saveTextFile, singboxExportFilename } from "../../desktop/src/lib/saveFile";
+import { singboxExportFilename } from "../../desktop/src/lib/saveFile";
 import type {
   ApiContract,
   AppErrorPayload,
@@ -89,8 +89,9 @@ export const api = {
     const text = await invoke<string>("subscription_share", {
       req: { id, kind: "singbox" },
     });
-    saveTextFile(singboxExportFilename(name), text);
-    return "saved" as const;
+    return invoke<"saved" | "cancelled">("save_text_document", {
+      req: { filename: singboxExportFilename(name), content: text },
+    });
   },
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
   listRules: (req: ListRulesRequest) => invoke<ListRulesResponse>("list_rules", { req }),

@@ -60,6 +60,12 @@ pub struct SubscriptionShareRequest {
 }
 
 #[derive(Deserialize)]
+pub struct SaveTextDocumentRequest {
+    pub filename: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
 pub struct SetActiveRequest {
     pub id: Uuid,
     pub active: bool,
@@ -264,6 +270,37 @@ pub async fn subscription_share(
         subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
     })
     .await?
+}
+
+const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Write `content` through the system save dialog.
+/// `"cancelled"` when the dialog is dismissed. Do not log `content`.
+///
+/// Synchronous, like [`start`]'s VPN consent dialog: the Android activity
+/// result launcher runs on the command thread.
+#[tauri::command]
+pub fn save_text_document(
+    app: AppHandle,
+    req: SaveTextDocumentRequest,
+) -> Result<String, AppError> {
+    if req.content.len() > MAX_EXPORT_BYTES {
+        return Err(AppError::new(ErrorCode::SubIo, "export is too large"));
+    }
+    let filename = bounded_export_filename(&req.filename);
+    let tunnel = app.state::<Tunnel<Wry>>();
+    tunnel
+        .save_text_document(&filename, &req.content)
+        .map_err(map_tunnel)
+}
+
+fn bounded_export_filename(name: &str) -> String {
+    let trimmed: String = name.trim().chars().take(200).collect();
+    if trimmed.is_empty() {
+        "sing-box.json".to_string()
+    } else {
+        trimmed
+    }
 }
 
 #[tauri::command]

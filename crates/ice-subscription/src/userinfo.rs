@@ -107,10 +107,12 @@ const MAX_INFO_LINES: usize = 6;
 /// Label/value separators providers use in info entries.
 const INFO_SEPARATORS: [char; 4] = [':', '：', '|', '｜'];
 
-/// Labels that mark an entry as provider info rather than a proxy. They are
-/// matched case-insensitively against the text before the first separator, so
-/// ordinary node names (`🇺🇸美国01|流媒体`) are not mistaken for info.
-const INFO_LABELS: [&str; 25] = [
+/// Labels that mark an entry as provider info rather than a proxy. The text
+/// before the first separator must be exactly these words (joined, case
+/// insensitive), so a node name that merely contains one (`香港-流量专线|IEPL`,
+/// `Unused: HK-01`) stays a proxy. `🇺🇸美国01|流媒体` has the keyword after the
+/// separator and is not info either.
+const INFO_LABELS: [&str; 26] = [
     "剩余流量",
     "流量",
     "剩余",
@@ -127,6 +129,7 @@ const INFO_LABELS: [&str; 25] = [
     "expire",
     "expires",
     "expiry",
+    "expired",
     "used",
     "remaining",
     "reset",
@@ -137,6 +140,10 @@ const INFO_LABELS: [&str; 25] = [
     "subscribe",
     "subscription",
 ];
+
+/// Allowed after a keyword label: `到期时间`, `套餐到期` is two keywords and
+/// does not need a suffix.
+const INFO_LABEL_SUFFIXES: [&str; 2] = ["时间", "日期"];
 
 /// Info entries a provider embeds in the proxy list, in list order.
 ///
@@ -172,13 +179,46 @@ pub(crate) fn is_provider_info_name(name: &str) -> bool {
     if parts.next().is_none() {
         return false;
     }
-    // A label is one short word ("剩余流量", "Expire"); a proxy name that
-    // happens to contain a keyword before a separator is longer.
+    // A label is one short word ("剩余流量", "Expire") or a few of those words
+    // joined (`套餐到期`). A longer name that only contains a keyword is a proxy.
     if label.is_empty() || label.chars().count() > 24 {
         return false;
     }
     let label = label.to_lowercase();
-    INFO_LABELS.iter().any(|keyword| label.contains(keyword))
+    label_is_info_keywords(&label)
+        || INFO_LABEL_SUFFIXES.iter().any(|suffix| {
+            label
+                .strip_suffix(suffix)
+                .is_some_and(|rest| !rest.is_empty() && label_is_info_keywords(rest))
+        })
+}
+
+/// True when `label` is one or more [`INFO_LABELS`] concatenated, and nothing else.
+fn label_is_info_keywords(label: &str) -> bool {
+    fn covers(label: &str, keywords: &[&str]) -> bool {
+        if label.is_empty() {
+            return true;
+        }
+        keywords.iter().any(|keyword| {
+            label
+                .strip_prefix(keyword)
+                .is_some_and(|rest| covers(rest, keywords))
+        })
+    }
+
+    !label.is_empty() && covers(label, info_keywords_longest_first())
+}
+
+fn info_keywords_longest_first() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static SORTED: OnceLock<Vec<&'static str>> = OnceLock::new();
+    SORTED
+        .get_or_init(|| {
+            let mut keys = INFO_LABELS.to_vec();
+            keys.sort_by_key(|keyword| std::cmp::Reverse(keyword.chars().count()));
+            keys
+        })
+        .as_slice()
 }
 
 /// Remove provider info proxies from `profile`.
@@ -370,8 +410,23 @@ mod tests {
             node("美国-流量专线 1"),
             node("🇯🇵 日本标准 IEPL 专线 1"),
             node("Expire-Me-Not"),
+            node("香港-流量专线|IEPL"),
+            node("Unused: HK-01"),
+            node("Unofficial: backup"),
         ];
         assert!(provider_info_lines(&nodes).is_empty());
+    }
+
+    #[test]
+    fn compound_info_labels_match_without_substring_false_positives() {
+        assert!(is_provider_info_name("套餐流量：100 GB"));
+        assert!(is_provider_info_name("套餐到期：长期有效"));
+        assert!(is_provider_info_name("到期时间：2026-01-01"));
+        assert!(is_provider_info_name("Expired: 2026-01-01"));
+        assert!(is_provider_info_name("距离下次重置剩余：19 天"));
+        assert!(!is_provider_info_name("香港-流量专线|IEPL"));
+        assert!(!is_provider_info_name("Unused: HK-01"));
+        assert!(!is_provider_info_name("Unofficial: backup"));
     }
 
     #[test]

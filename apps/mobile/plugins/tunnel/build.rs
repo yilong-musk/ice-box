@@ -10,6 +10,7 @@ const COMMANDS: &[&str] = &[
     "memory",
     "device_status",
     "request_battery_exemption",
+    "save_text_document",
     "open_network_settings",
     "open_vpn_settings",
     "open_https_url",

@@ -117,6 +117,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun scheduleMemoryReports() {
         if (memoryTask != null || destroyed) return
+        // The host treats a connected snapshot older than 15s as a dead
+        // process. Keep this period well under that.
         memoryTask = worker.scheduleWithFixedDelay({
             if (!destroyed && phase == "connected") publish("connected", null)
         }, 5, 5, TimeUnit.SECONDS)

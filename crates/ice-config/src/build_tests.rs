@@ -1989,6 +1989,38 @@ fn share_singbox_config_is_a_portable_document() {
 
     let empty = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![]));
     assert!(matches!(empty, Err(ConfigError::EmptyOutbounds)));
+
+    let with_local_set = share_singbox_config(&NormalizedProfile {
+        nodes: vec![socks("n1")],
+        groups: Vec::new(),
+        route: NormalizedRoute {
+            rules: vec![
+                json!({"domain": ["example.com"], "outbound": "proxy"}),
+                json!({"rule_set": ["cn"], "outbound": "direct"}),
+                json!({"domain": ["also.example"], "rule_set": ["cn"]}),
+            ],
+            final_outbound: "proxy".into(),
+            rule_sets: vec![json!({
+                "type": "local",
+                "tag": "cn",
+                "format": "binary",
+                "path": "/var/lib/ice-box/geoip/cn.srs"
+            })],
+        },
+        dns: None,
+        default_outbound: None,
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("share without local rule sets");
+    assert!(
+        !with_local_set.contains("cn.srs"),
+        "local rule set path must not leave the machine"
+    );
+    let with_local_set: Value = serde_json::from_str(&with_local_set).unwrap();
+    assert!(with_local_set["route"].get("rule_set").is_none());
+    let kept = with_local_set["route"]["rules"].as_array().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["domain"][0], "example.com");
 }
 
 #[test]

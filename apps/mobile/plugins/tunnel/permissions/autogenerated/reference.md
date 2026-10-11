@@ -13,6 +13,7 @@ Prepare, start, stop, and inspect the platform VPN tunnel.
 - `allow-memory`
 - `allow-device-status`
 - `allow-request-battery-exemption`
+- `allow-save-text-document`
 - `allow-open-network-settings`
 - `allow-open-vpn-settings`
 - `allow-open-https-url`
@@ -257,6 +258,32 @@ Enables the request_battery_exemption command without any pre-configured scope.
 <td>
 
 Denies the request_battery_exemption command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:allow-save-text-document`
+
+</td>
+<td>
+
+Enables the save_text_document command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:deny-save-text-document`
+
+</td>
+<td>
+
+Denies the save_text_document command without any pre-configured scope.
 
 </td>
 </tr>

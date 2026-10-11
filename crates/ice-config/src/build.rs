@@ -1676,7 +1676,9 @@ pub fn restore_runtime_config_from_bak(
 /// Local inbounds, the Clash API, and log paths stay behind: they belong to
 /// this install. `geosite` and `geoip` rules are omitted because sing-box
 /// 1.13 rejects those fields, and the bundled replacements are files on this
-/// machine. Credentials are left intact so the copy can be imported elsewhere.
+/// machine. Local `rule_set` entries are omitted for the same reason: their
+/// `path` is a file on this install, and rules that reference those sets go
+/// with them. Credentials are left intact so the copy can be imported elsewhere.
 pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, ConfigError> {
     if profile.nodes.is_empty() {
         return Err(ConfigError::EmptyOutbounds);
@@ -1725,12 +1727,9 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         }
     };
 
-    let set_tags: HashSet<&str> = profile
-        .route
-        .rule_sets
-        .iter()
-        .filter_map(|set| set.get("tag").and_then(|value| value.as_str()))
-        .collect();
+    // Stored rule sets are local files (remote sets are dropped at parse).
+    // An empty tag set drops rules that point at them.
+    let set_tags: HashSet<&str> = HashSet::new();
     let rules: Vec<Value> = profile
         .route
         .rules
@@ -1745,12 +1744,6 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
             .as_object_mut()
             .expect("route object")
             .insert("rules".into(), Value::Array(rules));
-    }
-    if !profile.route.rule_sets.is_empty() {
-        route.as_object_mut().expect("route object").insert(
-            "rule_set".into(),
-            Value::Array(profile.route.rule_sets.clone()),
-        );
     }
 
     let dns = if let Some(raw) = &profile.dns {
