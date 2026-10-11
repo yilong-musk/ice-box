@@ -5,6 +5,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-10-11
+
+### Added
+
+- A subscription can be shared as its real link or as a portable sing-box
+  document, copied or saved to a file. The list still hides URL secrets. On
+  the phone, the export goes through the system save dialog.
+- Import opens in a dialog and accepts a local sing-box file. A file import
+  has no remote URL, so it stays out of automatic refresh and link sharing.
+
+### Changed
+
+- Quota and expiry entries stay out of the node list, and page actions move
+  to the title bar. A new URL import on the desktop refreshes every 12 hours.
+  Copying a log selection shows a short confirmation.
+- Each subscription row has its own outline, so neighboring subscriptions
+  stay distinct.
+
+### Fixed
+
+- A log selection stays on the lines that were highlighted while the tail
+  scrolls. Releasing a drag or a multi-click copies that text.
+- The Windows close button clears its hover state after the window hides, so
+  reopening from the tray does not leave the button red.
+- The phone VPN follows the real tunnel. Loopback exclusions no longer stop
+  the tunnel from starting, private-IP rules no longer send VPN DNS into the
+  void, and a dead tunnel no longer looks connected. That session is not
+  stored for the next launch, and the Logs tab stays off the phone.
+- A flaky process list no longer overwrites a fresh phone VPN status.
+  Substring quota labels no longer delete real proxies. A shared sing-box
+  document no longer embeds local rule-set paths.
+- The share dialog closes from a click on the backdrop.
+- Copying a share uses the system clipboard, so the text still lands after
+  it is read from disk. A node already named `proxy` no longer produces a
+  second outbound with the same tag.
+
 ## [0.1.21] - 2026-10-09
 
 ### Changed
