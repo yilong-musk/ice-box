@@ -91,6 +91,11 @@ function ShareSubscriptionDialog({
   const open = subscription !== null;
   const fileSource = subscription?.source === "file";
 
+  function requestClose() {
+    if (copying) return;
+    onOpenChange(false);
+  }
+
   return (
     <AlertDialogPrimitive.Root
       open={open}
@@ -103,6 +108,7 @@ function ShareSubscriptionDialog({
         <AlertDialogPrimitive.Overlay
           data-slot="alert-dialog-overlay"
           className="fixed inset-0 z-50 bg-black/40 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+          onClick={requestClose}
         />
         <AlertDialogPrimitive.Content
           data-slot="alert-dialog-content"
@@ -168,7 +174,7 @@ function ShareSubscriptionDialog({
               size="sm"
               variant="ghost"
               disabled={copying !== null}
-              onClick={() => onOpenChange(false)}
+              onClick={requestClose}
             >
               {t("common.cancel")}
             </Button>

@@ -638,6 +638,26 @@ describe("Subscriptions", () => {
     ).toHaveTextContent(t("subs.shareCopied"));
   });
 
+  it("closes the share dialog when the backdrop is clicked", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("subs.share") }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+
+    const overlay = document.querySelector("[data-slot=alert-dialog-overlay]");
+    expect(overlay).not.toBeNull();
+    fireEvent.click(overlay!);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
   it("exports the sing-box config from the share dialog", async () => {
     exportSubscriptionSingbox.mockResolvedValue("cancelled");
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "sub-a" })]);
