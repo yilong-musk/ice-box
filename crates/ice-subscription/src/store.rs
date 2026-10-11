@@ -399,22 +399,26 @@ pub fn read_profile(
     id: Uuid,
 ) -> Result<NormalizedProfile, SubscriptionError> {
     let profile_path = paths.profile(id);
-    if profile_path.exists() {
+    let mut profile = if profile_path.exists() {
         let raw = fs::read_to_string(&profile_path)?;
-        return Ok(serde_json::from_str(&raw)?);
-    }
-    let nodes_path = paths.nodes(id);
-    if !nodes_path.exists() {
-        if paths.meta(id).exists() {
-            return Err(SubscriptionError::ParseFailed(format!(
-                "subscription {id} is missing profile.json"
-            )));
+        serde_json::from_str(&raw)?
+    } else {
+        let nodes_path = paths.nodes(id);
+        if !nodes_path.exists() {
+            if paths.meta(id).exists() {
+                return Err(SubscriptionError::ParseFailed(format!(
+                    "subscription {id} is missing profile.json"
+                )));
+            }
+            return Ok(NormalizedProfile::from_nodes_only(vec![]));
         }
-        return Ok(NormalizedProfile::from_nodes_only(vec![]));
-    }
-    let raw = fs::read_to_string(&nodes_path)?;
-    let nodes: Vec<NormalizedOutbound> = serde_json::from_str(&raw)?;
-    Ok(NormalizedProfile::from_nodes_only(nodes))
+        let raw = fs::read_to_string(&nodes_path)?;
+        let nodes: Vec<NormalizedOutbound> = serde_json::from_str(&raw)?;
+        NormalizedProfile::from_nodes_only(nodes)
+    };
+    // Profiles saved before info entries were omitted still contain them.
+    crate::userinfo::detach_provider_info_nodes(&mut profile);
+    Ok(profile)
 }
 
 pub fn read_nodes(
@@ -484,6 +488,11 @@ pub fn set_auto_update(
         index.items.iter_mut().find(|m| m.id == id).ok_or_else(|| {
             SubscriptionError::ParseFailed(format!("subscription {id} not found"))
         })?;
+    if auto_update && meta.source == crate::SubscriptionSource::File {
+        return Err(SubscriptionError::FetchFailed(
+            "file subscription has no remote URL".into(),
+        ));
+    }
     meta.auto_update = auto_update;
     if auto_update_interval.is_some() {
         meta.auto_update_interval = auto_update_interval;
@@ -564,6 +573,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),
@@ -580,6 +590,56 @@ mod tests {
         assert!(!paths.staging_dir(id).exists());
         let index = load_index(&paths).unwrap();
         assert_eq!(index.items.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_profile_omits_provider_info_nodes_saved_earlier() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-store-info-nodes-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: crate::SubscriptionFormat::Clash,
+            node_count: 2,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            provider_info: vec!["剩余流量：1 GB".into()],
+            auto_update: false,
+            auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
+        };
+        let profile = NormalizedProfile::from_nodes_only(vec![
+            NormalizedOutbound::new(
+                "剩余流量：1 GB",
+                serde_json::json!({"type":"trojan","tag":"剩余流量：1 GB","server":"203.0.113.1","server_port":443,"password":"p"}),
+            ),
+            NormalizedOutbound::new(
+                "hk",
+                serde_json::json!({"type":"trojan","tag":"hk","server":"203.0.113.2","server_port":443,"password":"p"}),
+            ),
+        ]);
+        write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
+        let loaded = read_profile(&paths, id).unwrap();
+        assert_eq!(loaded.nodes.len(), 1);
+        assert_eq!(loaded.nodes[0].tag, "hk");
+        assert_eq!(loaded.default_outbound.as_deref(), Some("hk"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -613,6 +673,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
@@ -663,6 +724,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let kept = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "kept".into(),
@@ -727,6 +789,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
             tag: "n1".into(),

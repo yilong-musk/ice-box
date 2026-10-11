@@ -4,7 +4,10 @@ package com.yilongmusk.icebox.tunnel
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.PendingIntent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
@@ -23,6 +26,8 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import org.json.JSONObject
 
 @TauriPlugin(
@@ -36,6 +41,7 @@ import org.json.JSONObject
 class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
     private val statusLock = Any()
     private var lastStatus: JSONObject? = null
+    private var pendingExport: ByteArray? = null
     // Keep these strings aligned with TunnelFiles.kt in the app module.
     // They stay inside this class so the two modules can share a package
     // without clashing top-level names.
@@ -45,7 +51,14 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         const val ACTION_RELOAD = "com.yilongmusk.icebox.RELOAD"
         const val SERVICE_CLASS = "com.yilongmusk.icebox.tunnel.TunnelService"
         const val STATUS_FILE = "tunnel-status.json"
+        const val STATUS_LOCK_FILE = ".tunnel-status.lock"
         const val PERMISSION_FILE = "vpn-permission.txt"
+        // Connected snapshots are rewritten every 5s. Three missed writes means
+        // the tunnel process is gone. Connecting has no heartbeat, so a dead
+        // "connecting" file is allowed to sit longer than a slow start.
+        const val CONNECTED_STATUS_MAX_AGE_MS = 15_000L
+        const val OTHER_LIVE_STATUS_MAX_AGE_MS = 60_000L
+        const val MAX_EXPORT_BYTES = 16 * 1024 * 1024
     }
     @Command
     fun prepare(invoke: Invoke) {
@@ -91,7 +104,10 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun status(invoke: Invoke) {
         val stored = readStatus()
-        val phase = stored?.optString("phase", "stopped").orEmpty().ifEmpty { "stopped" }
+        // The status file is written by the :tunnel process. A killed process
+        // leaves the last "connected" snapshot behind, so the UI must not
+        // trust a live phase unless that process is still running.
+        val phase = phaseWhileTunnelAlive(stored)
         val denied = runCatching {
             File(activity.filesDir, PERMISSION_FILE).readText().trim() == "denied"
         }.getOrDefault(false)
@@ -104,11 +120,14 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         payload.put("phase", phase)
         payload.put("permission", permission)
         payload.put("package_name", activity.packageName)
-        if (stored != null && stored.has("message") && !stored.isNull("message")) {
-            payload.put("message", stored.getString("message"))
-        }
-        if (stored != null && stored.has("memory_bytes") && !stored.isNull("memory_bytes")) {
-            payload.put("memory_bytes", stored.getLong("memory_bytes"))
+        // A forced "stopped" must not keep the dead tunnel's last error or RSS.
+        if (phase != "stopped") {
+            if (stored != null && stored.has("message") && !stored.isNull("message")) {
+                payload.put("message", stored.getString("message"))
+            }
+            if (stored != null && stored.has("memory_bytes") && !stored.isNull("memory_bytes")) {
+                payload.put("memory_bytes", stored.getLong("memory_bytes"))
+            }
         }
         invoke.resolve(payload)
     }
@@ -197,6 +216,208 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
         }
+    }
+
+    /**
+     * A live phase is real while `:tunnel` is running, or while the status
+     * file is still being refreshed. `getRunningAppProcesses` sometimes lists
+     * only the calling process, so a miss must not overwrite a fresh
+     * `connected` snapshot. The tunnel rewrites that snapshot every 5s;
+     * silence past [CONNECTED_STATUS_MAX_AGE_MS] means the process is gone.
+     */
+    private fun phaseWhileTunnelAlive(stored: JSONObject?): String {
+        val phase = stored?.optString("phase", "stopped").orEmpty().ifEmpty { "stopped" }
+        if (phase != "connecting" && phase != "connected" && phase != "disconnecting") {
+            return phase
+        }
+        if (tunnelProcessRunning()) return phase
+        if (!statusFileStale(phase)) return phase
+        return if (persistStoppedIfStillStale(phase)) "stopped" else phase
+    }
+
+    private fun tunnelProcessRunning(): Boolean {
+        return runCatching {
+            val manager = activity.getSystemService(ActivityManager::class.java) ?: return@runCatching false
+            val name = "${activity.packageName}:tunnel"
+            manager.runningAppProcesses.orEmpty().any { it.processName == name }
+        }.getOrDefault(false)
+    }
+
+    private fun statusFileStale(phase: String): Boolean {
+        val file = File(activity.filesDir, STATUS_FILE)
+        if (!file.exists()) return true
+        val age = System.currentTimeMillis() - file.lastModified()
+        if (age < 0) return false
+        val limit = if (phase == "connected") {
+            CONNECTED_STATUS_MAX_AGE_MS
+        } else {
+            OTHER_LIVE_STATUS_MAX_AGE_MS
+        }
+        return age > limit
+    }
+
+    /**
+     * Write `stopped` only when the file is still stale after the cross-process
+     * lock. A heartbeat that landed while we waited keeps the live phase.
+     * Returns whether this call stored `stopped`.
+     */
+    private fun persistStoppedIfStillStale(phase: String): Boolean {
+        val dir = activity.filesDir
+        val text = stoppedStatusText()
+        return synchronized(statusLock) {
+            val wrote = runCatching {
+                withStatusFileLock(dir) {
+                    if (!statusFileStale(phase)) return@withStatusFileLock false
+                    val dest = File(dir, STATUS_FILE)
+                    val tmp = File(dir, ".tunnel-status.host.tmp")
+                    FileOutputStream(tmp).use { out ->
+                        out.write(text.toByteArray(Charsets.UTF_8))
+                        out.fd.sync()
+                    }
+                    if (!tmp.renameTo(dest)) {
+                        tmp.copyTo(dest, overwrite = true)
+                        tmp.delete()
+                    }
+                    true
+                }
+            }.getOrDefault(false)
+            if (wrote) lastStatus = JSONObject(text)
+            wrote
+        }
+    }
+
+    private fun stoppedStatusText(): String {
+        val payload = JSONObject()
+        payload.put("phase", "stopped")
+        payload.put("package_name", activity.packageName)
+        payload.put("message", JSONObject.NULL)
+        payload.put("memory_bytes", JSONObject.NULL)
+        return payload.toString()
+    }
+
+    /**
+     * Same lock file as `TunnelFiles.withStatusFileLock`. The two modules do
+     * not share code; the file name is the protocol.
+     */
+    private inline fun <T> withStatusFileLock(dir: File, block: () -> T): T {
+        val lockFile = File(dir, STATUS_LOCK_FILE)
+        return RandomAccessFile(lockFile, "rw").use { raf ->
+            val lock = raf.channel.lock()
+            try {
+                block()
+            } finally {
+                lock.release()
+            }
+        }
+    }
+
+    /**
+     * System clipboard. The WebView clipboard API drops the user gesture
+     * after the share text is read from disk. The bytes are not logged.
+     */
+    @Command
+    fun copy_text(invoke: Invoke) {
+        val args = invoke.getArgs()
+        val content = if (args.has("content") && !args.isNull("content")) {
+            args.getString("content")
+        } else {
+            ""
+        }
+        if (content.toByteArray(Charsets.UTF_8).size > MAX_EXPORT_BYTES) {
+            invoke.reject("export is too large")
+            return
+        }
+        val clipboard = activity.getSystemService(ClipboardManager::class.java)
+        if (clipboard == null) {
+            invoke.reject("clipboard unavailable")
+            return
+        }
+        try {
+            clipboard.setPrimaryClip(ClipData.newPlainText("ice-box", content))
+            invoke.resolve(JSObject())
+        } catch (_: Exception) {
+            invoke.reject("clipboard unavailable")
+        }
+    }
+
+    /**
+     * System save dialog. Android WebView ignores `<a download>`, so the
+     * export is written to the URI the user picks. `"cancelled"` when the
+     * dialog is dismissed. The bytes are not logged.
+     */
+    @Command
+    fun save_text_document(invoke: Invoke) {
+        if (pendingExport != null) {
+            invoke.reject("export already in progress")
+            return
+        }
+        val args = invoke.getArgs()
+        val filename = exportFilename(args.optString("filename", ""))
+        val content = if (args.has("content") && !args.isNull("content")) {
+            args.getString("content")
+        } else {
+            ""
+        }
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        if (bytes.size > MAX_EXPORT_BYTES) {
+            invoke.reject("export is too large")
+            return
+        }
+        pendingExport = bytes
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, filename)
+        }
+        try {
+            startActivityForResult(invoke, intent, "saveTextDocument")
+        } catch (err: Exception) {
+            pendingExport = null
+            invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
+    @ActivityCallback
+    fun saveTextDocument(invoke: Invoke, result: ActivityResult) {
+        val bytes = pendingExport
+        pendingExport = null
+        if (result.resultCode != Activity.RESULT_OK || bytes == null) {
+            resolveOutcome(invoke, "cancelled")
+            return
+        }
+        val uri = result.data?.data
+        if (uri == null) {
+            resolveOutcome(invoke, "cancelled")
+            return
+        }
+        try {
+            val stream = activity.contentResolver.openOutputStream(uri)
+                ?: error("no output stream")
+            stream.use { it.write(bytes) }
+            resolveOutcome(invoke, "saved")
+        } catch (err: Exception) {
+            invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
+    private fun resolveOutcome(invoke: Invoke, outcome: String) {
+        val payload = JSObject()
+        payload.put("outcome", outcome)
+        invoke.resolve(payload)
+    }
+
+    private fun exportFilename(raw: String): String {
+        val cleaned = buildString(raw.length) {
+            for (ch in raw) {
+                if (ch.isISOControl() || ch == '\u007f' || ch in "\\/:*?\"<>|") {
+                    append('_')
+                } else {
+                    append(ch)
+                }
+            }
+        }.trim().trim('.')
+        if (cleaned.isEmpty()) return "sing-box.json"
+        return if (cleaned.endsWith(".json", ignoreCase = true)) cleaned else "$cleaned.json"
     }
 
     /**

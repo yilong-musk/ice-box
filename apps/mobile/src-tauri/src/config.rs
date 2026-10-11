@@ -199,6 +199,7 @@ mod tests {
             provider_info: Vec::new(),
             auto_update: false,
             auto_update_interval: None,
+            source: ice_subscription::SubscriptionSource::Remote,
         };
         let profile = NormalizedProfile::from_nodes_only(vec![ice_config::NormalizedOutbound {
             tag: "node".into(),

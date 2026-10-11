@@ -3,8 +3,11 @@
 //! Provider-reported subscription info: the `subscription-userinfo` response
 //! header, and the usage / expiry entries a provider embeds in the proxy list.
 
-use ice_config::NormalizedOutbound;
+use std::collections::HashSet;
+
+use ice_config::{NormalizedOutbound, NormalizedProfile};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Traffic and expiry metadata a provider reports for a subscription:
 /// `subscription-userinfo: upload=1; download=2; total=3; expire=1735689600`.
@@ -104,10 +107,12 @@ const MAX_INFO_LINES: usize = 6;
 /// Label/value separators providers use in info entries.
 const INFO_SEPARATORS: [char; 4] = [':', '：', '|', '｜'];
 
-/// Labels that mark an entry as provider info rather than a proxy. They are
-/// matched case-insensitively against the text before the first separator, so
-/// ordinary node names (`🇺🇸美国01|流媒体`) are not mistaken for info.
-const INFO_LABELS: [&str; 25] = [
+/// Labels that mark an entry as provider info rather than a proxy. The text
+/// before the first separator must be exactly these words (joined, case
+/// insensitive), so a node name that merely contains one (`香港-流量专线|IEPL`,
+/// `Unused: HK-01`) stays a proxy. `🇺🇸美国01|流媒体` has the keyword after the
+/// separator and is not info either.
+const INFO_LABELS: [&str; 26] = [
     "剩余流量",
     "流量",
     "剩余",
@@ -124,6 +129,7 @@ const INFO_LABELS: [&str; 25] = [
     "expire",
     "expires",
     "expiry",
+    "expired",
     "used",
     "remaining",
     "reset",
@@ -135,12 +141,17 @@ const INFO_LABELS: [&str; 25] = [
     "subscription",
 ];
 
+/// Allowed after a keyword label: `到期时间`, `套餐到期` is two keywords and
+/// does not need a suffix.
+const INFO_LABEL_SUFFIXES: [&str; 2] = ["时间", "日期"];
+
 /// Info entries a provider embeds in the proxy list, in list order.
 ///
 /// Panels publish quota and expiry as extra "proxies" whose names carry the
 /// text (`Traffic: 11.84 GB | 150 GB`, `剩余流量：1023.64 GB`). Each panel words
 /// and scales them its own way, so the names are stored as provider input for
 /// consumers to parse into a usage / expiry readout.
+/// [`detach_provider_info_nodes`] then drops those proxies from the profile.
 pub fn provider_info_lines(nodes: &[NormalizedOutbound]) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for node in nodes {
@@ -160,7 +171,7 @@ pub fn provider_info_lines(nodes: &[NormalizedOutbound]) -> Vec<String> {
     lines
 }
 
-fn is_provider_info_name(name: &str) -> bool {
+pub(crate) fn is_provider_info_name(name: &str) -> bool {
     let mut parts = name.split(INFO_SEPARATORS);
     let label = parts.next().unwrap_or_default().trim();
     // Info entries are `label: value`; a name without a separator is a proxy
@@ -168,13 +179,122 @@ fn is_provider_info_name(name: &str) -> bool {
     if parts.next().is_none() {
         return false;
     }
-    // A label is one short word ("剩余流量", "Expire"); a proxy name that
-    // happens to contain a keyword before a separator is longer.
+    // A label is one short word ("剩余流量", "Expire") or a few of those words
+    // joined (`套餐到期`). A longer name that only contains a keyword is a proxy.
     if label.is_empty() || label.chars().count() > 24 {
         return false;
     }
     let label = label.to_lowercase();
-    INFO_LABELS.iter().any(|keyword| label.contains(keyword))
+    label_is_info_keywords(&label)
+        || INFO_LABEL_SUFFIXES.iter().any(|suffix| {
+            label
+                .strip_suffix(suffix)
+                .is_some_and(|rest| !rest.is_empty() && label_is_info_keywords(rest))
+        })
+}
+
+/// True when `label` is one or more [`INFO_LABELS`] concatenated, and nothing else.
+fn label_is_info_keywords(label: &str) -> bool {
+    fn covers(label: &str, keywords: &[&str]) -> bool {
+        if label.is_empty() {
+            return true;
+        }
+        keywords.iter().any(|keyword| {
+            label
+                .strip_prefix(keyword)
+                .is_some_and(|rest| covers(rest, keywords))
+        })
+    }
+
+    !label.is_empty() && covers(label, info_keywords_longest_first())
+}
+
+fn info_keywords_longest_first() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static SORTED: OnceLock<Vec<&'static str>> = OnceLock::new();
+    SORTED
+        .get_or_init(|| {
+            let mut keys = INFO_LABELS.to_vec();
+            keys.sort_by_key(|keyword| std::cmp::Reverse(keyword.chars().count()));
+            keys
+        })
+        .as_slice()
+}
+
+/// Remove provider info proxies from `profile`.
+///
+/// Returns the info lines in list order (capped, for the subscription card).
+/// Matching leaf nodes are dropped, and selector groups that listed them fall
+/// through to the next real member so a freshly enabled subscription does not
+/// start on a quota or expiry entry. No parse warning is recorded: these
+/// entries are provider metadata, not broken proxies.
+pub fn detach_provider_info_nodes(profile: &mut NormalizedProfile) -> Vec<String> {
+    let lines = provider_info_lines(&profile.nodes);
+    let dropped: HashSet<String> = profile
+        .nodes
+        .iter()
+        .filter(|node| is_provider_info_name(node.tag.trim()))
+        .map(|node| node.tag.clone())
+        .collect();
+    if dropped.is_empty() {
+        return lines;
+    }
+
+    profile
+        .nodes
+        .retain(|node| !dropped.contains(node.tag.as_str()));
+    for group in &mut profile.groups {
+        remove_dropped_members(group, &dropped);
+        retarget_selector_default(group);
+    }
+
+    let warning_len = profile.parse_stats.warnings.len();
+    crate::prune::prune_dangling_refs(profile);
+    profile.parse_stats.warnings.truncate(warning_len);
+    lines
+}
+
+fn remove_dropped_members(group: &mut NormalizedOutbound, dropped: &HashSet<String>) {
+    let Some(members) = group
+        .outbound_mut()
+        .get_mut("outbounds")
+        .and_then(|value| value.as_array_mut())
+    else {
+        return;
+    };
+    members.retain(|member| member.as_str().is_none_or(|tag| !dropped.contains(tag)));
+}
+
+/// Point a selector at its first remaining member when the current default was
+/// an info entry (or is otherwise no longer listed).
+fn retarget_selector_default(group: &mut NormalizedOutbound) {
+    let outbound = group.outbound_mut();
+    if outbound.get("type").and_then(|value| value.as_str()) != Some("selector") {
+        return;
+    }
+    let members: Vec<String> = outbound
+        .get("outbounds")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let current_ok = outbound
+        .get("default")
+        .and_then(|value| value.as_str())
+        .is_some_and(|tag| members.iter().any(|member| member == tag));
+    if current_ok {
+        return;
+    }
+    let Some(first) = members.first().cloned() else {
+        return;
+    };
+    if let Some(object) = outbound.as_object_mut() {
+        object.insert("default".into(), json!(first));
+    }
 }
 
 #[cfg(test)]
@@ -290,8 +410,23 @@ mod tests {
             node("美国-流量专线 1"),
             node("🇯🇵 日本标准 IEPL 专线 1"),
             node("Expire-Me-Not"),
+            node("香港-流量专线|IEPL"),
+            node("Unused: HK-01"),
+            node("Unofficial: backup"),
         ];
         assert!(provider_info_lines(&nodes).is_empty());
+    }
+
+    #[test]
+    fn compound_info_labels_match_without_substring_false_positives() {
+        assert!(is_provider_info_name("套餐流量：100 GB"));
+        assert!(is_provider_info_name("套餐到期：长期有效"));
+        assert!(is_provider_info_name("到期时间：2026-01-01"));
+        assert!(is_provider_info_name("Expired: 2026-01-01"));
+        assert!(is_provider_info_name("距离下次重置剩余：19 天"));
+        assert!(!is_provider_info_name("香港-流量专线|IEPL"));
+        assert!(!is_provider_info_name("Unused: HK-01"));
+        assert!(!is_provider_info_name("Unofficial: backup"));
     }
 
     #[test]
@@ -305,5 +440,90 @@ mod tests {
         assert_eq!(lines[0], "剩余流量：0 GB");
         let long = node(&format!("Traffic: {}", "9".repeat(MAX_INFO_LINE_CHARS)));
         assert!(provider_info_lines(&[long]).is_empty());
+    }
+
+    fn profile_with(nodes: Vec<NormalizedOutbound>) -> NormalizedProfile {
+        NormalizedProfile::from_nodes_only(nodes)
+    }
+
+    #[test]
+    fn detach_drops_info_nodes_and_skips_them_as_the_default() {
+        let mut profile = profile_with(vec![
+            node("剩余流量：1023.64 GB"),
+            node("套餐到期：长期有效"),
+            node("🇭🇰 香港 1"),
+        ]);
+        let lines = detach_provider_info_nodes(&mut profile);
+        assert_eq!(lines, vec!["剩余流量：1023.64 GB", "套餐到期：长期有效"]);
+        assert_eq!(
+            profile
+                .nodes
+                .iter()
+                .map(|n| n.tag.as_str())
+                .collect::<Vec<_>>(),
+            ["🇭🇰 香港 1"]
+        );
+        assert_eq!(profile.default_outbound.as_deref(), Some("🇭🇰 香港 1"));
+        assert!(profile.parse_stats.warnings.is_empty());
+        assert_eq!(
+            crate::merge::resolve_selected_tag(Some("剩余流量：1023.64 GB"), &profile).as_deref(),
+            Some("🇭🇰 香港 1")
+        );
+    }
+
+    #[test]
+    fn detach_retargets_selector_default_past_info_members() {
+        let mut profile = profile_with(vec![
+            node("剩余流量：1023.64 GB"),
+            node("套餐到期：长期有效"),
+            node("🇭🇰 香港 1"),
+            node("🇯🇵 日本 1"),
+        ]);
+        profile.groups.push(NormalizedOutbound::new(
+            "Proxies",
+            json!({
+                "type": "selector",
+                "tag": "Proxies",
+                "outbounds": [
+                    "剩余流量：1023.64 GB",
+                    "套餐到期：长期有效",
+                    "🇭🇰 香港 1",
+                    "🇯🇵 日本 1",
+                ],
+                "default": "剩余流量：1023.64 GB",
+            }),
+        ));
+        profile.default_outbound = Some("Proxies".into());
+        detach_provider_info_nodes(&mut profile);
+        assert_eq!(
+            profile.groups[0].outbound["outbounds"],
+            json!(["🇭🇰 香港 1", "🇯🇵 日本 1"])
+        );
+        assert_eq!(profile.groups[0].outbound["default"], "🇭🇰 香港 1");
+        assert_eq!(profile.default_outbound.as_deref(), Some("Proxies"));
+    }
+
+    #[test]
+    fn detach_keeps_an_explicit_real_selector_default() {
+        let mut profile = profile_with(vec![
+            node("Expire: 2026-09-26"),
+            node("🇭🇰 香港 1"),
+            node("🇯🇵 日本 1"),
+        ]);
+        profile.groups.push(NormalizedOutbound::new(
+            "Proxies",
+            json!({
+                "type": "selector",
+                "tag": "Proxies",
+                "outbounds": ["Expire: 2026-09-26", "🇭🇰 香港 1", "🇯🇵 日本 1"],
+                "default": "🇯🇵 日本 1",
+            }),
+        ));
+        detach_provider_info_nodes(&mut profile);
+        assert_eq!(
+            profile.groups[0].outbound["outbounds"],
+            json!(["🇭🇰 香港 1", "🇯🇵 日本 1"])
+        );
+        assert_eq!(profile.groups[0].outbound["default"], "🇯🇵 日本 1");
     }
 }

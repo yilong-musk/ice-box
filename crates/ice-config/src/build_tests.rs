@@ -55,6 +55,16 @@ fn tun_network_cidr_rejects_out_of_range_prefix() {
 }
 
 #[test]
+fn tun_dns_server_is_the_next_ipv4_address() {
+    assert_eq!(
+        tun_dns_server("10.0.0.1/30").as_deref(),
+        Some("10.0.0.2/32")
+    );
+    assert_eq!(tun_dns_server("10.0.0.1/32"), None);
+    assert_eq!(tun_dns_server("fdfe:dcba:9876::1/126"), None);
+}
+
+#[test]
 fn direct_only_config_has_builtin_outbounds_and_direct_final() {
     let cfg = build_direct_only_config(
         &LocalTemplate::default(),
@@ -1718,12 +1728,15 @@ fn mobile_ignores_diagnostic_intent_and_emits_tun() {
         assert_eq!(inbounds[0]["stack"], "gvisor");
         let rules = cfg["route"]["rules"].as_array().expect("rules");
         assert_eq!(rules[0]["action"], "sniff");
-        assert_eq!(rules[1]["ip_is_private"], true);
-        assert_eq!(rules[1]["outbound"], "direct");
-        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[1]["ip_cidr"][0], "10.0.0.2/32");
+        assert_eq!(rules[1]["protocol"], "dns");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["ip_is_private"], true);
         assert_eq!(rules[2]["outbound"], "direct");
-        assert_eq!(rules[3]["protocol"], "dns");
-        assert_eq!(rules[3]["action"], "hijack-dns");
+        assert_eq!(rules[3]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[3]["outbound"], "direct");
+        assert_eq!(rules[4]["protocol"], "dns");
+        assert_eq!(rules[4]["action"], "hijack-dns");
         assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
         assert_eq!(cfg["dns"]["final"], "local");
         assert!(cfg.get("endpoints").is_none());
@@ -1865,6 +1878,185 @@ fn build_mobile_config_rejects_desktop_platforms() {
     let input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
     let err = build_mobile_config(&input).expect_err("desktop");
     assert!(matches!(err, ConfigError::Invalid(_)));
+}
+
+#[test]
+fn share_singbox_config_is_a_portable_document() {
+    let shared = share_singbox_config(&NormalizedProfile {
+        nodes: vec![NormalizedOutbound::new(
+            "n1",
+            json!({
+                "type": "vmess",
+                "tag": "n1",
+                "server": "1.2.3.4",
+                "uuid": "real-uuid"
+            }),
+        )],
+        groups: Vec::new(),
+        route: NormalizedRoute {
+            rules: vec![
+                json!({"domain": ["example.com"], "outbound": "proxy"}),
+                json!({"geoip": ["cn"], "outbound": "direct"}),
+                json!({"geosite": ["cn"], "outbound": "direct"}),
+                json!({"domain": ["missing.example"], "outbound": "gone"}),
+            ],
+            final_outbound: "proxy".into(),
+            rule_sets: Vec::new(),
+        },
+        dns: Some(json!({
+            "__ice_dns_listen": "127.0.0.1:53",
+            "servers": [{"type": "local", "tag": "local"}],
+            "final": "local"
+        })),
+        default_outbound: None,
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("share");
+    let value: Value = serde_json::from_str(&shared).expect("json");
+    assert!(value.get("inbounds").is_none());
+    assert!(value.get("experimental").is_none());
+    assert!(value.get("log").is_none());
+    assert!(value.get("dns").unwrap().get("__ice_dns_listen").is_none());
+    assert_eq!(value["route"]["default_domain_resolver"], "local");
+    assert_eq!(value["route"]["final"], "proxy");
+    let rules = value["route"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["domain"][0], "example.com");
+    let tags: Vec<&str> = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    assert!(tags.contains(&"n1"));
+    assert!(tags.contains(&"proxy"));
+    assert!(tags.contains(&"direct"));
+    assert!(tags.contains(&"block"));
+    let node = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "n1")
+        .unwrap();
+    assert_eq!(node["uuid"], "real-uuid");
+
+    let grouped = share_singbox_config(&NormalizedProfile {
+        nodes: vec![socks("n1")],
+        groups: vec![NormalizedOutbound::new(
+            "G",
+            json!({"type": "selector", "tag": "G", "outbounds": ["n1"]}),
+        )],
+        route: NormalizedRoute {
+            rules: Vec::new(),
+            final_outbound: "G".into(),
+            rule_sets: Vec::new(),
+        },
+        dns: None,
+        default_outbound: Some("G".into()),
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("grouped");
+    let grouped: Value = serde_json::from_str(&grouped).unwrap();
+    assert!(grouped["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|outbound| outbound["tag"] != "proxy"));
+    assert_eq!(grouped["route"]["final"], "G");
+
+    let wireguard = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
+        NormalizedOutbound::new(
+            "wg",
+            json!({
+                "type": "wireguard",
+                "tag": "wg",
+                "server": "1.2.3.4",
+                "server_port": 51820,
+                "private_key": "priv",
+                "peer_public_key": "pub"
+            }),
+        ),
+    ]))
+    .expect("wireguard");
+    let wireguard: Value = serde_json::from_str(&wireguard).unwrap();
+    assert!(wireguard["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|outbound| outbound["type"] != "wireguard"));
+    assert_eq!(wireguard["endpoints"][0]["type"], "wireguard");
+    assert_eq!(wireguard["endpoints"][0]["private_key"], "priv");
+
+    let empty = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![]));
+    assert!(matches!(empty, Err(ConfigError::EmptyOutbounds)));
+
+    let with_local_set = share_singbox_config(&NormalizedProfile {
+        nodes: vec![socks("n1")],
+        groups: Vec::new(),
+        route: NormalizedRoute {
+            rules: vec![
+                json!({"domain": ["example.com"], "outbound": "proxy"}),
+                json!({"rule_set": ["cn"], "outbound": "direct"}),
+                json!({"domain": ["also.example"], "rule_set": ["cn"]}),
+            ],
+            final_outbound: "proxy".into(),
+            rule_sets: vec![json!({
+                "type": "local",
+                "tag": "cn",
+                "format": "binary",
+                "path": "/var/lib/ice-box/geoip/cn.srs"
+            })],
+        },
+        dns: None,
+        default_outbound: None,
+        parse_stats: ProfileParseStats::default(),
+    })
+    .expect("share without local rule sets");
+    assert!(
+        !with_local_set.contains("cn.srs"),
+        "local rule set path must not leave the machine"
+    );
+    let with_local_set: Value = serde_json::from_str(&with_local_set).unwrap();
+    assert!(with_local_set["route"].get("rule_set").is_none());
+    let kept = with_local_set["route"]["rules"].as_array().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["domain"][0], "example.com");
+
+    let named_proxy = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
+        socks("proxy"),
+        socks("n2"),
+    ]))
+    .expect("node named proxy");
+    let named_proxy: Value = serde_json::from_str(&named_proxy).unwrap();
+    let outbounds = named_proxy["outbounds"].as_array().unwrap();
+    let tags: Vec<&str> = outbounds
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    let mut unique = tags.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        tags.len(),
+        unique.len(),
+        "share tags must be unique: {tags:?}"
+    );
+    let selectors: Vec<_> = outbounds
+        .iter()
+        .filter(|outbound| outbound["type"] == "selector")
+        .collect();
+    assert_eq!(selectors.len(), 1);
+    assert_ne!(selectors[0]["tag"], "proxy");
+    assert!(selectors[0]["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member == "proxy"));
+    let node = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(node["type"], "socks");
 }
 
 #[test]

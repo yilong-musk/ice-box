@@ -117,6 +117,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun scheduleMemoryReports() {
         if (memoryTask != null || destroyed) return
+        // The host treats a connected snapshot older than 15s as a dead
+        // process. Keep this period well under that.
         memoryTask = worker.scheduleWithFixedDelay({
             if (!destroyed && phase == "connected") publish("connected", null)
         }, 5, 5, TimeUnit.SECONDS)
@@ -226,8 +228,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
             val v6Routes = options.inet6RouteAddress.toPrefixes()
             if (v6Routes.isNotEmpty()) v6Routes.forEach { builder.addRoute(it.toIpPrefix()) }
             else if (v6.isNotEmpty()) builder.addRoute("::", 0)
-            options.inet4RouteExcludeAddress.toPrefixes().forEach { builder.excludeRoute(it.toIpPrefix()) }
-            options.inet6RouteExcludeAddress.toPrefixes().forEach { builder.excludeRoute(it.toIpPrefix()) }
+            excludeVpnRoutes(builder, options.inet4RouteExcludeAddress.toPrefixes())
+            excludeVpnRoutes(builder, options.inet6RouteExcludeAddress.toPrefixes())
             options.includePackage.toList().forEach { runCatching { builder.addAllowedApplication(it) } }
             options.excludePackage.toList().forEach { name ->
                 runCatching { builder.addDisallowedApplication(name) }
@@ -348,6 +350,26 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "vpn"
+    }
+}
+
+/**
+ * VpnService.Builder.excludeRoute rejects a loopback destination
+ * (127.0.0.0/8 and ::1) with IllegalArgumentException("Bad address").
+ * Android does not deliver loopback into the tunnel, so those prefixes
+ * are dropped here instead of failing openTun.
+ */
+private fun excludeVpnRoutes(builder: VpnService.Builder, prefixes: List<RoutePrefix>) {
+    for (prefix in prefixes) {
+        val address = InetAddress.getByName(prefix.address())
+        if (address.isLoopbackAddress) {
+            Log.i(
+                NetworkMonitor.TAG,
+                "skip exclude ${prefix.address()}/${prefix.prefix()}: loopback",
+            )
+            continue
+        }
+        builder.excludeRoute(prefix.toIpPrefix())
     }
 }
 

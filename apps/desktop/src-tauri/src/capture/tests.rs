@@ -264,6 +264,7 @@ fn seed_subscription(paths: &AppPaths) {
         provider_info: vec![],
         auto_update: false,
         auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
     };
     let nodes = vec![ice_config::NormalizedOutbound {
         tag: "n1".into(),

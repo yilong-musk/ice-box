@@ -21,8 +21,9 @@ pub use atomic::{write_bytes_atomic, write_json_atomic};
 pub use build::{
     build_direct_only_config, build_mobile_config, build_runtime_config, config_to_pretty_json,
     invalidate_geoip_code_cache, minimal_dns_block, restore_runtime_config_from_bak,
-    tun_dns_hijack_rule, tun_reserved_rules, validate_config, validate_config_for_intent,
-    validate_template, write_runtime_config_bytes, write_runtime_config_file, ConfigError,
+    share_singbox_config, tun_dns_hijack_rule, tun_reserved_rules, validate_config,
+    validate_config_for_intent, validate_template, write_runtime_config_bytes,
+    write_runtime_config_file, ConfigError,
 };
 pub use clash_secret::ensure_clash_api_secret;
 pub use error::{AppError, ErrorCode};

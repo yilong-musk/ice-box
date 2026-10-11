@@ -18,6 +18,8 @@ pub enum SubscriptionError {
     ParseFailed(String),
     #[error("no active subscription")]
     NoActiveSubscription,
+    #[error("subscription not found")]
+    NotFound,
     #[error("profile parse failed: {0}")]
     ProfileParseFailed(String),
     #[error(transparent)]
@@ -36,7 +38,7 @@ impl SubscriptionError {
                 ErrorCode::SubParseFailed
             }
             Self::Io(_) => ErrorCode::SubIo,
-            Self::NoActiveSubscription => ErrorCode::SubNotFound,
+            Self::NoActiveSubscription | Self::NotFound => ErrorCode::SubNotFound,
             Self::ProfileParseFailed(_) => ErrorCode::SubParseFailed,
         }
     }
@@ -56,7 +58,7 @@ impl SubscriptionError {
                 "error.sub.parse_failed"
             }
             Self::Io(_) => "error.sub.io",
-            Self::NoActiveSubscription => "error.sub.not_found",
+            Self::NoActiveSubscription | Self::NotFound => "error.sub.not_found",
             Self::ProfileParseFailed(_) => "error.sub.parse_failed",
         };
         let detail = self.redacted_display();

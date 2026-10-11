@@ -10,8 +10,6 @@ import {
   parsePortInput,
   portsConflict,
 } from "./listenValidation";
-import { formatUpdateFailures } from "./subscriptions";
-
 describe("listenValidation", () => {
   it("parsePortInput accepts valid ports", () => {
     expect(parsePortInput("17890")).toBe(17890);
@@ -51,27 +49,5 @@ describe("listenValidation", () => {
     expect(portsConflict(17890, 17890)).toBe(true);
     expect(portsConflict(17890, 19090)).toBe(false);
     expect(formatPortsConflictError()).toBe(t("validation.portsConflict"));
-  });
-});
-
-describe("formatUpdateFailures", () => {
-  it("returns null when all ok", () => {
-    expect(
-      formatUpdateFailures([
-        { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ok: true },
-      ]),
-    ).toBeNull();
-  });
-
-  it("lists failed subscription ids", () => {
-    const msg = formatUpdateFailures([
-      {
-        id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        ok: false,
-        error: "fetch failed",
-      },
-    ]);
-    expect(msg).toContain("fetch failed");
-    expect(msg).toContain("aaaaaaaa");
   });
 });

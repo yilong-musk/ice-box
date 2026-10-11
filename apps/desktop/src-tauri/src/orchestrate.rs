@@ -972,6 +972,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: ice_engine::SubscriptionSource::Remote,
         };
         let nodes = vec![NO {
             tag: "n1".into(),
@@ -1538,6 +1539,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: ice_engine::SubscriptionSource::Remote,
         };
         let nodes = vec![NO {
             tag: "n1".into(),
@@ -1839,6 +1841,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: ice_engine::SubscriptionSource::Remote,
         };
         let profile = ice_config::NormalizedProfile {
             nodes: vec![
@@ -1913,6 +1916,7 @@ mod tests {
             provider_info: vec![],
             auto_update: false,
             auto_update_interval: None,
+            source: ice_engine::SubscriptionSource::Remote,
         };
         let profile = ice_config::NormalizedProfile {
             nodes: vec![],

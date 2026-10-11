@@ -58,7 +58,7 @@ pub trait HttpFetcher: Send {
 
 /// One process-wide direct agent (no system proxy, no auto-redirects; the
 /// redirect loop re-validates each hop). `Agent` is an `Arc` handle, so clones
-/// are cheap and thread-safe — `fetch_all` shares the pool across its threads.
+/// are cheap and thread-safe — batch fetches share the pool across their threads.
 fn build_direct_agent() -> ureq::Agent {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     AGENT

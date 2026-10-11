@@ -6,7 +6,9 @@
 use std::sync::Mutex;
 
 use ice_config::{AppError, AppPaths, ErrorCode, ProxyMode, SettingsPatch};
-use ice_subscription::{AutoUpdateInterval, SubscriptionManager};
+use ice_subscription::{
+    subscription_share_text, AutoUpdateInterval, SubscriptionManager, SubscriptionShareKind,
+};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_tunnel::{Tunnel, TunnelError};
@@ -41,8 +43,26 @@ pub struct AddSubscriptionRequest {
 }
 
 #[derive(Deserialize)]
+pub struct ImportSubscriptionFileRequest {
+    pub content: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct IdRequest {
     pub id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct SubscriptionShareRequest {
+    pub id: Uuid,
+    pub kind: SubscriptionShareKind,
+}
+
+#[derive(Deserialize)]
+pub struct SaveTextDocumentRequest {
+    pub filename: String,
+    pub content: String,
 }
 
 #[derive(Deserialize)]
@@ -212,7 +232,6 @@ pub fn start(
     let package = package_name(&tunnel).or(current.package_name);
     host.rewrite_config(package.as_deref())?;
     tunnel.start().map_err(map_tunnel)?;
-    host.set_service_enabled(true)?;
     drop(host);
     notify(&app);
     Ok(())
@@ -224,15 +243,91 @@ pub fn stop(
     host: State<'_, Mutex<MobileHost>>,
     tunnel: State<'_, Tunnel<Wry>>,
 ) -> Result<(), AppError> {
-    let mut host = ready(&app, &host, &tunnel)?;
+    let host = ready(&app, &host, &tunnel)?;
     let _ = read_tunnel(&tunnel)?;
     tunnel
         .stop()
         .map_err(|err| AppError::new(ErrorCode::TunRestoreFailed, err.to_string()))?;
-    host.set_service_enabled(false)?;
     drop(host);
     notify(&app);
     Ok(())
+}
+
+/// Unredacted subscription URL, or a portable sing-box document.
+/// The list command keeps URLs redacted; do not log the returned text.
+#[tauri::command]
+pub async fn subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<String, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    run_blocking("subscription_share", move || {
+        subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)
+    })
+    .await?
+}
+
+/// Copy a subscription URL or sing-box document onto the system clipboard.
+/// The text is not logged and is not returned to the webview.
+#[tauri::command]
+pub fn copy_subscription_share(
+    app: AppHandle,
+    req: SubscriptionShareRequest,
+) -> Result<(), AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let text = subscription_share_text(&paths, req.id, req.kind).map_err(AppError::from)?;
+    let tunnel = app.state::<Tunnel<Wry>>();
+    tunnel.copy_text(&text).map_err(map_clipboard)
+}
+
+fn map_clipboard(err: TunnelError) -> AppError {
+    match &err {
+        TunnelError::Plugin(message) if message.contains("clipboard unavailable") => {
+            AppError::new(ErrorCode::ConfigInvalid, "clipboard unavailable")
+        }
+        _ => map_tunnel(err),
+    }
+}
+
+const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Write `content` through the system save dialog.
+/// `"cancelled"` when the dialog is dismissed. Do not log `content`.
+///
+/// Synchronous, like [`start`]'s VPN consent dialog: the Android activity
+/// result launcher runs on the command thread.
+#[tauri::command]
+pub fn save_text_document(
+    app: AppHandle,
+    req: SaveTextDocumentRequest,
+) -> Result<String, AppError> {
+    if req.content.len() > MAX_EXPORT_BYTES {
+        return Err(AppError::new(ErrorCode::SubIo, "export is too large"));
+    }
+    let filename = bounded_export_filename(&req.filename);
+    let tunnel = app.state::<Tunnel<Wry>>();
+    tunnel
+        .save_text_document(&filename, &req.content)
+        .map_err(map_tunnel)
+}
+
+fn bounded_export_filename(name: &str) -> String {
+    let trimmed: String = name.trim().chars().take(200).collect();
+    if trimmed.is_empty() {
+        "sing-box.json".to_string()
+    } else {
+        trimmed
+    }
 }
 
 #[tauri::command]
@@ -270,6 +365,35 @@ pub async fn add_subscription(
     let tunnel = app.state::<Tunnel<Wry>>();
     let mut guard = ready(&app, &host, &tunnel)?;
     let meta = guard.apply_added(fetched)?;
+    apply_config(&mut guard, &tunnel)?;
+    drop(guard);
+    notify(&app);
+    Ok(meta)
+}
+
+#[tauri::command]
+pub async fn import_subscription_file(
+    app: AppHandle,
+    req: ImportSubscriptionFileRequest,
+) -> Result<serde_json::Value, AppError> {
+    let paths = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        let guard = ready(&app, &host, &tunnel)?;
+        guard.subscription_paths()?
+    };
+    let content = req.content;
+    let name = req.name;
+    let prepared = run_blocking("import_subscription_file", move || {
+        SubscriptionManager::open(paths, PLATFORM)
+            .prepare_file_import(&content, name.as_deref())
+            .map_err(AppError::from)
+    })
+    .await??;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let mut guard = ready(&app, &host, &tunnel)?;
+    let meta = guard.apply_added(prepared)?;
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
     notify(&app);
@@ -326,28 +450,6 @@ pub async fn update_subscription(
     drop(guard);
     notify(&app);
     Ok(meta)
-}
-
-#[tauri::command]
-pub async fn update_all_subscriptions(app: AppHandle) -> Result<serde_json::Value, AppError> {
-    let paths = {
-        let host = app.state::<Mutex<MobileHost>>();
-        let tunnel = app.state::<Tunnel<Wry>>();
-        let guard = ready(&app, &host, &tunnel)?;
-        guard.subscription_paths()?
-    };
-    let fetched = run_blocking("update_all_subscriptions", move || {
-        SubscriptionManager::open(paths, PLATFORM).fetch_all()
-    })
-    .await?;
-    let host = app.state::<Mutex<MobileHost>>();
-    let tunnel = app.state::<Tunnel<Wry>>();
-    let mut guard = ready(&app, &host, &tunnel)?;
-    let report = guard.apply_updates(fetched)?;
-    apply_config(&mut guard, &tunnel)?;
-    drop(guard);
-    notify(&app);
-    Ok(report)
 }
 
 #[tauri::command]

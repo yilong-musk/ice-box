@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { act, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { Logs } from "./Logs";
@@ -209,5 +209,241 @@ describe("Logs", () => {
       await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     expect(scrollTop).toBe(500);
+  });
+
+  it("keeps the same row nodes when the tail slides forward", async () => {
+    vi.useFakeTimers();
+    getLogView.mockImplementation(async () => ["line-a", "line-b", "line-c"]);
+    const { container } = render(<Logs />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const pre = container.querySelector("pre")!;
+    const before = [...pre.children];
+    const kept = before[1];
+    const keptText = kept.firstChild;
+    expect(kept.textContent).toBe("line-b");
+
+    getLogView.mockImplementation(async () => ["line-b", "line-c", "line-d"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+
+    const after = [...pre.children];
+    expect(after.map((node) => node.textContent)).toEqual(["line-b", "line-c", "line-d"]);
+    expect(after[0]).toBe(kept);
+    expect(after[0].firstChild).toBe(keptText);
+  });
+
+  it("does not stick to the bottom while a log line is selected", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    const { container } = render(<Logs />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const pre = container.querySelector("pre")!;
+    let scrollTop = 0;
+    Object.defineProperty(pre, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(pre, "clientHeight", { value: 100, configurable: true });
+    Object.defineProperty(pre, "scrollTop", {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v;
+      },
+      configurable: true,
+    });
+    const selected = pre.querySelector("div")!.firstChild;
+    let selecting = true;
+    vi.spyOn(window, "getSelection").mockImplementation(
+      () =>
+        ({
+          isCollapsed: !selecting,
+          rangeCount: selecting ? 1 : 0,
+          anchorNode: selecting ? selected : null,
+          focusNode: selecting ? selected : null,
+        }) as Selection,
+    );
+
+    getLogView.mockImplementation(async () => [...baseTail, "INFO extra line while selected"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(scrollTop).toBe(0);
+
+    selecting = false;
+    getLogView.mockImplementation(async () => [
+      ...baseTail,
+      "INFO extra line while selected",
+      "INFO line after selection cleared",
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(scrollTop).toBe(2000);
+  });
+
+  describe("select to copy", () => {
+    const writeText = vi.fn();
+
+    beforeEach(() => {
+      writeText.mockReset();
+      writeText.mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+    });
+
+    async function renderLines() {
+      const view = render(<Logs />);
+      await waitFor(() => {
+        expect(within(view.container).getByText(/sing-box ready/)).toBeInTheDocument();
+      });
+      return view;
+    }
+
+    function selectIn(pre: HTMLElement, start: number, end: number) {
+      const node = pre.querySelector("div")!.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      const selection = window.getSelection();
+      if (selection == null) throw new Error("missing selection");
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    it("copies a selection made by a drag", async () => {
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("INFO");
+      });
+    });
+
+    it("copies a double-click of an existing selection", async () => {
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      selectIn(pre, 0, 4);
+      fireEvent.mouseDown(line, { button: 0 });
+      fireEvent.mouseUp(line, { button: 0, detail: 2 });
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("INFO");
+      });
+    });
+
+    it("does not copy a click that leaves the selection unchanged", async () => {
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      selectIn(pre, 0, 4);
+      fireEvent.mouseDown(line, { button: 0 });
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it("does not copy a selection that started outside the log view", async () => {
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      selectIn(pre, 0, 4);
+      fireEvent.mouseDown(document.documentElement, { button: 0 });
+      fireEvent.mouseUp(pre, { button: 0, detail: 1 });
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it("shows a failure when the clipboard rejects the selection", async () => {
+      writeText.mockRejectedValue(new Error("denied"));
+      document.execCommand = () => false;
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(container).getByRole("alert")).toHaveTextContent(t("logs.copyFailed"));
+      });
+      expect(within(container).queryByTestId("log-copy-hint")).toBeNull();
+    });
+
+    it("shows a capsule after a successful copy and hides it", async () => {
+      vi.useFakeTimers();
+      const view = render(<Logs />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const pre = view.container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const hint = within(view.container).getByTestId("log-copy-hint");
+      expect(hint).toHaveTextContent(t("logs.copied"));
+      expect(hint).toHaveAttribute("role", "status");
+      expect(within(view.container).queryByRole("alert")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1599);
+      });
+      expect(within(view.container).getByTestId("log-copy-hint")).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(within(view.container).queryByTestId("log-copy-hint")).toBeNull();
+    });
+
+    it("replaces a copy failure with the capsule after a later success", async () => {
+      writeText.mockRejectedValueOnce(new Error("denied"));
+      document.execCommand = () => false;
+      const { container } = await renderLines();
+      const pre = container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(container).getByRole("alert")).toHaveTextContent(t("logs.copyFailed"));
+      });
+
+      writeText.mockResolvedValueOnce(undefined);
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 8);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(container).getByTestId("log-copy-hint")).toHaveTextContent(t("logs.copied"));
+      });
+      expect(within(container).queryByRole("alert")).toBeNull();
+    });
+
+    it("hides the capsule when the log page is left", async () => {
+      const view = await renderLines();
+      const pre = view.container.querySelector("pre")!;
+      const line = pre.querySelector("div")!;
+      fireEvent.mouseDown(line, { button: 0 });
+      selectIn(pre, 0, 4);
+      fireEvent.mouseUp(line, { button: 0, detail: 1 });
+      await waitFor(() => {
+        expect(within(view.container).getByTestId("log-copy-hint")).toBeInTheDocument();
+      });
+
+      view.rerender(<Logs active={false} />);
+      await waitFor(() => {
+        expect(within(view.container).queryByTestId("log-copy-hint")).toBeNull();
+      });
+    });
   });
 });

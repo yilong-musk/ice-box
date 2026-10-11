@@ -161,12 +161,21 @@ const zh = {
   "nodes.noTestable": "当前没有可测的出口",
 
   // --- subscriptions page ---
-  "subs.partialUpdateFailed": "部分订阅更新失败：{details}",
-  "subs.url": "导入订阅",
+  "subs.url": "订阅链接",
   "subs.urlPlaceholder": "订阅 URL（https 优先）",
   "subs.name": "名称",
   "subs.namePlaceholder": "名称（可选）",
   "subs.importAction": "导入",
+  "subs.importTitle": "导入订阅",
+  "subs.importDesc": "从订阅链接或本地 sing-box 配置文件导入。",
+  "subs.importMode": "导入方式",
+  "subs.importFromUrl": "订阅链接",
+  "subs.importFromFile": "配置文件",
+  "subs.importFileLabel": "sing-box 配置文件",
+  "subs.importFileHint": "选择一个 sing-box 配置文件（JSON）。本地文件没有远程地址，不能更新。",
+  "subs.importFileTooLarge": "文件超过 8 MB，无法导入。",
+  "subs.importFileReadFailed": "无法读取该文件。",
+  "subs.fileBadge": "本地文件",
   "subs.autoUpdate": "自动更新",
   "subs.interval": "更新间隔",
   "subs.interval.one_hour": "1 小时",
@@ -178,10 +187,9 @@ const zh = {
   "subs.title": "订阅",
   "subs.emptyHint": "尚未导入订阅",
   "subs.count": "{n} 条",
-  "subs.updateAll": "全部更新",
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
-    "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅 URL。",
+    "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅链接或 sing-box 配置文件。",
   "subs.listAria": "订阅列表",
   "subs.activeBadge": "已激活",
   "subs.summaryNodes": "{n} 节点",
@@ -197,7 +205,16 @@ const zh = {
   "subs.trafficNeverExpires": "长期有效",
   "subs.deleteTitle": "删除订阅",
   "subs.deleteConfirm": "确认删除订阅「{name}」？",
-  "subs.unknownError": "未知错误",
+  "subs.share": "分享",
+  "subs.shareTitle": "分享「{name}」",
+  "subs.shareDesc": "复制订阅链接，复制 sing-box 配置，或把配置导出成文件。",
+  "subs.shareDescFile": "复制 sing-box 配置，或把配置导出成文件。",
+  "subs.shareCopyUrl": "复制订阅链接",
+  "subs.shareCopySingbox": "复制 sing-box 配置",
+  "subs.shareExportSingbox": "导出 sing-box 配置",
+  "subs.shareCopied": "已复制",
+  "subs.shareExported": "已导出",
+  "subs.shareCopyFailed": "复制失败",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "已保存，但应用失败：{detail}",
@@ -222,6 +239,8 @@ const zh = {
 
   // --- logs page ---
   "logs.empty": "（空）",
+  "logs.copied": "已复制",
+  "logs.copyFailed": "复制失败",
 
   // --- settings page ---
   "settings.appearance": "外观",
@@ -602,12 +621,21 @@ const en: Record<MessageKey, string> = {
   "nodes.noTestable": "No testable exits",
 
   // --- subscriptions page ---
-  "subs.partialUpdateFailed": "Some subscriptions failed to update: {details}",
-  "subs.url": "Import Subscription",
+  "subs.url": "Subscription URL",
   "subs.urlPlaceholder": "Subscription URL (https preferred)",
   "subs.name": "Name",
   "subs.namePlaceholder": "Name (optional)",
   "subs.importAction": "Import",
+  "subs.importTitle": "Import subscription",
+  "subs.importDesc": "Import from a subscription URL or a local sing-box config file.",
+  "subs.importMode": "Import method",
+  "subs.importFromUrl": "Subscription URL",
+  "subs.importFromFile": "Config file",
+  "subs.importFileLabel": "sing-box config file",
+  "subs.importFileHint": "Choose a sing-box config file (JSON). A local file has no remote URL and cannot be updated.",
+  "subs.importFileTooLarge": "The file is larger than 8 MB and cannot be imported.",
+  "subs.importFileReadFailed": "Could not read that file.",
+  "subs.fileBadge": "Local file",
   "subs.autoUpdate": "Auto update",
   "subs.interval": "Update interval",
   "subs.interval.one_hour": "1 hour",
@@ -620,10 +648,9 @@ const en: Record<MessageKey, string> = {
   "subs.title": "Subscriptions",
   "subs.emptyHint": "No subscriptions yet",
   "subs.count": "{n} items",
-  "subs.updateAll": "Update All",
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
-    "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL.",
+    "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL or a sing-box config file.",
   "subs.listAria": "Subscription list",
   "subs.activeBadge": "Active",
   "subs.summaryNodes": "{n} nodes",
@@ -639,7 +666,16 @@ const en: Record<MessageKey, string> = {
   "subs.trafficNeverExpires": "Never expires",
   "subs.deleteTitle": "Delete Subscription",
   "subs.deleteConfirm": "Delete subscription “{name}”?",
-  "subs.unknownError": "Unknown error",
+  "subs.share": "Share",
+  "subs.shareTitle": "Share “{name}”",
+  "subs.shareDesc": "Copy the subscription link, copy a sing-box config, or export that config to a file.",
+  "subs.shareDescFile": "Copy a sing-box config, or export that config to a file.",
+  "subs.shareCopyUrl": "Copy subscription link",
+  "subs.shareCopySingbox": "Copy sing-box config",
+  "subs.shareExportSingbox": "Export sing-box config",
+  "subs.shareCopied": "Copied",
+  "subs.shareExported": "Exported",
+  "subs.shareCopyFailed": "Copy failed",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "Saved, but applying failed: {detail}",
@@ -664,6 +700,8 @@ const en: Record<MessageKey, string> = {
 
   // --- logs page ---
   "logs.empty": "(empty)",
+  "logs.copied": "Copied",
+  "logs.copyFailed": "Copy failed",
 
   // --- settings page ---
   "settings.appearance": "Appearance",
