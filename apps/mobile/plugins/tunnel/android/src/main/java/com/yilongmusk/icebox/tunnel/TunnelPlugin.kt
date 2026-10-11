@@ -4,6 +4,7 @@ package com.yilongmusk.icebox.tunnel
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageInstaller
@@ -23,6 +24,7 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import org.json.JSONObject
 
 @TauriPlugin(
@@ -91,7 +93,10 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun status(invoke: Invoke) {
         val stored = readStatus()
-        val phase = stored?.optString("phase", "stopped").orEmpty().ifEmpty { "stopped" }
+        // The status file is written by the :tunnel process. A killed process
+        // leaves the last "connected" snapshot behind, so the UI must not
+        // trust a live phase unless that process is still running.
+        val phase = phaseWhileTunnelAlive(stored)
         val denied = runCatching {
             File(activity.filesDir, PERMISSION_FILE).readText().trim() == "denied"
         }.getOrDefault(false)
@@ -196,6 +201,50 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.resolve(JSObject())
         } catch (err: Exception) {
             invoke.reject(err.message ?: err.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * A live phase is only real while the `:tunnel` process exists. Otherwise
+     * the file is a leftover and the system VPN is already gone.
+     */
+    private fun phaseWhileTunnelAlive(stored: JSONObject?): String {
+        val phase = stored?.optString("phase", "stopped").orEmpty().ifEmpty { "stopped" }
+        if (phase != "connecting" && phase != "connected" && phase != "disconnecting") {
+            return phase
+        }
+        if (tunnelProcessRunning()) return phase
+        persistStopped()
+        return "stopped"
+    }
+
+    private fun tunnelProcessRunning(): Boolean {
+        val manager = activity.getSystemService(ActivityManager::class.java) ?: return false
+        val name = "${activity.packageName}:tunnel"
+        return manager.runningAppProcesses.orEmpty().any { it.processName == name }
+    }
+
+    private fun persistStopped() {
+        val payload = JSONObject()
+        payload.put("phase", "stopped")
+        payload.put("package_name", activity.packageName)
+        payload.put("message", JSONObject.NULL)
+        payload.put("memory_bytes", JSONObject.NULL)
+        val text = payload.toString()
+        val dest = File(activity.filesDir, STATUS_FILE)
+        val tmp = File(activity.filesDir, ".tunnel-status.host.tmp")
+        runCatching {
+            FileOutputStream(tmp).use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            if (!tmp.renameTo(dest)) {
+                tmp.copyTo(dest, overwrite = true)
+                tmp.delete()
+            }
+        }
+        synchronized(statusLock) {
+            lastStatus = JSONObject(text)
         }
     }
 

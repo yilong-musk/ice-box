@@ -155,6 +155,9 @@ function AppShell() {
   const bootLanguageRef = useRef(preference);
 
   useEffect(() => {
+    // Desktop restores the last proxy session after the first frame. The
+    // phone does not record that state and does not reconnect on open.
+    if (isPhoneShell()) return;
     void api.restoreLaunchProxy().catch(() => {
       // Home / status poll surfaces proxy_recovery_warning.
     });
@@ -270,7 +273,11 @@ function AppShell() {
     });
   }
 
-  const current = NAV_ITEMS.find((item) => item.id === tab);
+  const phone = isPhoneShell();
+  const navItems = phone
+    ? NAV_ITEMS.filter((item) => item.id !== "logs")
+    : NAV_ITEMS;
+  const current = navItems.find((item) => item.id === tab);
 
   const pages = (
     <>
@@ -298,7 +305,7 @@ function AppShell() {
           <Rules onNavigate={selectTab} active={tab === "rules"} />
         </TabPane>
       )}
-      {visited.has("logs") && (
+      {!phone && visited.has("logs") && (
         <TabPane active={tab === "logs"}>
           <Logs active={tab === "logs"} />
         </TabPane>
@@ -323,8 +330,6 @@ function AppShell() {
       </ErrorAlert>
     </div>
   ) : null;
-
-  const phone = isPhoneShell();
 
   if (phone && narrow) {
     return (
@@ -366,9 +371,9 @@ function AppShell() {
           <nav
             data-testid="phone-tab-bar"
             aria-label={t("app.nav.aria")}
-            className="phone-tab-bar grid shrink-0 grid-cols-6 border-t border-sidebar-border bg-sidebar"
+            className="phone-tab-bar grid shrink-0 grid-cols-5 border-t border-sidebar-border bg-sidebar"
           >
-            {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
+            {navItems.map(({ id, labelKey, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
@@ -416,7 +421,7 @@ function AppShell() {
             <SidebarContent>
               <SidebarGroup>
                 <SidebarMenu aria-label={t("app.nav.aria")}>
-                  {NAV_ITEMS.map(({ id, labelKey, icon: Icon }) => (
+                  {navItems.map(({ id, labelKey, icon: Icon }) => (
                     <SidebarMenuItem key={id}>
                       <SidebarMenuButton
                         type="button"

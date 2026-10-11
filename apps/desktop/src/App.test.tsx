@@ -471,6 +471,9 @@ describe("App", () => {
       "aria-current",
       "page",
     );
+    expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(view.queryByTestId("logs-panel")).not.toBeInTheDocument();
+    expect(restoreLaunchProxy).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(checkAppUpdate).toHaveBeenCalled();
     });
@@ -494,6 +497,8 @@ describe("App", () => {
       "aria-current",
       "page",
     );
+    expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(restoreLaunchProxy).not.toHaveBeenCalled();
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
   });
 });

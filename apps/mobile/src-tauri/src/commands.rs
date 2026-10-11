@@ -226,7 +226,6 @@ pub fn start(
     let package = package_name(&tunnel).or(current.package_name);
     host.rewrite_config(package.as_deref())?;
     tunnel.start().map_err(map_tunnel)?;
-    host.set_service_enabled(true)?;
     drop(host);
     notify(&app);
     Ok(())
@@ -238,12 +237,11 @@ pub fn stop(
     host: State<'_, Mutex<MobileHost>>,
     tunnel: State<'_, Tunnel<Wry>>,
 ) -> Result<(), AppError> {
-    let mut host = ready(&app, &host, &tunnel)?;
+    let host = ready(&app, &host, &tunnel)?;
     let _ = read_tunnel(&tunnel)?;
     tunnel
         .stop()
         .map_err(|err| AppError::new(ErrorCode::TunRestoreFailed, err.to_string()))?;
-    host.set_service_enabled(false)?;
     drop(host);
     notify(&app);
     Ok(())

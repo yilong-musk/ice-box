@@ -637,7 +637,7 @@ fn prepend_capture_rules(
     intent: CaptureIntent,
 ) {
     if platform.is_mobile() {
-        rules.extend(mobile_reserved_rules());
+        rules.extend(mobile_reserved_rules(tun));
     } else if intent == CaptureIntent::Tun {
         rules.extend(tun_reserved_rules(tun, platform));
     }
@@ -645,25 +645,48 @@ fn prepend_capture_rules(
 
 /// Reserved rules for a mobile VPN.
 ///
-/// Sniff runs first so later domain rules see a domain. Private, link-local,
-/// and multicast destinations stay on the physical network, ahead of DNS
-/// hijack, so a LAN resolver, captive portal, or printer is not captured in
-/// global mode. Public DNS is still hijacked. macOS `process_name` rules and
-/// the Windows peer-reject / UDP-443 rules are desktop TUN only.
-fn mobile_reserved_rules() -> Vec<Value> {
-    vec![
-        json!({ "action": "sniff" }),
-        json!({ "ip_is_private": true, "outbound": "direct" }),
-        json!({
-            "ip_cidr": [
-                "127.0.0.0/8", "::1/128", "169.254.0.0/16",
-                "224.0.0.0/4", "ff00::/8",
-                "fe80::/10", "fc00::/7",
-            ],
-            "outbound": "direct"
-        }),
-        json!({ "protocol": "dns", "action": "hijack-dns" }),
-    ]
+/// Sniff runs first so later domain rules see a domain. Android sets the
+/// system resolver to the next IPv4 address on the TUN prefix (`10.0.0.1/30`
+/// becomes `10.0.0.2`). That address is private, so it has to be hijacked
+/// before the private-network bypass; otherwise those queries are forwarded
+/// to a host that does not exist and every lookup fails. Other private,
+/// link-local, and multicast destinations stay on the physical network, so a
+/// LAN resolver, captive portal, or printer is not captured in global mode.
+/// Public DNS is still hijacked. macOS `process_name` rules and the Windows
+/// peer-reject / UDP-443 rules are desktop TUN only.
+fn mobile_reserved_rules(tun: &TunSettings) -> Vec<Value> {
+    let mut rules = vec![json!({ "action": "sniff" })];
+    if let Some(dns) = tun_dns_server(&tun.ipv4_address) {
+        rules.push(json!({
+            "ip_cidr": [dns],
+            "protocol": "dns",
+            "action": "hijack-dns",
+        }));
+    }
+    rules.push(json!({ "ip_is_private": true, "outbound": "direct" }));
+    rules.push(json!({
+        "ip_cidr": [
+            "127.0.0.0/8", "::1/128", "169.254.0.0/16",
+            "224.0.0.0/4", "ff00::/8",
+            "fe80::/10", "fc00::/7",
+        ],
+        "outbound": "direct"
+    }));
+    rules.push(json!({ "protocol": "dns", "action": "hijack-dns" }));
+    rules
+}
+
+/// The IPv4 address libbox installs as the VPN DNS server: one past the TUN
+/// interface address. A `/32` prefix has no spare address, matching libbox.
+fn tun_dns_server(address: &str) -> Option<String> {
+    let (addr, prefix_str) = address.split_once('/')?;
+    let prefix: u8 = prefix_str.parse().ok()?;
+    if prefix >= 32 {
+        return None;
+    }
+    let v4 = addr.parse::<std::net::Ipv4Addr>().ok()?;
+    let next = u32::from(v4).checked_add(1)?;
+    Some(format!("{}/32", std::net::Ipv4Addr::from(next)))
 }
 
 fn mixed_inbound(template: &LocalTemplate) -> Value {

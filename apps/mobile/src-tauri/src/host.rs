@@ -76,6 +76,10 @@ impl MobileHost {
             AppError::new(ErrorCode::ConfigInvalid, format!("create data dirs: {err}"))
         })?;
         self.paths = Some(paths.clone());
+        // The phone does not remember that the VPN was on, and does not
+        // reconnect it the next time the app opens. Clear a flag an older
+        // build may have stored.
+        set_proxy_service_enabled_for(&paths.settings(), false, PLATFORM)?;
         Ok(paths)
     }
 
@@ -124,15 +128,6 @@ impl MobileHost {
 
     pub fn subscription_paths(&self) -> Result<SubscriptionPaths, AppError> {
         Ok(SubscriptionPaths::from_app(self.paths()?))
-    }
-
-    pub fn set_service_enabled(&mut self, enabled: bool) -> Result<(), AppError> {
-        let paths = self.paths()?;
-        set_proxy_service_enabled_for(&paths.settings(), enabled, PLATFORM)?;
-        if !enabled {
-            self.traffic.set_endpoints(None);
-        }
-        Ok(())
     }
 
     /// Rewrite `config.json` from disk state. Callers reload the tunnel when it is live.

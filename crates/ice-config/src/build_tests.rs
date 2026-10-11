@@ -55,6 +55,16 @@ fn tun_network_cidr_rejects_out_of_range_prefix() {
 }
 
 #[test]
+fn tun_dns_server_is_the_next_ipv4_address() {
+    assert_eq!(
+        tun_dns_server("10.0.0.1/30").as_deref(),
+        Some("10.0.0.2/32")
+    );
+    assert_eq!(tun_dns_server("10.0.0.1/32"), None);
+    assert_eq!(tun_dns_server("fdfe:dcba:9876::1/126"), None);
+}
+
+#[test]
 fn direct_only_config_has_builtin_outbounds_and_direct_final() {
     let cfg = build_direct_only_config(
         &LocalTemplate::default(),
@@ -1718,12 +1728,15 @@ fn mobile_ignores_diagnostic_intent_and_emits_tun() {
         assert_eq!(inbounds[0]["stack"], "gvisor");
         let rules = cfg["route"]["rules"].as_array().expect("rules");
         assert_eq!(rules[0]["action"], "sniff");
-        assert_eq!(rules[1]["ip_is_private"], true);
-        assert_eq!(rules[1]["outbound"], "direct");
-        assert_eq!(rules[2]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[1]["ip_cidr"][0], "10.0.0.2/32");
+        assert_eq!(rules[1]["protocol"], "dns");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["ip_is_private"], true);
         assert_eq!(rules[2]["outbound"], "direct");
-        assert_eq!(rules[3]["protocol"], "dns");
-        assert_eq!(rules[3]["action"], "hijack-dns");
+        assert_eq!(rules[3]["ip_cidr"][0], "127.0.0.0/8");
+        assert_eq!(rules[3]["outbound"], "direct");
+        assert_eq!(rules[4]["protocol"], "dns");
+        assert_eq!(rules[4]["action"], "hijack-dns");
         assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
         assert_eq!(cfg["dns"]["final"], "local");
         assert!(cfg.get("endpoints").is_none());
