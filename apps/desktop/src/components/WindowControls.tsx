@@ -102,7 +102,7 @@ function CaptionButton({
   );
 }
 
-/** Windows caption buttons; macOS keeps native traffic lights in the overlay bar. */
+/** Windows caption buttons in macOS traffic-light order (close, minimize, zoom). macOS keeps the native lights. */
 export function WindowControls() {
   useLanguagePreference();
   const windows = detectWindowChrome() === "windows-custom";
@@ -110,7 +110,15 @@ export function WindowControls() {
   if (!windows) return null;
 
   return (
-    <div className="flex h-full shrink-0">
+    <div className="flex h-full shrink-0" data-testid="window-controls">
+      <CaptionButton
+        label={t("window.close")}
+        tone="close"
+        resumeEpoch={resumeEpoch}
+        onCommand={() => void runWindowCommand("close")}
+      >
+        <X className="size-3.5" />
+      </CaptionButton>
       <CaptionButton
         label={t("window.minimize")}
         tone="neutral"
@@ -126,14 +134,6 @@ export function WindowControls() {
         onCommand={() => void runWindowCommand("toggleMaximize")}
       >
         <Square className="size-3" />
-      </CaptionButton>
-      <CaptionButton
-        label={t("window.close")}
-        tone="close"
-        resumeEpoch={resumeEpoch}
-        onCommand={() => void runWindowCommand("close")}
-      >
-        <X className="size-3.5" />
       </CaptionButton>
     </div>
   );

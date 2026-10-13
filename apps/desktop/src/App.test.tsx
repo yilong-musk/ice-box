@@ -288,6 +288,52 @@ describe("App", () => {
     expect(sidebar!.querySelector('[data-slot="separator"]')).toBeNull();
   });
 
+  it("puts Windows caption buttons at the top left in traffic-light order", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    const userAgent = vi
+      .spyOn(navigator, "userAgent", "get")
+      .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    try {
+      const { container } = render(<App />);
+      const titlebar = container.querySelector("[data-titlebar]");
+      expect(titlebar).not.toBeNull();
+      const controls = within(titlebar as HTMLElement).getByTestId("window-controls");
+      const close = within(controls).getByRole("button", { name: t("window.close") });
+      const minimize = within(controls).getByRole("button", {
+        name: t("window.minimize"),
+      });
+      const maximize = within(controls).getByRole("button", {
+        name: t("window.maximize"),
+      });
+      expect(close.compareDocumentPosition(minimize)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      expect(minimize.compareDocumentPosition(maximize)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      const title = titlebar!.querySelector("h2");
+      expect(title).not.toBeNull();
+      expect(controls.compareDocumentPosition(title!)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      expect(titlebar!.firstElementChild).toBe(controls.parentElement);
+      expect(controls.parentElement).toHaveClass("bg-sidebar");
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
+
+      fireEvent.click(
+        within(titlebar as HTMLElement).getByRole("button", { name: "Toggle Sidebar" }),
+      );
+      expect(controls.parentElement).toHaveClass("w-max");
+      expect(controls.parentElement).not.toHaveClass("bg-sidebar");
+      expect(controls.compareDocumentPosition(title!)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    } finally {
+      platform.mockRestore();
+      userAgent.mockRestore();
+    }
+  });
+
   it("draws the titlebar divider as one shared edge", () => {
     const { container } = render(<App />);
     const titlebar = container.querySelector("[data-titlebar]");

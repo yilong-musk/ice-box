@@ -42,6 +42,7 @@ import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
 import { isPhoneShell } from "@platform/shell";
+import { detectWindowChrome } from "@platform/windowChrome";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   readLanguagePreference,
@@ -97,17 +98,30 @@ const NAV_ITEMS: {
 
 function TitleBar({ label }: { label: string }) {
   const { open, isMobile } = useSidebar();
+  const sidebarOpen = open && !isMobile;
+  const windows = detectWindowChrome() === "windows-custom";
 
   return (
     <div className="flex h-12 shrink-0 border-b" data-titlebar>
+      {/* Caption buttons sit in this sidebar-width strip so the divider stays
+          aligned. With the sidebar closed the strip shrinks to the buttons. */}
       <div
         className={cn(
-          "shrink-0 border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-linear",
-          open && !isMobile ? "w-(--sidebar-width)" : "w-0",
+          "flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
+          sidebarOpen
+            ? "w-(--sidebar-width) border-r border-sidebar-border bg-sidebar"
+            : windows
+              ? "w-max"
+              : "w-0",
         )}
-        data-tauri-drag-region
-        aria-hidden="true"
-      />
+      >
+        <WindowControls />
+        <div
+          className={cn("h-full", sidebarOpen && "min-w-0 flex-1")}
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
+      </div>
       <header className="flex min-w-0 flex-1 items-center">
         <div className="flex h-full shrink-0 items-center px-2 md:hidden">
           <SidebarTrigger />
@@ -123,7 +137,6 @@ function TitleBar({ label }: { label: string }) {
           data-titlebar-actions
           className="flex h-full shrink-0 items-center gap-2 not-empty:pr-7"
         />
-        <WindowControls />
       </header>
     </div>
   );
