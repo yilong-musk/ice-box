@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use ice_config::{NormalizedOutbound, NormalizedProfile};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// Traffic and expiry metadata a provider reports for a subscription:
 /// `subscription-userinfo: upload=1; download=2; total=3; expire=1735689600`.
@@ -252,6 +252,136 @@ pub fn detach_provider_info_nodes(profile: &mut NormalizedProfile) -> Vec<String
     crate::prune::prune_dangling_refs(profile);
     profile.parse_stats.warnings.truncate(warning_len);
     lines
+}
+
+/// Drop quota / expiry proxies from a sing-box document before it is copied.
+///
+/// The node list hides these entries. A share built from the original body
+/// would otherwise carry them, including as a selector default.
+pub(crate) fn strip_provider_info_singbox(root: &mut Value) {
+    let Some(obj) = root.as_object_mut() else {
+        return;
+    };
+    let mut dropped = HashSet::new();
+    for key in ["outbounds", "endpoints"] {
+        let Some(items) = obj.get(key).and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for item in items {
+            let ty = item
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if share_group_type(ty) {
+                continue;
+            }
+            let Some(tag) = item.get("tag").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if is_provider_info_name(tag.trim()) {
+                dropped.insert(tag.to_string());
+            }
+        }
+    }
+    if dropped.is_empty() {
+        return;
+    }
+    for key in ["outbounds", "endpoints"] {
+        let Some(items) = obj.get_mut(key).and_then(|value| value.as_array_mut()) else {
+            continue;
+        };
+        items.retain(|item| {
+            let tag = item
+                .get("tag")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            !dropped.contains(tag)
+        });
+        for item in items.iter_mut() {
+            if !share_group_type(
+                item.get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            ) {
+                continue;
+            }
+            if let Some(members) = item
+                .get_mut("outbounds")
+                .and_then(|value| value.as_array_mut())
+            {
+                members.retain(|member| member.as_str().is_none_or(|tag| !dropped.contains(tag)));
+            }
+            if item.get("type").and_then(|value| value.as_str()) == Some("selector") {
+                retarget_json_selector(item);
+            }
+        }
+    }
+    if let Some(route) = obj.get_mut("route") {
+        if let Some(final_tag) = route.get("final").and_then(|value| value.as_str()) {
+            if dropped.contains(final_tag) {
+                route["final"] = json!("direct");
+            }
+        }
+        if let Some(rules) = route
+            .get_mut("rules")
+            .and_then(|value| value.as_array_mut())
+        {
+            for rule in rules {
+                rewrite_dropped_outbound(rule, &dropped);
+            }
+        }
+    }
+}
+
+fn share_group_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance"
+    )
+}
+
+fn retarget_json_selector(outbound: &mut Value) {
+    let Some(obj) = outbound.as_object_mut() else {
+        return;
+    };
+    let members: Vec<String> = obj
+        .get("outbounds")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let current_ok = obj
+        .get("default")
+        .and_then(|value| value.as_str())
+        .is_some_and(|tag| members.iter().any(|member| member == tag));
+    if current_ok {
+        return;
+    }
+    let Some(first) = members.first().cloned() else {
+        return;
+    };
+    obj.insert("default".into(), json!(first));
+}
+
+fn rewrite_dropped_outbound(rule: &mut Value, dropped: &HashSet<String>) {
+    if rule.get("type").and_then(|value| value.as_str()) == Some("logical") {
+        if let Some(nested) = rule.get_mut("rules").and_then(|value| value.as_array_mut()) {
+            for child in nested {
+                rewrite_dropped_outbound(child, dropped);
+            }
+        }
+    }
+    let points_at_info = rule
+        .get("outbound")
+        .and_then(|value| value.as_str())
+        .is_some_and(|tag| dropped.contains(tag));
+    if points_at_info {
+        rule["outbound"] = json!("direct");
+    }
 }
 
 fn remove_dropped_members(group: &mut NormalizedOutbound, dropped: &HashSet<String>) {
@@ -501,6 +631,43 @@ mod tests {
         );
         assert_eq!(profile.groups[0].outbound["default"], "🇭🇰 香港 1");
         assert_eq!(profile.default_outbound.as_deref(), Some("Proxies"));
+    }
+
+    #[test]
+    fn strip_singbox_document_drops_info_nodes_and_retargets_the_selector() {
+        let mut doc = json!({
+            "outbounds": [
+                {"type": "socks", "tag": "剩余流量：1 GB", "server": "1.1.1.1", "server_port": 1},
+                {"type": "socks", "tag": "套餐到期：2026-01-01", "server": "1.1.1.1", "server_port": 1},
+                {"type": "socks", "tag": "香港-流量专线|IEPL", "server": "1.1.1.1", "server_port": 1},
+                {"type": "socks", "tag": "hk", "server": "1.1.1.1", "server_port": 1},
+                {
+                    "type": "selector",
+                    "tag": "proxy",
+                    "outbounds": ["剩余流量：1 GB", "套餐到期：2026-01-01", "香港-流量专线|IEPL", "hk"],
+                    "default": "剩余流量：1 GB"
+                }
+            ],
+            "route": {
+                "final": "剩余流量：1 GB",
+                "rules": [{"domain": ["example.com"], "outbound": "套餐到期：2026-01-01"}]
+            }
+        });
+        strip_provider_info_singbox(&mut doc);
+        let tags: Vec<&str> = doc["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|outbound| outbound["tag"].as_str())
+            .collect();
+        assert_eq!(tags, ["香港-流量专线|IEPL", "hk", "proxy"]);
+        assert_eq!(
+            doc["outbounds"][2]["outbounds"],
+            json!(["香港-流量专线|IEPL", "hk"])
+        );
+        assert_eq!(doc["outbounds"][2]["default"], "香港-流量专线|IEPL");
+        assert_eq!(doc["route"]["final"], "direct");
+        assert_eq!(doc["route"]["rules"][0]["outbound"], "direct");
     }
 
     #[test]

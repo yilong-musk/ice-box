@@ -1918,10 +1918,36 @@ fn share_singbox_config_is_a_portable_document() {
     assert!(value.get("log").is_none());
     assert!(value.get("dns").unwrap().get("__ice_dns_listen").is_none());
     assert_eq!(value["route"]["default_domain_resolver"], "local");
+    assert_eq!(value["route"]["auto_detect_interface"], true);
     assert_eq!(value["route"]["final"], "proxy");
     let rules = value["route"]["rules"].as_array().unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0]["domain"][0], "example.com");
+    assert!(rules.iter().any(|rule| rule["domain"][0] == "example.com"));
+    assert!(rules.iter().any(|rule| rule_mentions_set(rule, "geoip-cn")));
+    assert!(rules
+        .iter()
+        .any(|rule| rule_mentions_set(rule, "geosite-cn")));
+    assert!(rules
+        .iter()
+        .all(|rule| rule.get("geoip").is_none() && rule.get("geosite").is_none()));
+    assert!(rules
+        .iter()
+        .all(|rule| rule.get("outbound").and_then(|value| value.as_str()) != Some("gone")));
+    let sets = value["route"]["rule_set"].as_array().unwrap();
+    assert!(sets.iter().any(|set| {
+        set["tag"] == "geoip-cn"
+            && set["type"] == "remote"
+            && set["url"]
+                .as_str()
+                .unwrap()
+                .contains("sing-geoip/rule-set/geoip-cn.srs")
+    }));
+    assert!(sets.iter().any(|set| {
+        set["tag"] == "geosite-cn"
+            && set["url"]
+                .as_str()
+                .unwrap()
+                .contains("sing-geosite/rule-set/geosite-cn.srs")
+    }));
     let tags: Vec<&str> = value["outbounds"]
         .as_array()
         .unwrap()
@@ -2057,6 +2083,122 @@ fn share_singbox_config_is_a_portable_document() {
         .find(|outbound| outbound["tag"] == "proxy")
         .unwrap();
     assert_eq!(node["type"], "socks");
+}
+
+fn rule_mentions_set(rule: &Value, tag: &str) -> bool {
+    match &rule["rule_set"] {
+        Value::String(value) => value == tag,
+        Value::Array(items) => items.iter().any(|item| item.as_str() == Some(tag)),
+        _ => false,
+    }
+}
+
+#[test]
+fn share_singbox_document_keeps_remote_sets_endpoints_and_dns() {
+    let shared = share_singbox_document(
+        r#"{
+            "log": {"level": "info", "output": "/tmp/sing-box.log"},
+            "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": 2080}],
+            "experimental": {"clash_api": {"external_controller": "127.0.0.1:9090", "secret": "s"}},
+            "dns": {
+                "servers": [
+                    {"type": "local", "tag": "local"},
+                    {"type": "hosts", "tag": "hosts", "path": "/etc/hosts"},
+                    {"tag": "ali", "address": "tls://223.5.5.5"}
+                ],
+                "rules": [
+                    {"rule_set": "geosite-cn", "server": "local"},
+                    {"rule_set": "missing", "server": "local"}
+                ],
+                "final": "local"
+            },
+            "outbounds": [
+                {"type": "vless", "tag": "n1", "server": "1.1.1.1", "server_port": 443, "uuid": "u"},
+                {"type": "selector", "tag": "proxy", "outbounds": ["n1", "wg", "direct"], "default": "n1"},
+                {"type": "direct", "tag": "direct"},
+                {"type": "block", "tag": "block"},
+                {"type": "dns", "tag": "dns-out"}
+            ],
+            "endpoints": [
+                {
+                    "type": "wireguard",
+                    "tag": "wg",
+                    "private_key": "priv",
+                    "address": ["10.0.0.2/32"],
+                    "peers": [{"address": "1.2.3.4", "port": 51820, "public_key": "pub"}]
+                }
+            ],
+            "route": {
+                "final": "proxy",
+                "auto_detect_interface": true,
+                "find_process": true,
+                "rules": [
+                    {"protocol": "dns", "outbound": "dns-out"},
+                    {"rule_set": "geosite-cn", "outbound": "direct"},
+                    {"rule_set": ["geoip-cn"], "outbound": "direct"},
+                    {"geoip": ["cn"], "outbound": "direct"},
+                    {"domain": ["keep.example"], "outbound": "proxy"},
+                    {"inbound": ["in"], "outbound": "direct"},
+                    {"rule_set": "local-set", "outbound": "direct"}
+                ],
+                "rule_set": [
+                    {"type": "remote", "tag": "geosite-cn", "format": "binary", "url": "https://cdn.example/geosite-cn.srs", "download_detour": "proxy"},
+                    {"type": "remote", "tag": "geoip-cn", "format": "binary", "url": "https://cdn.example/geoip-cn.srs"},
+                    {"type": "local", "tag": "local-set", "format": "binary", "path": "/var/lib/ice-box/local.srs"}
+                ]
+            }
+        }"#,
+    )
+    .expect("share document");
+    assert!(!shared.contains("/tmp/sing-box.log"));
+    assert!(!shared.contains("/etc/hosts"));
+    assert!(!shared.contains("local.srs"));
+    assert!(!shared.contains("127.0.0.1:9090"));
+    let value: Value = serde_json::from_str(&shared).unwrap();
+    assert!(value.get("inbounds").is_none());
+    assert!(value.get("log").is_none());
+    assert!(value.get("experimental").is_none());
+    assert_eq!(value["endpoints"][0]["tag"], "wg");
+    assert_eq!(value["endpoints"][0]["private_key"], "priv");
+    let tags: Vec<&str> = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    assert!(tags.contains(&"n1"));
+    assert!(tags.contains(&"dns-out"));
+    assert!(tags.contains(&"proxy"));
+    assert!(tags.contains(&"direct"));
+    let dns_servers = value["dns"]["servers"].as_array().unwrap();
+    assert!(dns_servers.iter().any(|server| server["tag"] == "local"));
+    assert!(dns_servers.iter().any(|server| server["tag"] == "ali"));
+    assert!(dns_servers.iter().all(|server| server["type"] != "hosts"));
+    let dns_rules = value["dns"]["rules"].as_array().unwrap();
+    assert_eq!(dns_rules.len(), 1);
+    assert_eq!(dns_rules[0]["rule_set"], "geosite-cn");
+    let rules = value["route"]["rules"].as_array().unwrap();
+    assert!(rules
+        .iter()
+        .any(|rule| rule["protocol"] == "dns" && rule["outbound"] == "dns-out"));
+    assert!(rules
+        .iter()
+        .any(|rule| rule_mentions_set(rule, "geosite-cn")));
+    assert!(rules.iter().any(|rule| rule["domain"][0] == "keep.example"));
+    assert!(rules.iter().all(|rule| rule.get("inbound").is_none()));
+    assert!(rules
+        .iter()
+        .all(|rule| !rule_mentions_set(rule, "local-set")));
+    let sets = value["route"]["rule_set"].as_array().unwrap();
+    assert!(sets.iter().any(|set| {
+        set["tag"] == "geosite-cn" && set["url"] == "https://cdn.example/geosite-cn.srs"
+    }));
+    assert!(sets
+        .iter()
+        .any(|set| set["tag"] == "geoip-cn" && set["url"] == "https://cdn.example/geoip-cn.srs"));
+    assert!(sets.iter().all(|set| set["tag"] != "local-set"));
+    assert_eq!(value["route"]["find_process"], true);
+    assert_eq!(value["route"]["final"], "proxy");
 }
 
 #[test]

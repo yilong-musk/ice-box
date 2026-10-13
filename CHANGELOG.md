@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Copying or exporting a subscription's sing-box config keeps remote
+  rule-sets, DNS, DNS outbounds, and WireGuard endpoints. `geoip` and
+  `geosite` rules are rewritten to remote rule-sets so sing-box 1.13 can
+  load them. Local inbounds, log paths, and on-disk rule-set files stay
+  out of the copy.
+- Quota and expiry entries hidden from the node list are left out of that
+  copy. A selector that defaulted to one of them moves to the next real
+  member.
+
 ## [0.1.22] - 2026-10-11
 
 ### Added

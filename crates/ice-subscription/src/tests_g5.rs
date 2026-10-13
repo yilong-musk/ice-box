@@ -1519,6 +1519,120 @@ fn share_returns_the_full_url_and_a_singbox_document() {
 }
 
 #[test]
+fn share_singbox_document_keeps_remote_rule_sets_and_endpoints() {
+    let paths = temp_subs("share-full");
+    let body = r#"{
+        "inbounds": [{"type": "mixed", "tag": "in", "listen": "127.0.0.1", "listen_port": 2080}],
+        "outbounds": [
+            {"type": "socks", "tag": "n1", "server": "1.1.1.1", "server_port": 1},
+            {"type": "selector", "tag": "proxy", "outbounds": ["n1", "wg"], "default": "n1"},
+            {"type": "dns", "tag": "dns-out"}
+        ],
+        "endpoints": [{
+            "type": "wireguard",
+            "tag": "wg",
+            "private_key": "priv",
+            "address": ["10.0.0.2/32"],
+            "peers": [{"address": "1.2.3.4", "port": 51820, "public_key": "pub"}]
+        }],
+        "route": {
+            "final": "proxy",
+            "rules": [
+                {"protocol": "dns", "outbound": "dns-out"},
+                {"rule_set": "geosite-cn", "outbound": "proxy"}
+            ],
+            "rule_set": [{
+                "type": "remote",
+                "tag": "geosite-cn",
+                "format": "binary",
+                "url": "https://cdn.example/geosite-cn.srs"
+            }]
+        }
+    }"#;
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr
+        .add("https://example.com/full", Some("full"), false, None)
+        .unwrap();
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value.get("inbounds").is_none());
+    assert_eq!(value["endpoints"][0]["tag"], "wg");
+    assert_eq!(value["endpoints"][0]["private_key"], "priv");
+    assert!(value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|outbound| outbound["tag"] == "dns-out"));
+    assert_eq!(
+        value["route"]["rule_set"][0]["url"],
+        "https://cdn.example/geosite-cn.srs"
+    );
+    assert!(value["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|rule| rule["rule_set"] == "geosite-cn"));
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn share_omits_quota_and_expiry_nodes_hidden_from_the_node_list() {
+    let paths = temp_subs("share-info");
+    let body = r#"{
+        "outbounds": [
+            {"type": "socks", "tag": "剩余流量：1 GB", "server": "1.1.1.1", "server_port": 1},
+            {"type": "socks", "tag": "套餐到期：2026-01-01", "server": "1.1.1.1", "server_port": 1},
+            {"type": "socks", "tag": "hk", "server": "8.8.8.8", "server_port": 1},
+            {
+                "type": "selector",
+                "tag": "proxy",
+                "outbounds": ["剩余流量：1 GB", "套餐到期：2026-01-01", "hk"],
+                "default": "剩余流量：1 GB"
+            }
+        ]
+    }"#;
+    let fetcher = MockFetcher {
+        bypasses_proxy: true,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: body.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr
+        .add("https://example.com/info", Some("info"), false, None)
+        .unwrap();
+    let json = subscription_share_text(&paths, meta.id, SubscriptionShareKind::Singbox).unwrap();
+    assert!(!json.contains("剩余流量"));
+    assert!(!json.contains("套餐到期"));
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let proxy = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["default"], "hk");
+    assert_eq!(proxy["outbounds"], serde_json::json!(["hk"]));
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
 fn clash_shaped_garbage_does_not_panic() {
     let result = std::panic::catch_unwind(|| {
         normalize_raw_body("proxies: *not yaml*\n", HostPlatform::MacOs)
