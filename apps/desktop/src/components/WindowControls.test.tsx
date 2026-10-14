@@ -58,13 +58,25 @@ describe("WindowControls", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders Windows caption buttons and forwards clicks", () => {
+  it("renders Windows caption buttons in traffic-light order and forwards clicks", () => {
     chrome = "windows-custom";
     render(<WindowControls />);
 
-    fireEvent.click(screen.getByRole("button", { name: t("window.minimize") }));
-    fireEvent.click(screen.getByRole("button", { name: t("window.maximize") }));
-    fireEvent.click(screen.getByRole("button", { name: t("window.close") }));
+    const close = screen.getByRole("button", { name: t("window.close") });
+    const minimize = screen.getByRole("button", { name: t("window.minimize") });
+    const maximize = screen.getByRole("button", { name: t("window.maximize") });
+    expect(close).toHaveClass("text-destructive");
+    expect(minimize).not.toHaveClass("text-destructive");
+    expect(close.compareDocumentPosition(minimize)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(minimize.compareDocumentPosition(maximize)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+
+    fireEvent.click(minimize);
+    fireEvent.click(maximize);
+    fireEvent.click(close);
 
     expect(runWindowCommand).toHaveBeenCalledWith("minimize");
     expect(runWindowCommand).toHaveBeenCalledWith("toggleMaximize");

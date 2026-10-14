@@ -14,9 +14,7 @@ use crate::is_loopback_host;
 use crate::runtime_config::{tagged_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
 use crate::settings::{clash_mode_name, TunSettings};
-use crate::{
-    tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate, NormalizedProfile,
-};
+use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
 use ice_types::is_plausible_clash_api_secret;
 
 /// Connection routes are INFO. The Logs page filters to those plus
@@ -182,7 +180,7 @@ pub fn minimal_dns_block(platform: HostPlatform) -> Value {
 
 /// Whether the DNS block contains a `local`-tagged server (required for
 /// `route.default_domain_resolver` references).
-fn dns_has_local_server(dns: &Value) -> bool {
+pub(crate) fn dns_has_local_server(dns: &Value) -> bool {
     dns.get("servers")
         .and_then(|v| v.as_array())
         .map(|a| {
@@ -276,7 +274,7 @@ fn windows_default_domain_resolver(dns: &Value) -> Option<String> {
     }
 }
 
-fn dns_block_is_usable(dns: &Value) -> bool {
+pub(crate) fn dns_block_is_usable(dns: &Value) -> bool {
     let Some(servers) = dns.get("servers").and_then(|v| v.as_array()) else {
         return false;
     };
@@ -808,7 +806,9 @@ fn validate_mobile_inbounds(inbounds: &[Value]) -> Result<(), ConfigError> {
 /// sing-box 1.13 requires the endpoint `address` field.
 const WIREGUARD_DEFAULT_ADDRESS: &str = "10.0.0.2/32";
 
-fn split_wireguard_endpoints(outbounds: &mut Vec<Arc<Value>>) -> Result<Vec<Value>, ConfigError> {
+pub(crate) fn split_wireguard_endpoints(
+    outbounds: &mut Vec<Arc<Value>>,
+) -> Result<Vec<Value>, ConfigError> {
     let mut kept = Vec::with_capacity(outbounds.len());
     let mut endpoints = Vec::new();
     for outbound in outbounds.iter() {
@@ -825,7 +825,7 @@ fn split_wireguard_endpoints(outbounds: &mut Vec<Arc<Value>>) -> Result<Vec<Valu
 /// Rewrite the subscription parser's pre-1.13 WireGuard outbound into a
 /// sing-box 1.13 endpoint. Selector member tags are left in place: the core
 /// registers endpoints as outbounds.
-fn wireguard_endpoint(outbound: &Value) -> Result<Value, ConfigError> {
+pub(crate) fn wireguard_endpoint(outbound: &Value) -> Result<Value, ConfigError> {
     let tag = outbound
         .get("tag")
         .and_then(|v| v.as_str())
@@ -1305,7 +1305,7 @@ fn expand_geoip_rules(
     (kept, sets)
 }
 
-fn ensure_builtin_outbound(
+pub(crate) fn ensure_builtin_outbound(
     outbounds: &mut Vec<Arc<Value>>,
     tags: &mut std::collections::HashSet<String>,
     tag: &str,
@@ -1317,7 +1317,7 @@ fn ensure_builtin_outbound(
     }
 }
 
-fn validate_route_refs(
+pub(crate) fn validate_route_refs(
     route: &Value,
     tags: &std::collections::HashSet<String>,
 ) -> Result<(), ConfigError> {
@@ -1328,36 +1328,51 @@ fn validate_route_refs(
             )));
         }
     }
+    let set_tags: std::collections::HashSet<&str> = route
+        .get("rule_set")
+        .and_then(|v| v.as_array())
+        .map(|sets| {
+            sets.iter()
+                .filter_map(|entry| entry.get("tag").and_then(|v| v.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(rules) = route.get("rules").and_then(|v| v.as_array()) {
         for rule in rules {
-            if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
-                if out != "direct" && out != "block" && !tags.contains(out) {
-                    return Err(ConfigError::RouteInvalid(format!(
-                        "route rule references unknown outbound: {out}"
-                    )));
-                }
-            }
+            validate_one_route_rule(rule, tags, &set_tags)?;
         }
     }
-    if let Some(sets) = route.get("rule_set").and_then(|v| v.as_array()) {
-        let set_tags: std::collections::HashSet<&str> = sets
-            .iter()
-            .filter_map(|e| e.get("tag").and_then(|v| v.as_str()))
-            .collect();
-        if let Some(rules) = route.get("rules").and_then(|v| v.as_array()) {
-            for rule in rules {
-                if let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) {
-                    for r in refs {
-                        if let Some(t) = r.as_str() {
-                            if !set_tags.contains(t) {
-                                return Err(ConfigError::RouteInvalid(format!(
-                                    "route rule references unknown rule_set: {t}"
-                                )));
-                            }
-                        }
-                    }
-                }
-            }
+    Ok(())
+}
+
+fn validate_one_route_rule(
+    rule: &Value,
+    tags: &std::collections::HashSet<String>,
+    set_tags: &std::collections::HashSet<&str>,
+) -> Result<(), ConfigError> {
+    if let Some(outbound) = rule.get("outbound").and_then(|v| v.as_str()) {
+        if outbound != "direct" && outbound != "block" && !tags.contains(outbound) {
+            return Err(ConfigError::RouteInvalid(format!(
+                "route rule references unknown outbound: {outbound}"
+            )));
+        }
+    }
+    if !rule_set_field_known(rule, set_tags) {
+        return Err(ConfigError::RouteInvalid(format!(
+            "route rule references unknown rule_set: {}",
+            rule.get("rule_set")
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        )));
+    }
+    if rule.get("type").and_then(|v| v.as_str()) == Some("logical") {
+        let Some(nested) = rule.get("rules").and_then(|v| v.as_array()) else {
+            return Err(ConfigError::RouteInvalid(
+                "logical route rule is missing rules".into(),
+            ));
+        };
+        for child in nested {
+            validate_one_route_rule(child, tags, set_tags)?;
         }
     }
     Ok(())
@@ -1379,12 +1394,38 @@ fn custom_rule_is_usable(
     rule_set_refs_are_known(rule, rule_set_tags)
 }
 
-fn rule_set_refs_are_known(rule: &Value, rule_set_tags: &std::collections::HashSet<&str>) -> bool {
-    let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) else {
-        return true;
-    };
-    refs.iter()
-        .all(|r| r.as_str().is_some_and(|t| rule_set_tags.contains(t)))
+pub(crate) fn rule_set_refs_are_known(
+    rule: &Value,
+    rule_set_tags: &std::collections::HashSet<&str>,
+) -> bool {
+    if !rule_set_field_known(rule, rule_set_tags) {
+        return false;
+    }
+    if rule.get("type").and_then(|v| v.as_str()) == Some("logical") {
+        return rule
+            .get("rules")
+            .and_then(|v| v.as_array())
+            .is_some_and(|rules| {
+                !rules.is_empty()
+                    && rules
+                        .iter()
+                        .all(|child| rule_set_refs_are_known(child, rule_set_tags))
+            });
+    }
+    true
+}
+
+/// `rule_set` is either one tag or a list of tags. A string used to be treated
+/// as "no reference", so the rule survived after its set was removed.
+fn rule_set_field_known(rule: &Value, rule_set_tags: &std::collections::HashSet<&str>) -> bool {
+    match rule.get("rule_set") {
+        None => true,
+        Some(Value::String(tag)) => rule_set_tags.contains(tag.as_str()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .all(|item| item.as_str().is_some_and(|tag| rule_set_tags.contains(tag))),
+        Some(_) => false,
+    }
 }
 
 pub fn validate_config(config: &Value) -> Result<(), ConfigError> {
@@ -1670,160 +1711,7 @@ pub fn restore_runtime_config_from_bak(
     Ok(true)
 }
 
-/// Portable sing-box document for one subscription.
-///
-/// Outbounds, WireGuard endpoints, route, and DNS travel with the copy.
-/// Local inbounds, the Clash API, and log paths stay behind: they belong to
-/// this install. `geosite` and `geoip` rules are omitted because sing-box
-/// 1.13 rejects those fields, and the bundled replacements are files on this
-/// machine. Local `rule_set` entries are omitted for the same reason: their
-/// `path` is a file on this install, and rules that reference those sets go
-/// with them. Credentials are left intact so the copy can be imported elsewhere.
-pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, ConfigError> {
-    if profile.nodes.is_empty() {
-        return Err(ConfigError::EmptyOutbounds);
-    }
-
-    let mut tag_set: HashSet<String> = profile.all_tags().into_iter().collect();
-    let mut outbounds: Vec<Arc<Value>> = Vec::new();
-    for node in &profile.nodes {
-        outbounds.push(tagged_outbound(&node.outbound, &node.tag));
-    }
-    for group in &profile.groups {
-        outbounds.push(tagged_outbound(&group.outbound, &group.tag));
-    }
-    ensure_builtin_outbound(
-        &mut outbounds,
-        &mut tag_set,
-        "direct",
-        json!({"type": "direct", "tag": "direct"}),
-    );
-    ensure_builtin_outbound(
-        &mut outbounds,
-        &mut tag_set,
-        "block",
-        json!({"type": "block", "tag": "block"}),
-    );
-    // A flat node list gets a selector. `proxy` is the usual tag; a node that
-    // already uses it keeps that name and the selector takes the next free one.
-    let selector_tag = if profile.groups.is_empty() {
-        let tag = fresh_share_tag(&tag_set, "proxy");
-        let node_tags: Vec<String> = profile.nodes.iter().map(|n| n.tag.clone()).collect();
-        let proxy_default = node_tags[0].clone();
-        outbounds.push(Arc::new(json!({
-            "type": "selector",
-            "tag": tag.clone(),
-            "outbounds": node_tags,
-            "default": proxy_default,
-        })));
-        tag_set.insert(tag.clone());
-        Some(tag)
-    } else {
-        None
-    };
-
-    let final_outbound = {
-        let candidate = profile.route.final_outbound.as_str();
-        if candidate == "direct" || candidate == "block" || tag_set.contains(candidate) {
-            candidate.to_string()
-        } else if let Some(tag) = selector_tag {
-            tag
-        } else if tag_set.contains("proxy") {
-            "proxy".to_string()
-        } else {
-            "direct".to_string()
-        }
-    };
-
-    // Stored rule sets are local files (remote sets are dropped at parse).
-    // An empty tag set drops rules that point at them.
-    let set_tags: HashSet<&str> = HashSet::new();
-    let rules: Vec<Value> = profile
-        .route
-        .rules
-        .iter()
-        .filter(|rule| share_rule_is_portable(rule, &tag_set, &set_tags))
-        .cloned()
-        .collect();
-
-    let mut route = json!({ "final": final_outbound });
-    if !rules.is_empty() {
-        route
-            .as_object_mut()
-            .expect("route object")
-            .insert("rules".into(), Value::Array(rules));
-    }
-
-    let dns = if let Some(raw) = &profile.dns {
-        let mut dns = raw.clone();
-        if let Some(obj) = dns.as_object_mut() {
-            obj.remove("__ice_dns_listen");
-        }
-        ice_config_guard::retain_allowed_dns_servers(&mut dns);
-        if dns_block_is_usable(&dns) {
-            if dns_has_local_server(&dns) {
-                route
-                    .as_object_mut()
-                    .expect("route object")
-                    .insert("default_domain_resolver".into(), json!("local"));
-            }
-            Some(dns)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    validate_route_refs(&route, &tag_set)?;
-    let endpoints = split_wireguard_endpoints(&mut outbounds)?;
-
-    let mut root = serde_json::Map::new();
-    if let Some(dns) = dns {
-        root.insert("dns".into(), dns);
-    }
-    root.insert(
-        "outbounds".into(),
-        Value::Array(
-            outbounds
-                .into_iter()
-                .map(|item| item.as_ref().clone())
-                .collect(),
-        ),
-    );
-    if !endpoints.is_empty() {
-        root.insert("endpoints".into(), Value::Array(endpoints));
-    }
-    root.insert("route".into(), route);
-    Ok(serde_json::to_string_pretty(&Value::Object(root))?)
-}
-
-/// `preferred`, or `preferred-2`, `preferred-3`, … when that tag is taken.
-fn fresh_share_tag(tags: &HashSet<String>, preferred: &str) -> String {
-    if !tags.contains(preferred) {
-        return preferred.to_string();
-    }
-    for n in 2..u32::MAX {
-        let candidate = format!("{preferred}-{n}");
-        if !tags.contains(&candidate) {
-            return candidate;
-        }
-    }
-    format!("{preferred}-fallback")
-}
-
-/// Rules that sing-box 1.13 can load without this machine's bundled files.
-fn share_rule_is_portable(rule: &Value, tags: &HashSet<String>, set_tags: &HashSet<&str>) -> bool {
-    if rule.get("geosite").is_some() || rule.get("geoip").is_some() {
-        return false;
-    }
-    if let Some(outbound) = rule.get("outbound").and_then(|value| value.as_str()) {
-        if outbound != "direct" && outbound != "block" && !tags.contains(outbound) {
-            return false;
-        }
-    }
-    rule_set_refs_are_known(rule, set_tags)
-}
+pub use crate::share::{share_singbox_config, share_singbox_document};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
