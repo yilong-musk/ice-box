@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-10-14
+
 ### Changed
 
 - On Windows, minimize, maximize, and close sit at the top left in close,
