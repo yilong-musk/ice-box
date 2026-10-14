@@ -8,6 +8,12 @@ import {
   resolveLanguage,
 } from "../../desktop/src/lib/language";
 import {
+  INSTALLER_PLATFORMS,
+  detectPlatform,
+  installerDownloadUrl,
+  installerFilename,
+} from "./downloads";
+import {
   applyMarketingLanguage,
   marketingText,
   resolveInitialLanguage,
@@ -33,6 +39,7 @@ root.innerHTML = `
   <header class="site-nav">
     <a class="brand" href="#top"><img src="${logoUrl}" alt="ice-box logo"><span>ice-box</span></a>
     <div class="nav-actions">
+      <a class="nav-download" href="#download"></a>
       <a class="nav-github" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">GitHub ↗</a>
       <button class="nav-language" type="button"></button>
     </div>
@@ -45,7 +52,7 @@ root.innerHTML = `
       <div class="hero-aside">
         <div class="hero-actions">
           <a class="button button-primary" href="#demo"><span class="button-label"></span> <span>↓</span></a>
-          <a class="text-link" href="https://github.com/yilong-musk/ice-box/releases/latest" target="_blank" rel="noreferrer"></a>
+          <a class="text-link" href="#download"></a>
         </div>
         <div class="hero-meta">
           <span><b class="status-dot green"></b> ${displayVersion}</span>
@@ -54,25 +61,86 @@ root.innerHTML = `
         </div>
       </div>
     </section>
-    <section class="light page-wrap" id="light">
-      <p class="light-kicker"></p>
-      <h2></h2>
-    </section>
     <section class="demo-section page-wrap" id="demo"><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small></small></strong><span>${displayVersion}</span></div><iframe src="./demo.html"></iframe></div></section>
+    <section class="download page-wrap" id="download" aria-labelledby="download-title">
+      <div class="download-head">
+        <div>
+          <p class="download-kicker"></p>
+          <h2 id="download-title"></h2>
+        </div>
+        <p class="download-version">${displayVersion}</p>
+      </div>
+      <ul class="download-list">
+        ${INSTALLER_PLATFORMS.map(
+          (platform) => `<li class="download-row" data-platform="${platform}">
+          <div class="download-identity">
+            <p class="download-name"><span class="download-platform"></span><span class="download-yours" hidden></span></p>
+            <p class="download-file"></p>
+          </div>
+          <p class="download-note"></p>
+          <a class="button download-button" href="${installerDownloadUrl(appVersion, platform)}"><span class="download-action"></span><span aria-hidden="true">↓</span></a>
+        </li>`,
+        ).join("")}
+      </ul>
+    </section>
   </main>
   <footer class="site-footer page-wrap"><span>© 2026 ice-box</span><a href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">github.com/yilong-musk/ice-box ↗</a></footer>
 `;
 
 const parts = {
   headline: root.querySelector(".hero-copy h1"),
-  lightKicker: root.querySelector(".light-kicker"),
-  lightTitle: root.querySelector(".light h2"),
   demoLabel: root.querySelector(".button-label"),
   download: root.querySelector(".text-link"),
+  navDownload: root.querySelector(".nav-download"),
+  downloadKicker: root.querySelector(".download-kicker"),
+  downloadTitle: root.querySelector("#download-title"),
   windowBar: root.querySelector(".window-bar small"),
   demoFrame: root.querySelector(".app-window iframe"),
   languageToggle: root.querySelector(".nav-language"),
 };
+
+const currentPlatform = detectPlatform(navigator.userAgent);
+
+/** Platform names, first-launch notes, and which row matches this browser. */
+function applyDownloadCopy(next) {
+  for (const platform of INSTALLER_PLATFORMS) {
+    const row = root.querySelector(`[data-platform="${platform}"]`);
+    const isCurrent = platform === currentPlatform;
+    row.classList.toggle("is-current", isCurrent);
+    const name = marketingText(`download.${platform}.name`, next);
+    const yours = marketingText("download.yours", next);
+    const action = marketingText("download.action", next);
+    row.querySelector(".download-platform").textContent = name;
+    const yoursEl = row.querySelector(".download-yours");
+    yoursEl.textContent = yours;
+    yoursEl.hidden = !isCurrent;
+    row.querySelector(".download-file").textContent =
+      `${marketingText(`download.${platform}.kind`, next)} · ${installerFilename(appVersion, platform)}`;
+    row.querySelector(".download-note").textContent = marketingText(
+      `download.${platform}.note`,
+      next,
+    );
+    const button = row.querySelector(".download-button");
+    button.querySelector(".download-action").textContent = action;
+    button.setAttribute(
+      "aria-label",
+      isCurrent ? `${action} ${name}, ${yours}` : `${action} ${name}`,
+    );
+  }
+}
+
+/** Header label: the matching installer, or a plain download when we have none. */
+function navDownloadLabel(next) {
+  if (currentPlatform == null) return marketingText("nav.download", next);
+  const platformName = marketingText(
+    `download.${currentPlatform}.name`,
+    next,
+  );
+  return marketingText("nav.downloadPlatform", next).replaceAll(
+    "{platform}",
+    platformName,
+  );
+}
 
 /** Write every locale-dependent piece; runs once before the first paint and
  * again on each language change. The embedded demo is never re-rendered, so
@@ -81,10 +149,12 @@ function applyCopy(next) {
   language = next;
   applyMarketingLanguage(language);
   parts.headline.innerHTML = marketingText("hero.title", language);
-  parts.lightKicker.textContent = marketingText("light.kicker", language);
-  parts.lightTitle.textContent = marketingText("light.title", language);
   parts.demoLabel.textContent = marketingText("hero.demo", language);
   parts.download.textContent = marketingText("hero.download", language);
+  parts.navDownload.textContent = navDownloadLabel(language);
+  parts.downloadKicker.textContent = marketingText("download.kicker", language);
+  parts.downloadTitle.textContent = marketingText("download.title", language);
+  applyDownloadCopy(language);
   parts.windowBar.textContent = marketingText("demo.windowBar", language);
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
   parts.languageToggle.textContent = marketingText(

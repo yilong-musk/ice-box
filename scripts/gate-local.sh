@@ -35,6 +35,9 @@ echo "== tsc --noEmit =="
 (cd apps/website && npm run typecheck)
 (cd apps/mobile && npm run typecheck)
 
+echo "== website installer links =="
+(cd apps/website && npm test)
+
 echo "== vitest =="
 (cd apps/desktop && npm test)
 

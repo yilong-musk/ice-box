@@ -38,5 +38,9 @@
     "../desktop/src/hooks",
     "../desktop/src/vite-env.d.ts"
   ],
-  "exclude": ["../desktop/src/**/*.test.ts", "../desktop/src/**/*.test.tsx"]
+  "exclude": [
+    "../desktop/src/**/*.test.ts",
+    "../desktop/src/**/*.test.tsx",
+    "src/**/*.test.ts"
+  ]
 }
