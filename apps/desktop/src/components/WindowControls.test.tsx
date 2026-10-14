@@ -65,6 +65,8 @@ describe("WindowControls", () => {
     const close = screen.getByRole("button", { name: t("window.close") });
     const minimize = screen.getByRole("button", { name: t("window.minimize") });
     const maximize = screen.getByRole("button", { name: t("window.maximize") });
+    expect(close).toHaveClass("text-destructive");
+    expect(minimize).not.toHaveClass("text-destructive");
     expect(close.compareDocumentPosition(minimize)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );

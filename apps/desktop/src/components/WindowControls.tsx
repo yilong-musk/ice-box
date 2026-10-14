@@ -81,6 +81,7 @@ function CaptionButton({
       type="button"
       className={cn(
         BUTTON_CLASS,
+        tone === "close" && !pressed && "text-destructive",
         pressed && tone === "neutral" && "bg-muted text-foreground",
         pressed && tone === "close" && "bg-destructive text-white",
       )}

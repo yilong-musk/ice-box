@@ -5,16 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, minimize, maximize, and close sit at the top left in close,
+  minimize, maximize order. The close button stays red so it is distinct
+  from the other two. With the sidebar closed, the button strip keeps a
+  fixed width so the divider can animate.
+
 ### Fixed
 
 - Copying or exporting a subscription's sing-box config keeps remote
   rule-sets, DNS, DNS outbounds, and WireGuard endpoints. `geoip` and
-  `geosite` rules are rewritten to remote rule-sets so sing-box 1.13 can
-  load them. Local inbounds, log paths, and on-disk rule-set files stay
-  out of the copy.
+  `geosite` matchers on route rules and DNS rules are rewritten to remote
+  rule-sets so sing-box 1.13 can load them. An inverted country code such
+  as `!cn` becomes that rule-set with `invert`, and a rule that mixes
+  private addresses with country codes keeps its and/or meaning. Local
+  inbounds, log paths, and on-disk rule-set files stay out of the copy.
+  Inline `hosts` DNS entries are kept; a hosts file path is not.
 - Quota and expiry entries hidden from the node list are left out of that
   copy. A selector that defaulted to one of them moves to the next real
-  member.
+  member. A route that pointed at one of them blocks that traffic.
+- A route rule whose `rule_set` is a single tag is checked the same way as
+  a list. A tag whose set was removed is dropped instead of being written
+  into the running config.
 
 ## [0.1.22] - 2026-10-11
 

@@ -838,6 +838,42 @@ fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
 }
 
 #[test]
+fn string_rule_set_refs_are_checked_like_arrays() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "tag": "geoip-cn",
+        "type": "local",
+        "path": "geoip/geoip-cn.srs"
+    })];
+    profile.route.rules = vec![
+        json!({ "rule_set": "geoip-cn", "outbound": "direct" }),
+        json!({ "rule_set": "geoip-us", "outbound": "direct" }),
+    ];
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("string rule_set must not fail the build");
+    let rules = cfg["route"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().any(|rule| rule["rule_set"] == "geoip-cn"),
+        "known string rule_set is kept: {rules:?}"
+    );
+    assert!(
+        rules.iter().all(|rule| rule["rule_set"] != "geoip-us"),
+        "unknown string rule_set is dropped: {rules:?}"
+    );
+}
+
+#[test]
 fn remote_rule_sets_and_hosts_dns_are_dropped_for_user_mode() {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     profile.route.rule_sets = vec![
@@ -2199,6 +2235,176 @@ fn share_singbox_document_keeps_remote_sets_endpoints_and_dns() {
     assert!(sets.iter().all(|set| set["tag"] != "local-set"));
     assert_eq!(value["route"]["find_process"], true);
     assert_eq!(value["route"]["final"], "proxy");
+}
+
+fn rule_mentions_set_deep(rule: &Value, tag: &str) -> bool {
+    if rule_mentions_set(rule, tag) {
+        return true;
+    }
+    rule.get("rules")
+        .and_then(|value| value.as_array())
+        .is_some_and(|rules| rules.iter().any(|child| rule_mentions_set_deep(child, tag)))
+}
+
+fn rule_has_private(rule: &Value) -> bool {
+    rule.get("ip_is_private").and_then(|value| value.as_bool()) == Some(true)
+        || rule
+            .get("rules")
+            .and_then(|value| value.as_array())
+            .is_some_and(|rules| rules.iter().any(rule_has_private))
+}
+
+fn assert_no_legacy_geo_fields(value: &Value) {
+    match value {
+        Value::Object(map) => {
+            assert!(map.get("geoip").is_none(), "legacy geoip left in {value}");
+            assert!(
+                map.get("geosite").is_none(),
+                "legacy geosite left in {value}"
+            );
+            for child in map.values() {
+                assert_no_legacy_geo_fields(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                assert_no_legacy_geo_fields(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn share_rewrites_dns_geo_rules_and_keeps_inverted_predicates() {
+    let shared = share_singbox_document(
+        r#"{
+            "dns": {
+                "servers": [
+                    {"type": "local", "tag": "local"},
+                    {"type": "hosts", "tag": "static", "predefined": {"example.com": "1.2.3.4"}},
+                    {"type": "hosts", "tag": "file", "path": "/etc/hosts"},
+                    {"type": "hosts", "tag": "both", "path": "/etc/hosts", "predefined": {"a.com": "9.9.9.9"}}
+                ],
+                "rules": [
+                    {"geosite": ["cn"], "server": "local"},
+                    {"geoip": "private", "server": "local"},
+                    {"geosite": ["google"], "server": "missing"}
+                ],
+                "final": "local"
+            },
+            "outbounds": [
+                {"type": "socks", "tag": "hk", "server": "1.1.1.1", "server_port": 1},
+                {"type": "wireguard", "tag": "broken", "server": "1.1.1.1", "server_port": 1},
+                {
+                    "type": "selector",
+                    "tag": "proxy",
+                    "outbounds": ["broken", "hk", "direct"],
+                    "default": "broken"
+                }
+            ],
+            "route": {
+                "final": "proxy",
+                "rules": [
+                    {"geoip": ["!cn"], "outbound": "proxy"},
+                    {"geoip": ["private", "cn"], "invert": true, "outbound": "direct"},
+                    {
+                        "type": "logical",
+                        "mode": "and",
+                        "outbound": "direct",
+                        "rules": [
+                            {"domain_suffix": ["example.com"]},
+                            {"geoip": ["private", "cn"]}
+                        ]
+                    }
+                ]
+            }
+        }"#,
+    )
+    .expect("share");
+    assert!(
+        !shared.contains("geoip-!"),
+        "bang code became a filename: {shared}"
+    );
+    assert!(!shared.contains("/etc/hosts"));
+    let value: Value = serde_json::from_str(&shared).unwrap();
+    assert_no_legacy_geo_fields(&value);
+
+    let dns_servers = value["dns"]["servers"].as_array().unwrap();
+    assert!(dns_servers.iter().any(|server| server["tag"] == "static"));
+    assert!(dns_servers.iter().all(|server| server["tag"] != "file"));
+    let both = dns_servers
+        .iter()
+        .find(|server| server["tag"] == "both")
+        .expect("inline hosts kept");
+    assert!(both.get("path").is_none());
+    assert_eq!(both["predefined"]["a.com"], "9.9.9.9");
+
+    let dns_rules = value["dns"]["rules"].as_array().unwrap();
+    assert!(dns_rules
+        .iter()
+        .any(|rule| { rule["server"] == "local" && rule_mentions_set_deep(rule, "geosite-cn") }));
+    assert!(dns_rules.iter().any(|rule| {
+        rule["server"] == "local"
+            && rule.get("ip_is_private").and_then(|v| v.as_bool()) == Some(true)
+    }));
+    assert!(dns_rules.iter().all(|rule| rule["server"] != "missing"));
+
+    let rules = value["route"]["rules"].as_array().unwrap();
+    let bang = rules
+        .iter()
+        .find(|rule| rule["outbound"] == "proxy")
+        .expect("inverted country rule");
+    assert_eq!(bang["rule_set"], "geoip-cn");
+    assert_eq!(bang["invert"], true);
+    let inverted = rules
+        .iter()
+        .find(|rule| rule["invert"] == true && rule["type"] == "logical" && rule["mode"] == "or")
+        .expect("inverted private-or-country rule");
+    assert_eq!(inverted["outbound"], "direct");
+    assert!(rule_has_private(inverted));
+    assert!(rule_mentions_set_deep(inverted, "geoip-cn"));
+    assert!(inverted["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|child| child.get("invert").is_none()));
+    let combined = rules
+        .iter()
+        .find(|rule| rule["type"] == "logical" && rule["mode"] == "and")
+        .expect("domain and geo rule");
+    let children = combined["rules"].as_array().unwrap();
+    assert!(children
+        .iter()
+        .any(|child| child["domain_suffix"][0] == "example.com"));
+    assert!(children.iter().any(|child| {
+        child["type"] == "logical"
+            && child["mode"] == "or"
+            && rule_has_private(child)
+            && rule_mentions_set_deep(child, "geoip-cn")
+    }));
+
+    let sets = value["route"]["rule_set"].as_array().unwrap();
+    assert!(sets.iter().any(|set| {
+        set["tag"] == "geoip-cn" && set["url"].as_str().unwrap().ends_with("/geoip-cn.srs")
+    }));
+    assert!(sets.iter().any(|set| {
+        set["tag"] == "geosite-cn" && set["url"].as_str().unwrap().ends_with("/geosite-cn.srs")
+    }));
+
+    let proxy = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(proxy["outbounds"], json!(["hk", "direct"]));
+    assert_eq!(proxy["default"], "hk");
+    assert!(value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|outbound| outbound["tag"] == "direct" && outbound["type"] == "direct"));
 }
 
 #[test]

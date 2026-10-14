@@ -257,7 +257,8 @@ pub fn detach_provider_info_nodes(profile: &mut NormalizedProfile) -> Vec<String
 /// Drop quota / expiry proxies from a sing-box document before it is copied.
 ///
 /// The node list hides these entries. A share built from the original body
-/// would otherwise carry them, including as a selector default.
+/// would otherwise carry them, including as a selector default. A route that
+/// named one of them is sent to `block` so the traffic stays off the network.
 pub(crate) fn strip_provider_info_singbox(root: &mut Value) {
     let Some(obj) = root.as_object_mut() else {
         return;
@@ -319,7 +320,7 @@ pub(crate) fn strip_provider_info_singbox(root: &mut Value) {
     if let Some(route) = obj.get_mut("route") {
         if let Some(final_tag) = route.get("final").and_then(|value| value.as_str()) {
             if dropped.contains(final_tag) {
-                route["final"] = json!("direct");
+                route["final"] = json!("block");
             }
         }
         if let Some(rules) = route
@@ -380,7 +381,7 @@ fn rewrite_dropped_outbound(rule: &mut Value, dropped: &HashSet<String>) {
         .and_then(|value| value.as_str())
         .is_some_and(|tag| dropped.contains(tag));
     if points_at_info {
-        rule["outbound"] = json!("direct");
+        rule["outbound"] = json!("block");
     }
 }
 
@@ -666,8 +667,8 @@ mod tests {
             json!(["香港-流量专线|IEPL", "hk"])
         );
         assert_eq!(doc["outbounds"][2]["default"], "香港-流量专线|IEPL");
-        assert_eq!(doc["route"]["final"], "direct");
-        assert_eq!(doc["route"]["rules"][0]["outbound"], "direct");
+        assert_eq!(doc["route"]["final"], "block");
+        assert_eq!(doc["route"]["rules"][0]["outbound"], "block");
     }
 
     #[test]

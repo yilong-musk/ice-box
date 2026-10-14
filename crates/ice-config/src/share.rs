@@ -4,8 +4,9 @@
 //!
 //! The copy keeps proxies, groups, WireGuard endpoints, DNS, route rules, and
 //! remote rule-sets. Inbounds, logs, the Clash API, and on-disk rule-set files
-//! stay on this machine. Legacy `geoip` / `geosite` matchers are rewritten to
-//! remote rule-sets because sing-box 1.13 rejects those fields.
+//! stay on this machine. Legacy `geoip` / `geosite` matchers on both route and
+//! DNS rules are rewritten to remote rule-sets because sing-box 1.13 rejects
+//! those fields. A leading `!` on a country code becomes `invert` on that set.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -156,6 +157,20 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         .iter()
         .flat_map(|rule| expand_share_rules(rule, &tag_set, &mut rule_sets, &mut set_tags))
         .collect();
+    // DNS rules share the route rule-set table. Expand them before the sets
+    // are sealed so a geosite matcher can add its remote set.
+    let dns = if let Some(raw) = &profile.dns {
+        let mut dns = raw.clone();
+        if prepare_share_dns(&mut dns, &tag_set, &mut rule_sets, &mut set_tags)
+            && dns_block_is_usable(&dns)
+        {
+            Some(dns)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     scrub_rule_set_detours(&mut rule_sets, &tag_set);
 
     let mut route = json!({
@@ -174,23 +189,12 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
             .expect("route object")
             .insert("rule_set".into(), Value::Array(rule_sets));
     }
-
-    let dns = if let Some(raw) = &profile.dns {
-        let mut dns = raw.clone();
-        if prepare_share_dns(&mut dns, &tag_set, &set_tags) && dns_block_is_usable(&dns) {
-            if dns_has_local_server(&dns) {
-                route
-                    .as_object_mut()
-                    .expect("route object")
-                    .insert("default_domain_resolver".into(), json!("local"));
-            }
-            Some(dns)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    if dns.as_ref().is_some_and(dns_has_local_server) {
+        route
+            .as_object_mut()
+            .expect("route object")
+            .insert("default_domain_resolver".into(), json!("local"));
+    }
 
     validate_route_refs(&route, &tag_set)?;
     let endpoints = split_wireguard_endpoints(&mut outbounds)?;
@@ -241,6 +245,10 @@ pub fn share_singbox_document(raw: &str) -> Result<String, ConfigError> {
             push_share_item(item, &mut nodes, &mut groups, &mut tags);
         }
     }
+    // Rendering inserts `direct` and `block` after this trim. Keep members
+    // that name them so a selector can still fall through to those builtins.
+    tags.insert("direct".to_string());
+    tags.insert("block".to_string());
     trim_profile_groups(&mut groups, &mut tags);
     if !nodes.iter().any(share_node_is_proxy) {
         return Err(ConfigError::EmptyOutbounds);
@@ -320,14 +328,14 @@ fn trim_profile_groups(groups: &mut Vec<NormalizedOutbound>, tags: &mut HashSet<
     loop {
         let before = groups.len();
         for group in groups.iter_mut() {
-            let Some(members) = group
+            if let Some(members) = group
                 .outbound_mut()
                 .get_mut("outbounds")
                 .and_then(|value| value.as_array_mut())
-            else {
-                continue;
-            };
-            members.retain(|member| member.as_str().is_some_and(|tag| tags.contains(tag)));
+            {
+                members.retain(|member| member.as_str().is_some_and(|tag| tags.contains(tag)));
+            }
+            retarget_share_selector(group.outbound_mut());
         }
         groups.retain(|group| {
             let empty = group
@@ -440,6 +448,7 @@ fn trim_share_groups(outbounds: &mut Vec<Arc<Value>>, tags: &mut HashSet<String>
             if let Some(members) = cloned.get_mut("outbounds").and_then(|v| v.as_array_mut()) {
                 members.retain(|member| member.as_str().is_some_and(|tag| tags.contains(tag)));
             }
+            retarget_share_selector(&mut cloned);
             *outbound = Arc::new(cloned);
         }
         outbounds.retain(|outbound| {
@@ -462,6 +471,37 @@ fn trim_share_groups(outbounds: &mut Vec<Arc<Value>>, tags: &mut HashSet<String>
         if outbounds.len() == before {
             break;
         }
+    }
+}
+
+fn retarget_share_selector(outbound: &mut Value) {
+    if outbound.get("type").and_then(|v| v.as_str()) != Some("selector") {
+        return;
+    }
+    let Some(obj) = outbound.as_object_mut() else {
+        return;
+    };
+    let members: Vec<String> = obj
+        .get("outbounds")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let current_ok = obj
+        .get("default")
+        .and_then(|value| value.as_str())
+        .is_some_and(|tag| members.iter().any(|member| member == tag));
+    if current_ok {
+        return;
+    }
+    if let Some(first) = members.first() {
+        obj.insert("default".into(), json!(first.clone()));
+    } else {
+        obj.remove("default");
     }
 }
 
@@ -625,16 +665,22 @@ fn expand_logical_share_rule(
         }
         return vec![rebuild_logical(rule, "or", kept)];
     }
-    if expanded.iter().any(|child| child.len() != 1) {
+    // A child that expands to several rules is an OR (private addresses or a
+    // country list). Wrapping that OR keeps the parent AND; dropping the
+    // parent would send the traffic to `route.final`.
+    if expanded.iter().any(|child| child.is_empty()) {
         return Vec::new();
     }
     let kept: Vec<Value> = expanded
         .into_iter()
-        .filter_map(|mut child| child.pop())
+        .map(|child| {
+            if child.len() == 1 {
+                child.into_iter().next().expect("len checked")
+            } else {
+                rebuild_logical(&Value::Null, "or", child)
+            }
+        })
         .collect();
-    if kept.is_empty() {
-        return Vec::new();
-    }
     vec![rebuild_logical(rule, "and", kept)]
 }
 
@@ -676,27 +722,27 @@ fn rewrite_geo_share_rule(
         return Vec::new();
     }
 
-    let mut private = false;
-    let mut geoip_tags = Vec::new();
+    let mut geoip_atoms = Vec::new();
     if let Some(geoip) = geoip.as_ref() {
         for code in geo_codes(geoip) {
-            if code == "private" || code == "lan" {
-                private = true;
-            } else if let Some(tag) = ensure_share_geo_set("geoip", &code, rule_sets, set_tags) {
-                geoip_tags.push(tag);
-            }
+            push_geo_atom("geoip", &code, &mut geoip_atoms, rule_sets, set_tags);
         }
     }
-    let mut geosite_tags = Vec::new();
+    let mut geosite_atoms = Vec::new();
     if let Some(geosite) = geosite.as_ref() {
         for code in geo_codes(geosite) {
-            if let Some(tag) = ensure_share_geo_set("geosite", &code, rule_sets, set_tags) {
-                geosite_tags.push(tag);
-            }
+            push_geo_atom("geosite", &code, &mut geosite_atoms, rule_sets, set_tags);
         }
     }
 
-    if !private && geoip_tags.is_empty() && geosite_tags.is_empty() {
+    let mut parts = Vec::new();
+    if let Some(expr) = or_atoms(&geoip_atoms) {
+        parts.push(expr);
+    }
+    if let Some(expr) = or_atoms(&geosite_atoms) {
+        parts.push(expr);
+    }
+    if parts.is_empty() {
         return if share_rule_has_matcher(&base) {
             vec![base]
         } else {
@@ -704,39 +750,103 @@ fn rewrite_geo_share_rule(
         };
     }
 
-    let mut outputs = Vec::new();
-    if private {
-        let mut private_rule = base.clone();
-        private_rule["ip_is_private"] = json!(true);
-        outputs.push(and_rule_groups(
-            private_rule,
-            geosite_tag_groups(&geosite_tags),
-        ));
-    }
-    if !geoip_tags.is_empty() {
-        let mut groups = vec![geoip_tags];
-        if !geosite_tags.is_empty() {
-            groups.push(geosite_tags);
-        }
-        outputs.push(and_rule_groups(base, groups));
-    } else if !private && !geosite_tags.is_empty() {
-        outputs.push(and_rule_groups(base, vec![geosite_tags]));
-    }
-    outputs
-        .into_iter()
-        .filter(|rule| share_rule_sets_known(rule, set_tags) && share_rule_has_matcher(rule))
-        .collect()
-}
-
-fn geosite_tag_groups(tags: &[String]) -> Vec<Vec<String>> {
-    if tags.is_empty() {
-        Vec::new()
+    // One rule keeps `invert` on the whole predicate. Splitting `(private OR
+    // cn)` into two route rules makes `invert` match the first alternative.
+    let compiled = and_rule_parts(base, parts);
+    if share_rule_sets_known(&compiled, set_tags) && share_rule_has_matcher(&compiled) {
+        vec![compiled]
     } else {
-        vec![tags.to_vec()]
+        Vec::new()
     }
 }
 
-fn and_rule_groups(base: Value, groups: Vec<Vec<String>>) -> Value {
+enum GeoAtom {
+    Private { invert: bool },
+    Set { tag: String, invert: bool },
+}
+
+fn push_geo_atom(
+    kind: &str,
+    code: &str,
+    atoms: &mut Vec<GeoAtom>,
+    rule_sets: &mut Vec<Value>,
+    set_tags: &mut HashSet<String>,
+) {
+    let (invert, bare) = match code.strip_prefix('!') {
+        Some(rest) => (true, rest),
+        None => (false, code),
+    };
+    if kind == "geoip" && (bare == "private" || bare == "lan") {
+        if let Some(GeoAtom::Private { invert: existing }) = atoms
+            .iter_mut()
+            .find(|atom| matches!(atom, GeoAtom::Private { .. }))
+        {
+            if !invert {
+                *existing = false;
+            }
+            return;
+        }
+        atoms.push(GeoAtom::Private { invert });
+        return;
+    }
+    let Some(tag) = ensure_share_geo_set(kind, bare, rule_sets, set_tags) else {
+        return;
+    };
+    if atoms.iter().any(|atom| {
+        matches!(atom, GeoAtom::Set { tag: existing, invert: existing_invert } if existing == &tag && *existing_invert == invert)
+    }) {
+        return;
+    }
+    atoms.push(GeoAtom::Set { tag, invert });
+}
+
+fn or_atoms(atoms: &[GeoAtom]) -> Option<Value> {
+    if atoms.is_empty() {
+        return None;
+    }
+    let plain_sets = atoms
+        .iter()
+        .all(|atom| matches!(atom, GeoAtom::Set { invert: false, .. }));
+    if plain_sets {
+        let tags: Vec<String> = atoms
+            .iter()
+            .filter_map(|atom| match atom {
+                GeoAtom::Set { tag, .. } => Some(tag.clone()),
+                GeoAtom::Private { .. } => None,
+            })
+            .collect();
+        return Some(json!({ "rule_set": rule_set_value(&tags) }));
+    }
+    if atoms.len() == 1 {
+        return Some(atom_rule(&atoms[0]));
+    }
+    Some(json!({
+        "type": "logical",
+        "mode": "or",
+        "rules": atoms.iter().map(atom_rule).collect::<Vec<_>>(),
+    }))
+}
+
+fn atom_rule(atom: &GeoAtom) -> Value {
+    match atom {
+        GeoAtom::Private { invert } => {
+            let mut rule = json!({ "ip_is_private": true });
+            if *invert {
+                rule["invert"] = json!(true);
+            }
+            rule
+        }
+        GeoAtom::Set { tag, invert } => {
+            let mut rule = json!({ "rule_set": tag });
+            if *invert {
+                rule["invert"] = json!(true);
+            }
+            rule
+        }
+    }
+}
+
+fn and_rule_parts(base: Value, parts: Vec<Value>) -> Value {
     let Some(obj) = base.as_object() else {
         return base;
     };
@@ -760,16 +870,14 @@ fn and_rule_groups(base: Value, groups: Vec<Vec<String>>) -> Value {
     if !existing.is_empty() {
         children.push(json!({ "rule_set": rule_set_value(&existing) }));
     }
-    for group in groups {
-        if !group.is_empty() {
-            children.push(json!({ "rule_set": rule_set_value(&group) }));
+    for part in parts {
+        if part.as_object().is_some_and(|map| !map.is_empty()) {
+            children.push(part);
         }
     }
     if children.len() == 1 {
         if let Value::Object(child) = &children[0] {
-            for (key, value) in child {
-                meta.insert(key.clone(), value.clone());
-            }
+            merge_rule_fields(&mut meta, child);
             return Value::Object(meta);
         }
     }
@@ -780,6 +888,29 @@ fn and_rule_groups(base: Value, groups: Vec<Vec<String>>) -> Value {
     meta.insert("mode".into(), json!("and"));
     meta.insert("rules".into(), Value::Array(children));
     Value::Object(meta)
+}
+
+/// Copy matcher fields onto `meta`. Two `invert` flags cancel.
+fn merge_rule_fields(meta: &mut Map<String, Value>, child: &Map<String, Value>) {
+    let parent_invert = meta
+        .get("invert")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let child_invert = child
+        .get("invert")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    for (key, value) in child {
+        if key == "invert" {
+            continue;
+        }
+        meta.insert(key.clone(), value.clone());
+    }
+    if parent_invert ^ child_invert {
+        meta.insert("invert".into(), json!(true));
+    } else {
+        meta.remove("invert");
+    }
 }
 
 fn rule_set_list(value: &Value) -> Vec<String> {
@@ -846,7 +977,7 @@ fn geo_code_ok(code: &str) -> bool {
         && code.len() <= 64
         && code
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '!'))
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }
 
 fn share_outbound_ok(rule: &Value, tags: &HashSet<String>) -> bool {
@@ -879,7 +1010,8 @@ fn share_rule_meta_key(key: &str) -> bool {
 fn prepare_share_dns(
     dns: &mut Value,
     outbound_tags: &HashSet<String>,
-    set_tags: &HashSet<String>,
+    rule_sets: &mut Vec<Value>,
+    set_tags: &mut HashSet<String>,
 ) -> bool {
     let Some(obj) = dns.as_object_mut() else {
         return false;
@@ -926,6 +1058,21 @@ fn prepare_share_dns(
         if drop_detour {
             map.remove("detour");
         }
+        if map.get("type").and_then(|v| v.as_str()) == Some("hosts") {
+            let filesystem_keys: Vec<String> = map
+                .keys()
+                .filter(|key| {
+                    *key == "path"
+                        || *key == "executable_path"
+                        || *key == "output"
+                        || key.ends_with("_path")
+                })
+                .cloned()
+                .collect();
+            for key in filesystem_keys {
+                map.remove(&key);
+            }
+        }
     }
     let final_tag = obj
         .get("final")
@@ -940,18 +1087,18 @@ fn prepare_share_dns(
                     .map(str::to_string)
             })
         });
-    let set_refs: HashSet<&str> = set_tags.iter().map(String::as_str).collect();
-    let rules = obj
+    let source_rules = obj
         .get("rules")
         .and_then(|v| v.as_array())
-        .map(|rules| {
-            rules
-                .iter()
-                .filter(|rule| share_dns_rule_ok(rule, &server_tags, &set_refs))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
+        .cloned()
         .unwrap_or_default();
+    let mut rules = Vec::new();
+    for rule in &source_rules {
+        if !dns_rule_server_ok(rule, &server_tags) {
+            continue;
+        }
+        rules.extend(expand_share_rules(rule, outbound_tags, rule_sets, set_tags));
+    }
     obj.insert("servers".into(), Value::Array(servers));
     if rules.is_empty() {
         obj.remove("rules");
@@ -971,7 +1118,7 @@ fn dns_server_is_portable(server: &Value) -> bool {
         return false;
     };
     match obj.get("type").and_then(|v| v.as_str()) {
-        Some("hosts") => false,
+        Some("hosts") => hosts_server_is_portable(obj),
         Some(ty) if !ice_config_guard::dns_server_type_is_allowed(ty) => false,
         Some("https" | "h3") => true,
         Some(_) => !server_has_filesystem_path(obj),
@@ -990,14 +1137,25 @@ fn server_has_filesystem_path(server: &Map<String, Value>) -> bool {
     })
 }
 
-fn share_dns_rule_ok(rule: &Value, servers: &HashSet<String>, sets: &HashSet<&str>) -> bool {
-    if rule.get("inbound").is_some() {
-        return false;
+fn hosts_server_is_portable(server: &Map<String, Value>) -> bool {
+    let predefined = server.get("predefined").is_some_and(predefined_has_entries);
+    if server_has_filesystem_path(server) {
+        return predefined;
     }
-    if let Some(server) = rule.get("server").and_then(|v| v.as_str()) {
-        if !servers.contains(server) {
-            return false;
-        }
+    predefined
+}
+
+fn predefined_has_entries(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => !map.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        _ => false,
     }
-    rule_set_refs_are_known(rule, sets)
+}
+
+fn dns_rule_server_ok(rule: &Value, servers: &HashSet<String>) -> bool {
+    match rule.get("server").and_then(|v| v.as_str()) {
+        Some(server) => servers.contains(server),
+        None => true,
+    }
 }

@@ -104,14 +104,15 @@ function TitleBar({ label }: { label: string }) {
   return (
     <div className="flex h-12 shrink-0 border-b" data-titlebar>
       {/* Caption buttons sit in this sidebar-width strip so the divider stays
-          aligned. With the sidebar closed the strip shrinks to the buttons. */}
+          aligned. With the sidebar closed the strip shrinks to the three
+          w-11 buttons (8.25rem), a concrete width so the transition runs. */}
       <div
         className={cn(
           "flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
           sidebarOpen
             ? "w-(--sidebar-width) border-r border-sidebar-border bg-sidebar"
             : windows
-              ? "w-max"
+              ? "w-[8.25rem]"
               : "w-0",
         )}
       >

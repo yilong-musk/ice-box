@@ -323,7 +323,7 @@ describe("App", () => {
       fireEvent.click(
         within(titlebar as HTMLElement).getByRole("button", { name: "Toggle Sidebar" }),
       );
-      expect(controls.parentElement).toHaveClass("w-max");
+      expect(controls.parentElement).toHaveClass("w-[8.25rem]");
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,

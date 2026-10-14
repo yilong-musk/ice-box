@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use ice_config::{NormalizedProfile, UiMessage};
-use serde_json::json;
+use serde_json::{json, Value};
 
 const BUILTIN_TAGS: &[&str] = &["direct", "block", "dns", "proxy"];
 
@@ -104,24 +104,14 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
         .collect();
     let mut dropped_rule_sets = Vec::new();
     profile.route.rules.retain(|rule| {
-        let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) else {
+        if rule_set_refs_resolvable(rule, &known_sets) {
             return true;
-        };
-        let ok = refs
-            .iter()
-            .all(|r| r.as_str().is_some_and(|t| known_sets.contains(t)));
-        if !ok {
-            dropped_rule_sets.push(
-                UiMessage::new("parse.routeRuleSetMissing").with(
-                    "rule_set",
-                    refs.iter()
-                        .filter_map(|r| r.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                ),
-            );
         }
-        ok
+        dropped_rule_sets.push(
+            UiMessage::new("parse.routeRuleSetMissing")
+                .with("rule_set", unknown_rule_set_label(rule, &known_sets)),
+        );
+        false
     });
     profile.parse_stats.warnings.extend(dropped_rule_sets);
     if let Some(tag) = &profile.default_outbound {
@@ -131,6 +121,72 @@ pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
                 .first()
                 .map(|g| g.tag.clone())
                 .or_else(|| profile.nodes.first().map(|n| n.tag.clone()));
+        }
+    }
+}
+
+/// `rule_set` is one tag or a list of tags. A string used to be ignored, so a
+/// remote set removed during parse left a dangling reference in the profile.
+fn rule_set_refs_resolvable(rule: &Value, known_sets: &HashSet<String>) -> bool {
+    match rule.get("rule_set") {
+        None => {}
+        Some(Value::String(tag)) => {
+            if !known_sets.contains(tag) {
+                return false;
+            }
+        }
+        Some(Value::Array(items)) => {
+            if !items
+                .iter()
+                .all(|item| item.as_str().is_some_and(|tag| known_sets.contains(tag)))
+            {
+                return false;
+            }
+        }
+        Some(_) => return false,
+    }
+    if rule.get("type").and_then(|v| v.as_str()) == Some("logical") {
+        let Some(nested) = rule.get("rules").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        return !nested.is_empty()
+            && nested
+                .iter()
+                .all(|child| rule_set_refs_resolvable(child, known_sets));
+    }
+    true
+}
+
+fn unknown_rule_set_label(rule: &Value, known_sets: &HashSet<String>) -> String {
+    let mut tags = Vec::new();
+    collect_unknown_rule_sets(rule, known_sets, &mut tags);
+    if tags.is_empty() {
+        "logical".to_string()
+    } else {
+        tags.join(",")
+    }
+}
+
+fn collect_unknown_rule_sets(rule: &Value, known_sets: &HashSet<String>, tags: &mut Vec<String>) {
+    match rule.get("rule_set") {
+        Some(Value::String(tag)) if !known_sets.contains(tag) => tags.push(tag.clone()),
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(tag) = item.as_str() {
+                    if !known_sets.contains(tag) {
+                        tags.push(tag.to_string());
+                    }
+                }
+            }
+        }
+        Some(_) => tags.push("invalid".to_string()),
+        None => {}
+    }
+    if rule.get("type").and_then(|v| v.as_str()) == Some("logical") {
+        if let Some(nested) = rule.get("rules").and_then(|v| v.as_array()) {
+            for child in nested {
+                collect_unknown_rule_sets(child, known_sets, tags);
+            }
         }
     }
 }
@@ -201,5 +257,37 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.key == "parse.droppedDetour"));
+    }
+
+    #[test]
+    fn string_rule_set_refs_are_pruned_like_arrays() {
+        let mut p = profile(vec![], vec![]);
+        p.route.rule_sets = vec![json!({
+            "type": "local",
+            "tag": "ok",
+            "path": "geoip/ok.srs"
+        })];
+        p.route.rules = vec![
+            json!({"rule_set": "missing", "outbound": "direct"}),
+            json!({"rule_set": "ok", "outbound": "direct"}),
+            json!({"rule_set": ["ok"], "outbound": "direct"}),
+            json!({
+                "type": "logical",
+                "mode": "and",
+                "outbound": "direct",
+                "rules": [
+                    {"domain": ["example.com"]},
+                    {"rule_set": "also-missing"}
+                ]
+            }),
+        ];
+        prune_dangling_refs(&mut p);
+        assert_eq!(p.route.rules.len(), 2);
+        assert_eq!(p.route.rules[0]["rule_set"], "ok");
+        assert_eq!(p.route.rules[1]["rule_set"], json!(["ok"]));
+        assert!(p.parse_stats.warnings.iter().any(|warning| {
+            warning.key == "parse.routeRuleSetMissing"
+                && warning.params.get("rule_set").map(String::as_str) == Some("missing")
+        }));
     }
 }
