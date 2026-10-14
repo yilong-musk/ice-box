@@ -39,7 +39,6 @@ root.innerHTML = `
   <header class="site-nav">
     <a class="brand" href="#top"><img src="${logoUrl}" alt="ice-box logo"><span>ice-box</span></a>
     <div class="nav-actions">
-      <a class="nav-download" href="#download"></a>
       <a class="nav-github" href="https://github.com/yilong-musk/ice-box" target="_blank" rel="noreferrer">GitHub ↗</a>
       <button class="nav-language" type="button"></button>
     </div>
@@ -51,7 +50,7 @@ root.innerHTML = `
       </div>
       <div class="hero-aside">
         <div class="hero-actions">
-          <a class="button button-primary" href="#demo"><span class="button-label"></span> <span>↓</span></a>
+          <a class="button button-primary" href="#download"><span class="button-label"></span> <span aria-hidden="true">↓</span></a>
           <a class="text-link" href="#download"></a>
         </div>
         <div class="hero-meta">
@@ -89,9 +88,8 @@ root.innerHTML = `
 
 const parts = {
   headline: root.querySelector(".hero-copy h1"),
-  demoLabel: root.querySelector(".button-label"),
-  download: root.querySelector(".text-link"),
-  navDownload: root.querySelector(".nav-download"),
+  downloadLabel: root.querySelector(".button-label"),
+  moreDownloads: root.querySelector(".text-link"),
   downloadKicker: root.querySelector(".download-kicker"),
   downloadTitle: root.querySelector("#download-title"),
   windowBar: root.querySelector(".window-bar small"),
@@ -129,14 +127,14 @@ function applyDownloadCopy(next) {
   }
 }
 
-/** Header label: the matching installer, or a plain download when we have none. */
-function navDownloadLabel(next) {
-  if (currentPlatform == null) return marketingText("nav.download", next);
+/** Primary action: the matching installer, or a plain download when we have none. */
+function primaryDownloadLabel(next) {
+  if (currentPlatform == null) return marketingText("hero.installer", next);
   const platformName = marketingText(
     `download.${currentPlatform}.name`,
     next,
   );
-  return marketingText("nav.downloadPlatform", next).replaceAll(
+  return marketingText("hero.installerPlatform", next).replaceAll(
     "{platform}",
     platformName,
   );
@@ -149,9 +147,8 @@ function applyCopy(next) {
   language = next;
   applyMarketingLanguage(language);
   parts.headline.innerHTML = marketingText("hero.title", language);
-  parts.demoLabel.textContent = marketingText("hero.demo", language);
-  parts.download.textContent = marketingText("hero.download", language);
-  parts.navDownload.textContent = navDownloadLabel(language);
+  parts.downloadLabel.textContent = primaryDownloadLabel(language);
+  parts.moreDownloads.textContent = marketingText("hero.more", language);
   parts.downloadKicker.textContent = marketingText("download.kicker", language);
   parts.downloadTitle.textContent = marketingText("download.title", language);
   applyDownloadCopy(language);
