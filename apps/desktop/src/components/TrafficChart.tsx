@@ -141,7 +141,7 @@ const TrafficPlot = memo(function TrafficPlot({
   return (
     <ChartContainer
       config={config}
-      className="aspect-auto min-h-24 w-full flex-1"
+      className="aspect-auto h-24 w-full shrink-0"
       aria-label={ariaLabel}
     >
       <AreaChart
@@ -478,7 +478,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         config={chartConfig}
         ariaLabel={ariaLabel}
       />
-      <p className="muted shrink-0 text-xs">
+      <p className="muted shrink-0 text-pretty text-xs">
         {t("traffic.peak", {
           rate: formatRate(maxVal),
           n: WINDOW_SECONDS,

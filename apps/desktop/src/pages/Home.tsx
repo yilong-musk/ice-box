@@ -46,8 +46,8 @@ import {
   ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Toggle } from "@/components/ui/toggle";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
@@ -768,22 +768,27 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
       <div
         className={cn(
-          "grid shrink-0 items-stretch gap-3",
-          phone ? "grid-cols-1" : "grid-cols-2",
+          "flex shrink-0 gap-3",
+          phone ? "flex-col" : "flex-row flex-wrap items-start",
         )}
       >
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
           <CardHeader>
-            <CardTitle>{t("home.proxyStatus")}</CardTitle>
+            <CardTitle className="text-xs font-medium text-muted-foreground">
+              {t("home.proxyStatus")}
+            </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-1 flex-col">
+          <CardContent>
             {phone || proxyAvailable || configuredTun || tunActive ? (
               <>
                 <Button
                   type="button"
                   size="lg"
                   variant={powerOn ? "default" : "outline"}
-                  className="h-auto min-h-11 w-full justify-start gap-2 py-2"
+                  className={cn(
+                    "h-auto min-h-11 justify-start gap-2 py-2",
+                    phone ? "w-full" : "w-max",
+                  )}
                   disabled={!canToggle}
                   aria-pressed={powerOn}
                   aria-label={powerTitle}
@@ -816,11 +821,21 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 {t("home.unsupported")}
               </p>
             )}
+          </CardContent>
+        </Card>
+
+        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
+          <CardHeader>
+            <CardTitle className="text-xs font-medium text-muted-foreground">
+              {t("home.modeAria")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
             <ToggleGroup
               type="single"
               variant="outline"
               size="sm"
-              orientation="horizontal"
+              orientation="vertical"
               spacing={2}
               value={proxyMode}
               onValueChange={(value) => {
@@ -829,21 +844,28 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }
               }}
               disabled={modeBusy || busy}
-              className="mt-3 w-full"
+              className="grid w-max max-w-full"
               aria-label={t("home.modeAria")}
             >
               {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
-                <ToggleGroupItem key={mode} value={mode} className="flex-1">
+                <ToggleGroupItem key={mode} value={mode} className="w-full justify-start">
                   {t(labelKey)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            {!phone && !tunUiHidden && (
-              <Toggle
-                variant="outline"
-                size="sm"
-                pressed={tunOverride ?? configuredTun}
-                onPressedChange={(pressed) => {
+          </CardContent>
+        </Card>
+
+        {!phone && !tunUiHidden && (
+          <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0 overflow-visible"}>
+            <CardContent>
+              <div className="flex items-center gap-3">
+                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                  {t("home.tunMode")}
+                </span>
+              <Switch
+                checked={tunOverride ?? configuredTun}
+                onCheckedChange={(pressed) => {
                   const s = settings;
                   if (pressed) {
                     if (!s) return;
@@ -886,19 +908,80 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   status?.tun_available === false ||
                   status?.helper_stale === true
                 }
-                className="mt-3 w-full"
+                size="lg"
                 aria-label={t("home.tunMode")}
-              >
-                {t("home.tunMode")}
-              </Toggle>
+              />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card
+          size="sm"
+          className={cn(
+            "flex flex-col",
+            phone ? "w-full" : "w-80 max-w-full shrink-0",
+          )}
+        >
+          <CardHeader className="shrink-0">
+            <CardTitle className="text-xs font-medium text-muted-foreground">
+              {t("home.trafficTitle")}
+            </CardTitle>
+            <CardDescription>{t("home.trafficDesc")}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col">
+            {!hasNodes && !running ? (
+              <EmptyState
+                framed={false}
+                className="my-auto"
+                title={emptyTitle}
+                description={emptyDescription}
+                actionLabel={t("home.goToSubs")}
+                onAction={() => onNavigate?.("subs")}
+              />
+            ) : (
+              <>
+                {!hasNodes ? (
+                  <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{emptyTitle}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t("home.autoSwitchHint")}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => onNavigate?.("subs")}
+                    >
+                      {t("home.goToSubs")}
+                    </Button>
+                  </div>
+                ) : null}
+                <TrafficChart
+                  className="h-auto min-h-0"
+                  running={running}
+                  paused={modeBusy || busy || !active}
+                />
+              </>
             )}
-            {!phone && cliProxyEndpoint ? (
-              <div className="mt-3 flex w-full gap-2">
+          </CardContent>
+        </Card>
+
+        {!phone && cliProxyEndpoint ? (
+          <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
+            <CardHeader>
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                {t("home.cliModule")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-2">
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="min-w-0 flex-1 justify-start gap-2"
+                  className={cn("justify-start gap-2", phone ? "w-full" : "w-max")}
                   aria-label={t("home.copyCliProxy")}
                   title={t("home.copyCliProxyHint")}
                   onClick={() => void onCopyCliProxy()}
@@ -914,7 +997,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="min-w-0 flex-1 justify-start gap-2"
+                  className={cn("justify-start gap-2", phone ? "w-full" : "w-max")}
                   aria-label={t("home.openCliProxy")}
                   title={t("home.openCliProxyHint")}
                   onClick={() => void onOpenCliProxy()}
@@ -923,20 +1006,22 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   <span className="truncate">{t("home.openCliProxy")}</span>
                 </Button>
               </div>
-            ) : null}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ) : null}
 
-        <Card size="sm" className="min-w-0 data-[size=sm]:[--card-spacing:--spacing(2)]">
+        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0 self-start"}>
           <CardHeader>
-            <CardTitle>{t("home.infoTitle")}</CardTitle>
+            <CardTitle className="text-xs font-medium text-muted-foreground">
+              {t("home.infoTitle")}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <ItemGroup className="gap-0">
+            <ItemGroup className="w-max max-w-full gap-0">
               {infoRows.map((row, index) => (
                 <div key={row.label}>
                   {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                  <Item size="xs" className="justify-between px-0">
+                  <Item size="xs" className="justify-between rounded-none px-0">
                     <ItemDescription>{row.label}</ItemDescription>
                     <ItemTitle
                       className={row.valueClassName}
@@ -952,50 +1037,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
       </div>
-
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0">
-          <CardTitle>{t("home.trafficTitle")}</CardTitle>
-          <CardDescription>{t("home.trafficDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col">
-          {!hasNodes && !running ? (
-            <EmptyState
-              framed={false}
-              className="my-auto"
-              title={emptyTitle}
-              description={emptyDescription}
-              actionLabel={t("home.goToSubs")}
-              onAction={() => onNavigate?.("subs")}
-            />
-          ) : (
-            <>
-              {!hasNodes ? (
-                <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">{emptyTitle}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t("home.autoSwitchHint")}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => onNavigate?.("subs")}
-                  >
-                    {t("home.goToSubs")}
-                  </Button>
-                </div>
-              ) : null}
-              <TrafficChart
-                className="min-h-0 flex-1"
-                running={running}
-                paused={modeBusy || busy || !active}
-              />
-            </>
-          )}
-        </CardContent>
-      </Card>
 
       {!tunUiHidden && (
         <TunInstallDialog

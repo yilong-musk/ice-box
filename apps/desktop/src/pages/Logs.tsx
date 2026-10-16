@@ -240,7 +240,7 @@ export function Logs({ active = true }: { active?: boolean }) {
       {/* Anchoring would scroll when a row leaves the top, and Chromium would drag the selection with it. */}
       <pre
         ref={boxRef}
-        className="log-view min-h-0 flex-1 overflow-auto [overflow-anchor:none] bg-card p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all"
+        className="log-view min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-card p-3 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap break-all [overflow-anchor:none]"
         data-testid="log-view"
         onScroll={handleScroll}
         aria-live="polite"

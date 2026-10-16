@@ -203,13 +203,14 @@ describe("Home", () => {
       t("home.info.memory"),
     ]);
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
-    // The mode switch lives inside the 代理状态 card, below the power button.
+    // Outbound mode is its own module, beside the proxy status card.
     const statusCard = view
       .getByText(t("home.proxyStatus"))
       .closest("[data-slot=card]") as HTMLElement;
     expect(
-      within(statusCard).getByRole("radiogroup", { name: t("home.modeAria") }),
-    ).toBeInTheDocument();
+      within(statusCard).queryByRole("radiogroup", { name: t("home.modeAria") }),
+    ).toBeNull();
+    expect(view.getByRole("radiogroup", { name: t("home.modeAria") })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: t("home.mode.rule") })).toHaveAttribute("data-state", "on");
     expect(view.getByRole("radio", { name: t("home.mode.global") })).toHaveAttribute("data-state", "off");
     expect(view.getByRole("radio", { name: t("home.mode.direct") })).toHaveAttribute("data-state", "off");
@@ -1143,7 +1144,7 @@ describe("Home", () => {
       expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
     });
     // No TUN switch on the home page, no TUN reason text anywhere.
-    expect(view.queryByRole("button", { name: t("home.tunMode") })).not.toBeInTheDocument();
+    expect(view.queryByRole("switch", { name: t("home.tunMode") })).not.toBeInTheDocument();
     expect(container.textContent).not.toContain(t("tun.unsupportedPlatform"));
     // The power control ignores the hidden TUN desire: system proxy stays usable.
     expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
@@ -1183,7 +1184,7 @@ describe("Home", () => {
     });
     expect(container.textContent).not.toContain(t("home.unsupported"));
     expect(container.textContent).toContain(t("home.warn.vpnPermission"));
-    expect(view.queryByRole("button", { name: t("home.tunMode") })).not.toBeInTheDocument();
+    expect(view.queryByRole("switch", { name: t("home.tunMode") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("home.copyCliProxy") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("home.installHelper") })).not.toBeInTheDocument();
 
@@ -1394,10 +1395,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
-    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
+    expect(tunToggle).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(tunToggle);
     await waitFor(() => {
@@ -1448,10 +1449,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
-    expect(tunToggle).toHaveAttribute("aria-pressed", "true");
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
+    expect(tunToggle).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(tunToggle);
     await waitFor(() => {
@@ -1507,13 +1508,13 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
     });
-    fireEvent.click(view.getByRole("button", { name: t("home.tunMode") }));
+    fireEvent.click(view.getByRole("switch", { name: t("home.tunMode") }));
 
     expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
     expect(container.textContent).not.toContain(t("home.power.busy"));
-    expect(view.getByRole("button", { name: t("home.tunMode") })).toBeDisabled();
-    expect(view.getByRole("button", { name: t("home.tunMode") })).toHaveAttribute(
-      "aria-pressed",
+    expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeDisabled();
+    expect(view.getByRole("switch", { name: t("home.tunMode") })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
 
@@ -1522,7 +1523,7 @@ describe("Home", () => {
       expect(saveSettings).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeEnabled();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeEnabled();
     });
     expect(container.textContent).not.toContain(t("home.power.busy"));
     expect(start).not.toHaveBeenCalled();
@@ -1551,15 +1552,15 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
-    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
+    expect(tunToggle).toHaveAttribute("aria-checked", "false");
 
     // The toggle reflects the intent immediately instead of waiting for the
     // next 2s status poll.
     fireEvent.click(tunToggle);
-    expect(tunToggle).toHaveAttribute("aria-pressed", "true");
+    expect(tunToggle).toHaveAttribute("aria-checked", "true");
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1571,7 +1572,7 @@ describe("Home", () => {
     // The post-action refresh reports the committed value; the backend still
     // says TUN is not configured, so the toggle snaps back.
     await waitFor(() => {
-      expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+      expect(tunToggle).toHaveAttribute("aria-checked", "false");
     });
   });
 
@@ -1611,9 +1612,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
 
     // Windows (plan B): the one-time elevation component is installed
     // (single UAC) and the TUN-on next-start desire persists — no dialog,
@@ -1669,9 +1670,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    fireEvent.click(view.getByRole("button", { name: t("home.tunMode") }));
+    fireEvent.click(view.getByRole("switch", { name: t("home.tunMode") }));
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1719,9 +1720,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
 
     // Cancelled: nothing was persisted or started, the error surfaces.
     fireEvent.click(tunToggle);
@@ -1730,7 +1731,7 @@ describe("Home", () => {
     });
     expect(saveSettings).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
-    expect(tunToggle).toHaveAttribute("aria-pressed", "false");
+    expect(tunToggle).toHaveAttribute("aria-checked", "false");
   });
 
   it("prompts helper install before enabling TUN on the home page", async () => {
@@ -1766,9 +1767,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.tunMode") })).toBeInTheDocument();
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    const tunToggle = view.getByRole("button", { name: t("home.tunMode") });
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
 
     // No helper: dialog appears, nothing is saved.
     fireEvent.click(tunToggle);
