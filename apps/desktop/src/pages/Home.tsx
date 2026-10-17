@@ -980,12 +980,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         <div
           className={cn(
             "flex min-w-0 flex-col gap-3",
-            !phone && "col-start-1 row-span-2 row-start-2 min-h-0",
+            !phone &&
+              "col-start-1 row-span-2 row-start-2 min-h-0 overflow-y-auto",
           )}
         >
           <Card
             size="sm"
-            className="flex w-full min-h-0 min-w-0 flex-1 flex-col"
+            className="flex w-full min-h-fit min-w-0 flex-1 flex-col"
           >
             <CardHeader>
               <CardTitle className="text-xs font-medium text-muted-foreground">
@@ -1013,7 +1014,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardContent>
           </Card>
 
-          <Card size="sm" className="flex w-full min-h-0 min-w-0 flex-1 flex-col">
+          <Card size="sm" className="flex w-full min-h-fit min-w-0 flex-1 flex-col">
             <CardHeader>
               <CardTitle className="text-xs font-medium text-muted-foreground">
                 {t("home.inboundTitle")}
