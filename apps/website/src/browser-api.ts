@@ -50,6 +50,8 @@ function isCaptureMode(): boolean {
 }
 
 const CAPTURE_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
+const DEMO_LANDING_IP = "203.0.113.42";
+const DEMO_INITIAL_RUN_MS = 18 * 60_000 + 42_000;
 
 const settings: AppSettings = {
   mixed_listen: "127.0.0.1",
@@ -139,6 +141,7 @@ const ruleRows = [
 }));
 
 let running = true;
+let runningSinceMs = Date.now() - DEMO_INITIAL_RUN_MS;
 let trafficTick = 0;
 
 const delay = (ms = 80) =>
@@ -153,6 +156,7 @@ export const api = {
     await delay();
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
+      running_since_ms: running ? runningSinceMs : null,
       subscription_count: subscriptions.length,
       proxy_recovery_warning: [],
       system_proxy_applied: running,
@@ -194,6 +198,7 @@ export const api = {
           tag: node.tag,
           outbound_type: node.outbound_type,
           group_now: node.group_now,
+          landing_ip: running ? DEMO_LANDING_IP : null,
         };
       })(),
     };
@@ -204,9 +209,16 @@ export const api = {
   async getSettings(): Promise<AppSettings> { await delay(); return structuredClone(settings); },
   async restoreLaunchProxy(): Promise<void> {
     await delay();
-    if (settings.proxy_service_enabled) running = true;
+    if (settings.proxy_service_enabled) {
+      running = true;
+      runningSinceMs = Date.now();
+    }
   },
-  async start(): Promise<void> { await delay(180); running = true; },
+  async start(): Promise<void> {
+    await delay(180);
+    running = true;
+    runningSinceMs = Date.now();
+  },
   async saveSettings(patch: SettingsPatch): Promise<void> {
     await delay();
     Object.assign(settings, structuredClone(patch));

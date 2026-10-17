@@ -28,6 +28,14 @@ try {
   // This mode freezes demo traffic and disables mock latency, without taking images.
   await page.goto(new URL("demo.html?capture=1", baseUrl).href);
   await page.getByRole("button", { name: "Nodes", exact: true }).waitFor();
+  const runUptime = await page.getByTestId("home-run-uptime").textContent();
+  assert.match(runUptime?.trim() ?? "", /^\d{2}:\d{2}$/, "The Live Demo must show mocked run uptime");
+  const landingIp = await page.getByTestId("home-outbound-ip").textContent();
+  assert.equal(
+    landingIp?.trim(),
+    "203.0.113.42",
+    "The Live Demo must show the mocked landing IP",
+  );
   await page.evaluate(async count => {
     const { api } = await import("/src/browser-api.ts");
     const members = Array.from({ length: count }, (_, i) => `Benchmark node ${i}`);

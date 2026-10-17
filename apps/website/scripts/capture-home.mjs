@@ -125,6 +125,26 @@ async function waitForLanguage(page, target) {
   );
 }
 
+async function verifyMockedHomeData(page) {
+  const uptime = (
+    await page.getByTestId("home-run-uptime").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (!uptime || !/^\d{2}:\d{2}$/.test(uptime)) {
+    throw new Error(
+      `Live Demo run uptime must show mocked MM:SS data, got ${JSON.stringify(uptime)}`,
+    );
+  }
+
+  const landingIp = (
+    await page.getByTestId("home-outbound-ip").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (!landingIp || !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
+    throw new Error(
+      `Live Demo landing IP must show mocked IPv4 data, got ${JSON.stringify(landingIp)}`,
+    );
+  }
+}
+
 async function capture(browser, baseUrl, target) {
   const context = await browser.newContext({
     viewport: VIEWPORT,
@@ -151,6 +171,7 @@ async function capture(browser, baseUrl, target) {
       const el = document.querySelector(".recharts-wrapper");
       return el && el.getBoundingClientRect().height >= 80;
     }, { timeout: 15_000 });
+    await verifyMockedHomeData(page);
     await new Promise((resolve) => setTimeout(resolve, 400));
     return await page.screenshot({ type: "png" });
   } finally {
