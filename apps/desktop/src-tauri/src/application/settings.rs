@@ -17,6 +17,17 @@ fn only_log_debug_changed(previous: &AppSettings, next: &AppSettings) -> bool {
     left == right && previous.log_debug != next.log_debug
 }
 
+/// Persist-only: the exit probe is a privacy/UI preference. It is not part of
+/// the sing-box runtime config, so changing it must never apply or reload the
+/// live core (including a TUN stop/reconfigure/start transition).
+pub(crate) fn only_probe_exit_ip_changed(previous: &AppSettings, next: &AppSettings) -> bool {
+    let mut left = previous.clone();
+    let mut right = next.clone();
+    left.probe_exit_ip = false;
+    right.probe_exit_ip = false;
+    left == right && previous.probe_exit_ip != next.probe_exit_ip
+}
+
 /// Persist-only: the menu-bar item is drawn by the tray watchdog, which reads
 /// `settings.json` every second, so this needs no runtime-config apply.
 pub(crate) fn only_tray_display_mode_changed(previous: &AppSettings, next: &AppSettings) -> bool {
@@ -227,6 +238,13 @@ pub(crate) fn save_settings_inner(
     }
     if only_log_debug_changed(&previous, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
+        return Ok(());
+    }
+    if only_probe_exit_ip_changed(&previous, &settings) {
+        persist_settings(&state.paths.settings(), &settings, host_platform())?;
+        // Drop any existing sample and invalidate an in-flight fetch so turning
+        // privacy probes off takes effect immediately.
+        super::exit_probe::clear();
         return Ok(());
     }
     if only_tray_display_mode_changed(&previous, &settings) {

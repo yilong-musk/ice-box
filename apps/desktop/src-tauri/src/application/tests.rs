@@ -1347,3 +1347,176 @@ fn only_tray_display_mode_changed_ignores_other_fields() {
     // Unchanged mode: nothing to do.
     assert!(!only_tray_display_mode_changed(&both, &both));
 }
+
+#[test]
+fn only_probe_exit_ip_changed_ignores_other_fields() {
+    use crate::application::settings::only_probe_exit_ip_changed;
+
+    let on = AppSettings::default();
+    let off = AppSettings {
+        probe_exit_ip: false,
+        ..AppSettings::default()
+    };
+    assert!(only_probe_exit_ip_changed(&on, &off));
+    assert!(only_probe_exit_ip_changed(&off, &on));
+
+    let mut other = off.clone();
+    other.mixed_port = 18080;
+    assert!(!only_probe_exit_ip_changed(&on, &other));
+    assert!(!only_probe_exit_ip_changed(&on, &on));
+}
+
+#[test]
+fn saving_probe_exit_ip_only_does_not_touch_the_live_core() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct CountingCore {
+        status: CoreStatus,
+        start_calls: Arc<AtomicUsize>,
+        stop_calls: Arc<AtomicUsize>,
+        reload_calls: Arc<AtomicUsize>,
+    }
+
+    impl CoreHandle for CountingCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            self.stop_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            self.reload_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ReloadOutcome::HotReloaded)
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let mut state = temp_state_with_node("probe-exit-persist-only");
+    let start_calls = Arc::new(AtomicUsize::new(0));
+    let stop_calls = Arc::new(AtomicUsize::new(0));
+    let reload_calls = Arc::new(AtomicUsize::new(0));
+    let (core, core_snapshot) = wrap_core(Box::new(CountingCore {
+        status: CoreStatus::Running,
+        start_calls: start_calls.clone(),
+        stop_calls: stop_calls.clone(),
+        reload_calls: reload_calls.clone(),
+    }));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    // A resolvable binary keeps this test honest on the pre-fix path, where a
+    // normal settings apply would generate config and reload the running core.
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+    fs::write(state.paths.config(), b"runtime config sentinel").unwrap();
+
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            probe_exit_ip: Some(false),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("probe preference should persist");
+
+    assert!(!current_settings(&state.paths).unwrap().probe_exit_ip);
+    assert_eq!(
+        fs::read(state.paths.config()).unwrap(),
+        b"runtime config sentinel"
+    );
+    assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(reload_calls.load(Ordering::SeqCst), 0);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn exit_probe_fails_closed_without_settings_and_cache_key_tracks_route_state() {
+    use crate::application::nodes::{exit_probe_cache_key, probe_exit_ip_enabled};
+
+    assert!(!probe_exit_ip_enabled(None));
+    let off = AppSettings {
+        probe_exit_ip: false,
+        ..AppSettings::default()
+    };
+    assert!(!probe_exit_ip_enabled(Some(&off)));
+    assert!(probe_exit_ip_enabled(Some(&AppSettings::default())));
+
+    let rule = AppSettings::default();
+    let proxy_url = "http://127.0.0.1:17890";
+    let rule_key = exit_probe_cache_key(&rule, proxy_url, "Proxy", Some("HK-1"));
+
+    let mut global = rule.clone();
+    global.proxy_mode = ProxyMode::Global;
+    assert_ne!(
+        rule_key,
+        exit_probe_cache_key(&global, proxy_url, "Proxy", Some("HK-1"))
+    );
+
+    let mut moved = rule.clone();
+    moved.mixed_port = 18080;
+    assert_ne!(
+        rule_key,
+        exit_probe_cache_key(&moved, proxy_url, "Proxy", Some("HK-1"))
+    );
+}

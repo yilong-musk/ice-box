@@ -1283,6 +1283,24 @@ describe("Home", () => {
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
+  it("scrolls mobile Home and omits an unavailable exit IP row", async () => {
+    phoneShell.value = true;
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-panel")).toBeInTheDocument();
+    });
+    expect(view.getByTestId("home-panel")).toHaveClass(
+      "overflow-y-auto",
+      "overscroll-contain",
+    );
+    const outboundCard = view
+      .getByText(t("home.outboundTitle"))
+      .closest("[data-slot=card]") as HTMLElement;
+    expect(within(outboundCard).queryByTestId("home-outbound-ip")).toBeNull();
+  });
+
   it("shows permission-required state with a system-proxy fallback action", async () => {
     getStatus.mockResolvedValue({
       core: {

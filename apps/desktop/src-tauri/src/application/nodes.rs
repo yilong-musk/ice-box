@@ -132,6 +132,33 @@ fn lists_member(outbound: &NormalizedOutbound, tag: &str) -> bool {
         .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)))
 }
 
+/// Missing settings must fail closed: when the user's preference cannot be
+/// read, do not contact the third-party exit probe endpoint.
+pub(crate) fn probe_exit_ip_enabled(settings: Option<&AppSettings>) -> bool {
+    settings.is_some_and(|settings| settings.probe_exit_ip)
+}
+
+/// Include every state that can change the route or the inbound used for the
+/// probe. `outbound.tag` and `group_now` alone miss Rule/Global/Direct switches
+/// and Mixed endpoint edits, which would otherwise show a stale landing IP
+/// until the 30-second sample expires.
+pub(crate) fn exit_probe_cache_key(
+    settings: &AppSettings,
+    proxy_url: &str,
+    outbound_tag: &str,
+    group_now: Option<&str>,
+) -> String {
+    format!(
+        "{}|{}:{}|{}|{}|{}",
+        ice_config::clash_mode_name(settings.proxy_mode),
+        settings.mixed_listen,
+        settings.mixed_port,
+        proxy_url,
+        outbound_tag,
+        group_now.unwrap_or("")
+    )
+}
+
 /// Home's one-line exit. Does not clone strategy-group member lists.
 pub(crate) fn outbound_summary(
     state: &AppState,
@@ -188,14 +215,14 @@ pub(crate) fn outbound_summary(
     let shown_now = group_now.filter(|_| is_group);
     // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
     // Off by settings (`probe_exit_ip`) or when the core is stopped.
-    let probe_exit = settings.map(|s| s.probe_exit_ip).unwrap_or(true);
-    let landing_ip = if running && probe_exit {
-        match exit_proxy_url(state, settings) {
-            Some(proxy) => {
-                let key = format!("{}|{}", outbound.tag, shown_now.as_deref().unwrap_or(""));
+    let landing_ip = if running && probe_exit_ip_enabled(settings) {
+        match (settings, exit_proxy_url(state, settings)) {
+            (Some(settings), Some(proxy)) => {
+                let key =
+                    exit_probe_cache_key(settings, &proxy, &outbound.tag, shown_now.as_deref());
                 super::exit_probe::observe(&key, &proxy)
             }
-            None => None,
+            _ => None,
         }
     } else {
         super::exit_probe::clear();

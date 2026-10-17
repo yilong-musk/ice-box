@@ -488,6 +488,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
   const proxyOn = proxyLive || (proxyRecorded && running) || tunActive;
   const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
+  const phone = isPhoneShell();
   const statusOutbound = status?.selected_outbound ?? null;
   // A selection that lands while a sample is in flight keeps the line. A later
   // sample (the tray, or the next poll) replaces it once its timestamp is newer.
@@ -516,17 +517,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     value: string;
     valueClassName?: string;
     testId?: string;
-  }[] = [
-    { label: t("home.outbound.node"), value: currentNodeLabel },
-    {
+  }[] = [{ label: t("home.outbound.node"), value: currentNodeLabel }];
+  // Mobile status does not carry a landing IP and the compact layout cannot
+  // afford a permanent "Exit IP —" row.
+  if (!phone || landingIp) {
+    outboundRows.push({
       label: t("home.outbound.ip"),
       value: landingIp || t("common.dash"),
       valueClassName: "font-mono tabular-nums",
       testId: "home-outbound-ip",
-    },
-  ];
+    });
+  }
 
-  const phone = isPhoneShell();
   const tunCardVisible =
     !tunUiHidden &&
     (phone
@@ -722,7 +724,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const recoveryRequired = status?.tun_status === "recovery_required";
 
   return (
-    <div className="home-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="home-panel">
+    <div
+      className={cn(
+        "home-panel flex min-h-0 flex-1 flex-col gap-3",
+        phone && "overflow-y-auto overscroll-contain",
+      )}
+      data-testid="home-panel"
+    >
       {phone && status?.vpn_permission === "denied" && (
         <WarnAlert className="shrink-0">{t("home.warn.vpnPermission")}</WarnAlert>
       )}
