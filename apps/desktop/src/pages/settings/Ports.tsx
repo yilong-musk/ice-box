@@ -200,6 +200,25 @@ export function PortsCard({
               {t("settings.autoDefaultRulesDesc")}
             </FieldDescription>
           ) : null}
+          <Field orientation="horizontal" className="w-auto gap-2">
+            <Switch
+              id="settings-probe-exit-ip"
+              size="sm"
+              checked={form.probe_exit_ip}
+              disabled={busy || !loaded}
+              aria-label={t("settings.probeExitIp")}
+              onCheckedChange={(checked) => {
+                setForm({
+                  ...form,
+                  probe_exit_ip: checked === true,
+                });
+              }}
+            />
+            <FieldLabel htmlFor="settings-probe-exit-ip">
+              {t("settings.probeExitIp")}
+            </FieldLabel>
+          </Field>
+          <FieldDescription>{t("settings.probeExitIpDesc")}</FieldDescription>
         </div>
       </CardContent>
     </Card>

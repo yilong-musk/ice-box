@@ -186,6 +186,11 @@ export type AppSettings = {
   language: "system" | "zh" | "en";
   /** Background update checks and the auto prompt. Defaults to on. */
   check_app_updates: boolean;
+  /**
+   * Probe the public exit IP through the mixed inbound while the core runs.
+   * Defaults to on; turn off to skip third-party Cloudflare trace requests.
+   */
+  probe_exit_ip: boolean;
   /** Logs page shows every parsed line. Default is connections and important events. */
   log_debug: boolean;
   /** macOS menu-bar item: icon + live speed, icon only, or speed only. */
@@ -299,6 +304,7 @@ export type SettingsPatch = {
   auto_default_rules?: boolean;
   language?: "system" | "zh" | "en";
   check_app_updates?: boolean;
+  probe_exit_ip?: boolean;
   log_debug?: boolean;
   tray_display_mode?: TrayDisplayMode;
   /** Registered by the dedicated login-item path, not the form autosave. */

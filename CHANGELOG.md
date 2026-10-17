@@ -5,6 +5,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-10-17
+
+### Added
+
+- Home shows the public landing IP for the selected outbound. While the core
+  runs, the app may probe `https://www.cloudflare.com/cdn-cgi/trace` through
+  the local Mixed inbound about every 30 seconds; country comes from the
+  response or the bundled geoip rule-sets. Settings → Inbound can turn the
+  probe off.
+- The marketing site offers platform installers in place of the live demo.
+
+### Changed
+
+- The desktop home screen is rearranged into content-sized status modules
+  (health, inbound, outbound, traffic, proxy status), with inbound and
+  traffic stretched to fill remaining height.
+
+### Fixed
+
+- A single-node delay failure stays on that cell only instead of marking the
+  whole batch.
+- Failed geoip directory loads are cached so missing rule-sets are not
+  re-read on every exit probe. Overlapping country ranges pick the tightest
+  match.
+
 ## [0.1.23] - 2026-10-14
 
 ### Changed

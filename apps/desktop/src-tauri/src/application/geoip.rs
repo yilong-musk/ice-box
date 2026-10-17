@@ -21,56 +21,65 @@ struct GeoIndex {
     v6: Vec<(u128, u128, String)>,
 }
 
-fn cache() -> &'static Mutex<Option<(PathBuf, GeoIndex)>> {
-    static CACHE: OnceLock<Mutex<Option<(PathBuf, GeoIndex)>>> = OnceLock::new();
+/// Cached load for one directory. `index` is `None` when the directory is
+/// missing, empty, or unreadable so a failed load is not retried on every probe.
+struct CachedDir {
+    dir: PathBuf,
+    index: Option<GeoIndex>,
+}
+
+fn cache() -> &'static Mutex<Option<CachedDir>> {
+    static CACHE: OnceLock<Mutex<Option<CachedDir>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
 /// Lowercase country code (`hk`) when a bundled rule-set contains `ip`.
 pub(crate) fn region_code(geoip_dir: &Path, ip: IpAddr) -> Option<String> {
-    let guard = cached_index(geoip_dir)?;
-    let index = &guard.as_ref()?.1;
+    let guard = cached_index(geoip_dir);
+    let index = guard.as_ref()?.index.as_ref()?;
     match ip {
         IpAddr::V4(addr) => find_v4(&index.v4, u32::from(addr)),
         IpAddr::V6(addr) => find_v6(&index.v6, u128::from(addr)),
     }
 }
 
-fn cached_index(
-    geoip_dir: &Path,
-) -> Option<std::sync::MutexGuard<'static, Option<(PathBuf, GeoIndex)>>> {
+fn cached_index(geoip_dir: &Path) -> std::sync::MutexGuard<'static, Option<CachedDir>> {
     let mut slot = cache().lock().unwrap_or_else(|err| err.into_inner());
-    if slot.as_ref().is_some_and(|(dir, _)| dir == geoip_dir) {
-        return Some(slot);
+    if slot.as_ref().is_some_and(|cached| cached.dir == geoip_dir) {
+        return slot;
     }
-    let index = load_index(geoip_dir)?;
-    *slot = Some((geoip_dir.to_path_buf(), index));
-    Some(slot)
+    let index = load_index(geoip_dir);
+    *slot = Some(CachedDir {
+        dir: geoip_dir.to_path_buf(),
+        index,
+    });
+    slot
 }
 
+/// Ranges from different country files can overlap. After the binary search
+/// lands on the rightmost `start <= ip`, walk left through every such start and
+/// keep the tightest containing range (then the lexicographically smallest
+/// country code) so a wider neighbour cannot hide a nested match.
 fn find_v4(ranges: &[(u32, u32, String)], ip: u32) -> Option<String> {
-    let mut lo = 0usize;
-    let mut hi = ranges.len();
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if ranges[mid].0 <= ip {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    if lo == 0 {
-        return None;
-    }
-    let (start, end, code) = &ranges[lo - 1];
-    if *start <= ip && ip <= *end {
-        Some(code.clone())
-    } else {
-        None
-    }
+    find_overlapping(ranges, ip, |start, end, addr| {
+        *start <= addr && addr <= *end
+    })
 }
 
 fn find_v6(ranges: &[(u128, u128, String)], ip: u128) -> Option<String> {
+    find_overlapping(ranges, ip, |start, end, addr| {
+        *start <= addr && addr <= *end
+    })
+}
+
+fn find_overlapping<A>(
+    ranges: &[(A, A, String)],
+    ip: A,
+    contains: impl Fn(&A, &A, A) -> bool,
+) -> Option<String>
+where
+    A: Copy + Ord + std::ops::Sub<Output = A>,
+{
     let mut lo = 0usize;
     let mut hi = ranges.len();
     while lo < hi {
@@ -84,12 +93,26 @@ fn find_v6(ranges: &[(u128, u128, String)], ip: u128) -> Option<String> {
     if lo == 0 {
         return None;
     }
-    let (start, end, code) = &ranges[lo - 1];
-    if *start <= ip && ip <= *end {
-        Some(code.clone())
-    } else {
-        None
+    let mut best: Option<(A, &str)> = None;
+    for idx in (0..lo).rev() {
+        let (start, end, code) = &ranges[idx];
+        if *start > ip {
+            continue;
+        }
+        if !contains(start, end, ip) {
+            continue;
+        }
+        let span = *end - *start;
+        match best {
+            None => best = Some((span, code.as_str())),
+            Some((best_span, best_code)) => {
+                if span < best_span || (span == best_span && code.as_str() < best_code) {
+                    best = Some((span, code.as_str()));
+                }
+            }
+        }
     }
+    best.map(|(_, code)| code.to_string())
 }
 
 fn load_index(dir: &Path) -> Option<GeoIndex> {
@@ -123,8 +146,10 @@ fn load_index(dir: &Path) -> Option<GeoIndex> {
     if v4.is_empty() && v6.is_empty() {
         return None;
     }
-    v4.sort_by_key(|range| range.0);
-    v6.sort_by_key(|range| range.0);
+    // Sort by start, then end ascending so nested ranges stay after their
+    // outer neighbours with the same start and the overlap walk is stable.
+    v4.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    v6.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     Some(GeoIndex { v4, v6 })
 }
 
@@ -219,9 +244,10 @@ fn read_uvarint(data: &[u8], mut index: usize) -> Option<(u64, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::region_code;
+    use super::{find_v4, load_index, region_code};
     use std::net::IpAddr;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn bundled_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-geoip/rule-set")
@@ -235,5 +261,35 @@ mod tests {
         assert_eq!(region_code(&dir, hk).as_deref(), Some("hk"));
         assert_ne!(region_code(&dir, resolver).as_deref(), Some("hk"));
         assert_eq!(region_code(&dir, resolver).as_deref(), Some("us"));
+    }
+
+    #[test]
+    fn prefers_the_tightest_overlapping_range() {
+        // A wide `zz` range surrounds a nested `aa` block. Nearest-preceding
+        // alone would keep `zz` when `aa` starts later; the overlap walk must
+        // return the nested country.
+        let ranges = vec![
+            (10u32, 100u32, "zz".to_string()),
+            (40u32, 50u32, "aa".to_string()),
+        ];
+        assert_eq!(find_v4(&ranges, 45).as_deref(), Some("aa"));
+        assert_eq!(find_v4(&ranges, 20).as_deref(), Some("zz"));
+        assert_eq!(find_v4(&ranges, 200), None);
+    }
+
+    #[test]
+    fn a_missing_geoip_dir_is_cached_as_empty() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let missing = std::env::temp_dir().join(format!("ice-box-geoip-missing-{stamp}"));
+        assert!(!missing.exists());
+        assert!(load_index(&missing).is_none());
+        let missing_ip: IpAddr = "1.2.3.4".parse().unwrap();
+        assert_eq!(region_code(&missing, missing_ip), None);
+        // A second lookup must still miss without panicking; the cache holds
+        // the failed load for this path.
+        assert_eq!(region_code(&missing, missing_ip), None);
     }
 }

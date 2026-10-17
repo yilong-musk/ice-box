@@ -66,6 +66,7 @@ const settings: AppSettings = {
   auto_default_rules: true,
   language: "en",
   check_app_updates: true,
+  probe_exit_ip: true,
   log_debug: false,
   tun: {
     enabled: false,

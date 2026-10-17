@@ -186,7 +186,10 @@ pub(crate) fn outbound_summary(
         }
     }
     let shown_now = group_now.filter(|_| is_group);
-    let (landing_ip, landing_region) = if running {
+    // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
+    // Off by settings (`probe_exit_ip`) or when the core is stopped.
+    let probe_exit = settings.map(|s| s.probe_exit_ip).unwrap_or(true);
+    let (landing_ip, landing_region) = if running && probe_exit {
         match exit_proxy_url(state, settings) {
             Some(proxy) => {
                 let key = format!("{}|{}", outbound.tag, shown_now.as_deref().unwrap_or(""));

@@ -328,6 +328,27 @@ mod tests {
     }
 
     #[test]
+    fn probe_exit_ip_defaults_on_for_legacy_files() {
+        let path = temp_settings_path("legacy-probe-exit-ip");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without probe_exit_ip");
+        assert!(
+            s.probe_exit_ip,
+            "missing flag must mean on so Home keeps showing the landing IP"
+        );
+        assert!(AppSettings::default().probe_exit_ip);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn legacy_settings_without_proxy_service_enabled_loads_as_false() {
         let path = temp_settings_path("legacy-proxy-service");
         let json = r#"{

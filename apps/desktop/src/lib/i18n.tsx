@@ -334,6 +334,9 @@ const zh = {
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.autoDefaultRulesDesc":
     "订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP / 国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS 分流",
+  "settings.probeExitIp": "探测出口公网 IP",
+  "settings.probeExitIpDesc":
+    "核心运行时，约每 30 秒经本地 Mixed 入站向 Cloudflare 发起一次 HTTPS 探测，以便首页显示落地 IP；关闭后不再发起该请求",
   "settings.data": "数据",
   "settings.dataDesc": "日志展示与本地文件",
   "settings.logDebug": "调试模式",
@@ -831,6 +834,9 @@ const en: Record<MessageKey, string> = {
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.autoDefaultRulesDesc":
     "When a subscription carries no rules (e.g. share-link subscriptions), built-in split routing is attached automatically: private IPs / China IPs / China domains go direct and the rest goes through the selected node, with matching China / remote DNS split",
+  "settings.probeExitIp": "Probe public exit IP",
+  "settings.probeExitIpDesc":
+    "While the core is running, about every 30 seconds send one HTTPS probe through the local Mixed inbound to Cloudflare so Home can show the landing IP; turn off to skip those requests",
   "settings.data": "Data",
   "settings.dataDesc": "Log display and local files",
   "settings.logDebug": "Debug logs",

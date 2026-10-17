@@ -19,12 +19,16 @@ ignore = [
     # glib 0.18 is pinned by gtk 0.18 / webkit2gtk 2.0 (Tauri 2 Linux). gtk3-rs
     # is unmaintained; the 0.20 fix requires Tauri's GTK4 migration.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18 unsoundness is pinned by Tauri 2 GTK3; no upgrade until GTK4" },
-    # zip 4.x is pinned by tauri-plugin-updater's `zip` feature (also gates
-    # tar/flate2 for macOS .app.tar.gz). Fixed only in zip >=9; wait for
-    # upstream to bump. Our payloads are signed NSIS / tar.gz, not zip.
-    { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits pinned by tauri-plugin-updater; no zip>=9 until upstream bumps" },
-    { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape pinned by tauri-plugin-updater; no zip>=9 until upstream bumps" },
-    { id = "RUSTSEC-2026-0369", reason = "zip 4.x symlink perms pinned by tauri-plugin-updater; no zip>=9 until upstream bumps" },
+    # zip 4.x is still pulled by tauri-plugin-updater (default `zip` feature;
+    # on Windows zip is a direct dep, and ZipArchive::extract runs only when
+    # the downloaded bytes are a ZIP). Verified against updater 2.11 / 2.14
+    # and our publish path: macOS updater assets are signed `.app.tar.gz`
+    # (tar+flate2), Windows assets are raw signed NSIS `*-setup.exe`
+    # (`extract_exe`, not `extract_zip`). We do not publish `.exe.zip`.
+    # Advisories are fixed only in zip >=9; wait for upstream to bump.
+    { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 4.x symlink perms via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
 ]
 
 [licenses]

@@ -3,10 +3,11 @@
 //! Public exit IP of the current route, measured through the mixed inbound.
 //!
 //! The configured server address is often a hostname, and it is not the
-//! address a destination sees. This probe sends one request through the local
-//! proxy and reads the IP (and country, when the response includes it) from
-//! the far end. Status reads only consult the cache; the request runs on a
-//! background thread.
+//! address a destination sees. This probe sends one HTTPS request through the
+//! local proxy to Cloudflare's trace endpoint and reads the IP (and country,
+//! when the response includes it) from the far end. Status reads only consult
+//! the cache; the request runs on a background thread. See
+//! `docs/architecture.md` (Trust boundaries) and the `probe_exit_ip` setting.
 
 use std::io::Read;
 use std::net::IpAddr;
@@ -17,7 +18,6 @@ use std::time::{Duration, Instant};
 const FRESH: Duration = Duration::from_secs(30);
 const RETRY_AFTER_MISS: Duration = Duration::from_secs(15);
 const TRACE_URL: &str = "https://www.cloudflare.com/cdn-cgi/trace";
-const IP_API_URL: &str = "http://ip-api.com/json/?fields=status,query,countryCode";
 
 struct Cache {
     generation: u64,
@@ -133,9 +133,7 @@ fn fetch_exit(proxy_url: &str) -> Option<(String, Option<String>)> {
         .timeout_write(Duration::from_secs(5))
         .max_idle_connections(0)
         .build();
-    read_limited(&agent, TRACE_URL)
-        .and_then(|body| parse_trace(&body))
-        .or_else(|| read_limited(&agent, IP_API_URL).and_then(|body| parse_ip_api(&body)))
+    read_limited(&agent, TRACE_URL).and_then(|body| parse_trace(&body))
 }
 
 fn read_limited(agent: &ureq::Agent, url: &str) -> Option<String> {
@@ -174,25 +172,9 @@ fn parse_trace(body: &str) -> Option<(String, Option<String>)> {
     ip.map(|ip| (ip, region))
 }
 
-fn parse_ip_api(body: &str) -> Option<(String, Option<String>)> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    if value.get("status").and_then(|status| status.as_str()) != Some("success") {
-        return None;
-    }
-    let ip = value.get("query").and_then(|query| query.as_str())?;
-    if ip.parse::<IpAddr>().is_err() {
-        return None;
-    }
-    let region = value
-        .get("countryCode")
-        .and_then(|code| code.as_str())
-        .and_then(normalize_region);
-    Some((ip.to_string(), region))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{fetch_exit, parse_ip_api, parse_trace};
+    use super::{fetch_exit, parse_trace};
 
     #[test]
     fn trace_yields_the_observed_ip_and_country() {
@@ -200,14 +182,6 @@ mod tests {
         let (ip, region) = parse_trace(body).unwrap();
         assert_eq!(ip, "1.36.1.1");
         assert_eq!(region.as_deref(), Some("hk"));
-    }
-
-    #[test]
-    fn ip_api_yields_the_observed_ip_and_country() {
-        let body = r#"{"status":"success","countryCode":"JP","query":"203.0.113.8"}"#;
-        let (ip, region) = parse_ip_api(body).unwrap();
-        assert_eq!(ip, "203.0.113.8");
-        assert_eq!(region.as_deref(), Some("jp"));
     }
 
     #[test]
