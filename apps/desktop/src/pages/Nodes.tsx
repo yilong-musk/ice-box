@@ -606,9 +606,9 @@ export function Nodes({ onNavigate, active = true }: Props) {
         try {
           const r = await api.testNodeDelay(tag);
           value = r.delay_ms;
-        } catch (e) {
+        } catch {
+          // Probe failure is shown on the delay cell only — same as batch.
           value = "error";
-          if (!multi && isCurrent()) setError(formatInvokeError(e));
         }
         if (!isCurrent()) return;
         writeDelay(tag, value);
