@@ -793,8 +793,10 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
       <div
         className={cn(
-          "grid shrink-0 gap-3",
-          phone ? "grid-cols-1" : "grid-cols-3",
+          "grid gap-3",
+          phone
+            ? "grid-cols-1"
+            : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
         )}
       >
         <Card size="sm" className="w-full min-w-0">
@@ -967,10 +969,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        <div className={cn("flex min-w-0 flex-col gap-3", !phone && "col-start-1 row-span-2 row-start-2")}>
+        <div
+          className={cn(
+            "flex min-w-0 flex-col gap-3",
+            !phone && "col-start-1 row-span-2 row-start-2 min-h-0",
+          )}
+        >
           <Card
             size="sm"
-            className="w-full min-w-0 flex-1"
+            className="flex w-full min-h-0 min-w-0 flex-1 flex-col"
           >
             <CardHeader>
               <CardTitle className="text-xs font-medium text-muted-foreground">
@@ -998,13 +1005,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardContent>
           </Card>
 
-          <Card size="sm" className="w-full min-w-0 flex-1">
+          <Card size="sm" className="flex w-full min-h-0 min-w-0 flex-1 flex-col">
             <CardHeader>
               <CardTitle className="text-xs font-medium text-muted-foreground">
                 {t("home.inboundTitle")}
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-1 flex-col justify-between gap-3">
+            <CardContent className="flex min-h-0 flex-1 flex-col justify-between gap-3">
               <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
                 {inboundLabel}
               </p>
@@ -1048,7 +1055,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           size="sm"
           className={cn(
             "flex w-full min-w-0 flex-col",
-            !phone && "col-span-2 col-start-2 row-span-2 row-start-2",
+            !phone && "col-span-2 col-start-2 row-span-2 row-start-2 min-h-0",
           )}
         >
           <CardHeader className="shrink-0">
@@ -1087,7 +1094,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   </div>
                 ) : null}
                 <TrafficChart
-                  className="h-auto min-h-0"
+                  className="min-h-0"
                   running={running}
                   paused={modeBusy || busy || !active}
                 />
