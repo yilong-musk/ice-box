@@ -13,6 +13,9 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+type V4Cidr = (u32, u32);
+type V6Cidr = (u128, u128);
+
 struct GeoIndex {
     v4: Vec<(u32, u32, String)>,
     v6: Vec<(u128, u128, String)>,
@@ -126,7 +129,7 @@ fn load_index(dir: &Path) -> Option<GeoIndex> {
 }
 
 /// `None` when the file is not a geoip rule-set we know how to read.
-fn parse_srs(bytes: &[u8]) -> Option<(Vec<(u32, u32)>, Vec<(u128, u128)>)> {
+fn parse_srs(bytes: &[u8]) -> Option<(Vec<V4Cidr>, Vec<V6Cidr>)> {
     if bytes.len() < 5 || &bytes[..3] != b"SRS" {
         return None;
     }
