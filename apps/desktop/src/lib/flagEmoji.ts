@@ -18,15 +18,3 @@ export function applyFlagEmojiPolyfill(fontUrl: string): boolean {
     return false;
   }
 }
-
-const REGIONAL_INDICATOR_A = 0x1f1e6;
-
-/** Flag emoji for an ISO 3166-1 alpha-2 code, or `null` when the code is malformed. */
-export function regionFlagEmoji(code: string): string | null {
-  if (!/^[a-z]{2}$/i.test(code)) return null;
-  const upper = code.toUpperCase();
-  return String.fromCodePoint(
-    REGIONAL_INDICATOR_A + upper.charCodeAt(0) - 65,
-    REGIONAL_INDICATOR_A + upper.charCodeAt(1) - 65,
-  );
-}

@@ -268,26 +268,14 @@ back to the saved settings so a command can be prepared before starting it —
 and they never read or write the user's environment outside the process they
 start.
 
-While the core is running and Settings → **Probe public exit IP** is on
-(`probe_exit_ip`, default on), status assembly may start a background HTTPS
-probe through the Mixed inbound to `https://www.cloudflare.com/cdn-cgi/trace`
-(about every 30 seconds per selected outbound, or sooner after a miss). The
-response’s public IP and country code feed Home’s landing fields; when the
-trace omits a country, the app looks the IP up in the bundled
-`geoip-*.srs` rule-sets already used for routing. Turning the setting off
-clears the cache and skips those third-party requests. The probe is
-application-owned telemetry for the UI, not user traffic, and it never uses a
-plaintext HTTP fallback.
-
 While the core is running and Settings → Inbound → **Probe public exit IP**
 (`probe_exit_ip`, default on) is enabled, status assembly may start a
 background HTTPS probe through the local Mixed inbound to
-`https://www.cloudflare.com/cdn-cgi/trace`. The response’s public IP (and
-`loc` country when present) populates Home’s landing address; otherwise the
-bundled `geoip-*.srs` rule-sets supply the country. Probes are keyed by the
-selected outbound, cached for about 30 seconds, and never run when the setting
-is off or the core is stopped. Turning the setting off is the supported
-opt-out; the app does not use plaintext third-party IP lookup fallbacks.
+`https://www.cloudflare.com/cdn-cgi/trace`. The response’s public IP populates
+Home’s landing address. Probes are keyed by the selected outbound, cached for
+about 30 seconds, and never run when the setting is off or the core is stopped.
+Turning the setting off is the supported opt-out; the app does not use
+plaintext third-party IP lookup fallbacks.
 
 On macOS and Windows, app updates run in Rust and verify signed artifacts
 before installation. Android downloads the arm64 APK from the same GitHub

@@ -180,7 +180,6 @@ describe("Home", () => {
         outbound_type: "selector",
         group_now: "HK-1",
         landing_ip: "1.36.1.1",
-        landing_region: "hk",
       },
       ...tunStatus,
     });

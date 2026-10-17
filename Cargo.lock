@@ -1702,7 +1702,6 @@ dependencies = [
  "block2",
  "chrono",
  "dispatch2",
- "flate2",
  "fs2",
  "ice-config",
  "ice-core",

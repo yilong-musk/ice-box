@@ -31,7 +31,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 chrono = { workspace = true }
-flate2 = "1"
 ureq = { workspace = true }
 fs2 = "0.4"
 tauri-plugin-updater = "2.11.0"

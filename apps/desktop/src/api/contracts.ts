@@ -62,8 +62,6 @@ export type SelectedOutbound = {
   group_now: string | null;
   /** Public IP observed by a probe through the mixed inbound. */
   landing_ip?: string | null;
-  /** Lowercase country code of `landing_ip`, such as `hk`. */
-  landing_region?: string | null;
 };
 
 

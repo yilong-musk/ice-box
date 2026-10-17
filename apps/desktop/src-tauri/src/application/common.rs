@@ -162,9 +162,6 @@ pub struct SelectedOutbound {
     pub group_now: Option<String>,
     /// Public IP seen by a probe sent through the mixed inbound.
     pub landing_ip: Option<String>,
-    /// Lowercase country code for `landing_ip` (`hk`), from the probe response
-    /// or the bundled rule-sets. Absent until a probe succeeds.
-    pub landing_region: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]

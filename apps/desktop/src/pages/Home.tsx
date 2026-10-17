@@ -658,7 +658,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const emptyDescription = running
     ? t("home.empty.runningDesc")
     : t("home.empty.idleDesc");
-  // 「内存」is core + app main-process memory — the physical footprint on
+  // Memory is core + app main-process memory — the physical footprint on
   // macOS, the private working set on Windows.
   const memory = status?.memory;
   const memoryToneValue = memoryToneFor(memory);

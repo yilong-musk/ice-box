@@ -6,7 +6,6 @@
 mod common;
 mod core;
 mod exit_probe;
-mod geoip;
 mod host;
 mod logs;
 mod nodes;

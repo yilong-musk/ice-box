@@ -189,17 +189,17 @@ pub(crate) fn outbound_summary(
     // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
     // Off by settings (`probe_exit_ip`) or when the core is stopped.
     let probe_exit = settings.map(|s| s.probe_exit_ip).unwrap_or(true);
-    let (landing_ip, landing_region) = if running && probe_exit {
+    let landing_ip = if running && probe_exit {
         match exit_proxy_url(state, settings) {
             Some(proxy) => {
                 let key = format!("{}|{}", outbound.tag, shown_now.as_deref().unwrap_or(""));
-                super::exit_probe::observe(&key, &proxy, &state.paths.geoip_dir())
+                super::exit_probe::observe(&key, &proxy)
             }
-            None => (None, None),
+            None => None,
         }
     } else {
         super::exit_probe::clear();
-        (None, None)
+        None
     };
     (
         true,
@@ -208,7 +208,6 @@ pub(crate) fn outbound_summary(
             outbound_type: ty,
             group_now: shown_now,
             landing_ip,
-            landing_region,
         }),
     )
 }

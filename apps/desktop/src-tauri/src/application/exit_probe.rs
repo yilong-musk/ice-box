@@ -4,14 +4,12 @@
 //!
 //! The configured server address is often a hostname, and it is not the
 //! address a destination sees. This probe sends one HTTPS request through the
-//! local proxy to Cloudflare's trace endpoint and reads the IP (and country,
-//! when the response includes it) from the far end. Status reads only consult
-//! the cache; the request runs on a background thread. See
+//! local proxy to Cloudflare's trace endpoint and reads the IP from the far end.
+//! Status reads only consult the cache; the request runs on a background thread. See
 //! `docs/architecture.md` (Trust boundaries) and the `probe_exit_ip` setting.
 
 use std::io::Read;
 use std::net::IpAddr;
-use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -24,7 +22,6 @@ struct Cache {
     key: String,
     fetched_at: Instant,
     ip: Option<String>,
-    region: Option<String>,
     inflight_key: Option<String>,
 }
 
@@ -35,7 +32,6 @@ impl Cache {
             key: String::new(),
             fetched_at: Instant::now(),
             ip: None,
-            region: None,
             inflight_key: None,
         }
     }
@@ -60,11 +56,7 @@ pub(crate) fn clear() {
 
 /// Cached exit for `key`. Starts a probe when the sample is missing or stale.
 /// Returns immediately; the first sample appears on a later status read.
-pub(crate) fn observe(
-    key: &str,
-    proxy_url: &str,
-    geoip_dir: &Path,
-) -> (Option<String>, Option<String>) {
+pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<String> {
     let mut slot = lock();
     let same = slot.key == key;
     let age = slot.fetched_at.elapsed();
@@ -74,11 +66,7 @@ pub(crate) fn observe(
         } else {
             age < RETRY_AFTER_MISS
         };
-    let current = if same {
-        (slot.ip.clone(), slot.region.clone())
-    } else {
-        (None, None)
-    };
+    let current = if same { slot.ip.clone() } else { None };
     if fresh || slot.inflight_key.as_deref() == Some(key) {
         return current;
     }
@@ -86,23 +74,11 @@ pub(crate) fn observe(
     slot.inflight_key = Some(key.to_string());
     let probe_key = key.to_string();
     let proxy_url = proxy_url.to_string();
-    let geoip_dir = geoip_dir.to_path_buf();
     drop(slot);
     let spawned = std::thread::Builder::new()
         .name("exit-probe".into())
         .spawn(move || {
-            let probed = fetch_exit(&proxy_url);
-            let (ip, region) = match probed {
-                Some((ip, region)) => {
-                    let region = region.or_else(|| {
-                        ip.parse()
-                            .ok()
-                            .and_then(|addr| super::geoip::region_code(&geoip_dir, addr))
-                    });
-                    (Some(ip), region)
-                }
-                None => (None, None),
-            };
+            let ip = fetch_exit(&proxy_url);
             let mut slot = lock();
             if slot.generation != generation
                 || slot.inflight_key.as_deref() != Some(probe_key.as_str())
@@ -113,7 +89,6 @@ pub(crate) fn observe(
             slot.key = probe_key;
             slot.fetched_at = Instant::now();
             slot.ip = ip;
-            slot.region = region;
         });
     if spawned.is_err() {
         let mut slot = lock();
@@ -124,7 +99,7 @@ pub(crate) fn observe(
     current
 }
 
-fn fetch_exit(proxy_url: &str) -> Option<(String, Option<String>)> {
+fn fetch_exit(proxy_url: &str) -> Option<String> {
     let proxy = ureq::Proxy::new(proxy_url).ok()?;
     let agent = ureq::AgentBuilder::new()
         .proxy(proxy)
@@ -147,29 +122,17 @@ fn read_limited(agent: &ureq::Agent, url: &str) -> Option<String> {
     Some(body)
 }
 
-fn normalize_region(code: &str) -> Option<String> {
-    let code = code.trim();
-    if code.len() == 2 && code.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        Some(code.to_ascii_lowercase())
-    } else {
-        None
-    }
-}
-
-fn parse_trace(body: &str) -> Option<(String, Option<String>)> {
+fn parse_trace(body: &str) -> Option<String> {
     let mut ip = None;
-    let mut region = None;
     for line in body.lines() {
         if let Some(value) = line.strip_prefix("ip=") {
             let value = value.trim();
             if value.parse::<IpAddr>().is_ok() {
                 ip = Some(value.to_string());
             }
-        } else if let Some(value) = line.strip_prefix("loc=") {
-            region = normalize_region(value);
         }
     }
-    ip.map(|ip| (ip, region))
+    ip
 }
 
 #[cfg(test)]
@@ -177,11 +140,9 @@ mod tests {
     use super::{fetch_exit, parse_trace};
 
     #[test]
-    fn trace_yields_the_observed_ip_and_country() {
+    fn trace_yields_the_observed_ip() {
         let body = "ip=1.36.1.1\nloc=HK\ncolo=HKG\n";
-        let (ip, region) = parse_trace(body).unwrap();
-        assert_eq!(ip, "1.36.1.1");
-        assert_eq!(region.as_deref(), Some("hk"));
+        assert_eq!(parse_trace(body).as_deref(), Some("1.36.1.1"));
     }
 
     #[test]
