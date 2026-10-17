@@ -141,7 +141,7 @@ const TrafficPlot = memo(function TrafficPlot({
   return (
     <ChartContainer
       config={config}
-      className="aspect-auto h-24 w-full shrink-0"
+      className="aspect-auto min-h-0 w-full flex-1"
       aria-label={ariaLabel}
     >
       <AreaChart

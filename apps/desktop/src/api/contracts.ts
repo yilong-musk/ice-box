@@ -60,6 +60,10 @@ export type SelectedOutbound = {
   tag: string;
   outbound_type: string;
   group_now: string | null;
+  /** Public IP observed by a probe through the mixed inbound. */
+  landing_ip?: string | null;
+  /** Lowercase country code of `landing_ip`, such as `hk`. */
+  landing_region?: string | null;
 };
 
 
@@ -76,6 +80,8 @@ export type StatusResponse = {
     error: UiMessage | null;
   };
   core: CoreState;
+  /** Epoch ms when the current core run reached `running`; null when stopped. */
+  running_since_ms?: number | null;
   subscription_count: number;
   /** Process memory for the Home memory row (core + app main process). */
   memory: MemoryUsage;

@@ -3,7 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
-import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
+import { clearNodesSnapshot, readNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
@@ -32,13 +32,21 @@ const listenStateChanged = vi.fn();
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
 
-/** Labels of the info panel's rows, in render order. */
-function infoRowLabels(container: HTMLElement): (string | null)[] {
-  const card = within(container).getByText(t("home.infoTitle")).closest("[data-slot=card]");
-  if (!card) throw new Error("home info card not found");
+/** Labels of the health panel's rows, in render order. */
+function healthRowLabels(container: HTMLElement): (string | null)[] {
+  const card = within(container).getByText(t("home.healthTitle")).closest("[data-slot=card]");
+  if (!card) throw new Error("home health card not found");
   return within(card as HTMLElement)
     .getAllByText(/.+/, { selector: "[data-slot=item-description]" })
     .map((node) => node.textContent);
+}
+
+function healthRows(): string[] {
+  return [
+    t("home.health.core"),
+    t("home.health.memory"),
+    t("home.health.network"),
+  ];
 }
 
 vi.mock("../api/client", () => ({
@@ -153,7 +161,7 @@ describe("Home", () => {
     recoverTun.mockResolvedValue(null);
   });
 
-  it("shows current outbound in the status list", async () => {
+  it("shows the health panel with core status, memory, and network", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -171,6 +179,8 @@ describe("Home", () => {
         tag: "Proxies",
         outbound_type: "selector",
         group_now: "HK-1",
+        landing_ip: "1.36.1.1",
+        landing_region: "hk",
       },
       ...tunStatus,
     });
@@ -190,18 +200,30 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText(t("home.info.outbound"))).toBeInTheDocument();
+      expect(view.getByText(t("home.coreStatus.running"))).toBeInTheDocument();
     });
-    expect(view.getByText("Proxies → HK-1")).toBeInTheDocument();
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
     expect(view.getByText(t("home.proxyStatus"))).toBeInTheDocument();
-    expect(view.getByText(t("home.infoTitle"))).toBeInTheDocument();
-    // Row 2 is the memory figure: the capture state it replaced no longer has
-    // a row of its own (it lives in the power subtitle and the warnings).
-    expect(infoRowLabels(container).slice(0, 2)).toEqual([
-      t("home.info.core"),
-      t("home.info.memory"),
-    ]);
+    expect(view.getByText(t("home.healthTitle"))).toBeInTheDocument();
+    expect(healthRowLabels(container)).toEqual(healthRows());
+    const inboundCard = view
+      .getByText(t("home.inboundTitle"))
+      .closest("[data-slot=card]") as HTMLElement;
+    expect(within(inboundCard).getByTestId("home-inbound-address")).toHaveTextContent(
+      "127.0.0.1:17890",
+    );
+    expect(
+      within(inboundCard).getByRole("button", { name: t("home.copyCliProxy") }),
+    ).toBeInTheDocument();
+    expect(
+      within(inboundCard).getByRole("button", { name: t("home.openCliProxy") }),
+    ).toBeInTheDocument();
+    const outboundCard = view
+      .getByText(t("home.outboundTitle"))
+      .closest("[data-slot=card]") as HTMLElement;
+    expect(within(outboundCard).getByText("Proxies → HK-1")).toBeInTheDocument();
+    expect(within(outboundCard).getByTestId("home-outbound-ip")).toHaveTextContent("1.36.1.1");
+    expect(within(outboundCard).queryByTestId("home-outbound-region")).toBeNull();
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
     // Outbound mode is its own module, beside the proxy status card.
     const statusCard = view
@@ -217,16 +239,25 @@ describe("Home", () => {
     expect(
       within(statusCard).getByRole("button", { name: t("home.power.stop") }),
     ).toBeInTheDocument();
+    // TUN mode lives inside the proxy status card, under the power button.
+    expect(
+      within(statusCard).getByRole("switch", { name: t("home.tunMode") }),
+    ).toBeInTheDocument();
+    expect(within(statusCard).getByText(t("home.tunMode"))).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("nodes.batchTest") })).toBeNull();
   });
 
-  it("shows the core + app memory figure with the breakdown tooltip", async () => {
-    getStatus.mockResolvedValue({
+  function statusWithMemory(memory: {
+    app_bytes: number | null;
+    core_bytes: number | null;
+    total_bytes: number;
+  }, coreStatus: "running" | "stopped" = "running") {
+    return {
       core: {
-        status: "running",
+        status: coreStatus,
         message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
+        inbound_host: coreStatus === "running" ? "127.0.0.1" : null,
+        inbound_port: coreStatus === "running" ? 17890 : null,
       },
       subscription_count: 1,
       proxy_recovery_warning: null,
@@ -234,20 +265,91 @@ describe("Home", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
       ...tunStatus,
-      memory: {
+      memory,
+    };
+  }
+
+  it("ticks the proxy run uptime from the backend start time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const startedAt = Date.now() - 65_000;
+      getStatus.mockResolvedValue({
+        core: {
+          status: "running",
+          message: null,
+          inbound_host: "127.0.0.1",
+          inbound_port: 17890,
+        },
+        running_since_ms: startedAt,
+        subscription_count: 1,
+        proxy_recovery_warning: null,
+        system_proxy_applied: true,
+        system_proxy_recorded: true,
+        system_proxy_available: true,
+        has_nodes: true,
+        ...tunStatus,
+      });
+      getSettings.mockResolvedValue({
+        mixed_listen: "127.0.0.1",
+        mixed_port: 17890,
+        clash_api_listen: "127.0.0.1",
+        clash_api_port: 19090,
+        selected_tag: null,
+        auto_set_system_proxy: true,
+        proxy_service_enabled: false,
+        allow_lan: false,
+        proxy_mode: "rule",
+      });
+
+      const view = within(render(<Home />).container);
+      await waitFor(() => {
+        expect(view.getByTestId("home-run-uptime")).toHaveTextContent("01:05");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(view.getByTestId("home-run-uptime")).toHaveTextContent("01:08");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides the run uptime when the core is not running", async () => {
+    getStatus.mockResolvedValue({
+      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
+      running_since_ms: null,
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      has_nodes: true,
+      ...tunStatus,
+    });
+
+    const view = within(render(<Home />).container);
+    await waitFor(() => {
+      expect(view.getByText(t("home.coreStatus.stopped"))).toBeInTheDocument();
+    });
+    expect(view.queryByTestId("home-run-uptime")).toBeNull();
+  });
+
+  it("shows the core + app memory figure with the breakdown tooltip", async () => {
+    getStatus.mockResolvedValue(
+      statusWithMemory({
         app_bytes: 38 * 1024 * 1024,
         core_bytes: 14 * 1024 * 1024,
         total_bytes: 52 * 1024 * 1024,
-      },
-    });
+      }),
+    );
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-info-memory")).toHaveTextContent("52 MB");
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("52 MB");
     });
-    const row = view.getByTestId("home-info-memory");
+    const row = view.getByTestId("home-health-memory");
     expect(row.className).toContain("text-ok");
     expect(row).toHaveAttribute(
       "title",
@@ -256,36 +358,21 @@ describe("Home", () => {
   });
 
   it("keeps the memory breakdown adding up to the figure it labels", async () => {
-    getStatus.mockResolvedValue({
-      core: {
-        status: "running",
-        message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
-      },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: true,
-      system_proxy_recorded: true,
-      system_proxy_available: true,
-      ...tunStatus,
-      // 30.4 MB per side rounds to 30 MB each, while the byte total (60.8 MB)
-      // rounds to 61: the row sums the rounded parts, so the tooltip it shows
-      // adds up to the label.
-      memory: {
+    getStatus.mockResolvedValue(
+      statusWithMemory({
         app_bytes: 30.4 * 1024 * 1024,
         core_bytes: 30.4 * 1024 * 1024,
         total_bytes: 60.8 * 1024 * 1024,
-      },
-    });
+      }),
+    );
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-info-memory")).toHaveTextContent("60 MB");
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("60 MB");
     });
-    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+    expect(view.getByTestId("home-health-memory")).toHaveAttribute(
       "title",
       t("home.memory.tooltip", { core: "30 MB", app: "30 MB" }),
     );
@@ -299,131 +386,117 @@ describe("Home", () => {
   ])(
     "bands the displayed $mb MB memory value as $toneClass",
     async ({ mb, toneClass }) => {
-      getStatus.mockResolvedValue({
-        core: {
-          status: "running",
-          message: null,
-          inbound_host: "127.0.0.1",
-          inbound_port: 17890,
-        },
-        subscription_count: 1,
-        proxy_recovery_warning: null,
-        system_proxy_applied: true,
-        system_proxy_recorded: true,
-        system_proxy_available: true,
-        ...tunStatus,
-        memory: {
+      getStatus.mockResolvedValue(
+        statusWithMemory({
           app_bytes: mb * 1024 * 1024,
           core_bytes: null,
           total_bytes: mb * 1024 * 1024,
-        },
-      });
+        }),
+      );
 
       const { container } = render(<Home />);
       const view = within(container);
 
       await waitFor(() => {
-        expect(view.getByTestId("home-info-memory")).toHaveTextContent(`${mb} MB`);
+        expect(view.getByTestId("home-health-memory")).toHaveTextContent(`${mb} MB`);
       });
-      expect(view.getByTestId("home-info-memory").className).toContain(toneClass);
+      expect(view.getByTestId("home-health-memory").className).toContain(toneClass);
     },
   );
 
   it("falls back to the app-only figure when the core is unreadable", async () => {
-    getStatus.mockResolvedValue({
-      core: {
-        status: "running",
-        message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
-      },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: true,
-      system_proxy_recorded: true,
-      system_proxy_available: true,
-      ...tunStatus,
-      // A privileged macOS core cannot be read — show the app figure and say
-      // the core is not included.
-      memory: {
+    getStatus.mockResolvedValue(
+      statusWithMemory({
         app_bytes: 41 * 1024 * 1024,
         core_bytes: null,
         total_bytes: 41 * 1024 * 1024,
-      },
-    });
+      }),
+    );
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-info-memory")).toHaveTextContent("41 MB");
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("41 MB");
     });
-    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+    expect(view.getByTestId("home-health-memory")).toHaveAttribute(
       "title",
       t("home.memory.tooltipUnreadable", { app: "41 MB" }),
     );
   });
 
   it("notes a stopped core instead of an unreadable one", async () => {
-    getStatus.mockResolvedValue({
-      core: {
-        status: "stopped",
-        message: null,
-        inbound_host: null,
-        inbound_port: null,
-      },
-      subscription_count: 0,
-      proxy_recovery_warning: null,
-      system_proxy_applied: null,
-      system_proxy_recorded: null,
-      system_proxy_available: true,
-      ...tunStatus,
-      memory: {
-        app_bytes: 41 * 1024 * 1024,
-        core_bytes: null,
-        total_bytes: 41 * 1024 * 1024,
-      },
-    });
+    getStatus.mockResolvedValue(
+      statusWithMemory(
+        {
+          app_bytes: 41 * 1024 * 1024,
+          core_bytes: null,
+          total_bytes: 41 * 1024 * 1024,
+        },
+        "stopped",
+      ),
+    );
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-info-memory")).toHaveTextContent("41 MB");
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("41 MB");
     });
-    expect(view.getByTestId("home-info-memory")).toHaveAttribute(
+    expect(view.getByTestId("home-health-memory")).toHaveAttribute(
       "title",
       t("home.memory.tooltipAppOnly", { app: "41 MB" }),
     );
   });
 
   it("shows a dash when no process memory could be read", async () => {
-    getStatus.mockResolvedValue({
-      core: {
-        status: "running",
-        message: null,
-        inbound_host: "127.0.0.1",
-        inbound_port: 17890,
-      },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: true,
-      system_proxy_recorded: true,
-      system_proxy_available: true,
-      ...tunStatus,
-      memory: { app_bytes: null, core_bytes: null, total_bytes: 0 },
-    });
+    getStatus.mockResolvedValue(
+      statusWithMemory({ app_bytes: null, core_bytes: null, total_bytes: 0 }),
+    );
 
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-info-memory")).toHaveTextContent(t("common.dash"));
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent(t("common.dash"));
     });
-    const row = view.getByTestId("home-info-memory");
+    const row = view.getByTestId("home-health-memory");
     expect(row.className).not.toContain("text-ok");
     expect(row.className).not.toContain("text-warn");
     expect(row.className).not.toContain("text-destructive");
+  });
+
+  it("follows the webview network link", async () => {
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-health-network")).toHaveTextContent(
+        t("home.network.online"),
+      );
+    });
+
+    const previous = Object.getOwnPropertyDescriptor(window.navigator, "onLine");
+    Object.defineProperty(window.navigator, "onLine", {
+      configurable: true,
+      get: () => false,
+    });
+    try {
+      fireEvent(window, new Event("offline"));
+      expect(view.getByTestId("home-health-network")).toHaveTextContent(
+        t("home.network.offline"),
+      );
+      expect(view.getByTestId("home-health-network").className).toContain("text-destructive");
+    } finally {
+      if (previous) {
+        Object.defineProperty(window.navigator, "onLine", previous);
+      } else {
+        Object.defineProperty(window.navigator, "onLine", {
+          configurable: true,
+          get: () => true,
+        });
+      }
+    }
   });
 
   it("re-reads status and settings after an out-of-window state change", async () => {
@@ -550,179 +623,6 @@ describe("Home", () => {
     }
   });
 
-  it("updates outbound when the shared node snapshot changes", async () => {
-    getStatus.mockResolvedValue({
-      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: null,
-      system_proxy_recorded: null,
-      system_proxy_available: true,
-      has_nodes: true,
-      selected_outbound: { tag: "node-a", outbound_type: "socks", group_now: null },
-      ...tunStatus,
-    });
-    getSettings.mockResolvedValue({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: "node-a",
-      auto_set_system_proxy: true,
-      proxy_service_enabled: false,
-      allow_lan: false,
-      proxy_mode: "rule",
-      tun: tunSettings,
-    });
-
-    const { container } = render(<Home />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
-      ).toBeInTheDocument();
-    });
-
-    writeNodesSnapshot({
-      nodes: [
-        { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
-        { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
-      ],
-      selectedTag: "node-b",
-      running: false,
-    });
-
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("keeps a node switch that lands while Home is refetching settings", async () => {
-    const nodeList = [
-      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
-      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
-    ];
-    const settingsFor = (tag: string) => ({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: tag,
-      auto_set_system_proxy: true,
-      proxy_service_enabled: false,
-      allow_lan: false,
-      proxy_mode: "rule",
-      tun: tunSettings,
-    });
-    getStatus.mockResolvedValue({
-      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: null,
-      system_proxy_recorded: null,
-      system_proxy_available: true,
-      has_nodes: true,
-      selected_outbound: { tag: "node-a", outbound_type: "socks", group_now: null },
-      ...tunStatus,
-    });
-    getSettings.mockResolvedValue(settingsFor("node-a"));
-
-    const { container, rerender } = render(<Home active />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
-      ).toBeInTheDocument();
-    });
-
-    let resolveSettings: (value: unknown) => void = () => {};
-    getSettings.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSettings = resolve;
-        }),
-    );
-    rerender(<Home active={false} />);
-    rerender(<Home active />);
-    await waitFor(() => {
-      expect(getSettings.mock.calls.length).toBeGreaterThan(1);
-    });
-
-    writeNodesSnapshot({
-      nodes: nodeList,
-      selectedTag: "node-b",
-      running: false,
-    });
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
-      ).toBeInTheDocument();
-    });
-
-    await act(async () => {
-      resolveSettings(settingsFor("node-a"));
-      await Promise.resolve();
-    });
-
-    expect(
-      view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
-    ).toBeInTheDocument();
-    expect(
-      view.queryByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
-    ).toBeNull();
-  });
-
-  it("lets a later status sample replace the shared node snapshot", async () => {
-    const statusFor = (tag: string, type: string, sampledAt: number) => ({
-      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
-      subscription_count: 1,
-      proxy_recovery_warning: null,
-      system_proxy_applied: null,
-      system_proxy_recorded: null,
-      system_proxy_available: true,
-      sampled_at_ms: sampledAt,
-      has_nodes: true,
-      selected_outbound: { tag, outbound_type: type, group_now: null },
-      ...tunStatus,
-    });
-    getStatus.mockResolvedValue(statusFor("node-a", "socks", 1_000));
-
-    const { container } = render(<Home />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-a", type: "socks" })),
-      ).toBeInTheDocument();
-    });
-
-    writeNodesSnapshot({
-      nodes: [
-        { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
-        { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
-      ],
-      selectedTag: "node-b",
-      running: false,
-    });
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-b", type: "vmess" })),
-      ).toBeInTheDocument();
-    });
-
-    getStatus.mockResolvedValue(statusFor("node-c", "trojan", Date.now() + 60_000));
-    await act(async () => {
-      stateChangedHandler?.();
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(
-        view.getByText(t("home.outboundTyped", { tag: "node-c", type: "trojan" })),
-      ).toBeInTheDocument();
-    });
-  });
-
   it("switches proxy mode and reverts when it fails", async () => {
     getStatus.mockResolvedValue({
       core: {
@@ -798,7 +698,7 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText(t("home.empty.idleTitle"))).toBeInTheDocument();
     });
-    expect(view.getByText(t("home.info.outbound")).parentElement).toHaveTextContent(new RegExp(`${t("home.info.outbound")}\\s*${t("common.dash")}`));
+    expect(healthRowLabels(container)).toEqual(healthRows());
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
     const power = view.getByRole("button", { name: t("home.power.start") });
     expect(power).not.toBeDisabled();
@@ -924,7 +824,7 @@ describe("Home", () => {
     expect(power).toHaveAttribute("aria-pressed", "true");
     expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
     expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.proxyOutOfSync"));
-    expect(infoRowLabels(container)[1]).toBe(t("home.info.memory"));
+    expect(healthRowLabels(container)).toEqual(healthRows());
   });
 
   it("does not flash poll errors while power toggle start is pending", async () => {
@@ -1044,15 +944,8 @@ describe("Home", () => {
     });
     const power = view.getByRole("button", { name: t("home.power.stop") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(power).toHaveTextContent(
-      t("home.power.tunActive", {
-        iface: t("common.withIface", { iface: "utun42" }),
-      }),
-    );
-    expect(view.getByText(t("home.info.memory"))).toBeInTheDocument();
-    // Row 2 shows the memory figure; the capture state moved to the power
-    // subtitle asserted above.
-    expect(view.getByTestId("home-info-memory")).toHaveTextContent("38 MB");
+    expect(power).toHaveTextContent(t("home.power.stop"));
+    expect(healthRowLabels(container)).toEqual(healthRows());
   });
 
   it("shows TUN-configured subtitle when service is off", async () => {
@@ -1076,13 +969,11 @@ describe("Home", () => {
     const view = within(container);
 
     // The power button is enabled before the first status arrives; wait for
-    // the status-dependent subtitle so the assertion cannot race the mocked
-    // status resolution.
+    // the TUN-configured status to land so the assertion cannot race the mock.
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(
-        t("home.power.tunReady"),
-      );
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
+    expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
   });
 
   it("disables the power control and shows the reason when TUN is unavailable", async () => {
@@ -1148,9 +1039,7 @@ describe("Home", () => {
     expect(container.textContent).not.toContain(t("tun.unsupportedPlatform"));
     // The power control ignores the hidden TUN desire: system proxy stays usable.
     expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
-    expect(view.getByRole("button", { name: t("home.power.start") })).toHaveTextContent(
-      t("home.power.clickToCapture"),
-    );
+    expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
   });
 
   it("connects and disconnects the VPN from the power button on the phone shell", async () => {
@@ -1216,7 +1105,7 @@ describe("Home", () => {
     const { container } = render(<Home />);
     const view = within(container);
     const power = await view.findByRole("button", { name: t("home.power.vpnStop") });
-    expect(power).toHaveTextContent(t("home.power.vpnOn"));
+    expect(power).toHaveTextContent(t("home.power.vpnStop"));
     fireEvent.click(power);
     await waitFor(() => expect(stop).toHaveBeenCalled());
     expect(stopSystemProxy).not.toHaveBeenCalled();

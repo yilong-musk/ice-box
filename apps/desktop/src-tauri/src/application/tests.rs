@@ -666,6 +666,65 @@ fn cached_system_proxy_applied_ignores_expired_memo_when_proxy_busy() {
 }
 
 #[test]
+fn probe_refresh_keeps_last_system_proxy_value_when_proxy_lock_is_busy() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL};
+    let mut state = temp_state_with_node("probe-busy-proxy");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    let values = ProbeValues {
+        core_generation: state.core_snapshot.load().generation,
+        settings_signature: file_sig(&state.paths.settings()),
+        system_proxy_applied: Some(true),
+        ..ProbeValues::default()
+    };
+    let epoch = state.runtime_status.probe_epoch();
+    state.runtime_status.complete_probe(epoch, Ok(values), aged);
+    {
+        let _busy = state.proxy.lock().unwrap();
+        refresh_runtime_probes(&state);
+    }
+    let status = collect_status(&state).unwrap();
+    assert!(!status.diagnostics.stale);
+    assert!(status.diagnostics.error.is_none());
+    assert_eq!(status.system_proxy_applied, Some(true));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn probe_refresh_does_not_reuse_a_pre_mutation_value_when_proxy_lock_is_busy() {
+    use crate::runtime_status::{ProbeValues, PROBE_INTERVAL};
+    let mut state = temp_state_with_node("probe-busy-after-mutation");
+    state.system_proxy_available = true;
+    let mut core = state.core_snapshot.load().state.clone();
+    core.status = CoreStatus::Running;
+    state.core_snapshot.publish(core);
+    let aged = Instant::now()
+        .checked_sub(PROBE_INTERVAL + std::time::Duration::from_millis(100))
+        .expect("monotonic clock");
+    let values = ProbeValues {
+        core_generation: state.core_snapshot.load().generation,
+        settings_signature: file_sig(&state.paths.settings()),
+        system_proxy_applied: Some(true),
+        ..ProbeValues::default()
+    };
+    let epoch = state.runtime_status.probe_epoch();
+    state.runtime_status.complete_probe(epoch, Ok(values), aged);
+    state.runtime_status.invalidate_probes();
+    {
+        let _busy = state.proxy.lock().unwrap();
+        refresh_runtime_probes(&state);
+    }
+    let status = collect_status(&state).unwrap();
+    assert_eq!(status.system_proxy_applied, None);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn cached_system_proxy_applied_serves_fresh_memo_without_proxy_lock() {
     let state = temp_state_with_node("fresh-cache");
     let settings = ice_config::AppSettings::default();

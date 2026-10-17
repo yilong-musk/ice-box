@@ -185,14 +185,60 @@ pub(crate) fn outbound_summary(
             }
         }
     }
+    let shown_now = group_now.filter(|_| is_group);
+    let (landing_ip, landing_region) = if running {
+        match exit_proxy_url(state, settings) {
+            Some(proxy) => {
+                let key = format!("{}|{}", outbound.tag, shown_now.as_deref().unwrap_or(""));
+                super::exit_probe::observe(&key, &proxy, &state.paths.geoip_dir())
+            }
+            None => (None, None),
+        }
+    } else {
+        super::exit_probe::clear();
+        (None, None)
+    };
     (
         true,
         Some(SelectedOutbound {
             tag: outbound.tag.clone(),
             outbound_type: ty,
-            group_now: group_now.filter(|_| is_group),
+            group_now: shown_now,
+            landing_ip,
+            landing_region,
         }),
     )
+}
+
+/// Loopback HTTP proxy URL for the mixed inbound. A non-loopback listen
+/// (LAN share) is still reached through 127.0.0.1.
+fn exit_proxy_url(state: &AppState, settings: Option<&AppSettings>) -> Option<String> {
+    let core = state.core_snapshot.load();
+    let port = core
+        .state
+        .inbound_port
+        .filter(|port| *port > 0)
+        .or_else(|| settings.map(|settings| settings.mixed_port))
+        .filter(|port| *port > 0)?;
+    let configured = core
+        .state
+        .inbound_host
+        .as_deref()
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .or_else(|| settings.map(|settings| settings.mixed_listen.clone()))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let host = if ice_config::is_loopback_host(&configured) {
+        configured
+    } else {
+        "127.0.0.1".to_string()
+    };
+    let host = host.trim_matches(|ch| ch == '[' || ch == ']');
+    if host.contains(':') {
+        Some(format!("http://[{host}]:{port}"))
+    } else {
+        Some(format!("http://{host}:{port}"))
+    }
 }
 
 #[derive(Serialize)]

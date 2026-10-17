@@ -51,6 +51,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
+import { formatUptime } from "../lib/uptime";
 import { resolveShellProxyEndpoint } from "../lib/shellProxy";
 
 type Props = {
@@ -63,13 +64,30 @@ type Props = {
   onStatus?: (status: StatusResponse) => void;
 };
 
-const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
-
 const PROXY_MODE_KEYS = [
   ["rule", "home.mode.rule"],
   ["global", "home.mode.global"],
   ["direct", "home.mode.direct"],
 ] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
+
+function formatCoreStatus(status: CoreStatus | undefined): string {
+  switch (status) {
+    case "running":
+      return t("home.coreStatus.running");
+    case "stopped":
+      return t("home.coreStatus.stopped");
+    case "starting":
+      return t("home.coreStatus.starting");
+    case "stopping":
+      return t("home.coreStatus.stopping");
+    case "error":
+      return t("home.coreStatus.error");
+    default:
+      return t("common.dash");
+  }
+}
+
+const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
 function formatOutbound(tag: string, nodes: NodeInfo[]): string {
   const node = nodes.find((n) => n.tag === tag);
@@ -97,25 +115,37 @@ function formatSelectedOutbound(outbound: {
   });
 }
 
-function formatCoreStatus(status: CoreStatus | undefined): string {
-  switch (status) {
-    case "running":
-      return t("home.coreStatus.running");
-    case "stopped":
-      return t("home.coreStatus.stopped");
-    case "starting":
-      return t("home.coreStatus.starting");
-    case "stopping":
-      return t("home.coreStatus.stopping");
-    case "error":
-      return t("home.coreStatus.error");
-    default:
-      return t("common.dash");
-  }
+/** Elapsed time since `since` (epoch ms), re-rendered once a second on its own
+ * timer so the parent page does not re-render every tick. */
+function RunUptime({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return <>{formatUptime(now - since)}</>;
+}
+
+/** OS network link as reported by the webview (`online` / `offline`). */
+function useNetworkOnline(): boolean {
+  const [online, setOnline] = useState(
+    () => typeof navigator !== "undefined" && navigator.onLine,
+  );
+  useEffect(() => {
+    const sync = () => setOnline(navigator.onLine);
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
+  return online;
 }
 
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
   useLanguagePreference();
+  const networkOnline = useNetworkOnline();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
   const runtimeRef = useRef(runtime);
@@ -469,7 +499,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const hasNodes = snapshotWins
     ? true
     : status?.has_nodes === true || statusOutbound != null;
-  const outboundLabel = !hasNodes
+  const currentNodeLabel = !hasNodes
     ? running
       ? t("home.outboundDirect")
       : t("common.dash")
@@ -478,8 +508,30 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       : statusOutbound
         ? formatSelectedOutbound(statusOutbound)
         : t("common.dash");
+  // A snapshot that just changed the selection still carries the previous
+  // sample's landing address. Hide it until status catches up.
+  const landingIp = snapshotWins ? null : statusOutbound?.landing_ip;
+  const outboundRows: {
+    label: string;
+    value: string;
+    valueClassName?: string;
+    testId?: string;
+  }[] = [
+    { label: t("home.outbound.node"), value: currentNodeLabel },
+    {
+      label: t("home.outbound.ip"),
+      value: landingIp || t("common.dash"),
+      valueClassName: "font-mono tabular-nums",
+      testId: "home-outbound-ip",
+    },
+  ];
 
   const phone = isPhoneShell();
+  const tunCardVisible =
+    !tunUiHidden &&
+    (phone
+      ? configuredTun && !tunActive && !tunAvailable
+      : proxyAvailable || configuredTun || tunActive);
   const tunnel = status?.tunnel_status ?? "stopped";
   const vpnActive =
     tunnel === "connected" ||
@@ -606,9 +658,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const emptyDescription = running
     ? t("home.empty.runningDesc")
     : t("home.empty.idleDesc");
-  // Row 2「内存」: core + app main-process memory — the physical footprint on
-  // macOS, the private working set on Windows. The capture state that used to
-  // live here stays visible in the power subtitle and the warnings above.
+  // 「内存」is core + app main-process memory — the physical footprint on
+  // macOS, the private working set on Windows.
   const memory = status?.memory;
   const memoryToneValue = memoryToneFor(memory);
   const memoryTip = memory
@@ -633,34 +684,30 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     testId?: string;
   }[] = [
     {
-      label: t("home.info.core"),
+      label: t("home.health.core"),
       value: formatCoreStatus(core?.status),
       valueClassName: `status status-${core?.status ?? "unknown"}`,
     },
     {
-      label: t("home.info.memory"),
+      label: t("home.health.memory"),
       value: memoryLabel(memory),
       title: memoryTip,
-      testId: "home-info-memory",
+      testId: "home-health-memory",
       valueClassName: cn(
         memoryToneValue === "ok" && "text-ok",
         memoryToneValue === "warn" && "text-warn",
         memoryToneValue === "bad" && "text-destructive",
       ),
     },
-    { label: t("home.info.outbound"), value: outboundLabel },
     {
-      label: t("home.info.inbound"),
-      value: inboundLabel,
-      valueClassName: "font-mono tabular-nums",
+      label: t("home.health.network"),
+      value: networkOnline
+        ? t("home.network.online")
+        : t("home.network.offline"),
+      valueClassName: networkOnline ? "text-ok" : "text-destructive",
+      testId: "home-health-network",
     },
   ];
-  if (core?.message) {
-    infoRows.push({
-      label: t("home.info.message"),
-      value: formatUiMessage(core.message),
-    });
-  }
 
   const powerOn = phone ? vpnActive : proxyOn;
   const canToggle = phone ? !busy : canToggleProxy;
@@ -671,28 +718,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     : proxyOn
       ? t("home.power.stop")
       : t("home.power.start");
-  const powerSubtitle = phone
-    ? busy || tunnel === "connecting" || tunnel === "disconnecting"
-      ? t("home.power.busy")
-      : tunnel === "connected"
-        ? t("home.power.vpnOn")
-        : t("home.power.vpnOff")
-    : busy
-      ? t("home.power.busy")
-      : tunActive
-        ? t("home.power.tunActive", {
-            iface: status?.tun_interface
-              ? t("common.withIface", { iface: status.tun_interface })
-              : "",
-          })
-        : proxyLive
-          ? t("home.power.proxyLive")
-          : proxyOn
-            ? t("home.power.recorded")
-            : configuredTun
-              ? t("home.power.tunReady")
-              : t("home.power.clickToCapture");
-
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
 
@@ -768,54 +793,113 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
       <div
         className={cn(
-          "flex shrink-0 gap-3",
-          phone ? "flex-col" : "flex-row flex-wrap items-start",
+          "grid shrink-0 gap-3",
+          phone ? "grid-cols-1" : "grid-cols-3",
         )}
       >
-        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
+        <Card size="sm" className="w-full min-w-0">
           <CardHeader>
             <CardTitle className="text-xs font-medium text-muted-foreground">
               {t("home.proxyStatus")}
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-1 flex-col">
             {phone || proxyAvailable || configuredTun || tunActive ? (
-              <>
+              <div className="flex w-full flex-1 flex-col justify-between gap-3">
                 <Button
                   type="button"
                   size="lg"
                   variant={powerOn ? "default" : "outline"}
-                  className={cn(
-                    "h-auto min-h-11 justify-start gap-2 py-2",
-                    phone ? "w-full" : "w-max",
-                  )}
+                  className="h-auto min-h-11 w-full justify-center gap-2 py-2"
                   disabled={!canToggle}
                   aria-pressed={powerOn}
                   aria-label={powerTitle}
                   onClick={onToggleProxy}
                 >
                   <Power />
-                  <span className="min-w-0 text-left">
-                    <span className="block text-sm font-medium">{powerTitle}</span>
-                    <span
-                      className={cn(
-                        "block text-xs font-normal",
-                        powerOn
-                          ? "text-primary-foreground/80"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {powerSubtitle}
-                    </span>
-                  </span>
+                  <span className="text-sm font-medium">{powerTitle}</span>
                 </Button>
-                {configuredTun && !tunActive && !tunAvailable && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {formatUiMessage(status?.tun_unavailable_reason) ||
-                      t("home.tunUnavailable")}
-                  </p>
+                {tunCardVisible && (
+                  <div className="flex items-center gap-3 whitespace-nowrap">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {t("home.tunMode")}
+                    </span>
+                    {configuredTun && !tunActive && !tunAvailable && (
+                      <span
+                        className="min-w-0 truncate text-xs text-muted-foreground"
+                        title={formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                      >
+                        {formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                      </span>
+                    )}
+                    {!phone && (
+                      <div className="ml-auto flex shrink-0 items-center">
+                        <Switch
+                          checked={tunOverride ?? configuredTun}
+                          onCheckedChange={(pressed) => {
+                            const s = settings;
+                            if (pressed) {
+                              if (!s) return;
+                              if (
+                                status?.helper_supported === true &&
+                                status?.helper_installed !== true
+                              ) {
+                                // No authorized helper (macOS): guide the user to
+                                // install it first; the TUN-on setting is persisted only
+                                // after a successful install (cancel leaves it off).
+                                tunInstall.setOpen(true);
+                                return;
+                              }
+                              if (status?.helper_supported === false) {
+                                // Windows (plan B): a one-time elevation component (a
+                                // scheduled task) makes TUN work without any further
+                                // prompt. The first enable triggers a single UAC to
+                                // install it, then persists the next-start desire.
+                                // Never start/stop the proxy service from this switch.
+                                setTunOverride(true);
+                                void persistTunDesire(async () => {
+                                  if (status?.tun_elevation_ready !== true) {
+                                    await api.ensureTunElevation();
+                                  }
+                                  await api.saveSettings({
+                                    tun: { enabled: true },
+                                  });
+                                });
+                                return;
+                              }
+                              onToggleTunSetting(true);
+                            } else {
+                              onToggleTunSetting(false);
+                            }
+                          }}
+                          disabled={
+                            busy ||
+                            tunSaving ||
+                            !settings ||
+                            status?.tun_available === false ||
+                            status?.helper_stale === true
+                          }
+                          size="lg"
+                          aria-label={t("home.tunMode")}
+                        />
+                      </div>
+                    )}
+                  </div>
                 )}
-              </>
+                {running && status?.running_since_ms != null && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                      {t("home.runUptime")}
+                    </span>
+                    <span
+                      className="font-mono text-sm tabular-nums"
+                      data-testid="home-run-uptime"
+                    >
+                      <RunUptime since={status.running_since_ms} />
+                    </span>
+                  </div>
+                )}
+              </div>
             ) : (
               <p className="muted text-sm">
                 {t("home.unsupported")}
@@ -824,13 +908,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
-          <CardHeader>
-            <CardTitle className="text-xs font-medium text-muted-foreground">
+        <Card size="sm" className="w-full min-w-0">
+          <CardHeader className="[container-type:normal]">
+            <CardTitle className="whitespace-nowrap text-xs font-medium text-muted-foreground">
               {t("home.modeAria")}
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-1 flex-col">
             <ToggleGroup
               type="single"
               variant="outline"
@@ -844,11 +928,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }
               }}
               disabled={modeBusy || busy}
-              className="grid w-max max-w-full"
+              className="flex w-full flex-1 flex-col"
               aria-label={t("home.modeAria")}
             >
               {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
-                <ToggleGroupItem key={mode} value={mode} className="w-full justify-start">
+                <ToggleGroupItem key={mode} value={mode} className="h-auto w-full flex-1">
                   {t(labelKey)}
                 </ToggleGroupItem>
               ))}
@@ -856,71 +940,115 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        {!phone && !tunUiHidden && (
-          <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0 overflow-visible"}>
-            <CardContent>
-              <div className="flex items-center gap-3">
-                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                  {t("home.tunMode")}
-                </span>
-              <Switch
-                checked={tunOverride ?? configuredTun}
-                onCheckedChange={(pressed) => {
-                  const s = settings;
-                  if (pressed) {
-                    if (!s) return;
-                    if (
-                      status?.helper_supported === true &&
-                      status?.helper_installed !== true
-                    ) {
-                      // No authorized helper (macOS): guide the user to
-                      // install it first; the TUN-on setting is persisted only
-                      // after a successful install (cancel leaves it off).
-                      tunInstall.setOpen(true);
-                      return;
-                    }
-                    if (status?.helper_supported === false) {
-                      // Windows (plan B): a one-time elevation component (a
-                      // scheduled task) makes TUN work without any further
-                      // prompt. The first enable triggers a single UAC to
-                      // install it, then persists the next-start desire.
-                      // Never start/stop the proxy service from this switch.
-                      setTunOverride(true);
-                      void persistTunDesire(async () => {
-                        if (status?.tun_elevation_ready !== true) {
-                          await api.ensureTunElevation();
-                        }
-                        await api.saveSettings({
-                          tun: { enabled: true },
-                        });
-                      });
-                      return;
-                    }
-                    onToggleTunSetting(true);
-                  } else {
-                    onToggleTunSetting(false);
-                  }
-                }}
-                disabled={
-                  busy ||
-                  tunSaving ||
-                  !settings ||
-                  status?.tun_available === false ||
-                  status?.helper_stale === true
-                }
-                size="lg"
-                aria-label={t("home.tunMode")}
-              />
-              </div>
+        <Card size="sm" className="w-full min-w-0">
+          <CardHeader>
+            <CardTitle className="text-xs font-medium text-muted-foreground">
+              {t("home.healthTitle")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ItemGroup className="w-full gap-0">
+              {infoRows.map((row, index) => (
+                <div key={row.label}>
+                  {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                  <Item size="xs" className="justify-between rounded-none px-0">
+                    <ItemDescription>{row.label}</ItemDescription>
+                    <ItemTitle
+                      className={row.valueClassName}
+                      title={row.title ?? row.value}
+                      data-testid={row.testId}
+                    >
+                      {row.value}
+                    </ItemTitle>
+                  </Item>
+                </div>
+              ))}
+            </ItemGroup>
+          </CardContent>
+        </Card>
+
+        <div className={cn("flex min-w-0 flex-col gap-3", !phone && "col-start-1 row-span-2 row-start-2")}>
+          <Card
+            size="sm"
+            className="w-full min-w-0 flex-1"
+          >
+            <CardHeader>
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                {t("home.outboundTitle")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-1 flex-col">
+              <ItemGroup className="w-full flex-1 gap-0">
+                {outboundRows.map((row, index) => (
+                  <div key={row.label} className="flex flex-1 flex-col">
+                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                    <Item size="xs" className="flex-1 justify-between rounded-none px-0">
+                      <ItemDescription className="whitespace-nowrap">{row.label}</ItemDescription>
+                      <ItemTitle
+                        className={cn("min-w-0 flex-1 justify-end", row.valueClassName)}
+                        title={row.value}
+                        data-testid={row.testId}
+                      >
+                        <span className="min-w-0 truncate">{row.value}</span>
+                      </ItemTitle>
+                    </Item>
+                  </div>
+                ))}
+              </ItemGroup>
             </CardContent>
           </Card>
-        )}
+
+          <Card size="sm" className="w-full min-w-0 flex-1">
+            <CardHeader>
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                {t("home.inboundTitle")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-1 flex-col justify-between gap-3">
+              <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
+                {inboundLabel}
+              </p>
+              {!phone && cliProxyEndpoint ? (
+                <div className="flex flex-col gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full justify-center gap-2"
+                    aria-label={t("home.copyCliProxy")}
+                    title={t("home.copyCliProxyHint")}
+                    onClick={() => void onCopyCliProxy()}
+                  >
+                    <Copy />
+                    <span className="truncate">
+                      {copiedCliProxy
+                        ? t("home.copyCliProxyCopied")
+                        : t("home.copyCliProxy")}
+                    </span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full justify-center gap-2"
+                    aria-label={t("home.openCliProxy")}
+                    title={t("home.openCliProxyHint")}
+                    onClick={() => void onOpenCliProxy()}
+                  >
+                    <Terminal />
+                    <span className="truncate">{t("home.openCliProxy")}</span>
+                  </Button>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
 
         <Card
           size="sm"
           className={cn(
-            "flex flex-col",
-            phone ? "w-full" : "w-80 max-w-full shrink-0",
+            "flex w-full min-w-0 flex-col",
+            !phone && "col-span-2 col-start-2 row-span-2 row-start-2",
           )}
         >
           <CardHeader className="shrink-0">
@@ -929,7 +1057,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardTitle>
             <CardDescription>{t("home.trafficDesc")}</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col">
+          <CardContent className="flex min-h-0 flex-1 flex-col">
             {!hasNodes && !running ? (
               <EmptyState
                 framed={false}
@@ -968,74 +1096,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        {!phone && cliProxyEndpoint ? (
-          <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0"}>
-            <CardHeader>
-              <CardTitle className="text-xs font-medium text-muted-foreground">
-                {t("home.cliModule")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className={cn("justify-start gap-2", phone ? "w-full" : "w-max")}
-                  aria-label={t("home.copyCliProxy")}
-                  title={t("home.copyCliProxyHint")}
-                  onClick={() => void onCopyCliProxy()}
-                >
-                  <Copy />
-                  <span className="truncate">
-                    {copiedCliProxy
-                      ? t("home.copyCliProxyCopied")
-                      : t("home.copyCliProxy")}
-                  </span>
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className={cn("justify-start gap-2", phone ? "w-full" : "w-max")}
-                  aria-label={t("home.openCliProxy")}
-                  title={t("home.openCliProxyHint")}
-                  onClick={() => void onOpenCliProxy()}
-                >
-                  <Terminal />
-                  <span className="truncate">{t("home.openCliProxy")}</span>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        <Card size="sm" className={phone ? "w-full" : "w-max max-w-full shrink-0 self-start"}>
-          <CardHeader>
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              {t("home.infoTitle")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ItemGroup className="w-max max-w-full gap-0">
-              {infoRows.map((row, index) => (
-                <div key={row.label}>
-                  {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                  <Item size="xs" className="justify-between rounded-none px-0">
-                    <ItemDescription>{row.label}</ItemDescription>
-                    <ItemTitle
-                      className={row.valueClassName}
-                      title={row.title ?? row.value}
-                      data-testid={row.testId}
-                    >
-                      {row.value}
-                    </ItemTitle>
-                  </Item>
-                </div>
-              ))}
-            </ItemGroup>
-          </CardContent>
-        </Card>
       </div>
 
       {!tunUiHidden && (

@@ -160,6 +160,11 @@ pub struct SelectedOutbound {
     pub tag: String,
     pub outbound_type: String,
     pub group_now: Option<String>,
+    /// Public IP seen by a probe sent through the mixed inbound.
+    pub landing_ip: Option<String>,
+    /// Lowercase country code for `landing_ip` (`hk`), from the probe response
+    /// or the bundled rule-sets. Absent until a probe succeeds.
+    pub landing_region: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +177,8 @@ pub struct StatusResponse {
     pub diagnostics: crate::runtime_status::ProbeFreshness,
     pub workers: Vec<crate::workers::WorkerStatus>,
     pub core: CoreState,
+    /// Wall-clock ms when the current core run reached `Running`; `None` when stopped.
+    pub running_since_ms: Option<u64>,
     pub subscription_count: usize,
     /// Process memory for the Home memory row.
     pub memory: MemoryUsage,
@@ -1052,6 +1059,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         diagnostics,
         workers: state.workers.statuses(),
         core: core_state,
+        running_since_ms: core_snapshot.running_since_ms,
         subscription_count: count,
         memory: memory_usage(state, running),
         proxy_recovery_warning,
@@ -1094,11 +1102,10 @@ pub(crate) fn refresh_runtime_probes(state: &AppState) -> bool {
         let settings = current_settings(&state.paths)?;
         let system_proxy_applied =
             if core.state.status == CoreStatus::Running && state.system_proxy_available {
-                Some(
-                    cached_system_proxy_applied(state, &settings).ok_or_else(|| {
-                        AppError::new(ErrorCode::CoreInvalidState, "proxy transition in progress")
-                    })?,
-                )
+                match cached_system_proxy_applied(state, &settings) {
+                    Some(value) => Some(value),
+                    None => state.runtime_status.last_system_proxy_applied(epoch),
+                }
             } else {
                 None
             };
