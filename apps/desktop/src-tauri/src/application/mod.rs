@@ -5,6 +5,7 @@
 
 mod common;
 mod core;
+mod exit_probe;
 mod host;
 mod logs;
 mod nodes;

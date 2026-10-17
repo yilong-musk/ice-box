@@ -146,17 +146,14 @@ const GroupMembers = memo(function GroupMembers({
         return (
           <div
             key={`${groupTag}::${member}`}
-            className={cn(
-              "flex h-8 shrink-0 items-center gap-2 overflow-hidden px-0",
-              isExit && "bg-muted/50",
-            )}
+            className="flex h-8 shrink-0 items-center gap-2 overflow-hidden px-0"
           >
             {selectable ? (
               <button
                 type="button"
                 className={cn(
                   buttonVariants({ variant: "ghost", size: "sm" }),
-                  "h-auto min-w-0 flex-1 justify-start px-0",
+                  "h-7 min-w-0 flex-1 justify-start px-0 text-xs",
                 )}
                 disabled={busy || isExit}
                 aria-current={isExit ? "true" : undefined}
@@ -238,9 +235,9 @@ const NodeRow = memo(function NodeRow({
       <Item
         style={{ height: NODE_ROW_HEIGHT }}
         size="sm"
-        variant={selected ? "muted" : "default"}
+        variant="default"
         className={cn(
-          "box-border flex-nowrap overflow-hidden border-x-0 border-t-0 px-0 py-1.5",
+          "box-border flex-nowrap overflow-hidden rounded-none border-x-0 border-t-0 px-0 py-1.5",
           itemDivider ? "border-b border-border" : "border-b-0",
           expandable && "cursor-pointer",
         )}
@@ -280,7 +277,9 @@ const NodeRow = memo(function NodeRow({
                     </Label>
                   ) : null}
                 </ItemTitle>
-                <ItemDescription>{typeLabel}</ItemDescription>
+                <ItemDescription className="line-clamp-1 leading-4">
+                  {typeLabel}
+                </ItemDescription>
               </ItemContent>
               {node.group_now ? (
                 <span className={badgeVariants({ variant: "outline" })}>
@@ -333,7 +332,9 @@ const NodeRow = memo(function NodeRow({
                   </Label>
                 ) : null}
               </ItemTitle>
-              <ItemDescription>{typeLabel}</ItemDescription>
+              <ItemDescription className="line-clamp-1 leading-4">
+                {typeLabel}
+              </ItemDescription>
             </ItemContent>
             <ItemActions className="flex-nowrap">
               {delayBadge(delay)}
@@ -605,9 +606,9 @@ export function Nodes({ onNavigate, active = true }: Props) {
         try {
           const r = await api.testNodeDelay(tag);
           value = r.delay_ms;
-        } catch (e) {
+        } catch {
+          // Probe failure is shown on the delay cell only — same as batch.
           value = "error";
-          if (!multi && isCurrent()) setError(formatInvokeError(e));
         }
         if (!isCurrent()) return;
         writeDelay(tag, value);

@@ -268,6 +268,15 @@ back to the saved settings so a command can be prepared before starting it —
 and they never read or write the user's environment outside the process they
 start.
 
+While the core is running and Settings → Inbound → **Probe public exit IP**
+(`probe_exit_ip`, default on) is enabled, status assembly may start a
+background HTTPS probe through the local Mixed inbound to
+`https://www.cloudflare.com/cdn-cgi/trace`. The response’s public IP populates
+Home’s landing address. Probes are keyed by the selected outbound, cached for
+about 30 seconds, and never run when the setting is off or the core is stopped.
+Turning the setting off is the supported opt-out; the app does not use
+plaintext third-party IP lookup fallbacks.
+
 On macOS and Windows, app updates run in Rust and verify signed artifacts
 before installation. Android downloads the arm64 APK from the same GitHub
 release and hands it to the system installer. The APK is a release asset and

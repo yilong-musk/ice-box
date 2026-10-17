@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyFlagEmojiPolyfill, FLAG_EMOJI_FONT } from "./flagEmoji";
+import {
+  applyFlagEmojiPolyfill,
+  FLAG_EMOJI_FONT,
+} from "./flagEmoji";
 
 const polyfillCountryFlagEmojis = vi.fn();
 

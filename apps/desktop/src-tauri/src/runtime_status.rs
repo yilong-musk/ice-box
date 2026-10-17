@@ -167,6 +167,18 @@ impl RuntimeReadModel {
         cancel.wait_or_wake(PROBE_INTERVAL, &self.probe_wake)
     }
 
+    /// The last sampled `system_proxy_applied`, kept through a transient lock
+    /// miss so the probe does not record an error for a busy proxy lock. Only
+    /// a sample from `epoch` qualifies: a mutation invalidates the epoch, and
+    /// its pre-mutation value must never be re-served as current.
+    pub(crate) fn last_system_proxy_applied(&self, epoch: u64) -> Option<bool> {
+        let sample = self.probes.lock().unwrap_or_else(|e| e.into_inner());
+        if sample.epoch != epoch || sample.error.is_some() {
+            return None;
+        }
+        sample.values.system_proxy_applied
+    }
+
     pub(crate) fn probes_at(&self, now: Instant) -> (ProbeValues, ProbeFreshness) {
         let sample = self.probes.lock().unwrap_or_else(|e| e.into_inner());
         let age = sample

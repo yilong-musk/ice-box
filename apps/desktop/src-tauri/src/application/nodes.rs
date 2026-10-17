@@ -132,6 +132,33 @@ fn lists_member(outbound: &NormalizedOutbound, tag: &str) -> bool {
         .is_some_and(|members| members.iter().any(|member| member.as_str() == Some(tag)))
 }
 
+/// Missing settings must fail closed: when the user's preference cannot be
+/// read, do not contact the third-party exit probe endpoint.
+pub(crate) fn probe_exit_ip_enabled(settings: Option<&AppSettings>) -> bool {
+    settings.is_some_and(|settings| settings.probe_exit_ip)
+}
+
+/// Include every state that can change the route or the inbound used for the
+/// probe. `outbound.tag` and `group_now` alone miss Rule/Global/Direct switches
+/// and Mixed endpoint edits, which would otherwise show a stale landing IP
+/// until the 30-second sample expires.
+pub(crate) fn exit_probe_cache_key(
+    settings: &AppSettings,
+    proxy_url: &str,
+    outbound_tag: &str,
+    group_now: Option<&str>,
+) -> String {
+    format!(
+        "{}|{}:{}|{}|{}|{}",
+        ice_config::clash_mode_name(settings.proxy_mode),
+        settings.mixed_listen,
+        settings.mixed_port,
+        proxy_url,
+        outbound_tag,
+        group_now.unwrap_or("")
+    )
+}
+
 /// Home's one-line exit. Does not clone strategy-group member lists.
 pub(crate) fn outbound_summary(
     state: &AppState,
@@ -185,14 +212,62 @@ pub(crate) fn outbound_summary(
             }
         }
     }
+    let shown_now = group_now.filter(|_| is_group);
+    // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
+    // Off by settings (`probe_exit_ip`) or when the core is stopped.
+    let landing_ip = if running && probe_exit_ip_enabled(settings) {
+        match (settings, exit_proxy_url(state, settings)) {
+            (Some(settings), Some(proxy)) => {
+                let key =
+                    exit_probe_cache_key(settings, &proxy, &outbound.tag, shown_now.as_deref());
+                super::exit_probe::observe(&key, &proxy)
+            }
+            _ => None,
+        }
+    } else {
+        super::exit_probe::clear();
+        None
+    };
     (
         true,
         Some(SelectedOutbound {
             tag: outbound.tag.clone(),
             outbound_type: ty,
-            group_now: group_now.filter(|_| is_group),
+            group_now: shown_now,
+            landing_ip,
         }),
     )
+}
+
+/// Loopback HTTP proxy URL for the mixed inbound. A non-loopback listen
+/// (LAN share) is still reached through 127.0.0.1.
+fn exit_proxy_url(state: &AppState, settings: Option<&AppSettings>) -> Option<String> {
+    let core = state.core_snapshot.load();
+    let port = core
+        .state
+        .inbound_port
+        .filter(|port| *port > 0)
+        .or_else(|| settings.map(|settings| settings.mixed_port))
+        .filter(|port| *port > 0)?;
+    let configured = core
+        .state
+        .inbound_host
+        .as_deref()
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .or_else(|| settings.map(|settings| settings.mixed_listen.clone()))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let host = if ice_config::is_loopback_host(&configured) {
+        configured
+    } else {
+        "127.0.0.1".to_string()
+    };
+    let host = host.trim_matches(|ch| ch == '[' || ch == ']');
+    if host.contains(':') {
+        Some(format!("http://[{host}]:{port}"))
+    } else {
+        Some(format!("http://{host}:{port}"))
+    }
 }
 
 #[derive(Serialize)]

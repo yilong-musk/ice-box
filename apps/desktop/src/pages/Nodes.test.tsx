@@ -621,6 +621,29 @@ describe("Nodes", () => {
     expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
   });
 
+  it("marks a failed single-node delay test on the cell without a page alert", async () => {
+    testNodeDelay.mockRejectedValueOnce("probe timed out");
+    const { container } = render(<Nodes />);
+    const view = within(container);
+
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const row = within(nodeList)
+      .getAllByRole("button", { name: t("nodes.test") })[0]
+      .closest("[data-slot='item']");
+    expect(row).not.toBeNull();
+    fireEvent.click(
+      within(row as HTMLElement).getByRole("button", { name: t("nodes.test") }),
+    );
+
+    await waitFor(() => {
+      expect(within(row as HTMLElement).getByTestId("delay-error")).toHaveTextContent(
+        t("delay.failed"),
+      );
+    });
+    expect(view.queryByRole("alert")).not.toBeInTheDocument();
+    expect(view.queryByText("probe timed out")).not.toBeInTheDocument();
+  });
+
   it("shows an error when a collapsed group has no exit to test", async () => {
     listNodes.mockResolvedValue([
       {

@@ -147,8 +147,9 @@ async function capture(browser, baseUrl, target) {
     await waitForLanguage(page, target);
     await page.evaluate(() => window.dispatchEvent(new Event("resize")));
     await page.waitForFunction(() => {
+      // The home chart is a compact module, not a full-height pane.
       const el = document.querySelector(".recharts-wrapper");
-      return el && el.getBoundingClientRect().height >= 240;
+      return el && el.getBoundingClientRect().height >= 80;
     }, { timeout: 15_000 });
     await new Promise((resolve) => setTimeout(resolve, 400));
     return await page.screenshot({ type: "png" });

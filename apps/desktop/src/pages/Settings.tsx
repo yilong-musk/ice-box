@@ -45,6 +45,7 @@ const defaults: AppSettings = {
   auto_default_rules: true,
   language: "system",
   check_app_updates: true,
+  probe_exit_ip: true,
   log_debug: false,
   tray_display_mode: "icon_and_speed",
   launch_at_login: false,
@@ -81,6 +82,7 @@ function settingsOwnedPatch(form: AppSettings): SettingsPatch {
     auto_default_rules: form.auto_default_rules,
     language: form.language,
     check_app_updates: form.check_app_updates,
+    probe_exit_ip: form.probe_exit_ip,
     log_debug: form.log_debug,
     tray_display_mode: form.tray_display_mode,
   };

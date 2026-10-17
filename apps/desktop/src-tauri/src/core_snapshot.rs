@@ -5,6 +5,7 @@
 //! Transitions still serialize on `AppState.core`. Status polling and the
 //! UI event read an immutable snapshot and never take that mutex.
 
+use crate::runtime_status::timestamp_ms;
 use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, CoreStatus, ReloadOutcome};
 use serde::Serialize;
 use std::path::Path;
@@ -39,6 +40,8 @@ fn runtime_probe_invalidations_are_coalesced_and_rearmed_on_mutations() {
 pub struct CoreSnapshot {
     pub state: CoreState,
     pub generation: u64,
+    /// Wall-clock ms when the current run first reached `Running`; `None` otherwise.
+    pub running_since_ms: Option<u64>,
 }
 
 pub struct CoreSnapshotHub {
@@ -51,6 +54,7 @@ impl CoreSnapshotHub {
     pub fn from_state(state: CoreState) -> Arc<Self> {
         Arc::new(Self {
             inner: RwLock::new(Arc::new(CoreSnapshot {
+                running_since_ms: running_since(&state, None),
                 state,
                 generation: 0,
             })),
@@ -70,11 +74,25 @@ impl CoreSnapshotHub {
     }
 
     pub fn publish(&self, state: CoreState) {
+        self.publish_with_run_start(state, false);
+    }
+
+    fn publish_restarted(&self, state: CoreState) {
+        self.publish_with_run_start(state, true);
+    }
+
+    fn publish_with_run_start(&self, state: CoreState, restart_run: bool) {
         self.request_probe_refresh();
         let snapshot = {
             let mut slot = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let generation = slot.generation.saturating_add(1);
-            let next = Arc::new(CoreSnapshot { state, generation });
+            let previous = (!restart_run).then_some(slot.running_since_ms).flatten();
+            let running_since_ms = running_since(&state, previous);
+            let next = Arc::new(CoreSnapshot {
+                state,
+                generation,
+                running_since_ms,
+            });
             *slot = next.clone();
             next
         };
@@ -91,6 +109,14 @@ impl CoreSnapshotHub {
 
     pub fn take_probe_refresh(&self) -> bool {
         self.probes_dirty.swap(false, Ordering::AcqRel)
+    }
+}
+
+/// Keeps the start of an ongoing run; a run starts when `Running` is first seen.
+fn running_since(state: &CoreState, previous: Option<u64>) -> Option<u64> {
+    match state.status {
+        CoreStatus::Running => previous.or_else(|| Some(timestamp_ms())),
+        _ => None,
     }
 }
 
@@ -135,7 +161,11 @@ impl CoreHandle for PublishingCore {
 
     fn reload(&mut self, paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
         let result = self.inner.reload(paths);
-        self.publish();
+        if matches!(&result, Ok(ReloadOutcome::Restarted)) {
+            self.hub.publish_restarted(self.inner.state());
+        } else {
+            self.publish();
+        }
         result
     }
 
@@ -179,4 +209,111 @@ pub fn wrap_core(
     let hub = CoreSnapshotHub::from_state(inner.state());
     let wrapped: Box<dyn CoreHandle> = Box::new(PublishingCore::new(inner, hub.clone()));
     (std::sync::Mutex::new(wrapped), hub)
+}
+
+#[cfg(test)]
+#[test]
+fn running_since_survives_repeated_running_publishes_and_clears_on_stop() {
+    let hub = CoreSnapshotHub::from_state(CoreState::default());
+    assert_eq!(hub.load().running_since_ms, None);
+    let running = CoreState {
+        status: CoreStatus::Running,
+        ..CoreState::default()
+    };
+    hub.publish(running.clone());
+    let started = hub
+        .load()
+        .running_since_ms
+        .expect("running run has a start time");
+    hub.publish(running);
+    assert_eq!(hub.load().running_since_ms, Some(started));
+    hub.publish(CoreState::default());
+    assert_eq!(hub.load().running_since_ms, None);
+}
+
+#[cfg(test)]
+#[test]
+fn a_restarted_reload_starts_a_new_run_clock() {
+    let running = CoreState {
+        status: CoreStatus::Running,
+        ..CoreState::default()
+    };
+    let hub = CoreSnapshotHub::from_state(running.clone());
+    let started = hub
+        .load()
+        .running_since_ms
+        .expect("running run has a start time");
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let inner = RestartingReloadCore {
+        state: running,
+        outcome: ReloadOutcome::Restarted,
+    };
+    let mut core = PublishingCore::new(Box::new(inner), hub.clone());
+    let paths = CorePaths {
+        binary: std::path::PathBuf::new(),
+        extra_binaries: Vec::new(),
+        config: std::path::PathBuf::new(),
+        log_file: std::path::PathBuf::new(),
+        pid_file: std::path::PathBuf::new(),
+        inbound_host: "127.0.0.1".into(),
+        inbound_port: 17890,
+        clash_api_host: "127.0.0.1".into(),
+        clash_api_port: 19090,
+        clash_api_secret: String::new(),
+        allow_lan: false,
+    };
+    assert_eq!(
+        core.reload(&paths).expect("mock reload"),
+        ReloadOutcome::Restarted
+    );
+
+    let restarted = hub
+        .load()
+        .running_since_ms
+        .expect("restarted run has a start time");
+    assert!(restarted > started);
+}
+
+#[cfg(test)]
+struct RestartingReloadCore {
+    state: CoreState,
+    outcome: ReloadOutcome,
+}
+
+#[cfg(test)]
+impl CoreHandle for RestartingReloadCore {
+    fn state(&self) -> CoreState {
+        self.state.clone()
+    }
+
+    fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+        Ok(self.outcome)
+    }
+
+    fn needs_proxy_restore(&self) -> bool {
+        false
+    }
+
+    fn clear_needs_proxy_restore(&mut self) {}
+
+    fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+        false
+    }
+
+    fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    fn reclaim_orphan_pid(&mut self, _pid_file: &Path, _cores: &[&Path]) -> Result<(), CoreError> {
+        Ok(())
+    }
 }

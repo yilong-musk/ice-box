@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "ice-app"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-engine",
  "serde",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "block2",
  "chrono",
@@ -1725,6 +1725,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "ureq",
  "url",
  "uuid",
  "windows-sys 0.59.0",
@@ -1732,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box-mobile"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "chrono",
  "ice-app",
@@ -1753,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -1768,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config-guard"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-types",
  "libc",
@@ -1778,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "ice-core"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "ice-types",
@@ -1795,14 +1796,14 @@ dependencies = [
 
 [[package]]
 name = "ice-elevate"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ice-engine"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-config",
  "ice-subscription",
@@ -1813,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "ice-helper"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-config-guard",
  "ice-tun-helper-proto",
@@ -1828,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "ice-proxy-sys"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1843,7 +1844,7 @@ dependencies = [
 
 [[package]]
 name = "ice-subscription"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1868,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-helper-proto"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-types",
  "serde",
@@ -1877,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-journal"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "chrono",
  "ice-types",
@@ -1887,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-launcher"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "ice-config-guard",
  "ice-tun-pin",
@@ -1898,14 +1899,14 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-pin"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "ice-tun-sys"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "chrono",
  "ice-config-guard",
@@ -1925,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "ice-types"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "serde",
  "serde_json",
@@ -3374,9 +3375,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -4331,7 +4332,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-tunnel"
-version = "0.1.23"
+version = "0.1.30"
 dependencies = [
  "serde",
  "serde_json",

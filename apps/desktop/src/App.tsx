@@ -356,7 +356,7 @@ function AppShell() {
             <img
               src={logo}
               alt=""
-              className="size-7 shrink-0 object-contain"
+              className="size-7 shrink-0 rounded-md object-contain"
               aria-hidden="true"
             />
             <div className="min-w-0 flex-1">
@@ -396,7 +396,7 @@ function AppShell() {
                 className={cn(
                   "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-xs leading-tight",
                   tab === id
-                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    ? "font-medium text-primary"
                     : "text-sidebar-foreground/70",
                 )}
                 onClick={() => selectTab(id)}
@@ -462,7 +462,7 @@ function AppShell() {
                   <img
                     src={logo}
                     alt=""
-                    className="size-7 shrink-0 object-contain"
+                    className="size-7 shrink-0 rounded-md object-contain"
                     aria-hidden="true"
                   />
                   <h1 className="font-heading text-sm font-medium tracking-tight">
@@ -480,7 +480,7 @@ function AppShell() {
                   {availableUpdate?.available && availableUpdate.version ? (
                     <button
                       type="button"
-                      className="inline-flex size-4 shrink-0 items-center justify-center text-green-500 hover:text-green-400"
+                      className="inline-flex size-4 shrink-0 items-center justify-center text-ok hover:text-ok/80"
                       aria-label={t("app.updateAvailableAria", {
                         version: availableUpdate.version,
                       })}

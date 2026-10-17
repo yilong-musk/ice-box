@@ -349,6 +349,12 @@ pub struct AppSettings {
     /// for existing `settings.json` files; the Settings page can turn it off.
     #[serde(default = "default_check_app_updates")]
     pub check_app_updates: bool,
+    /// While the core is running, periodically probe the public exit IP through
+    /// the mixed inbound (Cloudflare trace) so Home can show the landing
+    /// address. Defaults to on for existing `settings.json` files; turn off to
+    /// skip those third-party requests.
+    #[serde(default = "default_probe_exit_ip")]
+    pub probe_exit_ip: bool,
     /// Logs page shows every parsed line when true. Display-only; default
     /// off (connections and important events). Missing field → false.
     #[serde(default)]
@@ -376,6 +382,10 @@ fn default_check_app_updates() -> bool {
     true
 }
 
+fn default_probe_exit_ip() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -392,6 +402,7 @@ impl Default for AppSettings {
             auto_default_rules: true,
             language: LanguagePreference::System,
             check_app_updates: true,
+            probe_exit_ip: true,
             log_debug: false,
             tray_display_mode: TrayDisplayMode::IconAndSpeed,
             launch_at_login: false,
@@ -491,6 +502,9 @@ impl AppSettings {
         if let Some(v) = patch.check_app_updates {
             next.check_app_updates = v;
         }
+        if let Some(v) = patch.probe_exit_ip {
+            next.probe_exit_ip = v;
+        }
         if let Some(v) = patch.log_debug {
             next.log_debug = v;
         }
@@ -540,6 +554,8 @@ pub struct SettingsPatch {
     pub language: Option<LanguagePreference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_app_updates: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_exit_ip: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_debug: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

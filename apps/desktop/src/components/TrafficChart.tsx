@@ -478,7 +478,7 @@ export function TrafficChart({ running, paused = false, className }: Props) {
         config={chartConfig}
         ariaLabel={ariaLabel}
       />
-      <p className="muted shrink-0 text-xs">
+      <p className="muted shrink-0 text-pretty text-xs">
         {t("traffic.peak", {
           rate: formatRate(maxVal),
           n: WINDOW_SECONDS,
