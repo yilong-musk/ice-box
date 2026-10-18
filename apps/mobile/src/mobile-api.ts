@@ -12,6 +12,7 @@ import type {
   DelayTestResponse,
   ListRulesRequest,
   ListRulesResponse,
+  McpStatus,
   NodeInfo,
   ProxyMode,
   RuleOverview,
@@ -26,6 +27,18 @@ import type {
 
 const noop = async () => {};
 const unlisten = async () => () => {};
+const unsupportedMcp = async (): Promise<McpStatus> => ({
+  supported: false,
+  enabled: false,
+  running: false,
+  endpoint: null,
+  client_count: 0,
+  tool_count: 0,
+  bridge_executable: "",
+  bridge_args: [],
+  client_config: "",
+  error: null,
+});
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -142,4 +155,7 @@ export const api = {
     ),
   setTrayLanguage: noop,
   setTrayUpdateAvailable: noop,
+  getMcpStatus: unsupportedMcp,
+  setMcpEnabled: unsupportedMcp,
+  restartMcp: unsupportedMcp,
 } satisfies ApiContract;

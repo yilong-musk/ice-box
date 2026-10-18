@@ -4,3 +4,8 @@
 export function isPhoneShell(): boolean {
   return false;
 }
+
+/** True only in the desktop shell; the website demo also uses `isPhoneShell=false`. */
+export function isDesktopShell(): boolean {
+  return true;
+}

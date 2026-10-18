@@ -11,6 +11,8 @@ design decisions.
 ```mermaid
 flowchart LR
     UI["React UI"] <-->|"Commands and events"| App["Tauri / Rust application"]
+    Agent["MCP Agent"] <-->|"stdio bridge"| Mcp["Desktop MCP listener"]
+    Mcp <-->|"Shared use cases"| App
     Subs["Subscription sources"] -->|"Fetch and normalize"| Engine["Configuration engine"]
     Engine -->|"Runtime configuration"| App
     App -->|"Start, reload, observe"| Core["sing-box process"]
@@ -33,6 +35,9 @@ through React or the application's configuration code.
 | macOS and Windows | [`apps/desktop`](../apps/desktop) | One sing-box process. TUN starts it through a privileged runner | System proxy or [TUN](tun.md) |
 | Android | [`apps/mobile`](../apps/mobile) | libbox inside the VPN service process (`:tunnel`) | Android VPN service |
 | Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop UI |
+
+Only the macOS and Windows desktop shell exposes MCP. Android and the website
+do not start or render that control surface. See [`mcp.md`](mcp.md).
 
 The Android application id is `com.yilongmusk.icebox`, and `minSdk` is 34. The
 published build is one `arm64-v8a` APK. The phone UI hides desktop ports, the
@@ -128,6 +133,20 @@ Their Tauri implementation lives in `app_host.rs`, outside the service layer.
 This is a module-level boundary, not a separate headless crate: `AppState` and
 the shell build still depend on Tauri. The configuration-only scope of
 `ice-engine` and the existing capture rollback paths are unchanged.
+
+### MCP control surface
+
+The desktop process owns the MCP listener as well as `AppState`. A lightweight
+stdio bridge invokes the same executable with `--mcp-stdio`; it forwards
+protocol messages to the authenticated loopback listener and exits with the
+Agent connection. It never opens the data directory as a second runtime owner
+and never starts another core or capture controller.
+
+MCP tool handlers are thin adapters over existing `application` use cases. They
+share orchestration locks, validation, filesystem state, and GUI event
+broadcasts with Tauri commands. The server is opt-in and disabled by default.
+Its endpoint and token are regenerated for each service generation. Android and
+the browser demo have no MCP implementation or navigation entry.
 
 ### Runtime reads and diagnostics
 

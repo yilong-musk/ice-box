@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   ArrowUpCircle,
+  Bot,
   House,
   ListFilter,
   Rss,
@@ -23,6 +24,7 @@ import { Nodes } from "./pages/Nodes";
 import { Subscriptions } from "./pages/Subscriptions";
 import { Rules } from "./pages/Rules";
 import { Logs } from "./pages/Logs";
+import { Mcp } from "./pages/Mcp";
 import { Settings } from "./pages/Settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -41,7 +43,7 @@ import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
-import { isPhoneShell } from "@platform/shell";
+import { isDesktopShell, isPhoneShell } from "@platform/shell";
 import { detectWindowChrome } from "@platform/windowChrome";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -55,7 +57,7 @@ import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import logo from "./assets/logo.png";
 
-type Tab = "home" | "nodes" | "subs" | "rules" | "logs" | "settings";
+type Tab = "home" | "nodes" | "subs" | "rules" | "settings" | "mcp" | "logs";
 
 const SIDEBAR_WIDTH = "11rem";
 
@@ -92,8 +94,9 @@ const NAV_ITEMS: {
   { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
   { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
   { id: "subs", labelKey: "app.nav.subs", icon: Rss },
-  { id: "logs", labelKey: "app.nav.logs", icon: ScrollText },
   { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
+  { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
+  { id: "logs", labelKey: "app.nav.logs", icon: ScrollText },
 ];
 
 function TitleBar({ label }: { label: string }) {
@@ -288,9 +291,10 @@ function AppShell() {
   }
 
   const phone = isPhoneShell();
-  const navItems = phone
-    ? NAV_ITEMS.filter((item) => item.id !== "logs")
-    : NAV_ITEMS;
+  const desktop = isDesktopShell();
+  const navItems = NAV_ITEMS.filter(
+    (item) => (desktop || item.id !== "mcp") && (!phone || item.id !== "logs"),
+  );
   const current = navItems.find((item) => item.id === tab);
 
   const pages = (
@@ -332,6 +336,11 @@ function AppShell() {
             onAvailableUpdate={setAvailableUpdate}
             focusUpdateNonce={focusUpdateNonce}
           />
+        </TabPane>
+      )}
+      {desktop && visited.has("mcp") && (
+        <TabPane active={tab === "mcp"}>
+          <Mcp active={tab === "mcp"} />
         </TabPane>
       )}
     </>

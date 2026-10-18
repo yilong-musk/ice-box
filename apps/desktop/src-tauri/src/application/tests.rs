@@ -579,6 +579,122 @@ fn collect_status_reports_app_memory_and_skips_a_stopped_core() {
 }
 
 #[test]
+fn subscription_auto_update_announces_the_shared_state_change() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+
+    let state = temp_state_with_node("auto-update-notify");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+
+    set_auto_update_subscription_use_case(
+        &host,
+        &state,
+        SetAutoUpdateRequest {
+            id,
+            auto_update: true,
+            auto_update_interval: Some(ice_engine::AutoUpdateInterval::ThreeHours),
+        },
+    )
+    .expect("set auto update");
+
+    assert_eq!(host.notifications.get(), 1);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn rule_mutations_announce_even_when_the_mutation_fails() {
+    struct Host {
+        notifications: std::cell::Cell<usize>,
+    }
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {
+            self.notifications.set(self.notifications.get() + 1);
+        }
+    }
+
+    let state = temp_state_with_rules("rule-notify", sample_rules());
+    let host = Host {
+        notifications: std::cell::Cell::new(0),
+    };
+    let error = set_rule_disabled_use_case(
+        &host,
+        &state,
+        SetRuleDisabledRequest {
+            fingerprint: "missing".into(),
+            disabled: true,
+        },
+    )
+    .expect_err("unknown rule");
+
+    assert_eq!(error.code, ErrorCode::ConfigInvalid.as_str());
+    assert_eq!(host.notifications.get(), 1);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn startup_is_rejected_while_the_application_is_quitting() {
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("quit-start-guard");
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = start_core_inner(&Host, &state).expect_err("start while quitting");
+    assert_eq!(error.code, ErrorCode::CoreInvalidState.as_str());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn stopping_the_core_clears_the_next_launch_proxy_service_desire() {
+    let state = temp_state_with_node("stop-core-proxy-desire");
+    set_proxy_service_enabled(&state.paths.settings(), true).expect("proxy desire");
+
+    stop_core_with_binary(&state, std::env::current_exe().expect("test executable"))
+        .expect("stop core");
+
+    assert!(
+        !current_settings(&state.paths)
+            .unwrap()
+            .proxy_service_enabled
+    );
+    assert!(
+        !state
+            .shutdown_requested
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "an explicit stop must allow a later start"
+    );
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn collect_status_reads_core_memory_from_a_live_pid() {
     let state = temp_state_with_node("memory-running");
     // The test process stands in for the core: a live pid whose memory figure

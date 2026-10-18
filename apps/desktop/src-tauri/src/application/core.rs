@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use std::path::PathBuf;
+
+fn ensure_start_is_allowed(state: &AppState) -> Result<(), AppError> {
+    if state.shutdown_requested.load(Ordering::SeqCst) {
+        return Err(AppError::new(
+            ErrorCode::CoreInvalidState,
+            "the application is shutting down",
+        ));
+    }
+    Ok(())
+}
 
 /// Start the core process. Callers that already hold `orchestrate` skip
 /// the orchestrate lock.
 pub(crate) fn start_core_inner(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
+    ensure_start_is_allowed(state)?;
     let settings = current_settings(&state.paths)?;
     {
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -31,6 +43,7 @@ pub(crate) fn start_core_inner(app: &impl AppHost, state: &AppState) -> Result<(
 /// start the configured capture backend (system proxy or TUN, `docs/tun.md`).
 pub(crate) fn start_service(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
+    ensure_start_is_allowed(state)?;
     let settings = current_settings(&state.paths)?;
     {
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
@@ -135,6 +148,33 @@ pub(crate) fn start_service(app: &impl AppHost, state: &AppState) -> Result<(), 
     drop(_orch);
     broadcast_state_change(app);
     Ok(())
+}
+
+/// Stop the core and capture, and record that the proxy service should remain
+/// off on the next launch. Unlike quit cleanup, this is an explicit user/Agent
+/// stop rather than a temporary process exit.
+pub(crate) fn stop_core_use_case(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
+    let result = binary_for(app).and_then(|binary| stop_core_with_binary(state, binary));
+    broadcast_state_change(app);
+    result
+}
+
+pub(crate) fn stop_core_with_binary(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    state.shutdown_requested.store(true, Ordering::SeqCst);
+    let result = match state.orchestrate.lock() {
+        Ok(_orch) => {
+            let result = crate::shutdown::graceful_stop_locked(state, binary).and_then(|()| {
+                set_proxy_service_enabled_for(&state.paths.settings(), false, host_platform())
+            });
+            state.shutdown_requested.store(false, Ordering::SeqCst);
+            result
+        }
+        Err(_) => {
+            state.shutdown_requested.store(false, Ordering::SeqCst);
+            Err(lock_poisoned("orchestrate"))
+        }
+    };
+    result
 }
 
 /// App-launch path: reclaim leftover cores, recover crash leftovers, then

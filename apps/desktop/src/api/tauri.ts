@@ -3,7 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, CheckAppUpdateResponse, DelayTestResponse, ListRulesRequest, ListRulesResponse, NodeInfo, ProxyMode, RuleOverview, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, CheckAppUpdateResponse, DelayTestResponse, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -164,4 +164,8 @@ export const api = {
       "remove_custom_rule",
       { req: { fingerprint } },
     ),
+  getMcpStatus: () => invoke<McpStatus>("get_mcp_status"),
+  setMcpEnabled: (enabled: boolean) =>
+    invoke<McpStatus>("set_mcp_enabled", { enabled }),
+  restartMcp: () => invoke<McpStatus>("restart_mcp"),
 } satisfies ApiContract;

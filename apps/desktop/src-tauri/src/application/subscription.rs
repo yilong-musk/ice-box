@@ -181,9 +181,15 @@ pub(crate) fn update_subscription_use_case(
         Ok(upd) => upd,
         Err(err) => {
             // Keep the pre-split behavior: record `last_error` on a failed fetch.
-            let _orch = lock_orchestrate(state)?;
-            write_subscription_error(mgr.paths(), req.id, err.ui_message())
-                .map_err(AppError::from)?;
+            let recorded = {
+                let _orch = lock_orchestrate(state)?;
+                write_subscription_error(mgr.paths(), req.id, err.ui_message())
+                    .map_err(AppError::from)
+            };
+            if recorded.is_ok() {
+                broadcast_state_change(app);
+            }
+            recorded?;
             return Err(AppError::from(err));
         }
     };
@@ -288,22 +294,27 @@ pub(crate) fn copy_subscription_share_use_case(
 }
 
 pub(crate) fn set_auto_update_subscription_use_case(
+    app: &impl AppHost,
     state: &AppState,
     req: SetAutoUpdateRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(state)?;
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let meta =
-        ice_engine::set_auto_update(&paths, req.id, req.auto_update, req.auto_update_interval)
-            .map_err(AppError::from)?;
-    tracing::info!(
-        id = %req.id,
-        auto_update = req.auto_update,
-        interval = ?req.auto_update_interval,
-        "set_auto_update_subscription"
-    );
-    serde_json::to_value(meta)
-        .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        let paths = SubscriptionPaths::from_app(&state.paths);
+        let meta =
+            ice_engine::set_auto_update(&paths, req.id, req.auto_update, req.auto_update_interval)
+                .map_err(AppError::from)?;
+        tracing::info!(
+            id = %req.id,
+            auto_update = req.auto_update,
+            interval = ?req.auto_update_interval,
+            "set_auto_update_subscription"
+        );
+        serde_json::to_value(meta)
+            .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))
+    })();
+    broadcast_state_change(app);
+    result
 }
 
 #[cfg(test)]

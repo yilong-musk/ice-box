@@ -15,9 +15,11 @@ import { LANGUAGE_STORAGE_KEY, t, isMessageKey } from "./lib/i18n";
 import { clearNodesSnapshot } from "./lib/nodes";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
+const desktopShell = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@platform/shell", () => ({
   isPhoneShell: () => phoneShell.value,
+  isDesktopShell: () => desktopShell.value,
 }));
 
 const getStatus = vi.fn();
@@ -30,6 +32,9 @@ const listenTrayUpdateClick = vi.fn();
 const restoreLaunchProxy = vi.fn();
 const checkAppUpdate = vi.fn();
 const installAppUpdate = vi.fn();
+const getMcpStatus = vi.fn();
+const setMcpEnabled = vi.fn();
+const restartMcp = vi.fn();
 
 const defaultSettings = {
   mixed_listen: "127.0.0.1",
@@ -74,6 +79,20 @@ const tunStatus = {
   helper_supported: true,
   launch_at_login_supported: true,
   helper_stale: false,
+} as const;
+
+const mcpStatus = {
+  supported: true,
+  enabled: true,
+  running: true,
+  endpoint: "127.0.0.1:4567",
+  client_count: 1,
+  tool_count: 34,
+  bridge_executable: "/Applications/ice-box.app/Contents/MacOS/ice-box",
+  bridge_args: ["--mcp-stdio", "--data-dir", "/tmp/ice-box"],
+  client_config:
+    '{"mcpServers":{"ice-box":{"command":"/Applications/ice-box.app/Contents/MacOS/ice-box","args":["--mcp-stdio","--data-dir","/tmp/ice-box"]}}}',
+  error: null,
 } as const;
 
 vi.mock("./api/client", () => ({
@@ -123,6 +142,9 @@ vi.mock("./api/client", () => ({
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),
     getLogView: vi.fn().mockResolvedValue([]),
+    getMcpStatus: (...args: unknown[]) => getMcpStatus(...args),
+    setMcpEnabled: (...args: unknown[]) => setMcpEnabled(...args),
+    restartMcp: (...args: unknown[]) => restartMcp(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -130,6 +152,7 @@ vi.mock("./api/client", () => ({
 describe("App", () => {
   beforeEach(() => {
     phoneShell.value = false;
+    desktopShell.value = true;
     vi.clearAllMocks();
     clearNodesSnapshot();
     getSettings.mockResolvedValue(defaultSettings);
@@ -147,6 +170,9 @@ describe("App", () => {
     });
     installAppUpdate.mockResolvedValue(undefined);
     saveSettings.mockResolvedValue(undefined);
+    getMcpStatus.mockResolvedValue(mcpStatus);
+    setMcpEnabled.mockResolvedValue(mcpStatus);
+    restartMcp.mockResolvedValue(mcpStatus);
     window.innerWidth = 1280;
     getStatus.mockResolvedValue({
       core: {
@@ -241,6 +267,27 @@ describe("App", () => {
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.settings") }));
     expect(view.getByTestId("settings-panel")).toBeInTheDocument();
+  });
+
+  it("places MCP between Settings and Logs and opens its desktop page", async () => {
+    const { container } = render(<App />);
+    const view = within(container);
+    const nav = container.querySelector('[data-slot="sidebar-menu"]');
+    expect(nav).not.toBeNull();
+    const labels = within(nav as HTMLElement)
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(labels.slice(-3)).toEqual([
+      t("app.nav.settings"),
+      t("app.nav.mcp"),
+      t("app.nav.logs"),
+    ]);
+
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.mcp") }));
+    await waitFor(() => {
+      expect(view.getByTestId("mcp-panel")).toBeInTheDocument();
+    });
+    expect(getMcpStatus).toHaveBeenCalled();
   });
 
   it("applies appearance changes from settings to the document", async () => {
@@ -505,6 +552,7 @@ describe("App", () => {
 
   it("uses a bottom tab bar on the phone shell", async () => {
     phoneShell.value = true;
+    desktopShell.value = false;
     window.innerWidth = 390;
 
     const { container } = render(<App />);
@@ -519,7 +567,9 @@ describe("App", () => {
       "page",
     );
     expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(view.queryByTestId("logs-panel")).not.toBeInTheDocument();
+    expect(view.queryByTestId("mcp-panel")).not.toBeInTheDocument();
     expect(restoreLaunchProxy).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(checkAppUpdate).toHaveBeenCalled();
@@ -529,6 +579,7 @@ describe("App", () => {
 
   it("uses the sidebar when the phone shell is wide", async () => {
     phoneShell.value = true;
+    desktopShell.value = false;
     window.innerWidth = 1280;
 
     const { container } = render(<App />);
@@ -545,7 +596,22 @@ describe("App", () => {
       "page",
     );
     expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(restoreLaunchProxy).not.toHaveBeenCalled();
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+  });
+
+  it("keeps MCP out of the website shell", async () => {
+    desktopShell.value = false;
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("button", { name: t("app.nav.home") })).toBeInTheDocument();
+    });
+    expect(view.getByRole("button", { name: t("app.nav.logs") })).toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
+    expect(view.queryByTestId("mcp-panel")).not.toBeInTheDocument();
   });
 });

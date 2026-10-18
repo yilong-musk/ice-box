@@ -34,15 +34,28 @@ describe("application architecture boundaries", () => {
     expect(contract).toContain("export interface CoreApi");
     expect(contract).toContain("export interface DesktopCaptureApi");
     expect(contract).toContain("export interface DesktopShellApi");
+    expect(contract).toContain("export interface McpApi");
     expect(contract).toContain(
-      "export interface ApiContract extends CoreApi, DesktopCaptureApi, DesktopShellApi",
+      "export interface ApiContract extends CoreApi, DesktopCaptureApi, DesktopShellApi, McpApi",
     );
     expect(contract).not.toContain("@tauri-apps");
     expect(contract).not.toContain("typeof import");
     const website = readFileSync(path.join(desktop, "../website/vite.config.ts"), "utf8");
     expect(website).toContain('find: "@platform/api"');
     expect(website).toContain('find: "@platform/shell"');
+    expect(website).toContain('src/browser-shell.ts');
     expect(website).not.toContain("resolveId");
+    const browserShell = readFileSync(
+      path.join(desktop, "../website/src/browser-shell.ts"),
+      "utf8",
+    );
+    const mobileShell = readFileSync(
+      path.join(desktop, "../mobile/src/shell.ts"),
+      "utf8",
+    );
+    expect(browserShell).toContain("return false");
+    expect(mobileShell).toContain("isDesktopShell");
+    expect(mobileShell).toContain("return false");
     const desktopVite = readFileSync(path.join(desktop, "vite.config.ts"), "utf8");
     expect(desktopVite).toContain('"@platform/shell"');
   });

@@ -7,7 +7,7 @@
 //! `update-check.json`, not `settings.json`.
 
 use crate::orchestrate::current_settings;
-use crate::shutdown::graceful_stop;
+use crate::shutdown::graceful_stop_for_update;
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use ice_config::{is_loopback_host, write_json_atomic, AppError, AppSettings, ErrorCode};
@@ -254,7 +254,7 @@ fn stop_for_update(app: &AppHandle) -> Result<(), AppError> {
     };
     let binary = crate::application::binary_for(app).unwrap_or_default();
     let _pause = state.workers.pause();
-    graceful_stop(state.inner(), binary)
+    graceful_stop_for_update(state.inner(), binary)
 }
 
 #[tauri::command]

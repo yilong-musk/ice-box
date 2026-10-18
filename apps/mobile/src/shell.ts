@@ -4,3 +4,7 @@
 export function isPhoneShell(): boolean {
   return true;
 }
+
+export function isDesktopShell(): boolean {
+  return false;
+}

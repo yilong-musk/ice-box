@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Graceful shutdown shared by IPC `stop` and tray Quit.
+//! Graceful shutdown shared by IPC `stop`, updates, and tray Quit.
 
 use crate::capture::TrafficCapture;
 use crate::orchestrate::{current_settings, orchestrate_stop};
@@ -26,15 +26,66 @@ fn detach_traffic_if_core_not_live(state: &AppState, status: CoreStatus) {
 /// failed TUN cleanup is surfaced as a warning and the core is still stopped
 /// so no capture remains enabled.
 pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
-    // Abort any in-flight auto-start healthcheck before waiting on the orchestrate lock.
     state
         .shutdown_requested
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let _orch = state
-        .orchestrate
-        .lock()
-        .map_err(|_| lock_poisoned("orchestrate"))?;
+    let result = {
+        let _orch = match state.orchestrate.lock() {
+            Ok(orch) => orch,
+            Err(_) => {
+                state
+                    .shutdown_requested
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(lock_poisoned("orchestrate"));
+            }
+        };
+        let result = graceful_stop_locked(state, binary);
+        state
+            .shutdown_requested
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        result
+    };
+    result
+}
 
+fn stop_with_persistent_shutdown_signal(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    state
+        .shutdown_requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = {
+        let _orch = match state.orchestrate.lock() {
+            Ok(orch) => orch,
+            Err(_) => {
+                state
+                    .shutdown_requested
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(lock_poisoned("orchestrate"));
+            }
+        };
+        let result = graceful_stop_locked(state, binary);
+        if result.is_err() {
+            state
+                .shutdown_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        result
+    };
+    result
+}
+
+pub(crate) fn graceful_stop_for_update(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    stop_with_persistent_shutdown_signal(state, binary)
+}
+
+fn graceful_stop_for_quit(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
+    stop_with_persistent_shutdown_signal(state, binary)
+}
+
+/// Stop the runtime while the caller holds the orchestrate lock.
+///
+/// Keeping the lock with the caller lets composite operations persist related
+/// settings before another start or settings mutation can interleave.
+pub(crate) fn graceful_stop_locked(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
     let mut tun_warning: Option<UiMessage> = None;
     if state.capture.active_backend() == TrafficCapture::Tun {
         let settings = current_settings(&state.paths).unwrap_or_default();
@@ -75,10 +126,6 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             drop(proxy);
             drop(core);
             state.traffic.set_endpoints(None);
-            // Stay open: allow another quit attempt / UI retry.
-            state
-                .shutdown_requested
-                .store(false, std::sync::atomic::Ordering::SeqCst);
             if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
                 *slot = vec![err.ui_message()];
             }
@@ -91,9 +138,6 @@ pub fn graceful_stop(state: &AppState, binary: PathBuf) -> Result<(), AppError> 
             // Stop did not finish; drop the collector if Clash API is gone so
             // the supervisor cannot keep retrying a dead port.
             detach_traffic_if_core_not_live(state, status);
-            state
-                .shutdown_requested
-                .store(false, std::sync::atomic::Ordering::SeqCst);
             Err(err)
         }
     }
@@ -115,16 +159,22 @@ pub enum QuitOutcome {
 /// Tray Quit: serialize with orchestrate, stop core, exit only when proxy state is consistent.
 pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
     let Some(state) = app.try_state::<AppState>() else {
+        if let Some(mcp) = app.try_state::<crate::mcp::McpService>() {
+            mcp.shutdown();
+        }
         return QuitOutcome::Stopped;
     };
     let binary = crate::application::binary_for(app).unwrap_or_default();
     let _pause = state.workers.pause();
 
-    match graceful_stop(state.inner(), binary) {
+    match graceful_stop_for_quit(state.inner(), binary) {
         Ok(()) => {
             state
                 .workers
                 .shutdown(std::time::Duration::from_millis(500));
+            if let Some(mcp) = app.try_state::<crate::mcp::McpService>() {
+                mcp.shutdown();
+            }
             QuitOutcome::Stopped
         }
         Err(err) if err.code == ErrorCode::ProxyRestoreFailed.as_str() => {
@@ -371,13 +421,48 @@ mod tests {
     fn graceful_stop_leaves_core_stopped() {
         let state = temp_state("stopped", Box::new(OkProxy));
         state
+            .shutdown_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        state
             .traffic
             .set_endpoints(Some(HealthEndpoints::new("127.0.0.1", 9)));
         graceful_stop(&state, PathBuf::from("/bin/true")).expect("stop");
         let core = state.core.lock().unwrap();
         assert_eq!(core.state().status, CoreStatus::Stopped);
         assert!(!state.traffic.has_target());
+        assert!(
+            !state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "a normal stop must allow a later start"
+        );
 
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn quit_keeps_the_shutdown_signal_after_stopping() {
+        let state = temp_state("quit-stopped", Box::new(OkProxy));
+        graceful_stop_for_quit(&state, PathBuf::from("/bin/true")).expect("quit stop");
+        assert!(
+            state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "the quit path must keep healthchecks cancelled"
+        );
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn update_keeps_the_shutdown_signal_after_stopping() {
+        let state = temp_state("update-stopped", Box::new(OkProxy));
+        graceful_stop_for_update(&state, PathBuf::from("/bin/true")).expect("update stop");
+        assert!(
+            state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "auto-start must remain cancelled while the updater replaces the app"
+        );
         let _ = std::fs::remove_dir_all(state.paths.root());
     }
 

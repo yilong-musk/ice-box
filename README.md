@@ -83,6 +83,18 @@ exemption, strict Private DNS, and always-on VPN, which connects at boot.
 
 On macOS and Windows, TUN captures traffic at the network layer, covering apps that never read the system proxy. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations. Android uses the system VPN; see [`docs/architecture.md`](docs/architecture.md#clients).
 
+## Agent access with MCP
+
+The macOS and Windows desktop app can expose a local MCP service for Agent
+clients. Open **MCP** between **Settings** and **Logs**, enable the service, and
+copy the generated client configuration. The Agent controls the running desktop
+session: it uses the same settings, subscriptions, data directory, core, and
+proxy session as the GUI instead of starting another runtime.
+
+MCP is off by default and listens only on authenticated loopback. It is not
+available in the Android app or website demo. See [`docs/mcp.md`](docs/mcp.md)
+for setup, tool coverage, lifecycle, and security boundaries.
+
 ## Development
 
 Rust (stable), Node.js 22, and the Xcode Command Line Tools on macOS. An
@@ -118,6 +130,7 @@ docs/           Architecture, TUN, testing, release process
 | Document | What you will find |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | System structure for macOS, Windows, and Android, component responsibilities, data flow, and design boundaries |
+| [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, shared-runtime model, tool coverage, and security boundaries |
 | [`docs/tun.md`](docs/tun.md) | TUN behavior, state machine, recovery, platform configuration, and limits |
 | [`docs/testing.md`](docs/testing.md) | Local and CI gate coverage, manual live tests |
 | [`docs/release-process.md`](docs/release-process.md) | Version bump, changelog, gate, tag, release pipeline |
