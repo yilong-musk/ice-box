@@ -175,6 +175,9 @@ export function Settings({
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<AppSettings | null>(null);
   const saveIdleWaitersRef = useRef<Array<() => void>>([]);
+  const formRef = useRef<AppSettings>(defaults);
+  const loadedRef = useRef(false);
+  formRef.current = form;
   /** Last local form snapshot known to be applied to disk. */
   const persistedFormRef = useRef<AppSettings>(defaults);
   /** Coalesce state announcements received while a local save is in flight. */
@@ -326,23 +329,36 @@ export function Settings({
     };
   }, []);
 
+  function hasLocalDraft(): boolean {
+    return (
+      loadedRef.current &&
+      settingsDiffPatch(formRef.current, persistedFormRef.current) !== null
+    );
+  }
+
+  function applyPendingRemoteReload() {
+    if (!remoteReloadPendingRef.current) return;
+    if (
+      saveTimerRef.current !== null ||
+      scheduledSaveRef.current !== null ||
+      saveInFlightRef.current ||
+      pendingSaveRef.current !== null ||
+      hasLocalDraft()
+    ) {
+      return;
+    }
+    remoteReloadPendingRef.current = false;
+    setReloadNonce((value) => value + 1);
+  }
+
   useEffect(() => {
     if (!active || typeof api.listenStateChanged !== "function") return;
     let cancelled = false;
     let unlisten = () => {};
     void api
       .listenStateChanged(() => {
-        if (
-          saveTimerRef.current !== null ||
-          scheduledSaveRef.current !== null ||
-          saveInFlightRef.current ||
-          pendingSaveRef.current !== null
-        ) {
-          remoteReloadPendingRef.current = true;
-          return;
-        }
-        remoteReloadPendingRef.current = false;
-        setReloadNonce((value) => value + 1);
+        remoteReloadPendingRef.current = true;
+        applyPendingRemoteReload();
       })
       .then((off) => {
         if (cancelled) off();
@@ -360,10 +376,12 @@ export function Settings({
   useEffect(() => {
     if (!active) {
       flushScheduledSave();
+      loadedRef.current = false;
       setLoaded(false);
       skipInitialSaveRef.current = true;
       return;
     }
+    loadedRef.current = false;
     setLoaded(false);
     skipInitialSaveRef.current = true;
     let cancelled = false;
@@ -376,10 +394,17 @@ export function Settings({
           api.getStatus(),
         ]);
         if (!cancelled) {
+          if (hasLocalDraft()) {
+            remoteReloadPendingRef.current = true;
+            loadedRef.current = true;
+            setLoaded(true);
+            return;
+          }
           setForm(settings);
           persistedFormRef.current = settings;
           setLaunchAtLogin(settings.launch_at_login === true);
           setStatus(s);
+          loadedRef.current = true;
           setLoaded(true);
           // settings.json is the authoritative language preference; re-apply
           // it when it differs from the cached one (e.g. first launch after a
@@ -471,6 +496,7 @@ export function Settings({
         ...persistedFormRef.current,
         tun: { ...persistedFormRef.current.tun, enabled },
       };
+      applyPendingRemoteReload();
     } catch (err) {
       setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled: previous } }));
       throw err;
@@ -568,10 +594,7 @@ export function Settings({
       } else {
         const waiters = saveIdleWaitersRef.current.splice(0);
         for (const resolve of waiters) resolve();
-        if (remoteReloadPendingRef.current) {
-          remoteReloadPendingRef.current = false;
-          setReloadNonce((value) => value + 1);
-        }
+        applyPendingRemoteReload();
       }
     }
   }
@@ -616,6 +639,10 @@ export function Settings({
     if (!loaded) return;
     if (skipInitialSaveRef.current) {
       skipInitialSaveRef.current = false;
+      return;
+    }
+    if (!hasLocalDraft()) {
+      applyPendingRemoteReload();
       return;
     }
     scheduleAutoSave(form);

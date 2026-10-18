@@ -72,7 +72,11 @@ export function Mcp({ active = true }: { active?: boolean }) {
     setBusy(true);
     setActionError(null);
     try {
-      applyStatus(await api.setMcpEnabled(enabled));
+      const next = await api.setMcpEnabled(enabled);
+      // Any status poll started while the action was in flight has a newer
+      // sequence number. Advance past it before applying the action result.
+      requestSeqRef.current += 1;
+      applyStatus(next);
     } catch (invokeError) {
       setActionError(formatInvokeError(invokeError));
       await refresh();
@@ -86,7 +90,9 @@ export function Mcp({ active = true }: { active?: boolean }) {
     setBusy(true);
     setActionError(null);
     try {
-      applyStatus(await api.restartMcp());
+      const next = await api.restartMcp();
+      requestSeqRef.current += 1;
+      applyStatus(next);
     } catch (invokeError) {
       setActionError(formatInvokeError(invokeError));
       await refresh();

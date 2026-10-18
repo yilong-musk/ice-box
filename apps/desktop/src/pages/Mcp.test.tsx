@@ -125,6 +125,37 @@ describe("Mcp", () => {
     expect(toggle).toBeChecked();
   });
 
+  it("does not let a poll started during an action overwrite its result", async () => {
+    const action = deferred<McpStatus>();
+    const staleDuringAction = deferred<McpStatus>();
+    getMcpStatus.mockResolvedValue(
+      status({ enabled: false, running: false, endpoint: null }),
+    );
+    setMcpEnabled.mockReturnValue(action.promise);
+    const view = within(render(<Mcp />).container);
+    const toggle = await view.findByRole("switch", { name: t("mcp.enable") });
+
+    getMcpStatus.mockReturnValueOnce(staleDuringAction.promise);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setMcpEnabled).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(getMcpStatus).toHaveBeenCalledTimes(2), {
+      timeout: 3000,
+    });
+
+    await act(async () => {
+      action.resolve(status());
+      await action.promise;
+    });
+    await act(async () => {
+      staleDuringAction.resolve(
+        status({ enabled: false, running: false, endpoint: null }),
+      );
+      await staleDuringAction.promise;
+    });
+
+    expect(toggle).toBeChecked();
+  });
+
   it("restarts a running service", async () => {
     restartMcp.mockResolvedValue(status({ client_count: 0 }));
     const view = within(render(<Mcp />).container);

@@ -43,10 +43,7 @@ pub fn tools() -> Vec<Value> {
             json!({
                 "type": "object",
                 "properties": {
-                    "patch": {
-                        "type": "object",
-                        "description": "Partial AppSettings object. Omitted fields are unchanged. proxy_service_enabled is managed by start_proxy_service and stop_proxy_service."
-                    }
+                    "patch": settings_patch_schema()
                 },
                 "required": ["patch"],
                 "additionalProperties": false
@@ -255,7 +252,7 @@ pub fn tools() -> Vec<Value> {
                     "disabled": {"type": ["string", "null"], "enum": ["all", "disabled", "enabled", null]},
                     "custom": {"type": ["boolean", "null"]},
                     "offset": {"type": "integer", "minimum": 0},
-                    "limit": {"type": "integer", "minimum": 0}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
                 },
                 "additionalProperties": false
             }),
@@ -339,6 +336,46 @@ fn no_args() -> Value {
     json!({
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+    })
+}
+
+fn settings_patch_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Partial AppSettings object. Omitted fields are unchanged. proxy_service_enabled is managed by start_proxy_service and stop_proxy_service.",
+        "properties": {
+            "mixed_listen": {"type": "string"},
+            "mixed_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "clash_api_listen": {"type": "string"},
+            "clash_api_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+            "selected_tag": {"type": ["string", "null"]},
+            "auto_set_system_proxy": {"type": "boolean"},
+            "allow_lan": {"type": "boolean"},
+            "proxy_mode": {"type": "string", "enum": ["rule", "global", "direct"]},
+            "tun": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "interface_name": {"type": ["string", "null"]},
+                    "ipv4_address": {"type": "string"},
+                    "ipv6_address": {"type": "string"},
+                    "mtu": {"type": "integer", "minimum": 1280, "maximum": 9000},
+                    "auto_route": {"type": "boolean"},
+                    "strict_route": {"type": "boolean"},
+                    "stack": {"type": "string", "enum": ["gvisor", "system", "mixed"]},
+                    "dns_hijack": {"type": "boolean"}
+                },
+                "additionalProperties": false
+            },
+            "auto_default_rules": {"type": "boolean"},
+            "language": {"type": "string", "enum": ["system", "zh", "en"]},
+            "check_app_updates": {"type": "boolean"},
+            "probe_exit_ip": {"type": "boolean"},
+            "log_debug": {"type": "boolean"},
+            "tray_display_mode": {"type": "string", "enum": ["icon_and_speed", "icon", "speed"]},
+            "launch_at_login": {"type": "boolean"}
+        },
         "additionalProperties": false
     })
 }
@@ -518,6 +555,7 @@ pub(super) fn protocol_error_value(
 
 fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppError> {
     ensure_object(&args)?;
+    validate_tool_arguments(name, &args)?;
     let state = app.state::<AppState>();
     match name {
         "get_status" => {
@@ -697,6 +735,118 @@ fn ensure_object(value: &Value) -> Result<(), AppError> {
     }
 }
 
+fn validate_tool_arguments(name: &str, args: &Value) -> Result<(), AppError> {
+    if name == "update_settings" {
+        if let Some(patch) = args.get("patch") {
+            reject_proxy_service_flag(patch)?;
+        }
+    }
+    let Some(tool) = tools()
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+    else {
+        return Ok(());
+    };
+    let schema = tool
+        .get("inputSchema")
+        .ok_or_else(|| invalid_args(format!("{name} has no input schema")))?;
+    validate_schema_value(args, schema, "$")
+        .map_err(|message| invalid_args(format!("invalid tool arguments: {message}")))
+}
+
+fn validate_schema_value(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    if let Some(expected) = schema.get("type") {
+        let matches = match expected {
+            Value::String(kind) => schema_type_matches(value, kind),
+            Value::Array(kinds) => kinds
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|kind| schema_type_matches(value, kind)),
+            _ => false,
+        };
+        if !matches {
+            return Err(format!("{path} must be {}", schema_type_name(expected)));
+        }
+    }
+
+    if let Some(options) = schema.get("enum").and_then(Value::as_array) {
+        if !options.iter().any(|option| option == value) {
+            return Err(format!("{path} must be one of {options:?}"));
+        }
+    }
+
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+        if value.as_f64().is_none_or(|number| number < minimum) {
+            return Err(format!("{path} must be at least {minimum}"));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+        if value.as_f64().is_none_or(|number| number > maximum) {
+            return Err(format!("{path} must be at most {maximum}"));
+        }
+    }
+
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                return Err(format!("{path}.{key} is required"));
+            }
+        }
+    }
+
+    let properties = schema.get("properties").and_then(Value::as_object);
+    if let Some(properties) = properties {
+        for (key, child) in object {
+            if let Some(child_schema) = properties.get(key) {
+                validate_schema_value(child, child_schema, &format!("{path}.{key}"))?;
+                continue;
+            }
+            match schema.get("additionalProperties") {
+                Some(Value::Bool(false)) => {
+                    return Err(format!("{path}.{key} is not allowed"));
+                }
+                Some(additional @ Value::Object(_)) => {
+                    validate_schema_value(child, additional, &format!("{path}.{key}"))?;
+                }
+                _ => {}
+            }
+        }
+    } else if matches!(schema.get("additionalProperties"), Some(Value::Bool(false)))
+        && !object.is_empty()
+    {
+        return Err(format!("{path} does not allow properties"));
+    }
+    Ok(())
+}
+
+fn schema_type_matches(value: &Value, kind: &str) -> bool {
+    match kind {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "null" => value.is_null(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => false,
+    }
+}
+
+fn schema_type_name(expected: &Value) -> String {
+    match expected {
+        Value::String(kind) => kind.clone(),
+        Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" or "),
+        _ => "valid".to_string(),
+    }
+}
+
 fn parse_args<T: DeserializeOwned>(value: Value) -> Result<T, AppError> {
     serde_json::from_value(value)
         .map_err(|error| invalid_args(format!("invalid tool arguments: {error}")))
@@ -707,12 +857,17 @@ fn parse_update_settings_args(args: &Value) -> Result<SettingsPatch, AppError> {
         .get("patch")
         .ok_or_else(|| invalid_args("update_settings requires a patch object"))?;
     ensure_object(patch)?;
+    reject_proxy_service_flag(patch)?;
+    parse_args(patch.clone())
+}
+
+fn reject_proxy_service_flag(patch: &Value) -> Result<(), AppError> {
     if patch.get("proxy_service_enabled").is_some() {
         return Err(invalid_args(
             "proxy_service_enabled is managed by start_proxy_service and stop_proxy_service",
         ));
     }
-    parse_args(patch.clone())
+    Ok(())
 }
 
 fn invalid_args(message: impl Into<String>) -> AppError {
@@ -829,6 +984,36 @@ mod tests {
         }))
         .expect("ordinary setting");
         assert_eq!(patch.mixed_port, Some(18080));
+    }
+
+    #[test]
+    fn tool_arguments_are_validated_against_the_advertised_schema() {
+        assert!(validate_tool_arguments("start_proxy_service", &json!({"dry_run": true})).is_err());
+        assert!(validate_tool_arguments("set_proxy_mode", &json!({"mode": "bogus"})).is_err());
+        assert!(validate_tool_arguments("get_logs", &json!({"n": 0})).is_err());
+        assert!(validate_tool_arguments(
+            "update_settings",
+            &json!({"patch": {"mixedPort": 18080}})
+        )
+        .is_err());
+        assert!(validate_tool_arguments(
+            "update_settings",
+            &json!({"patch": {"mixed_port": 18080}})
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn update_settings_schema_lists_managed_patch_fields() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "update_settings")
+            .expect("update_settings tool");
+        let patch = &tool["inputSchema"]["properties"]["patch"];
+        assert_eq!(patch["additionalProperties"], false);
+        assert!(patch["properties"]["mixed_port"].is_object());
+        assert!(patch["properties"]["tun"]["properties"]["enabled"].is_object());
+        assert!(patch["properties"].get("proxy_service_enabled").is_none());
     }
 
     #[test]
