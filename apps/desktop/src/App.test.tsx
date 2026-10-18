@@ -269,7 +269,7 @@ describe("App", () => {
     expect(view.getByTestId("settings-panel")).toBeInTheDocument();
   });
 
-  it("places MCP between Settings and Logs and opens its desktop page", async () => {
+  it("orders MCP, Logs, and Settings from top to bottom", async () => {
     const { container } = render(<App />);
     const view = within(container);
     const nav = container.querySelector('[data-slot="sidebar-menu"]');
@@ -278,9 +278,9 @@ describe("App", () => {
       .getAllByRole("button")
       .map((button) => button.textContent);
     expect(labels.slice(-3)).toEqual([
-      t("app.nav.settings"),
       t("app.nav.mcp"),
       t("app.nav.logs"),
+      t("app.nav.settings"),
     ]);
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.mcp") }));

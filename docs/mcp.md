@@ -33,8 +33,8 @@ the running application. It exits with the Agent's stdio session.
 
 ## Enable and connect
 
-1. Start ice-box and open **MCP** in the desktop navigation. The page is between
-   **Settings** and **Logs**.
+1. Start ice-box and open **MCP** in the desktop navigation. From top to bottom,
+   the final entries are **MCP**, **Logs**, and **Settings**.
 2. Enable **MCP Service**.
 3. Copy the generated client configuration.
 4. Add that configuration to an MCP-capable Agent client and start or restart

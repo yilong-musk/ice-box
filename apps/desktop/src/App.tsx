@@ -94,9 +94,9 @@ const NAV_ITEMS: {
   { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
   { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
   { id: "subs", labelKey: "app.nav.subs", icon: Rss },
-  { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
   { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
   { id: "logs", labelKey: "app.nav.logs", icon: ScrollText },
+  { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
 ];
 
 function TitleBar({ label }: { label: string }) {
