@@ -22,6 +22,7 @@ use crate::application::{
 };
 use crate::capture::TrafficCapture;
 use crate::core_snapshot::APP_STATE_CHANGED;
+use crate::mcp::McpService;
 use crate::shutdown::{request_tray_quit, QuitOutcome};
 #[cfg(any(target_os = "macos", test))]
 use crate::tray_delay::{delay_tone, DelayOutcome, DelayScope, DelayTone, DelayView};
@@ -210,6 +211,9 @@ fn mode_from_code(code: u8) -> ProxyMode {
 struct TrayLabels {
     service_start: &'static str,
     service_stop: &'static str,
+    mcp_start: &'static str,
+    mcp_stop: &'static str,
+    copy_mcp_config: &'static str,
     mode: &'static str,
     mode_rule: &'static str,
     mode_global: &'static str,
@@ -241,6 +245,14 @@ impl TrayLabels {
         }
     }
 
+    fn mcp(self, enabled: bool) -> &'static str {
+        if enabled {
+            self.mcp_stop
+        } else {
+            self.mcp_start
+        }
+    }
+
     /// Text of the button whose page has a test in flight: `延迟测试中 3/8`.
     #[cfg(any(target_os = "macos", test))]
     fn delay_progress_text(self, index: usize, total: usize) -> String {
@@ -255,6 +267,9 @@ fn labels(language: TrayLanguage) -> TrayLabels {
         TrayLanguage::Zh => TrayLabels {
             service_start: "启动代理服务",
             service_stop: "停止代理服务",
+            mcp_start: "启动 MCP 服务",
+            mcp_stop: "关闭 MCP 服务",
+            copy_mcp_config: "复制 MCP 配置",
             mode: "代理模式",
             mode_rule: "规则",
             mode_global: "全局",
@@ -272,6 +287,9 @@ fn labels(language: TrayLanguage) -> TrayLabels {
         TrayLanguage::En => TrayLabels {
             service_start: "Start Proxy Service",
             service_stop: "Stop Proxy Service",
+            mcp_start: "Start MCP Service",
+            mcp_stop: "Stop MCP Service",
+            copy_mcp_config: "Copy MCP Configuration",
             mode: "Proxy Mode",
             mode_rule: "Rule",
             mode_global: "Global",
@@ -632,6 +650,8 @@ struct TrayView {
     /// Whether this platform can start capture at all (`proxyAvailable` /
     /// `tunAvailable` in the Home page); the switch is disabled otherwise.
     service_enabled: bool,
+    mcp_enabled: bool,
+    mcp_config_available: bool,
     mode: ProxyMode,
     cli_proxy_enabled: bool,
 }
@@ -642,6 +662,8 @@ impl Default for TrayView {
             service_on: false,
             // A failed read must not disable the switch; the next sync decides.
             service_enabled: true,
+            mcp_enabled: false,
+            mcp_config_available: false,
             mode: ProxyMode::Rule,
             cli_proxy_enabled: true,
         }
@@ -684,6 +706,8 @@ fn update_prompt_step(wanted: Option<&str>, shown: Option<&str>) -> UpdatePrompt
 
 struct TrayMenuState {
     service: MenuItem<Wry>,
+    mcp: MenuItem<Wry>,
+    copy_mcp_config: MenuItem<Wry>,
     mode: Submenu<Wry>,
     mode_rule: CheckMenuItem<Wry>,
     mode_global: CheckMenuItem<Wry>,
@@ -723,9 +747,11 @@ struct TrayMenuState {
     update: Mutex<UpdatePrompt>,
     language: AtomicU8,
     service_on: AtomicBool,
+    mcp_on: AtomicBool,
     /// Set for the life of one start/stop so a second click cannot queue the
     /// same action (the label is read before the worker runs).
     service_busy: AtomicBool,
+    mcp_busy: AtomicBool,
     mode_value: AtomicU8,
 }
 
@@ -740,8 +766,16 @@ impl TrayMenuState {
         self.service_on.load(Ordering::SeqCst)
     }
 
+    fn mcp_on(&self) -> bool {
+        self.mcp_on.load(Ordering::SeqCst)
+    }
+
     fn service_busy(&self) -> bool {
         self.service_busy.load(Ordering::SeqCst)
+    }
+
+    fn mcp_busy(&self) -> bool {
+        self.mcp_busy.load(Ordering::SeqCst)
     }
 
     /// `true` if this click owns the switch. A second click while the first
@@ -752,6 +786,15 @@ impl TrayMenuState {
 
     fn end_service_switch(&self) {
         self.service_busy.store(false, Ordering::SeqCst);
+    }
+
+    /// `true` if this click owns the MCP switch.
+    fn try_begin_mcp_switch(&self) -> bool {
+        !self.mcp_busy.swap(true, Ordering::SeqCst)
+    }
+
+    fn end_mcp_switch(&self) {
+        self.mcp_busy.store(false, Ordering::SeqCst);
     }
 
     fn mode(&self) -> ProxyMode {
@@ -768,6 +811,11 @@ impl TrayMenuState {
         self.update_label(
             "service",
             self.service.set_text(labels.service(self.service_on())),
+        )?;
+        self.update_label("MCP service", self.mcp.set_text(labels.mcp(self.mcp_on())))?;
+        self.update_label(
+            "copy MCP config",
+            self.copy_mcp_config.set_text(labels.copy_mcp_config),
         )?;
         self.update_label("mode", self.mode.set_text(labels.mode))?;
         self.update_label("rule mode", self.mode_rule.set_text(labels.mode_rule))?;
@@ -972,6 +1020,12 @@ impl TrayMenuState {
                 .set_text(self.labels().service(view.service_on));
             self.service_on.store(view.service_on, Ordering::SeqCst);
         }
+        let _ = self.mcp.set_enabled(mcp_item_enabled(self.mcp_busy()));
+        if self.mcp_on() != view.mcp_enabled {
+            let _ = self.mcp.set_text(self.labels().mcp(view.mcp_enabled));
+            self.mcp_on.store(view.mcp_enabled, Ordering::SeqCst);
+        }
+        let _ = self.copy_mcp_config.set_enabled(view.mcp_config_available);
         if self.mode() != view.mode {
             self.apply_mode(view.mode);
         }
@@ -984,6 +1038,12 @@ impl TrayMenuState {
 /// start/stop is already running.
 fn service_item_enabled(capability: bool, busy: bool) -> bool {
     capability && !busy
+}
+
+/// The desktop always has an MCP service; only an in-flight switch disables
+/// its menu item.
+fn mcp_item_enabled(busy: bool) -> bool {
+    !busy
 }
 
 /// Skip a live (non-click) node rebuild while the tray popup is open. Click
@@ -1351,6 +1411,20 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         view.service_enabled,
         None::<&str>,
     )?;
+    let mcp = MenuItem::with_id(
+        app,
+        "mcp-service",
+        labels.mcp(view.mcp_enabled),
+        true,
+        None::<&str>,
+    )?;
+    let copy_mcp_config = MenuItem::with_id(
+        app,
+        "copy-mcp-config",
+        labels.copy_mcp_config,
+        view.mcp_config_available,
+        None::<&str>,
+    )?;
     let mode_rule = CheckMenuItem::with_id(
         app,
         "mode:rule",
@@ -1462,6 +1536,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let mcp_separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -1471,6 +1546,9 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             &subs,
             &copy_cli_proxy,
             &open_cli_proxy,
+            &mcp_separator,
+            &mcp,
+            &copy_mcp_config,
             &separator,
             &show,
             &quit,
@@ -1478,6 +1556,8 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
     )?;
     app.manage(TrayMenuState {
         service,
+        mcp,
+        copy_mcp_config,
         mode,
         mode_rule,
         mode_global,
@@ -1500,7 +1580,9 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
         update: Mutex::new(UpdatePrompt::default()),
         language: AtomicU8::new(language.code()),
         service_on: AtomicBool::new(view.service_on),
+        mcp_on: AtomicBool::new(view.mcp_enabled),
         service_busy: AtomicBool::new(false),
+        mcp_busy: AtomicBool::new(false),
         mode_value: AtomicU8::new(mode_code(view.mode)),
     });
 
@@ -1523,6 +1605,8 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
             }
             match id {
                 "service" => toggle_service(app),
+                "mcp-service" => toggle_mcp(app),
+                "copy-mcp-config" => on_copy_mcp_config(app),
                 "mode:rule" => switch_mode(app, ProxyMode::Rule),
                 "mode:global" => switch_mode(app, ProxyMode::Global),
                 "mode:direct" => switch_mode(app, ProxyMode::Direct),
@@ -1579,9 +1663,14 @@ fn current_view(app: &AppHandle) -> Option<TrayView> {
     let capture = state.capture.status(&settings);
     let tun_active = capture.traffic_capture == TrafficCapture::Tun;
     let posture = proxy_service_posture(state.inner(), Some(&settings), running);
+    let mcp_status = app.try_state::<McpService>().map(|mcp| mcp.status());
     Some(TrayView {
         service_on: posture.engaged(tun_active),
         service_enabled: state.system_proxy_available || capture.tun_available,
+        mcp_enabled: mcp_status.as_ref().is_some_and(|status| status.enabled),
+        mcp_config_available: mcp_status
+            .as_ref()
+            .is_some_and(|status| !status.client_config.is_empty()),
         mode: settings.proxy_mode,
         cli_proxy_enabled: crate::application::mixed_proxy_endpoint(state.inner()).is_ok(),
     })
@@ -2103,6 +2192,18 @@ pub fn sync_menu(app: &AppHandle) {
     sync_menu_inner(app, true);
 }
 
+/// Re-derive only the lightweight top-level view. Used when the window changes
+/// MCP state and should not pay for a forced node-menu rebuild.
+pub(crate) fn sync_view(app: &AppHandle) {
+    let Some(menu) = app.try_state::<TrayMenuState>() else {
+        return;
+    };
+    let Some(view) = current_view(app) else {
+        return;
+    };
+    menu.apply_view(view);
+}
+
 fn sync_menu_inner(app: &AppHandle, force_nodes: bool) {
     let Some(menu) = app.try_state::<TrayMenuState>() else {
         return;
@@ -2188,6 +2289,67 @@ pub fn spawn_state_watchdog(app: AppHandle) {
             break;
         }
         sync_menu_inner(&app, false);
+    });
+}
+
+/// Tray MCP switch: persist the enabled state and start or stop the listener.
+fn toggle_mcp(app: &AppHandle) {
+    let Some(menu) = app.try_state::<TrayMenuState>() else {
+        return;
+    };
+    if !menu.try_begin_mcp_switch() {
+        return;
+    }
+    let _ = menu.mcp.set_enabled(false);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        struct McpSwitchGuard {
+            app: AppHandle,
+        }
+        impl Drop for McpSwitchGuard {
+            fn drop(&mut self) {
+                if let Some(menu) = self.app.try_state::<TrayMenuState>() {
+                    menu.end_mcp_switch();
+                }
+                sync_menu(&self.app);
+            }
+        }
+        let _guard = McpSwitchGuard { app: app.clone() };
+        let Some(mcp) = app.try_state::<McpService>() else {
+            return;
+        };
+        let enabled = !mcp.status().enabled;
+        if let Err(err) = mcp.set_enabled(&app, enabled) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                enabled,
+                "tray MCP service switch failed"
+            );
+        }
+        // Refresh the Home row and the MCP page as well as the menu.
+        broadcast_state_change(&app);
+    });
+}
+
+/// Tray copy: the same ready-to-paste MCP client configuration as the MCP page.
+fn on_copy_mcp_config(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(mcp) = app.try_state::<McpService>() else {
+            return;
+        };
+        let status = mcp.status();
+        if status.client_config.is_empty() {
+            return;
+        }
+        if let Err(err) = crate::proxy_terminal::copy_to_clipboard(&status.client_config) {
+            tracing::warn!(
+                code = %err.code,
+                error = %err.message,
+                "tray copy MCP config failed"
+            );
+        }
     });
 }
 
@@ -2421,6 +2583,9 @@ mod tests {
         let zh = labels(TrayLanguage::Zh);
         assert_eq!(zh.service(false), "启动代理服务");
         assert_eq!(zh.service(true), "停止代理服务");
+        assert_eq!(zh.mcp(false), "启动 MCP 服务");
+        assert_eq!(zh.mcp(true), "关闭 MCP 服务");
+        assert_eq!(zh.copy_mcp_config, "复制 MCP 配置");
         assert_eq!(zh.mode, "代理模式");
         assert_eq!(
             (zh.mode_rule, zh.mode_global, zh.mode_direct),
@@ -2442,6 +2607,9 @@ mod tests {
         let en = labels(TrayLanguage::En);
         assert_eq!(en.service(false), "Start Proxy Service");
         assert_eq!(en.service(true), "Stop Proxy Service");
+        assert_eq!(en.mcp(false), "Start MCP Service");
+        assert_eq!(en.mcp(true), "Stop MCP Service");
+        assert_eq!(en.copy_mcp_config, "Copy MCP Configuration");
         assert_eq!(en.mode, "Proxy Mode");
         assert_eq!(
             (en.mode_rule, en.mode_global, en.mode_direct),
@@ -2459,6 +2627,12 @@ mod tests {
             ("Test Delay", "Testing {}/{}", "Failed")
         );
         assert_eq!(en.delay_progress_text(3, 8), "Testing 3/8");
+    }
+
+    #[test]
+    fn mcp_menu_switch_is_disabled_only_while_busy() {
+        assert!(mcp_item_enabled(false));
+        assert!(!mcp_item_enabled(true));
     }
 
     #[test]

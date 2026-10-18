@@ -16,7 +16,9 @@ pub async fn get_mcp_status(app: AppHandle) -> Result<McpStatus, AppError> {
 pub async fn set_mcp_enabled(app: AppHandle, enabled: bool) -> Result<McpStatus, AppError> {
     run_blocking("set_mcp_enabled", move || {
         let mcp = app.state::<McpService>();
-        mcp.set_enabled(&app, enabled)
+        let status = mcp.set_enabled(&app, enabled)?;
+        crate::tray::sync_view(&app);
+        Ok(status)
     })
     .await
 }

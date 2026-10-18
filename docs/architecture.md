@@ -211,11 +211,12 @@ Settings card is rendered only where the platform can register the entry
 running from the read-only App Translocation mount is refused before anything
 is written.
 Closing the window leaves the app in the tray, whose menu mirrors the Home
-power switch (start / stop the proxy service)
-and the routing-mode selector, the Subscriptions page for switching the active
-subscription, and the Nodes page for switching the active exit (one node per
-strategy group, nested one level down); all of them call the same application services
-the window does. The Nodes menu on macOS also carries a delay test per page
+power switch (start / stop the proxy service), exposes the MCP service switch
+and a copy action for its client configuration, and carries the routing-mode
+selector, the Subscriptions page for switching the active subscription, and the
+Nodes page for switching the active exit (one node per strategy group, nested
+one level down); all of them call the same application services the window
+does. The Nodes menu on macOS also carries a delay test per page
 (`tray_delay.rs`): the top page probes every strategy group's current exit, a
 group page probes its members, the measured delay lands in the row labels, and
 closing the menu cancels a run that is still in flight and drops the results

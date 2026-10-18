@@ -86,10 +86,31 @@ On macOS and Windows, TUN captures traffic at the network layer, covering apps t
 ## Agent access with MCP
 
 The macOS and Windows desktop app can expose a local MCP service for Agent
-clients. Open **MCP** between **Settings** and **Logs**, enable the service, and
+clients. Open **MCP** above **Logs** and **Settings**, enable the service, and
 copy the generated client configuration. The Agent controls the running desktop
 session: it uses the same settings, subscriptions, data directory, core, and
 proxy session as the GUI instead of starting another runtime.
+
+### Agent-friendly capabilities
+
+- **One shared live session.** GUI actions and Agent calls use the same
+  application state, orchestration locks, data directory, core, and capture
+  backend. State changes are announced to the other control surface.
+- **A broad tool surface.** The server exposes 34 tools for status, settings,
+  traffic, subscriptions, nodes and groups, rules, logs, runtime diagnostics,
+  proxy control, and protected TUN recovery.
+- **Machine-readable results.** Tool schemas and safety annotations are
+  discoverable through `tools/list`. Results include MCP text plus
+  `structuredContent` when available; failures set `isError` and preserve the
+  application error code and message.
+- **Safe defaults.** MCP is opt-in, listens only on loopback, requires a random
+  control token, and never includes that token in the copied client config.
+  Disabling, restarting, or quitting the app removes the active endpoint and
+  token.
+- **A simple stdio bridge.** The generated client config launches the same
+  executable in bridge mode, so Agent clients need no separate daemon or
+  protocol adapter. The bridge exits when its Agent session or the desktop
+  service closes.
 
 MCP is off by default and listens only on authenticated loopback. It is not
 available in the Android app or website demo. See [`docs/mcp.md`](docs/mcp.md)

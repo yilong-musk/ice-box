@@ -450,10 +450,13 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), AppError> {
         return Err(err);
     }
 
-    update.install(bytes).map_err(|err| {
+    if let Err(err) = update.install(bytes) {
         UPDATE_INSTALLING.store(false, Ordering::SeqCst);
-        map_updater_err(ERR_UPDATE_INSTALL_FAILED, err)
-    })?;
+        if let Some(state) = app.try_state::<AppState>() {
+            crate::shutdown::clear_shutdown_request(state.inner());
+        }
+        return Err(map_updater_err(ERR_UPDATE_INSTALL_FAILED, err));
+    }
 
     // Windows: `install` exits the process after launching NSIS (which restarts
     // the app). macOS replaces the bundle in-place and needs an explicit relaunch.

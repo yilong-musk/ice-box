@@ -76,6 +76,10 @@ The client count covers authenticated bridge sessions. A bridge can have only
 one Agent stdio pipe, although several Agents may connect to the same desktop
 service at once.
 
+The desktop tray menu can also enable or disable the service and copy the same
+client configuration. The copied JSON contains the bridge path and data
+directory, but never the loopback endpoint's control token.
+
 ## Lifecycle
 
 Closing the window normally leaves ice-box running in the tray, so the MCP
@@ -122,7 +126,8 @@ message rather than claiming success.
 `update_settings` rejects `proxy_service_enabled`; use
 `start_proxy_service` or `stop_proxy_service` so the live capture backend and
 the persisted next-launch preference change together. A successful
-`stop_core` also records the proxy service off before stopping the core.
+`stop_core` records that the proxy service should remain off after the core
+and capture backend have stopped.
 
 Tools declare MCP annotations. Read-only tools are marked with
 `readOnlyHint`. Tools that can change local state are marked with

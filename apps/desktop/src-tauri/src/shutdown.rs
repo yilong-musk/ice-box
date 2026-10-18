@@ -77,6 +77,15 @@ pub(crate) fn graceful_stop_for_update(state: &AppState, binary: PathBuf) -> Res
     stop_with_persistent_shutdown_signal(state, binary)
 }
 
+/// Re-enable runtime starts after an update stops the app but installation
+/// subsequently fails. The process remains open in that case, so keeping the
+/// persistent shutdown signal would make every later start look like a quit.
+pub(crate) fn clear_shutdown_request(state: &AppState) {
+    state
+        .shutdown_requested
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
 fn graceful_stop_for_quit(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
     stop_with_persistent_shutdown_signal(state, binary)
 }
@@ -462,6 +471,25 @@ mod tests {
                 .shutdown_requested
                 .load(std::sync::atomic::Ordering::SeqCst),
             "auto-start must remain cancelled while the updater replaces the app"
+        );
+        let _ = std::fs::remove_dir_all(state.paths.root());
+    }
+
+    #[test]
+    fn failed_update_can_release_the_persistent_shutdown_signal() {
+        let state = temp_state("update-failed", Box::new(OkProxy));
+        graceful_stop_for_update(&state, PathBuf::from("/bin/true")).expect("update stop");
+        assert!(state
+            .shutdown_requested
+            .load(std::sync::atomic::Ordering::SeqCst));
+
+        clear_shutdown_request(&state);
+
+        assert!(
+            !state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "a failed installation must allow the still-running app to restart its runtime"
         );
         let _ = std::fs::remove_dir_all(state.paths.root());
     }

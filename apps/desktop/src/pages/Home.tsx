@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type CoreStatus,
   type CoreState,
+  type McpStatus,
   type NodeInfo,
   type ProxyMode,
   type StatusResponse,
@@ -126,7 +127,7 @@ function RunUptime({ since }: { since: number }) {
   return <>{formatUptime(now - since)}</>;
 }
 
-/** OS network link as reported by the webview (`online` / `offline`). */
+/** OS network link as reported by the mobile webview (`online` / `offline`). */
 function useNetworkOnline(): boolean {
   const [online, setOnline] = useState(
     () => typeof navigator !== "undefined" && navigator.onLine,
@@ -145,6 +146,7 @@ function useNetworkOnline(): boolean {
 
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
   useLanguagePreference();
+  const phone = isPhoneShell();
   const networkOnline = useNetworkOnline();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
@@ -152,6 +154,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   runtimeRef.current = runtime;
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [selectedTag, setSelectedTag] = useState<string>("");
@@ -198,12 +201,17 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         const settingsPromise = wantSettings
           ? api.getSettings()
           : Promise.resolve(null);
+        const mcpPromise = phone
+          ? Promise.resolve(null)
+          : api.getMcpStatus().catch(() => null);
 
-        const [s, nextSettings] = await Promise.all([
+        const [s, nextSettings, nextMcpStatus] = await Promise.all([
           statusPromise,
           settingsPromise,
+          mcpPromise,
         ]);
         if (gen !== pollGenRef.current || !activeRef.current) return;
+        if (nextMcpStatus) setMcpStatus(nextMcpStatus);
 
         // A node switch may land while this fetch is in flight. Keep the
         // snapshot selection instead of regressing to stale settings.
@@ -249,7 +257,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         }
       }
     },
-    [noteStatus],
+    [noteStatus, phone],
   );
 
   useEffect(() => {
@@ -488,7 +496,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
   const proxyOn = proxyLive || (proxyRecorded && running) || tunActive;
   const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
-  const phone = isPhoneShell();
   const statusOutbound = status?.selected_outbound ?? null;
   // A selection that lands while a sample is in flight keeps the line. A later
   // sample (the tray, or the next poll) replaces it once its timestamp is newer.
@@ -678,6 +685,35 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             app: formatMemoryPart(memory.app_bytes),
           })
     : undefined;
+  const mcpSupported = mcpStatus?.supported === true;
+  const mcpRunning = mcpStatus?.supported === true && mcpStatus.running;
+  const mcpValue = mcpRunning
+    ? t("mcp.running")
+    : mcpSupported
+      ? t("mcp.stopped")
+      : t("common.dash");
+  const platformStatusRow = phone
+    ? {
+        label: t("home.health.network"),
+        value: networkOnline
+          ? t("home.network.online")
+          : t("home.network.offline"),
+        valueClassName: networkOnline ? "text-ok" : "text-destructive",
+        testId: "home-health-network",
+      }
+    : {
+        label: t("home.health.mcp"),
+        value: mcpValue,
+        title: mcpStatus?.error ?? undefined,
+        valueClassName: mcpRunning
+          ? "text-ok"
+          : mcpStatus?.error
+            ? "text-destructive"
+            : mcpSupported
+              ? "text-muted-foreground"
+              : undefined,
+        testId: "home-health-mcp",
+      };
   const infoRows: {
     label: string;
     value: string;
@@ -689,6 +725,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       label: t("home.health.core"),
       value: formatCoreStatus(core?.status),
       valueClassName: `status status-${core?.status ?? "unknown"}`,
+      testId: "home-health-core",
     },
     {
       label: t("home.health.memory"),
@@ -701,14 +738,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         memoryToneValue === "bad" && "text-destructive",
       ),
     },
-    {
-      label: t("home.health.network"),
-      value: networkOnline
-        ? t("home.network.online")
-        : t("home.network.offline"),
-      valueClassName: networkOnline ? "text-ok" : "text-destructive",
-      testId: "home-health-network",
-    },
+    platformStatusRow,
   ];
 
   const powerOn = phone ? vpnActive : proxyOn;
