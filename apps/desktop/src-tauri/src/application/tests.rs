@@ -1427,22 +1427,91 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
 }
 
 #[test]
-fn only_launch_at_login_changed_ignores_other_fields() {
-    use crate::application::settings::only_launch_at_login_changed;
+fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
+    use crate::application::settings::save_settings_inner_with_autostart;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
-    let off = AppSettings::default();
-    let on = AppSettings {
-        launch_at_login: true,
-        ..AppSettings::default()
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("launch-at-login-combined");
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
     };
-    assert!(only_launch_at_login_changed(&off, &on));
-    // A save that also touches anything else is a full apply, not this
-    // persist-only path.
-    let mut other = on.clone();
-    other.mixed_port = 18080;
-    assert!(!only_launch_at_login_changed(&off, &other));
-    // Unchanged login item: nothing to do.
-    assert!(!only_launch_at_login_changed(&off, &off));
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+    let calls = Arc::new(Mutex::new(Vec::new()));
+
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(true),
+            mixed_port: Some(18080),
+            ..SettingsPatch::default()
+        },
+        |enabled| {
+            calls.lock().unwrap().push(enabled);
+            Ok(())
+        },
+    )
+    .expect("combined enable");
+    let enabled = current_settings(&state.paths).unwrap();
+    assert!(enabled.launch_at_login);
+    assert_eq!(enabled.mixed_port, 18080);
+
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(false),
+            mixed_port: Some(18081),
+            ..SettingsPatch::default()
+        },
+        |enabled| {
+            calls.lock().unwrap().push(enabled);
+            Ok(())
+        },
+    )
+    .expect("combined disable");
+    let disabled = current_settings(&state.paths).unwrap();
+    assert!(!disabled.launch_at_login);
+    assert_eq!(disabled.mixed_port, 18081);
+    assert_eq!(*calls.lock().unwrap(), vec![true, false]);
+
+    let err = save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            launch_at_login: Some(true),
+            mixed_port: Some(18082),
+            ..SettingsPatch::default()
+        },
+        |_enabled| Err("login item write refused".to_string()),
+    )
+    .expect_err("autostart failure must abort the combined save");
+    assert_eq!(err.code, "app.autostart_failed");
+    let unchanged = current_settings(&state.paths).unwrap();
+    assert!(!unchanged.launch_at_login);
+    assert_eq!(unchanged.mixed_port, 18081);
+
+    let _ = fs::remove_dir_all(state.paths.root());
 }
 
 #[test]

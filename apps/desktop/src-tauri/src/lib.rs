@@ -296,8 +296,6 @@ pub fn run() {
             }
             let mcp_paths = app.state::<AppState>().paths.root().to_path_buf();
             app.manage(mcp::McpService::new(mcp_paths));
-            let mcp_handle = app.handle().clone();
-            app.state::<mcp::McpService>().start_if_enabled(&mcp_handle);
             // Overlap geoip copy and the bundled-core SHA-256 with leftover
             // reclaim / TUN recovery and the first UI status poll.
             {
@@ -343,6 +341,12 @@ pub fn run() {
             if orch_rx.recv().is_err() {
                 tracing::warn!("startup worker exited before acquiring orchestrate lock");
             }
+            // Publish MCP only after the startup worker holds `orchestrate`.
+            // Any Agent runtime mutation that acquires the listener now queues
+            // behind orphan reclaim and launch recovery instead of starting a
+            // core that the recovery worker can immediately reclaim.
+            let mcp_handle = app.handle().clone();
+            app.state::<mcp::McpService>().start_if_enabled(&mcp_handle);
             // Reconcile the OS login item with `settings.json` on every launch.
             // On: the entry stores an absolute path and the app moves between
             // installs (DMG → /Applications, NSIS upgrades), so it is rewritten

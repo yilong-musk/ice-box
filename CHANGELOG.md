@@ -13,6 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a ready-to-use stdio bridge configuration. Android and the website do not
   expose MCP.
 
+### Fixed
+
+- MCP settings patches that change `launch_at_login` together with runtime
+  fields now update the OS login item before persisting the new settings.
+- The MCP listener starts only after launch recovery owns the runtime mutation
+  lock, so Agent requests cannot start or replace a core while startup is still
+  reclaiming the previous session.
+
 ## [0.1.30] - 2026-10-17
 
 ### Added
