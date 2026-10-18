@@ -870,11 +870,14 @@ mod tests {
         let status = service.status();
         assert!(status.supported);
         assert!(!status.enabled);
-        assert!(status.client_config.contains("--mcp-stdio"));
-        assert!(status.client_config.contains("--data-dir"));
-        assert!(status
-            .client_config
-            .contains(&dir.to_string_lossy().to_string()));
+        let config: serde_json::Value = serde_json::from_str(&status.client_config).unwrap();
+        let server = &config["mcpServers"]["ice-box"];
+        assert_eq!(server["command"], status.bridge_executable);
+        assert_eq!(server["args"], serde_json::json!(status.bridge_args));
+        assert_eq!(
+            server["args"][2],
+            serde_json::Value::String(dir.to_string_lossy().into_owned())
+        );
         assert!(!status.client_config.contains(MCP_SECRET_FILE));
         let _ = std::fs::remove_dir_all(dir);
     }
