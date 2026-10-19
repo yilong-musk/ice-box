@@ -36,8 +36,9 @@ through React or the application's configuration code.
 | Android | [`apps/mobile`](../apps/mobile) | libbox inside the VPN service process (`:tunnel`) | Android VPN service |
 | Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop UI |
 
-Only the macOS and Windows desktop shell exposes MCP. Android and the website
-do not start or render that control surface. See [`mcp.md`](mcp.md).
+Only the macOS and Windows desktop shell exposes a real MCP service. Android
+neither starts nor renders that control surface; the website Live Demo renders
+it with a simulated service. See [`mcp.md`](mcp.md).
 
 The Android application id is `com.yilongmusk.icebox`, and `minSdk` is 34. The
 published build is one `arm64-v8a` APK. The phone UI hides desktop ports, the
@@ -145,8 +146,10 @@ and never starts another core or capture controller.
 MCP tool handlers are thin adapters over existing `application` use cases. They
 share orchestration locks, validation, filesystem state, and GUI event
 broadcasts with Tauri commands. The server is opt-in and disabled by default.
-Its endpoint and token are regenerated for each service generation. Android and
-the browser demo have no MCP implementation or navigation entry.
+Its endpoint and token are regenerated for each service generation. Android has
+no MCP implementation or navigation entry. The browser demo has no MCP
+implementation, but it renders the navigation entry and page with simulated
+status.
 
 ### Runtime reads and diagnostics
 

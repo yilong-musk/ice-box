@@ -143,6 +143,20 @@ async function verifyMockedHomeData(page) {
       `Live Demo landing IP must show mocked IPv4 data, got ${JSON.stringify(landingIp)}`,
     );
   }
+
+  const mcpNav = page.getByRole("button", { name: "MCP", exact: true });
+  if ((await mcpNav.count()) === 0) {
+    throw new Error("Live Demo must show the MCP navigation entry");
+  }
+
+  const mcpStatus = (
+    await page.getByTestId("home-health-mcp").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (!mcpStatus || !/^(Running|运行中)$/.test(mcpStatus)) {
+    throw new Error(
+      `Live Demo MCP service status must be running, got ${JSON.stringify(mcpStatus)}`,
+    );
+  }
 }
 
 async function capture(browser, baseUrl, target) {

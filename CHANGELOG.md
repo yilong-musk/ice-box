@@ -13,8 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   GUI actions and MCP tools share one runtime, data directory, core, and OS
   capture session. A new desktop-only MCP page manages the service and copies
   a ready-to-use stdio bridge configuration. The tray can enable or disable
-  the service, copy the same configuration, and show its status. Android and
-  the website do not expose MCP.
+  the service, copy the same configuration, and show its status. Android does
+  not expose MCP; the website demo shows a simulated running service.
 
 ### Fixed
 

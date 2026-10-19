@@ -5,8 +5,9 @@ endpoint so an Agent can inspect and operate the same desktop session that a
 person is using.
 
 MCP is a desktop-only capability. The macOS and Windows builds include it. The
-Android app and the website Live Demo do not start an MCP service and do not
-show an MCP page.
+Android app does not start an MCP service and does not show an MCP page. The
+website Live Demo renders the MCP page with a simulated service; it never opens
+a real listener or bridge.
 
 ## One runtime, two control surfaces
 
@@ -177,7 +178,7 @@ removed when the service is disabled, restarted, stopped, or exits.
   server. The endpoint and token intentionally changed.
 - **The page shows a configuration error:** repair or remove `mcp.json`, then
   enable the service again. A malformed file fails closed.
-- **No MCP entry appears:** you are using Android or the website. MCP is
-  intentionally absent on those shells.
+- **No MCP entry appears:** you are using Android. MCP is intentionally absent
+  there. The website demo renders a simulated MCP page.
 - **A protected TUN action stops at an OS prompt:** complete or cancel the
   prompt in the operating system. MCP does not bypass platform authorization.

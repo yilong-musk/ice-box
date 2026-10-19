@@ -113,8 +113,9 @@ proxy session as the GUI instead of starting another runtime.
   service closes.
 
 MCP is off by default and listens only on authenticated loopback. It is not
-available in the Android app or website demo. See [`docs/mcp.md`](docs/mcp.md)
-for setup, tool coverage, lifecycle, and security boundaries.
+available in the Android app; the website demo renders the MCP page with a
+simulated service. See [`docs/mcp.md`](docs/mcp.md) for setup, tool coverage,
+lifecycle, and security boundaries.
 
 ## Development
 

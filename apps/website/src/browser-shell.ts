@@ -6,5 +6,7 @@ export function isPhoneShell(): boolean {
 }
 
 export function isDesktopShell(): boolean {
-  return false;
+  // The Live Demo mirrors the desktop shell so desktop-only pages such as MCP
+  // are visible; the backend behind them is simulated.
+  return true;
 }
