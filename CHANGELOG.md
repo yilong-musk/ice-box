@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-19
+
+### Added
+
+- The Android VPN notification shows live upload and download rates, refreshed
+  from the running core while the app is in the background.
+
+### Changed
+
+- The phone Home screen puts the core state and selected node in the proxy
+  status card. It no longer shows the separate traffic, outbound, inbound,
+  memory, connectivity, or service-status modules. Desktop Home is unchanged.
+- Phone pages keep consistent spacing below the system status bar.
+
 ## [0.2.1] - 2026-10-19
 
 ### Added

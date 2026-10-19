@@ -386,7 +386,7 @@ function AppShell() {
           </header>
           {recovery}
           <main
-            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pb-2"
+            className="content-main content-fill min-h-0 flex-1 overflow-hidden px-4 pt-3 pb-2"
             data-testid="app-main"
           >
             {pages}

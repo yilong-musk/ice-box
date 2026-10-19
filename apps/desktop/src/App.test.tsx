@@ -561,6 +561,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByTestId("phone-tab-bar")).toBeInTheDocument();
     });
+    expect(view.getByTestId("app-main")).toHaveClass("pt-3");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
     expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
       "aria-current",

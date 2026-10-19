@@ -30,11 +30,16 @@ import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 import io.nekohasekai.libbox.NetworkInterface as BoxInterface
 
 /**
@@ -54,6 +59,11 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile
     private var destroyed = false
     private var memoryTask: java.util.concurrent.ScheduledFuture<*>? = null
+    private var trafficReporter: Thread? = null
+    @Volatile
+    private var trafficReporting = false
+    @Volatile
+    private var trafficSocket: Socket? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -92,6 +102,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
             publish("connected", null)
             Log.i(NetworkMonitor.TAG, "$reason ok (libbox ${Libbox.version()})")
             scheduleMemoryReports()
+            startTrafficReports()
         } catch (err: Throwable) {
             if (destroyed) return
             val message = "${err.javaClass.simpleName}: ${err.message}"
@@ -132,6 +143,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun stopBox() {
         if (!destroyed) publish("disconnecting", null)
+        stopTrafficReports()
         memoryTask?.cancel(false)
         memoryTask = null
         // Leave the CommandServer in place so the next start can reload it.
@@ -145,6 +157,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
 
     /** Idempotent. Runs on [worker] only, after [destroyed] is set. */
     private fun destroyServer() {
+        stopTrafficReports()
         memoryTask?.cancel(false)
         memoryTask = null
         val running = server
@@ -211,7 +224,121 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
             .setContentText("VPN")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .build()
+    }
+
+    /**
+     * The Android status bar only reserves notification icons for third-party
+     * apps. Keep the VPN's ongoing notification in the shade and refresh its
+     * text once per Clash `/traffic` sample.
+     */
+    private fun startTrafficReports() {
+        if (trafficReporter?.isAlive == true) return
+        trafficReporting = true
+        trafficReporter = Thread({ trafficReportLoop() }, "ice-box-traffic").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun stopTrafficReports() {
+        trafficReporting = false
+        runCatching { trafficSocket?.close() }
+        trafficSocket = null
+        trafficReporter?.interrupt()
+        trafficReporter = null
+    }
+
+    private fun trafficReportLoop() {
+        while (trafficReporting && !destroyed) {
+            try {
+                streamTraffic()
+            } catch (_: InterruptedException) {
+                return
+            } catch (err: Exception) {
+                if (!trafficReporting || destroyed) return
+                Log.d(NetworkMonitor.TAG, "traffic notification retry: ${err.message}")
+            }
+            try {
+                Thread.sleep(1_000L)
+            } catch (_: InterruptedException) {
+                return
+            }
+        }
+    }
+
+    /**
+     * Stream the same Clash `/traffic` endpoint used by the desktop chart. A
+     * raw loopback socket avoids Android's cleartext HTTP policy while keeping
+     * the API bearer token out of a URL or log line.
+     */
+    private fun streamTraffic() {
+        val config = JSONObject(File(sharedDir(this), "config.json").readText())
+        val clashApi = config
+            .getJSONObject("experimental")
+            .getJSONObject("clash_api")
+        val controller = clashApi.getString("external_controller")
+        val secret = clashApi.getString("secret")
+        val separator = controller.lastIndexOf(':')
+        require(separator > 0) { "invalid Clash controller" }
+        val host = controller.substring(0, separator).removeSurrounding("[", "]")
+        val port = controller.substring(separator + 1).toInt()
+
+        val socket = Socket()
+        trafficSocket = socket
+        try {
+            socket.connect(InetSocketAddress(InetAddress.getByName(host), port), 2_000)
+            socket.soTimeout = 5_000
+            socket.getOutputStream().bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(
+                    "GET /traffic HTTP/1.1\r\n" +
+                        "Host: $controller\r\n" +
+                        "Authorization: Bearer $secret\r\n" +
+                        "Accept: text/event-stream\r\n" +
+                        "Connection: close\r\n\r\n",
+                )
+                writer.flush()
+
+                val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+                val status = reader.readLine().orEmpty()
+                require(status.contains(" 200 ")) { "Clash traffic HTTP $status" }
+                while (reader.readLine()?.isNotEmpty() == true) {
+                    // Skip response headers; the body is chunked JSON lines.
+                }
+                while (trafficReporting && !destroyed) {
+                    val line = reader.readLine() ?: error("traffic stream ended")
+                    if (!line.trimStart().startsWith("{")) continue
+                    val sample = JSONObject(line)
+                    postTrafficNotification(
+                        up = sample.optLong("up", 0L),
+                        down = sample.optLong("down", 0L),
+                    )
+                }
+            }
+        } finally {
+            if (trafficSocket === socket) trafficSocket = null
+            runCatching { socket.close() }
+        }
+    }
+
+    private fun postTrafficNotification(up: Long, down: Long) {
+        if (!trafficReporting || destroyed || phase != "connected") return
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(
+                NOTIFICATION_ID,
+                Notification.Builder(this, CHANNEL_ID)
+                    .setContentTitle("ice-box")
+                    .setContentText("↓ ${formatRate(down)}   ↑ ${formatRate(up)}")
+                    .setSubText("VPN")
+                    .setSmallIcon(android.R.drawable.ic_lock_lock)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .build(),
+            )
+        }.onFailure {
+            Log.d(NetworkMonitor.TAG, "traffic notification update failed: ${it.message}")
+        }
     }
 
     override fun openTun(options: TunOptions): Int {
@@ -350,6 +477,17 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "vpn"
+
+        private fun formatRate(bytesPerSecond: Long): String {
+            val rate = bytesPerSecond.coerceAtLeast(0L)
+            return when {
+                rate < 1_024L -> "$rate B/s"
+                rate < 1_048_576L ->
+                    String.format(Locale.US, "%.1f KB/s", rate / 1_024.0)
+                else ->
+                    String.format(Locale.US, "%.2f MB/s", rate / 1_048_576.0)
+            }
+        }
     }
 }
 
