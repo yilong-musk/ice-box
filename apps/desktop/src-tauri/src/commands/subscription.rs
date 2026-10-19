@@ -170,7 +170,7 @@ pub async fn set_auto_update_subscription(
 ) -> Result<serde_json::Value, AppError> {
     run_blocking("set_auto_update_subscription", move || {
         let state = app.state::<AppState>();
-        set_auto_update_subscription_use_case(state.inner(), req)
+        set_auto_update_subscription_use_case(&app, state.inner(), req)
     })
     .await
 }

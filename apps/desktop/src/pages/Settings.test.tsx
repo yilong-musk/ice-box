@@ -43,6 +43,7 @@ const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
 const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
 const listenStateChanged = vi.fn().mockResolvedValue(() => {});
+let stateChangedHandler: (() => void) | null = null;
 
 vi.mock("../api/client", () => ({
   api: {
@@ -122,7 +123,12 @@ const defaultStatus = {
 describe("Settings", () => {
   beforeEach(() => {
     phoneShell.value = false;
+    stateChangedHandler = null;
     vi.clearAllMocks();
+    listenStateChanged.mockImplementation((handler: () => void) => {
+      stateChangedHandler = handler;
+      return Promise.resolve(() => {});
+    });
     saveSettings.mockResolvedValue(undefined);
     window.localStorage.removeItem(THEME_STORAGE_KEY);
     document.documentElement.classList.remove("dark");
@@ -740,6 +746,134 @@ describe("Settings", () => {
 
     // Reset the module-level language so later tests in this file render zh.
     persistLanguagePreference("system");
+  });
+
+  it("reloads settings when another control surface announces a change", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => expect(view.getByDisplayValue("17890")).toBeInTheDocument());
+    await waitFor(() => expect(listenStateChanged).toHaveBeenCalledOnce());
+
+    getSettings.mockResolvedValueOnce({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 18081,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "system",
+      check_app_updates: true,
+      probe_exit_ip: true,
+      log_debug: false,
+      tray_display_mode: "icon_and_speed",
+      launch_at_login: false,
+      tun: tunSettings,
+    });
+
+    act(() => stateChangedHandler?.());
+
+    await waitFor(() => {
+      expect(view.getByDisplayValue("18081")).toBeInTheDocument();
+    });
+  });
+
+  it("preserves an unrelated remote change while a local save is pending", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => expect(view.getByDisplayValue("17890")).toBeInTheDocument());
+    await waitFor(() => expect(listenStateChanged).toHaveBeenCalledOnce());
+
+    let finishSave = () => {};
+    saveSettings.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+    fireEvent.change(view.getByDisplayValue("17890"), {
+      target: { value: "18080" },
+    });
+    await waitFor(
+      () => expect(saveSettings).toHaveBeenCalledOnce(),
+      { timeout: 2000 },
+    );
+    expect(saveSettings.mock.calls[0][0]).toEqual({ mixed_port: 18080 });
+
+    getSettings.mockResolvedValueOnce({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 18080,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "en",
+      check_app_updates: true,
+      probe_exit_ip: true,
+      log_debug: false,
+      tray_display_mode: "icon_and_speed",
+      launch_at_login: false,
+      tun: tunSettings,
+    });
+    act(() => stateChangedHandler?.());
+    await act(async () => {
+      finishSave();
+    });
+
+    await waitFor(() => {
+      expect(view.getByDisplayValue("18080")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.language"))).toHaveValue("en");
+    });
+  });
+
+  it("keeps an invalid local draft when another control surface changes", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => expect(view.getByDisplayValue("17890")).toBeInTheDocument());
+    await waitFor(() => expect(listenStateChanged).toHaveBeenCalledOnce());
+
+    const port = view.getByDisplayValue("17890");
+    fireEvent.change(port, { target: { value: "80" } });
+    await waitFor(
+      () => {
+        expect(container.textContent).toContain("1024");
+        expect(saveSettings).not.toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
+    const readsBeforeEvent = getSettings.mock.calls.length;
+
+    getSettings.mockResolvedValueOnce({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 18081,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: false,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      auto_default_rules: true,
+      language: "en",
+      check_app_updates: true,
+      probe_exit_ip: true,
+      log_debug: false,
+      tray_display_mode: "icon_and_speed",
+      launch_at_login: false,
+      tun: tunSettings,
+    });
+
+    act(() => stateChangedHandler?.());
+
+    expect(view.getByDisplayValue("80")).toBeInTheDocument();
+    expect(container.textContent).toContain("1024");
+    expect(getSettings).toHaveBeenCalledTimes(readsBeforeEvent);
   });
 
   it("lets the settings panel fill the content pane", () => {

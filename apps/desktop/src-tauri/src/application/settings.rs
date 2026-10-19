@@ -38,16 +38,6 @@ pub(crate) fn only_tray_display_mode_changed(previous: &AppSettings, next: &AppS
     left == right && previous.tray_display_mode != next.tray_display_mode
 }
 
-/// Persist-only: the login item is an OS registration the shell owns, and no
-/// part of the sing-box runtime config depends on it.
-pub(crate) fn only_launch_at_login_changed(previous: &AppSettings, next: &AppSettings) -> bool {
-    let mut left = previous.clone();
-    let mut right = next.clone();
-    left.launch_at_login = false;
-    right.launch_at_login = false;
-    left == right && previous.launch_at_login != next.launch_at_login
-}
-
 pub(crate) fn parse_proxy_mode(mode: &str) -> Result<ProxyMode, AppError> {
     match mode {
         "rule" => Ok(ProxyMode::Rule),
@@ -218,6 +208,15 @@ pub(crate) fn save_settings_inner(
     state: &AppState,
     patch: SettingsPatch,
 ) -> Result<(), AppError> {
+    save_settings_inner_with_autostart(app, state, patch, crate::autostart::set_enabled)
+}
+
+pub(super) fn save_settings_inner_with_autostart(
+    app: &impl AppHost,
+    state: &AppState,
+    patch: SettingsPatch,
+    sync_autostart: impl FnOnce(bool) -> Result<(), String>,
+) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     let previous = current_settings(&state.paths)?;
     // Home start/stop own `proxy_service_enabled`; Settings omits it so a
@@ -225,38 +224,46 @@ pub(crate) fn save_settings_inner(
     // dedicated callers.
     let settings = previous.apply_patch(&patch);
     settings.validate_for(host_platform())?;
+    // The login item is an OS registration independent of the sing-box runtime
+    // config. Handle it before every save path, including patches that also
+    // change runtime fields. The OS write must succeed before settings.json
+    // records the new state.
+    let mut previous_for_apply = previous.clone();
+    if previous.launch_at_login != settings.launch_at_login {
+        sync_autostart(settings.launch_at_login)
+            .map_err(|err| AppError::new(ErrorCode::AutostartFailed, err))?;
+        // Remove the login-item delta from the runtime change classification.
+        // A combined persist-only change must not reload a live core merely
+        // because this OS-only field was in the same patch.
+        previous_for_apply.launch_at_login = settings.launch_at_login;
+    }
+    if previous_for_apply == settings {
+        persist_settings(&state.paths.settings(), &settings, host_platform())?;
+        return Ok(());
+    }
     let active = state.capture.active_backend();
     // `tun.enabled` is next-start desire only: persist it without starting,
     // stopping, or switching the live capture backend.
-    if only_tun_enabled_changed(&previous, &settings) {
+    if only_tun_enabled_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         return Ok(());
     }
-    if crate::app_update::only_check_app_updates_changed(&previous, &settings) {
+    if crate::app_update::only_check_app_updates_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         return Ok(());
     }
-    if only_log_debug_changed(&previous, &settings) {
+    if only_log_debug_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         return Ok(());
     }
-    if only_probe_exit_ip_changed(&previous, &settings) {
+    if only_probe_exit_ip_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         // Drop any existing sample and invalidate an in-flight fetch so turning
         // privacy probes off takes effect immediately.
         super::exit_probe::clear();
         return Ok(());
     }
-    if only_tray_display_mode_changed(&previous, &settings) {
-        persist_settings(&state.paths.settings(), &settings, host_platform())?;
-        return Ok(());
-    }
-    if only_launch_at_login_changed(&previous, &settings) {
-        // The OS write comes first: a refused registration (read-only
-        // LaunchAgents directory, locked registry) must not be remembered
-        // as enabled, so `settings.json` mirrors what the OS really has.
-        crate::autostart::set_enabled(settings.launch_at_login)
-            .map_err(|err| AppError::new(ErrorCode::AutostartFailed, err))?;
+    if only_tray_display_mode_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         return Ok(());
     }
@@ -264,9 +271,9 @@ pub(crate) fn save_settings_inner(
     // TUN capture stays the active backend. Enabled flips never belong
     // here — they were handled above.
     let tun_transition = active == TrafficCapture::Tun
-        && previous.tun.enabled
+        && previous_for_apply.tun.enabled
         && settings.tun.enabled
-        && tun_topology_changed(&previous.tun, &settings.tun);
+        && tun_topology_changed(&previous_for_apply.tun, &settings.tun);
     if tun_transition {
         // Serialized topology apply (`docs/tun.md`): the pending record is
         // committed only after the requested backend is healthy.
@@ -274,7 +281,7 @@ pub(crate) fn save_settings_inner(
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
         state.capture.transition_tun_settings(
-            &previous,
+            &previous_for_apply,
             &settings,
             &mut **core,
             proxy.as_ref(),
@@ -293,10 +300,10 @@ pub(crate) fn save_settings_inner(
             // TUN was disabled: the disable path restarted the app-managed
             // core on the previous config; apply the non-backend parts of
             // the change (ports, mode, rules) now.
-            apply_after_change(app, state, &settings, &previous)
+            apply_after_change(app, state, &settings, &previous_for_apply)
         }
     } else {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
-        apply_after_change(app, state, &settings, &previous)
+        apply_after_change(app, state, &settings, &previous_for_apply)
     }
 }

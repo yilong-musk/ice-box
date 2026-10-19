@@ -66,26 +66,80 @@ const defaults: AppSettings = {
 /// and radios feel instant).
 const SAVE_DEBOUNCE_MS = 500;
 
-/** Fields this page owns. Omitting Home-owned keys avoids last-writer races (ORCH-3).
- * `tun.enabled` is persisted only by the TUN switch (`persistTunEnabled`), never
- * by the debounced auto-save of other fields. */
-function settingsOwnedPatch(form: AppSettings): SettingsPatch {
-  const { enabled: _enabled, ...tunRest } = form.tun;
-  return {
-    mixed_listen: form.mixed_listen,
-    mixed_port: form.mixed_port,
-    clash_api_listen: form.clash_api_listen,
-    clash_api_port: form.clash_api_port,
-    auto_set_system_proxy: form.auto_set_system_proxy,
-    allow_lan: form.allow_lan,
-    tun: tunRest,
-    auto_default_rules: form.auto_default_rules,
-    language: form.language,
-    check_app_updates: form.check_app_updates,
-    probe_exit_ip: form.probe_exit_ip,
-    log_debug: form.log_debug,
-    tray_display_mode: form.tray_display_mode,
-  };
+/** Return only page-owned fields changed since the last loaded/persisted form.
+ * Sending a full snapshot turns an unrelated MCP update into a lost update.
+ * `tun.enabled` remains owned by the dedicated TUN switch. */
+function settingsDiffPatch(
+  form: AppSettings,
+  previous: AppSettings,
+): SettingsPatch | null {
+  const patch: SettingsPatch = {};
+  if (form.mixed_listen !== previous.mixed_listen) {
+    patch.mixed_listen = form.mixed_listen;
+  }
+  if (form.mixed_port !== previous.mixed_port) {
+    patch.mixed_port = form.mixed_port;
+  }
+  if (form.clash_api_listen !== previous.clash_api_listen) {
+    patch.clash_api_listen = form.clash_api_listen;
+  }
+  if (form.clash_api_port !== previous.clash_api_port) {
+    patch.clash_api_port = form.clash_api_port;
+  }
+  if (form.auto_set_system_proxy !== previous.auto_set_system_proxy) {
+    patch.auto_set_system_proxy = form.auto_set_system_proxy;
+  }
+  if (form.allow_lan !== previous.allow_lan) {
+    patch.allow_lan = form.allow_lan;
+  }
+  if (form.auto_default_rules !== previous.auto_default_rules) {
+    patch.auto_default_rules = form.auto_default_rules;
+  }
+  if (form.language !== previous.language) {
+    patch.language = form.language;
+  }
+  if (form.check_app_updates !== previous.check_app_updates) {
+    patch.check_app_updates = form.check_app_updates;
+  }
+  if (form.probe_exit_ip !== previous.probe_exit_ip) {
+    patch.probe_exit_ip = form.probe_exit_ip;
+  }
+  if (form.log_debug !== previous.log_debug) {
+    patch.log_debug = form.log_debug;
+  }
+  if (form.tray_display_mode !== previous.tray_display_mode) {
+    patch.tray_display_mode = form.tray_display_mode;
+  }
+
+  const tun: NonNullable<SettingsPatch["tun"]> = {};
+  if (form.tun.interface_name !== previous.tun.interface_name) {
+    tun.interface_name = form.tun.interface_name;
+  }
+  if (form.tun.ipv4_address !== previous.tun.ipv4_address) {
+    tun.ipv4_address = form.tun.ipv4_address;
+  }
+  if (form.tun.ipv6_address !== previous.tun.ipv6_address) {
+    tun.ipv6_address = form.tun.ipv6_address;
+  }
+  if (form.tun.mtu !== previous.tun.mtu) {
+    tun.mtu = form.tun.mtu;
+  }
+  if (form.tun.auto_route !== previous.tun.auto_route) {
+    tun.auto_route = form.tun.auto_route;
+  }
+  if (form.tun.strict_route !== previous.tun.strict_route) {
+    tun.strict_route = form.tun.strict_route;
+  }
+  if (form.tun.stack !== previous.tun.stack) {
+    tun.stack = form.tun.stack;
+  }
+  if (form.tun.dns_hijack !== previous.tun.dns_hijack) {
+    tun.dns_hijack = form.tun.dns_hijack;
+  }
+  if (Object.keys(tun).length > 0) {
+    patch.tun = tun;
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 export function Settings({
@@ -101,6 +155,7 @@ export function Settings({
 }) {
   const [form, setForm] = useState<AppSettings>(defaults);
   const [loaded, setLoaded] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -120,6 +175,13 @@ export function Settings({
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<AppSettings | null>(null);
   const saveIdleWaitersRef = useRef<Array<() => void>>([]);
+  const formRef = useRef<AppSettings>(defaults);
+  const loadedRef = useRef(false);
+  formRef.current = form;
+  /** Last local form snapshot known to be applied to disk. */
+  const persistedFormRef = useRef<AppSettings>(defaults);
+  /** Coalesce state announcements received while a local save is in flight. */
+  const remoteReloadPendingRef = useRef(false);
   /// Reset timer for the "saved" flash; tracked so the pending reset is
   /// cancelled on unmount (a stray fire into a torn-down test environment
   /// crashes with `window is not defined`) and superseded on every new save.
@@ -267,13 +329,59 @@ export function Settings({
     };
   }, []);
 
+  function hasLocalDraft(): boolean {
+    return (
+      loadedRef.current &&
+      settingsDiffPatch(formRef.current, persistedFormRef.current) !== null
+    );
+  }
+
+  function applyPendingRemoteReload() {
+    if (!remoteReloadPendingRef.current) return;
+    if (
+      saveTimerRef.current !== null ||
+      scheduledSaveRef.current !== null ||
+      saveInFlightRef.current ||
+      pendingSaveRef.current !== null ||
+      hasLocalDraft()
+    ) {
+      return;
+    }
+    remoteReloadPendingRef.current = false;
+    setReloadNonce((value) => value + 1);
+  }
+
+  useEffect(() => {
+    if (!active || typeof api.listenStateChanged !== "function") return;
+    let cancelled = false;
+    let unlisten = () => {};
+    void api
+      .listenStateChanged(() => {
+        remoteReloadPendingRef.current = true;
+        applyPendingRemoteReload();
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        // Settings still reloads whenever the tab becomes active again.
+      });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [active]);
+
   useEffect(() => {
     if (!active) {
       flushScheduledSave();
+      loadedRef.current = false;
       setLoaded(false);
       skipInitialSaveRef.current = true;
       return;
     }
+    loadedRef.current = false;
     setLoaded(false);
     skipInitialSaveRef.current = true;
     let cancelled = false;
@@ -286,9 +394,17 @@ export function Settings({
           api.getStatus(),
         ]);
         if (!cancelled) {
+          if (hasLocalDraft()) {
+            remoteReloadPendingRef.current = true;
+            loadedRef.current = true;
+            setLoaded(true);
+            return;
+          }
           setForm(settings);
+          persistedFormRef.current = settings;
           setLaunchAtLogin(settings.launch_at_login === true);
           setStatus(s);
+          loadedRef.current = true;
           setLoaded(true);
           // settings.json is the authoritative language preference; re-apply
           // it when it differs from the cached one (e.g. first launch after a
@@ -308,7 +424,7 @@ export function Settings({
     };
     // Only consulted when settings are (re)loaded, so `preference` is
     // intentionally not a dependency.
-  }, [active]);
+  }, [active, reloadNonce]);
 
   function clearFieldError(key: string) {
     setFieldErrors((prev) => {
@@ -376,6 +492,11 @@ export function Settings({
     setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled } }));
     try {
       await api.saveSettings({ tun: { enabled } });
+      persistedFormRef.current = {
+        ...persistedFormRef.current,
+        tun: { ...persistedFormRef.current.tun, enabled },
+      };
+      applyPendingRemoteReload();
     } catch (err) {
       setForm((prev) => ({ ...prev, tun: { ...prev.tun, enabled: previous } }));
       throw err;
@@ -454,8 +575,13 @@ export function Settings({
       if (Object.keys(errs).length > 0) {
         return;
       }
+      const patch = settingsDiffPatch(candidate, persistedFormRef.current);
+      if (patch === null) {
+        return;
+      }
       setError(null);
-      await api.saveSettings(settingsOwnedPatch(candidate));
+      await api.saveSettings(patch);
+      persistedFormRef.current = candidate;
       flashSaved();
     } catch (err) {
       setError(formatInvokeError(err));
@@ -468,6 +594,7 @@ export function Settings({
       } else {
         const waiters = saveIdleWaitersRef.current.splice(0);
         for (const resolve of waiters) resolve();
+        applyPendingRemoteReload();
       }
     }
   }
@@ -512,6 +639,10 @@ export function Settings({
     if (!loaded) return;
     if (skipInitialSaveRef.current) {
       skipInitialSaveRef.current = false;
+      return;
+    }
+    if (!hasLocalDraft()) {
+      applyPendingRemoteReload();
       return;
     }
     scheduleAutoSave(form);

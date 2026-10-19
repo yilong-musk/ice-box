@@ -379,6 +379,21 @@ export type ListRulesResponse = {
   items: RuleRow[];
 };
 
+/** Desktop-only MCP service exposed to Agent clients. */
+export type McpStatus = {
+  supported: boolean;
+  enabled: boolean;
+  running: boolean;
+  endpoint: string | null;
+  client_count: number;
+  tool_count: number;
+  bridge_executable: string;
+  bridge_args: string[];
+  /** Ready-to-paste MCP client configuration; never contains the control token. */
+  client_config: string;
+  error: string | null;
+};
+
 /** Shared by the desktop shell and the mobile shell. */
 export interface CoreApi {
   getStatus(): Promise<StatusResponse>;
@@ -462,5 +477,12 @@ export interface DesktopShellApi {
   releaseRuleSearch(): Promise<void>;
 }
 
+/** Desktop-only local MCP bridge. Mobile and browser clients report unsupported. */
+export interface McpApi {
+  getMcpStatus(): Promise<McpStatus>;
+  setMcpEnabled(enabled: boolean): Promise<McpStatus>;
+  restartMcp(): Promise<McpStatus>;
+}
+
 /** Shared views depend on this full contract. The mobile transport no-ops the desktop-only methods. */
-export interface ApiContract extends CoreApi, DesktopCaptureApi, DesktopShellApi {}
+export interface ApiContract extends CoreApi, DesktopCaptureApi, DesktopShellApi, McpApi {}

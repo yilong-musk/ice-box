@@ -4,6 +4,7 @@
 
 mod core;
 mod logs;
+mod mcp;
 mod nodes;
 mod proxy_terminal;
 mod settings;
@@ -15,6 +16,7 @@ use crate::application::*;
 use crate::tray::{self, TrayLanguage};
 pub use core::*;
 pub use logs::*;
+pub use mcp::*;
 pub use nodes::*;
 pub use proxy_terminal::*;
 pub use settings::*;

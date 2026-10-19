@@ -13,6 +13,7 @@ vi.mock("@platform/shell", () => ({
 }));
 
 const getStatus = vi.fn();
+const getMcpStatus = vi.fn();
 const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getTrafficSnapshot = vi.fn();
@@ -45,6 +46,14 @@ function healthRows(): string[] {
   return [
     t("home.health.core"),
     t("home.health.memory"),
+    t("home.health.mcp"),
+  ];
+}
+
+function mobileHealthRows(): string[] {
+  return [
+    t("home.health.core"),
+    t("home.health.memory"),
     t("home.health.network"),
   ];
 }
@@ -52,6 +61,7 @@ function healthRows(): string[] {
 vi.mock("../api/client", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
+    getMcpStatus: (...args: unknown[]) => getMcpStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     getSettings: (...args: unknown[]) => getSettings(...args),
     getTrafficSnapshot: (...args: unknown[]) => getTrafficSnapshot(...args),
@@ -140,6 +150,18 @@ describe("Home", () => {
       system_proxy_available: true,
       ...tunStatus,
     });
+    getMcpStatus.mockResolvedValue({
+      supported: true,
+      enabled: true,
+      running: true,
+      endpoint: "127.0.0.1:4567",
+      client_count: 0,
+      tool_count: 34,
+      bridge_executable: "/Applications/ice-box.app/Contents/MacOS/ice-box",
+      bridge_args: ["--mcp-stdio", "--data-dir", "/tmp/ice-box"],
+      client_config: "{}",
+      error: null,
+    });
     listNodes.mockResolvedValue([]);
     getSettings.mockResolvedValue({
       mixed_listen: "127.0.0.1",
@@ -161,7 +183,7 @@ describe("Home", () => {
     recoverTun.mockResolvedValue(null);
   });
 
-  it("shows the health panel with core status, memory, and network", async () => {
+  it("shows the service panel with core, memory, and MCP status", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -199,7 +221,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByText(t("home.coreStatus.running"))).toBeInTheDocument();
+      expect(view.getByTestId("home-health-core")).toHaveTextContent(
+        t("home.coreStatus.running"),
+      );
     });
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
     expect(view.getByText(t("home.proxyStatus"))).toBeInTheDocument();
@@ -465,27 +489,48 @@ describe("Home", () => {
     expect(row.className).not.toContain("text-destructive");
   });
 
-  it("follows the webview network link", async () => {
+  it("shows the running MCP service in the health panel", async () => {
     const { container } = render(<Home />);
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-health-network")).toHaveTextContent(
-        t("home.network.online"),
-      );
+      expect(view.getByTestId("home-health-mcp")).toHaveTextContent(t("mcp.running"));
     });
+    expect(view.getByTestId("home-health-mcp").className).toContain("text-ok");
+  });
 
+  it("shows network connectivity instead of MCP status on the phone shell", async () => {
+    phoneShell.value = true;
     const previous = Object.getOwnPropertyDescriptor(window.navigator, "onLine");
     Object.defineProperty(window.navigator, "onLine", {
       configurable: true,
-      get: () => false,
+      get: () => true,
     });
+
     try {
+      const { container } = render(<Home />);
+      const view = within(container);
+
+      await waitFor(() => {
+        expect(view.getByTestId("home-health-network")).toHaveTextContent(
+          t("home.network.online"),
+        );
+      });
+      expect(healthRowLabels(container)).toEqual(mobileHealthRows());
+      expect(view.queryByTestId("home-health-mcp")).toBeNull();
+      expect(getMcpStatus).not.toHaveBeenCalled();
+
+      Object.defineProperty(window.navigator, "onLine", {
+        configurable: true,
+        get: () => false,
+      });
       fireEvent(window, new Event("offline"));
       expect(view.getByTestId("home-health-network")).toHaveTextContent(
         t("home.network.offline"),
       );
-      expect(view.getByTestId("home-health-network").className).toContain("text-destructive");
+      expect(view.getByTestId("home-health-network").className).toContain(
+        "text-destructive",
+      );
     } finally {
       if (previous) {
         Object.defineProperty(window.navigator, "onLine", previous);
@@ -496,6 +541,32 @@ describe("Home", () => {
         });
       }
     }
+  });
+
+  it("shows a stopped MCP service and its error", async () => {
+    getMcpStatus.mockResolvedValue({
+      supported: true,
+      enabled: true,
+      running: false,
+      endpoint: null,
+      client_count: 0,
+      tool_count: 34,
+      bridge_executable: "/Applications/ice-box.app/Contents/MacOS/ice-box",
+      bridge_args: ["--mcp-stdio", "--data-dir", "/tmp/ice-box"],
+      client_config: "{}",
+      error: "listener stopped unexpectedly",
+    });
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-health-mcp")).toHaveTextContent(t("mcp.stopped"));
+    });
+    expect(view.getByTestId("home-health-mcp")).toHaveAttribute(
+      "title",
+      "listener stopped unexpectedly",
+    );
+    expect(view.getByTestId("home-health-mcp").className).toContain("text-destructive");
   });
 
   it("re-reads status and settings after an out-of-window state change", async () => {

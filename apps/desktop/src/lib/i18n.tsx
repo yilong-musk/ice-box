@@ -61,8 +61,9 @@ const zh = {
   "app.nav.rules": "规则",
   "app.nav.subs": "订阅",
   "app.nav.subsTab": "订阅",
-  "app.nav.logs": "日志",
   "app.nav.settings": "设置",
+  "app.nav.mcp": "MCP",
+  "app.nav.logs": "日志",
   "app.nav.aria": "主导航",
   "app.versionAria": "版本 {version}",
   "app.updateAvailableAria": "有新版本 {version}，前往应用更新",
@@ -79,7 +80,8 @@ const zh = {
     "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。",
   "home.health.core": "内核状态",
   "home.health.memory": "内存",
-  "home.health.network": "当前网络连通性",
+  "home.health.network": "网络连通性",
+  "home.health.mcp": "MCP 服务状态",
   "home.network.online": "已连通",
   "home.network.offline": "未连通",
   "home.memory.tooltip": "内核 {core} · 应用 {app}",
@@ -132,7 +134,7 @@ const zh = {
   "home.unsupported": "当前平台不支持系统代理或 TUN 接管",
   "home.modeAria": "出站模式",
   "home.tunMode": "TUN 模式",
-  "home.healthTitle": "健康",
+  "home.healthTitle": "服务状态",
   "home.trafficTitle": "流量",
   "home.trafficDesc": "最近 60 秒上下行",
   "home.goToSubs": "前往订阅页导入",
@@ -246,6 +248,27 @@ const zh = {
   "logs.empty": "（空）",
   "logs.copied": "已复制",
   "logs.copyFailed": "复制失败",
+
+  // --- MCP page ---
+  "mcp.service": "MCP 服务",
+  "mcp.description":
+    "让 Agent 通过 MCP 操作当前桌面应用，与 GUI 共用代理、设置和运行状态。",
+  "mcp.enable": "启用 MCP 服务",
+  "mcp.enableDesc":
+    "服务随桌面应用运行，仅监听本机回环地址。关闭窗口后仍可从托盘保持运行。",
+  "mcp.running": "运行中",
+  "mcp.stopped": "未运行",
+  "mcp.endpoint": "本地端点",
+  "mcp.clients": "已连接 Agent",
+  "mcp.tools": "可用工具",
+  "mcp.restart": "重启服务",
+  "mcp.integration": "Agent 接入",
+  "mcp.integrationDesc": "将以下配置加入支持 MCP 的 Agent 客户端。",
+  "mcp.copyConfig": "复制配置",
+  "mcp.copied": "已复制",
+  "mcp.localOnly":
+    "MCP 使用本机认证通道；它不会启动第二个代理实例，也不会让 Agent 单独占用数据目录。",
+  "mcp.unavailable": "当前平台不支持 MCP 服务。",
 
   // --- settings page ---
   "settings.appearance": "外观",
@@ -527,8 +550,9 @@ const en: Record<MessageKey, string> = {
   "app.nav.rules": "Rules",
   "app.nav.subs": "Subscriptions",
   "app.nav.subsTab": "Subs",
-  "app.nav.logs": "Logs",
   "app.nav.settings": "Settings",
+  "app.nav.mcp": "MCP",
+  "app.nav.logs": "Logs",
   "app.nav.aria": "Main navigation",
   "app.versionAria": "Version {version}",
   "app.updateAvailableAria": "Version {version} is available, open App Updates",
@@ -546,6 +570,7 @@ const en: Record<MessageKey, string> = {
   "home.health.core": "Core status",
   "home.health.memory": "Memory",
   "home.health.network": "Connectivity",
+  "home.health.mcp": "MCP service status",
   "home.network.online": "Connected",
   "home.network.offline": "Offline",
   "home.memory.tooltip": "Core {core} · App {app}",
@@ -600,7 +625,7 @@ const en: Record<MessageKey, string> = {
     "System proxy and TUN capture are not supported on this platform",
   "home.modeAria": "Outbound Mode",
   "home.tunMode": "TUN Mode",
-  "home.healthTitle": "Health",
+  "home.healthTitle": "Service status",
   "home.trafficTitle": "Traffic",
   "home.trafficDesc": "Up/down over the last 60 seconds",
   "home.goToSubs": "Import subscriptions",
@@ -715,6 +740,27 @@ const en: Record<MessageKey, string> = {
   "logs.empty": "(empty)",
   "logs.copied": "Copied",
   "logs.copyFailed": "Copy failed",
+
+  // --- MCP page ---
+  "mcp.service": "MCP Service",
+  "mcp.description":
+    "Let Agents operate this desktop app while sharing its proxy, settings, and runtime with the GUI.",
+  "mcp.enable": "Enable MCP service",
+  "mcp.enableDesc":
+    "The service runs inside the desktop app and listens on loopback only. It stays available in the tray after the window closes.",
+  "mcp.running": "Running",
+  "mcp.stopped": "Stopped",
+  "mcp.endpoint": "Local endpoint",
+  "mcp.clients": "Connected Agents",
+  "mcp.tools": "Available tools",
+  "mcp.restart": "Restart service",
+  "mcp.integration": "Agent integration",
+  "mcp.integrationDesc": "Add this configuration to an MCP-capable Agent client.",
+  "mcp.copyConfig": "Copy configuration",
+  "mcp.copied": "Copied",
+  "mcp.localOnly":
+    "MCP uses an authenticated local channel. It does not start a second proxy instance or let Agents own the data directory.",
+  "mcp.unavailable": "The MCP service is unavailable on this platform.",
 
   // --- settings page ---
   "settings.appearance": "Appearance",

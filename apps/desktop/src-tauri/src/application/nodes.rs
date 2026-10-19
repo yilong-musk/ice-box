@@ -1023,13 +1023,17 @@ pub(crate) fn set_rule_disabled_use_case(
     state: &AppState,
     req: SetRuleDisabledRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(state)?;
-    persist_rule_disabled(state, &req)?;
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        persist_rule_disabled(state, &req)?;
 
-    let apply_warning = apply_after_rule_change(app, state)?;
-    let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "disabled": req.disabled });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
 }
 
 pub(crate) fn add_custom_rule_use_case(
@@ -1037,13 +1041,17 @@ pub(crate) fn add_custom_rule_use_case(
     state: &AppState,
     req: AddCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(state)?;
-    let fp = persist_add_custom_rule(state, &req)?;
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        let fp = persist_add_custom_rule(state, &req)?;
 
-    let apply_warning = apply_after_rule_change(app, state)?;
-    let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
 }
 
 pub(crate) fn remove_custom_rule_use_case(
@@ -1051,13 +1059,17 @@ pub(crate) fn remove_custom_rule_use_case(
     state: &AppState,
     req: RemoveCustomRuleRequest,
 ) -> Result<serde_json::Value, AppError> {
-    let _orch = lock_orchestrate(state)?;
-    persist_remove_custom_rule(state, &req)?;
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        persist_remove_custom_rule(state, &req)?;
 
-    let apply_warning = apply_after_rule_change(app, state)?;
-    let mut value = serde_json::json!({ "ok": true });
-    attach_apply_warning(&mut value, apply_warning);
-    Ok(value)
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
 }
 
 pub(crate) fn set_selected_node_use_case(

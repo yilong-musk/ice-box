@@ -7,6 +7,7 @@ import type {
   DelayTestResponse,
   ListRulesRequest,
   ListRulesResponse,
+  McpStatus,
   NodeInfo,
   ProxyMode,
   RuleOverview,
@@ -359,4 +360,22 @@ export const api = {
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
+  async getMcpStatus(): Promise<McpStatus> { return unsupportedMcp(); },
+  async setMcpEnabled(): Promise<McpStatus> { return unsupportedMcp(); },
+  async restartMcp(): Promise<McpStatus> { return unsupportedMcp(); },
 } satisfies ApiContract;
+
+function unsupportedMcp(): McpStatus {
+  return {
+    supported: false,
+    enabled: false,
+    running: false,
+    endpoint: null,
+    client_count: 0,
+    tool_count: 0,
+    bridge_executable: "",
+    bridge_args: [],
+    client_config: "",
+    error: null,
+  };
+}

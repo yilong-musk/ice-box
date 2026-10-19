@@ -13,6 +13,7 @@ mod helper_install;
 mod instance;
 mod log_tail;
 mod log_view;
+mod mcp;
 mod orchestrate;
 mod proc_memory;
 mod proxy_terminal;
@@ -159,6 +160,15 @@ pub struct AppState {
     pub(crate) live_cache: application::LiveCache,
 }
 
+/// Run the lightweight MCP stdio bridge used by Agent clients.
+///
+/// The bridge never owns application state; it connects to the MCP listener in
+/// the running desktop process so the GUI and Agent share one data directory,
+/// one core, and one OS capture session.
+pub fn run_mcp_stdio_bridge(args: impl IntoIterator<Item = std::ffi::OsString>) -> i32 {
+    mcp::run_stdio_bridge(args)
+}
+
 fn acquire_instance_lock(paths: &AppPaths, request_focus: bool) -> Result<std::fs::File, String> {
     match instance::acquire_or_request_focus(paths, request_focus)? {
         instance::InstanceLock::Primary(file) => Ok(file),
@@ -284,6 +294,8 @@ pub fn run() {
                     }
                 });
             }
+            let mcp_paths = app.state::<AppState>().paths.root().to_path_buf();
+            app.manage(mcp::McpService::new(mcp_paths));
             // Overlap geoip copy and the bundled-core SHA-256 with leftover
             // reclaim / TUN recovery and the first UI status poll.
             {
@@ -329,6 +341,12 @@ pub fn run() {
             if orch_rx.recv().is_err() {
                 tracing::warn!("startup worker exited before acquiring orchestrate lock");
             }
+            // Publish MCP only after the startup worker holds `orchestrate`.
+            // Any Agent runtime mutation that acquires the listener now queues
+            // behind orphan reclaim and launch recovery instead of starting a
+            // core that the recovery worker can immediately reclaim.
+            let mcp_handle = app.handle().clone();
+            app.state::<mcp::McpService>().start_if_enabled(&mcp_handle);
             // Reconcile the OS login item with `settings.json` on every launch.
             // On: the entry stores an absolute path and the app moves between
             // installs (DMG → /Applications, NSIS upgrades), so it is rewritten
@@ -396,6 +414,9 @@ pub fn run() {
             commands::get_log_view,
             commands::set_log_view_active,
             commands::get_runtime_config,
+            commands::get_mcp_status,
+            commands::set_mcp_enabled,
+            commands::restart_mcp,
             commands::reveal_data_dir,
             commands::copy_proxy_command,
             commands::open_proxy_terminal,
@@ -437,6 +458,9 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
             if crate::app_update::update_installing() {
+                if let Some(mcp) = app_handle.try_state::<mcp::McpService>() {
+                    mcp.shutdown();
+                }
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     state
                         .workers
