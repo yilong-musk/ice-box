@@ -162,6 +162,9 @@ pub struct McpService {
     endpoint_path: PathBuf,
     secret_path: PathBuf,
     inner: Mutex<Inner>,
+    /// Serializes start/stop generations. State reads never take this lock, so
+    /// draining a client worker cannot block that worker's tray status update.
+    lifecycle: Mutex<()>,
 }
 
 impl McpService {
@@ -184,6 +187,7 @@ impl McpService {
                 running: None,
                 last_error,
             }),
+            lifecycle: Mutex::new(()),
         }
     }
 
@@ -256,54 +260,89 @@ impl McpService {
     }
 
     pub fn set_enabled(&self, app: &AppHandle, enabled: bool) -> Result<McpStatus, AppError> {
-        let mut inner = self
-            .inner
+        let _lifecycle = self
+            .lifecycle
             .lock()
-            .map_err(|_| lock_poisoned("mcp service"))?;
+            .map_err(|_| lock_poisoned("mcp lifecycle"))?;
         if enabled {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| lock_poisoned("mcp service"))?;
             if let Err(error) = self.start_locked(app, &mut inner) {
                 inner.last_error = Some(error.to_string());
                 return Err(error);
             }
             if let Err(error) = save_config(&self.config_path, &McpConfig { enabled: true }) {
-                self.stop_locked(&mut inner, true);
+                // Take the server out before waiting on clients: a worker that
+                // reports status during the drain must not wait on this lock.
+                let server = inner.running.take();
                 let error = AppError::new(
                     ErrorCode::ConfigInvalid,
                     format!("persist MCP service setting: {error}"),
                 );
                 inner.last_error = Some(error.to_string());
+                drop(inner);
+                if let Some(server) = server {
+                    stop_server(server, true);
+                }
+                remove_runtime_files(&self.endpoint_path, &self.secret_path);
                 return Err(error);
             }
             inner.enabled = true;
         } else {
-            if let Err(error) = save_config(&self.config_path, &McpConfig { enabled: false }) {
-                let error = AppError::new(
-                    ErrorCode::ConfigInvalid,
-                    format!("persist MCP service setting: {error}"),
-                );
-                inner.last_error = Some(error.to_string());
-                return Err(error);
+            let server = {
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| lock_poisoned("mcp service"))?;
+                if let Err(error) = save_config(&self.config_path, &McpConfig { enabled: false }) {
+                    let error = AppError::new(
+                        ErrorCode::ConfigInvalid,
+                        format!("persist MCP service setting: {error}"),
+                    );
+                    inner.last_error = Some(error.to_string());
+                    return Err(error);
+                }
+                inner.enabled = false;
+                inner.last_error = None;
+                inner.running.take()
+            };
+            // Draining clients must happen outside the state lock.
+            if let Some(server) = server {
+                stop_server(server, true);
             }
-            self.stop_locked(&mut inner, true);
-            inner.enabled = false;
-            inner.last_error = None;
+            remove_runtime_files(&self.endpoint_path, &self.secret_path);
         }
-        drop(inner);
         Ok(self.status())
     }
 
     pub fn restart(&self, app: &AppHandle) -> Result<McpStatus, AppError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| lock_poisoned("mcp lifecycle"))?;
+        let server = {
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| lock_poisoned("mcp service"))?;
+            if !inner.enabled {
+                return Err(AppError::new(
+                    ErrorCode::ConfigInvalid,
+                    "enable the MCP service before restarting it",
+                ));
+            }
+            inner.running.take()
+        };
+        if let Some(server) = server {
+            stop_server(server, true);
+        }
+        remove_runtime_files(&self.endpoint_path, &self.secret_path);
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| lock_poisoned("mcp service"))?;
-        if !inner.enabled {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                "enable the MCP service before restarting it",
-            ));
-        }
-        self.stop_locked(&mut inner, true);
         if let Err(error) = self.start_locked(app, &mut inner) {
             inner.last_error = Some(error.to_string());
             return Err(error);
@@ -313,16 +352,32 @@ impl McpService {
     }
 
     pub fn shutdown(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            self.stop_locked(&mut inner, false);
+        let Ok(_lifecycle) = self.lifecycle.lock() else {
+            return;
+        };
+        let server = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut inner| inner.running.take());
+        if let Some(server) = server {
+            stop_server(server, false);
         }
+        remove_runtime_files(&self.endpoint_path, &self.secret_path);
     }
 
     fn start(&self, app: &AppHandle) -> Result<(), AppError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| lock_poisoned("mcp lifecycle"))?;
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| lock_poisoned("mcp service"))?;
+        if !inner.enabled {
+            return Ok(());
+        }
         self.start_locked(app, &mut inner)
     }
 
@@ -334,7 +389,12 @@ impl McpService {
         {
             return Ok(());
         }
-        inner.running = None;
+        if let Some(server) = inner.running.take() {
+            server.stop.store(true, Ordering::SeqCst);
+            let _ = server.join.join();
+            server.clients.shutdown_connections();
+            server.clients.finish_workers(false);
+        }
         remove_runtime_files(&self.endpoint_path, &self.secret_path);
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
@@ -404,23 +464,29 @@ impl McpService {
         inner.last_error = None;
         Ok(())
     }
+}
 
-    fn stop_locked(&self, inner: &mut Inner, wait_for_clients: bool) {
-        if let Some(server) = inner.running.take() {
-            server.stop.store(true, Ordering::SeqCst);
-            let _ = server.join.join();
-            server.clients.shutdown_connections();
-            server.clients.finish_workers(wait_for_clients);
-        }
-        remove_runtime_files(&self.endpoint_path, &self.secret_path);
-    }
+fn stop_server(server: RunningServer, wait_for_clients: bool) {
+    server.stop.store(true, Ordering::SeqCst);
+    let _ = server.join.join();
+    server.clients.shutdown_connections();
+    server.clients.finish_workers(wait_for_clients);
 }
 
 impl Drop for McpService {
     fn drop(&mut self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            self.stop_locked(&mut inner, false);
+        let Ok(_lifecycle) = self.lifecycle.lock() else {
+            return;
+        };
+        let server = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut inner| inner.running.take());
+        if let Some(server) = server {
+            stop_server(server, false);
         }
+        remove_runtime_files(&self.endpoint_path, &self.secret_path);
     }
 }
 
@@ -831,7 +897,7 @@ mod tests {
             thread::sleep(Duration::from_millis(40));
             let _ = release.send(());
         });
-        {
+        let server = {
             let mut inner = service.inner.lock().unwrap();
             inner.running = Some(RunningServer {
                 endpoint: "127.0.0.1:1".into(),
@@ -839,10 +905,11 @@ mod tests {
                 clients: Arc::clone(&clients),
                 join: thread::spawn(|| {}),
             });
-            let started = Instant::now();
-            service.stop_locked(&mut inner, true);
-            assert!(started.elapsed() >= Duration::from_millis(30));
-        }
+            inner.running.take().unwrap()
+        };
+        let started = Instant::now();
+        stop_server(server, true);
+        assert!(started.elapsed() >= Duration::from_millis(30));
         release_after_stop_starts.join().unwrap();
         assert_eq!(clients.authenticated.load(Ordering::SeqCst), 0);
         let _ = std::fs::remove_dir_all(dir);
