@@ -144,6 +144,33 @@ const ruleRows = [
 let running = true;
 let runningSinceMs = Date.now() - DEMO_INITIAL_RUN_MS;
 let trafficTick = 0;
+let mcpEnabled = true;
+let mcpRunning = true;
+
+function demoMcpStatus(): McpStatus {
+  const bridgeExecutable = "/Applications/ice-box.app/Contents/MacOS/ice-box";
+  const bridgeArgs = [
+    "--mcp-stdio",
+    "--data-dir",
+    "/Users/demo/Library/Application Support/com.yilong-musk.icebox",
+  ];
+  return {
+    supported: true,
+    enabled: mcpEnabled,
+    running: mcpRunning,
+    endpoint: mcpRunning ? "127.0.0.1:43001" : null,
+    client_count: mcpRunning ? 1 : 0,
+    tool_count: 34,
+    bridge_executable: bridgeExecutable,
+    bridge_args: bridgeArgs,
+    client_config: JSON.stringify(
+      { mcpServers: { "ice-box": { command: bridgeExecutable, args: bridgeArgs } } },
+      null,
+      2,
+    ),
+    error: null,
+  };
+}
 
 const delay = (ms = 80) =>
   isCaptureMode() ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -360,22 +387,16 @@ export const api = {
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
-  async getMcpStatus(): Promise<McpStatus> { return unsupportedMcp(); },
-  async setMcpEnabled(): Promise<McpStatus> { return unsupportedMcp(); },
-  async restartMcp(): Promise<McpStatus> { return unsupportedMcp(); },
+  async getMcpStatus(): Promise<McpStatus> { await delay(); return demoMcpStatus(); },
+  async setMcpEnabled(enabled: boolean): Promise<McpStatus> {
+    await delay();
+    mcpEnabled = enabled;
+    mcpRunning = enabled;
+    return demoMcpStatus();
+  },
+  async restartMcp(): Promise<McpStatus> {
+    await delay(180);
+    mcpRunning = mcpEnabled;
+    return demoMcpStatus();
+  },
 } satisfies ApiContract;
-
-function unsupportedMcp(): McpStatus {
-  return {
-    supported: false,
-    enabled: false,
-    running: false,
-    endpoint: null,
-    client_count: 0,
-    tool_count: 0,
-    bridge_executable: "",
-    bridge_args: [],
-    client_config: "",
-    error: null,
-  };
-}
