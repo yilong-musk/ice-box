@@ -417,12 +417,13 @@ impl McpService {
         })?;
         let endpoint = address.to_string();
         let token = uuid::Uuid::new_v4().simple().to_string();
-        write_private_file(&self.secret_path, token.as_bytes()).map_err(|error| {
-            AppError::new(
+        if let Err(error) = write_private_file(&self.secret_path, token.as_bytes()) {
+            let _ = std::fs::remove_file(&self.secret_path);
+            return Err(AppError::new(
                 ErrorCode::CoreApiFailed,
                 format!("write MCP control token: {error}"),
-            )
-        })?;
+            ));
+        }
         let endpoint_file = EndpointFile {
             host: address.ip().to_string(),
             port: address.port(),
