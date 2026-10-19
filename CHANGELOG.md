@@ -5,13 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-19
+
 ### Added
 
 - The desktop app can expose an opt-in local MCP service for Agent clients.
   GUI actions and MCP tools share one runtime, data directory, core, and OS
   capture session. A new desktop-only MCP page manages the service and copies
-  a ready-to-use stdio bridge configuration. Android and the website do not
-  expose MCP.
+  a ready-to-use stdio bridge configuration. The tray can enable or disable
+  the service, copy the same configuration, and show its status. Android and
+  the website do not expose MCP.
 
 ### Fixed
 
