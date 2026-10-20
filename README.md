@@ -34,12 +34,10 @@ English · [简体中文](README.zh-CN.md)
 <br>
 
 <p>
-  <img src="docs/images/mobile-home.png" alt="ice-box Android home: VPN status, routing mode, selected node and the node list" width="210">
-  &nbsp;&nbsp;
-  <img src="docs/images/mobile-apps.png" alt="ice-box Android apps: per-app routing mode" width="210">
+  <img src="docs/images/mobile-home.png" alt="ice-box Android home in a current-generation Pixel-style phone shell: VPN status, routing mode, selected node and the node list" width="250">
 </p>
 
-<sub>On Android the same app becomes a phone-first UI: nodes live on Home, and Apps routes each application.</sub>
+<sub>On Android the same app becomes a phone-first UI: nodes live on Home.</sub>
 
 </div>
 

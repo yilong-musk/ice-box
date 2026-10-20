@@ -34,12 +34,10 @@
 <br>
 
 <p>
-  <img src="docs/images/mobile-home.zh-CN.png" alt="ice-box Android 主页：VPN 状态、分流模式、选中节点和节点列表" width="210">
-  &nbsp;&nbsp;
-  <img src="docs/images/mobile-apps.zh-CN.png" alt="ice-box Android 应用页：按应用分流" width="210">
+  <img src="docs/images/mobile-home.zh-CN.png" alt="ice-box Android 主页（最新 Pixel 手机壳效果）：VPN 状态、分流模式、选中节点和节点列表" width="250">
 </p>
 
-<sub>在 Android 上，同一个应用切换为手机界面：节点在主页，应用页可按应用分流。</sub>
+<sub>在 Android 上，同一个应用切换为手机界面：节点位于主页。</sub>
 
 </div>
 

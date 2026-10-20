@@ -16,7 +16,7 @@ import type {
 import { api as browserApi } from "../../website/src/browser-api";
 import { readLanguagePreference } from "../../desktop/src/lib/language";
 
-/** One app per routing mode so the Apps screenshot shows every badge. */
+/** One app per routing mode so the Apps page shows every badge. */
 const apps: InstalledApp[] = [
   { package_name: "com.google.android.youtube", label: "YouTube", system: false, icon: null },
   { package_name: "com.android.chrome", label: "Chrome", system: true, icon: null },

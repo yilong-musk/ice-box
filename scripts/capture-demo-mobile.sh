@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Capture the phone shell into the README images:
+# Capture the phone Home view in a current-generation Pixel-style shell for the
+# README images:
 #   docs/images/mobile-home.png      mobile-home.zh-CN.png
-#   docs/images/mobile-apps.png      mobile-apps.zh-CN.png
 # Recaptures when the mobile package version differs from
-# docs/images/mobile.version, when phone UI files changed, or when any
+# docs/images/mobile.version, when phone UI files changed, or when the
 # screenshot is missing.
 # CAPTURE_DEMO_MOBILE_FORCE=1 always recaptures.
 set -euo pipefail
@@ -16,8 +16,6 @@ VERSION_FILE="docs/images/mobile.version"
 SCREENSHOTS=(
   "docs/images/mobile-home.png"
   "docs/images/mobile-home.zh-CN.png"
-  "docs/images/mobile-apps.png"
-  "docs/images/mobile-apps.zh-CN.png"
 )
 
 current_version() {

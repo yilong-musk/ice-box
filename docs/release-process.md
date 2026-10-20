@@ -107,9 +107,8 @@ bash scripts/gate-local.sh
 ```
 
 Commit the updated desktop and Android screenshots (`docs/images/home.png`,
-`home.zh-CN.png`, `mobile-home.png`, `mobile-apps.png`, and their `.zh-CN`
-variants) together with `docs/images/home.version` and
-`docs/images/mobile.version`.
+`home.zh-CN.png`, `mobile-home.png`, and `mobile-home.zh-CN.png`) together with
+`docs/images/home.version` and `docs/images/mobile.version`.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,

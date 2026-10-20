@@ -13,7 +13,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 The local gate omits desktop Rust tests because GTK/WebKit dependencies may be
 unavailable. Its screenshot step refreshes the documentation images — the
-desktop Home view and the Android Home and Apps views — when the version or
+desktop Home view and the Android Home view — when the version or
 relevant UI files change, or when any image is missing. CI skips screenshot
 capture.
 

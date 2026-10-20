@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
- * Capture the phone shell into the README images:
+ * Capture the phone shell home view into the README images:
  *   docs/images/mobile-home.png      mobile-home.zh-CN.png
- *   docs/images/mobile-apps.png      mobile-apps.zh-CN.png
  *
  * Builds the mobile frontend with `--mode capture`, which replaces the Tauri
  * transport with the Live Demo browser mock. The viewport matches a common
- * Android phone (390x844) and screenshots are taken at 2x for GitHub.
+ * Android phone (390x844) and screenshots are taken at 2x for GitHub, then
+ * wrapped in a current-generation Pixel-style phone shell with an Android
+ * status bar and gesture navigation.
  *
  * Usage:
  *   bash scripts/capture-demo-mobile.sh
@@ -23,6 +24,14 @@ const VIEWPORT = { width: 390, height: 844 };
 const SCALE = 2;
 const PREVIEW_PORT = 4176;
 const MOBILE_TABS = 5;
+const PHONE_SHELL = {
+  bezelX: 14,
+  bezelY: 16,
+  radius: 48,
+  padding: 28,
+  statusBar: 24,
+  navBar: 24,
+};
 
 /** One capture per README language; parameters are identical otherwise. */
 const TARGETS = [
@@ -33,10 +42,11 @@ const TARGETS = [
     // that the mocked tunnel is connected.
     vpnStopLabel: "Disconnect VPN",
     homeLabel: "Home",
+    // Only used to leave Home before re-entering it, so the runtime store
+    // refreshes against the loaded status.
     appsLabel: "Apps",
     screenshots: {
       home: "docs/images/mobile-home.png",
-      apps: "docs/images/mobile-apps.png",
     },
   },
   {
@@ -44,10 +54,11 @@ const TARGETS = [
     locale: "zh-CN",
     vpnStopLabel: "断开 VPN",
     homeLabel: "主页",
+    // Only used to leave Home before re-entering it, so the runtime store
+    // refreshes against the loaded status.
     appsLabel: "应用",
     screenshots: {
       home: "docs/images/mobile-home.zh-CN.png",
-      apps: "docs/images/mobile-apps.zh-CN.png",
     },
   },
 ];
@@ -163,7 +174,229 @@ async function settle(page) {
   await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
-async function openApps(page, target) {
+/** Pixel-like shell dimensions shared by the HTML and the capture viewport. */
+function phoneShellSize() {
+  const screenHeight =
+    VIEWPORT.height + PHONE_SHELL.statusBar + PHONE_SHELL.navBar;
+  return {
+    width:
+      VIEWPORT.width + PHONE_SHELL.bezelX * 2 + PHONE_SHELL.padding * 2,
+    height:
+      screenHeight + PHONE_SHELL.bezelY * 2 + PHONE_SHELL.padding * 2,
+  };
+}
+
+/**
+ * Wrap a raw phone screenshot in a Pixel-style shell with Android system bars.
+ * The frame is drawn in CSS so captures stay reproducible without image assets.
+ */
+function phoneShellHtml(screenshot) {
+  const screenWidth = VIEWPORT.width;
+  const { bezelX, bezelY, radius, padding, statusBar, navBar } = PHONE_SHELL;
+  const screenHeight = VIEWPORT.height + statusBar + navBar;
+  const shellWidth = screenWidth + bezelX * 2;
+  const shellHeight = screenHeight + bezelY * 2;
+  const screenRadius = radius - bezelY;
+  const image = `data:image/png;base64,${screenshot.toString("base64")}`;
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
+      body { width: max-content; }
+      .stage { display: inline-block; padding: ${padding}px; }
+      .phone {
+        position: relative;
+        width: ${shellWidth}px;
+        height: ${shellHeight}px;
+        padding: ${bezelY}px ${bezelX}px;
+        border-radius: ${radius}px;
+        background:
+          linear-gradient(145deg, #6d6e72 0%, #303135 8%, #121315 26%, #0c0d0f 62%, #232427 88%, #55565a 100%);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.1),
+          0 28px 56px rgba(0, 0, 0, 0.6),
+          0 4px 14px rgba(0, 0, 0, 0.45),
+          inset 0 1px 0 rgba(255, 255, 255, 0.2),
+          inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+          inset 0 0 0 1px rgba(0, 0, 0, 0.9);
+      }
+      .phone::before,
+      .phone::after {
+        content: "";
+        position: absolute;
+        right: -3px;
+        width: 3px;
+        border-radius: 0 2px 2px 0;
+        background: linear-gradient(180deg, #5a5b5f, #26272a 45%, #4a4b4f);
+        box-shadow: inset 0 0 1px rgba(255, 255, 255, 0.25);
+      }
+      .phone::before {
+        top: 168px;
+        height: 60px;
+      }
+      .phone::after {
+        top: 244px;
+        height: 42px;
+      }
+      .sim-tray {
+        position: absolute;
+        left: -2px;
+        top: 220px;
+        width: 2px;
+        height: 26px;
+        border-radius: 1px;
+        background: #202124;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+      }
+      .screen {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: ${screenWidth}px;
+        height: ${screenHeight}px;
+        overflow: hidden;
+        border-radius: ${screenRadius}px;
+        background: #000;
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.95);
+      }
+      .status-bar {
+        display: flex;
+        flex: 0 0 ${statusBar}px;
+        align-items: center;
+        justify-content: space-between;
+        height: ${statusBar}px;
+        padding: 0 14px 0 16px;
+        background: #131416;
+        color: #ecedef;
+        font-family: "Inter", "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .clock { font-size: 12.5px; font-weight: 600; letter-spacing: 0.1px; }
+      .status-icons { display: flex; align-items: center; gap: 5px; }
+      .network { font-size: 9px; font-weight: 700; letter-spacing: 0.2px; }
+      .status-icons svg { display: block; }
+      .screen img {
+        display: block;
+        flex: 0 0 ${VIEWPORT.height}px;
+        width: 100%;
+        height: ${VIEWPORT.height}px;
+      }
+      .nav-bar {
+        display: flex;
+        flex: 0 0 ${navBar}px;
+        align-items: center;
+        justify-content: center;
+        height: ${navBar}px;
+        background: #0b0c0e;
+      }
+      .gesture-pill {
+        width: 104px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.85);
+        box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+      }
+      .screen::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+          inset 0 0 14px rgba(0, 0, 0, 0.3);
+        pointer-events: none;
+      }
+      .camera {
+        position: absolute;
+        z-index: 2;
+        top: 6px;
+        left: 50%;
+        width: 11px;
+        height: 11px;
+        transform: translateX(-50%);
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 35%, #1c2430 0%, #05070a 55%, #000 100%);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.06),
+          inset 0 0 2px rgba(90, 130, 200, 0.35);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="phone">
+        <span class="sim-tray"></span>
+        <div class="screen">
+          <div class="status-bar">
+            <span class="clock">12:00</span>
+            <div class="status-icons">
+              <span class="network">5G</span>
+              <svg width="14" height="12" viewBox="0 0 14 12" fill="none" aria-hidden="true">
+                <rect x="0.5" y="8" width="2.2" height="3.5" rx="0.7" fill="#ecedef" />
+                <rect x="4" y="6" width="2.2" height="5.5" rx="0.7" fill="#ecedef" />
+                <rect x="7.5" y="3.5" width="2.2" height="8" rx="0.7" fill="#ecedef" />
+                <rect x="11" y="1" width="2.2" height="10.5" rx="0.7" fill="#ecedef" />
+              </svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 2.5 20 5.5v6c0 4.5-3.2 8.2-8 10-4.8-1.8-8-5.5-8-10v-6L12 2.5Z" stroke="#ecedef" stroke-width="2" stroke-linejoin="round" />
+              </svg>
+              <svg width="14" height="12" viewBox="0 0 14 12" fill="none" aria-hidden="true">
+                <path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round" />
+                <path d="M3.1 6.7C4.2 5.7 5.5 5.1 7 5.1s2.8.6 3.9 1.6" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round" />
+                <path d="M5.2 9.1C5.8 8.5 6.4 8.2 7 8.2s1.2.3 1.8.9" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round" />
+                <circle cx="7" cy="10.4" r="0.9" fill="#ecedef" />
+              </svg>
+              <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true">
+                <rect x="0.5" y="0.5" width="19" height="10" rx="2.5" stroke="#ecedef" stroke-opacity="0.85" />
+                <rect x="2" y="2" width="14.5" height="7" rx="1.4" fill="#ecedef" />
+                <rect x="20.2" y="3.5" width="1.5" height="4" rx="0.75" fill="#ecedef" fill-opacity="0.85" />
+              </svg>
+            </div>
+          </div>
+          <img src="${image}" alt="" />
+          <div class="nav-bar">
+            <span class="gesture-pill"></span>
+          </div>
+          <span class="camera"></span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
+async function addPhoneShell(browser, screenshot) {
+  const context = await browser.newContext({
+    viewport: phoneShellSize(),
+    deviceScaleFactor: SCALE,
+    colorScheme: "dark",
+  });
+  try {
+    const page = await context.newPage();
+    await page.setContent(phoneShellHtml(screenshot), { waitUntil: "load" });
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(
+        Array.from(document.images, (image) =>
+          image.complete ? Promise.resolve() : image.decode(),
+        ),
+      );
+    });
+    return await page
+      .locator(".stage")
+      .screenshot({ type: "png", omitBackground: true });
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Visit Apps once so returning to Home reloads the node state. The screenshot
+ * itself is taken only on Home.
+ */
+async function visitApps(page, target) {
   await page
     .getByTestId("phone-tab-bar")
     .getByRole("button", { name: target.appsLabel, exact: true })
@@ -203,7 +436,7 @@ async function capture(browser, baseUrl, target) {
     // store can still be empty, so leave and re-enter Home once: the second
     // activation refreshes the node state against the loaded status and drops
     // the transient "service not running" warning.
-    await openApps(page, target);
+    await visitApps(page, target);
     await page
       .getByTestId("phone-tab-bar")
       .getByRole("button", { name: target.homeLabel, exact: true })
@@ -218,11 +451,7 @@ async function capture(browser, baseUrl, target) {
     await settle(page);
     const home = await page.screenshot({ type: "png" });
 
-    await openApps(page, target);
-    await settle(page);
-    const apps = await page.screenshot({ type: "png" });
-
-    return { home, apps };
+    return { home };
   } finally {
     await context.close();
   }
@@ -255,7 +484,8 @@ try {
     const shots = [];
     for (const target of TARGETS) {
       try {
-        shots.push({ target, png: await capture(browser, baseUrl, target) });
+        const raw = await capture(browser, baseUrl, target);
+        shots.push({ target, png: await addPhoneShell(browser, raw.home) });
       } catch (error) {
         throw new Error(
           `[${target.language}] ${target.screenshots.home}: ${
@@ -267,12 +497,10 @@ try {
     }
     const version = appVersion();
     for (const { target, png } of shots) {
-      for (const name of ["home", "apps"]) {
-        const outFile = screenshotPath(target, name);
-        fs.mkdirSync(path.dirname(outFile), { recursive: true });
-        fs.writeFileSync(outFile, png[name]);
-        console.log(`Wrote ${target.screenshots[name]} (${version})`);
-      }
+      const outFile = screenshotPath(target, "home");
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      fs.writeFileSync(outFile, png);
+      console.log(`Wrote ${target.screenshots.home} (${version})`);
     }
     fs.writeFileSync(versionFile, `${version}\n`);
   } finally {

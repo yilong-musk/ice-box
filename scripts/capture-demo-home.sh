@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Capture the Live Demo Home view into docs/images/home.png (English) and
-# docs/images/home.zh-CN.png (Chinese).
+# docs/images/home.zh-CN.png (Chinese), with simulated macOS window controls.
 # Recaptures when the desktop package version differs from
 # docs/images/home.version, when Live Demo UI files changed, or when either
 # screenshot is missing.

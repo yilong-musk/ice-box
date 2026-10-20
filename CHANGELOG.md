@@ -7,10 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- The README now shows the Android Home and Apps views next to the desktop
-  screenshot. They are captured from the real phone shell against the Live Demo
-  mock, in English and Chinese, and refresh with the other documentation
-  images when the version or phone UI changes.
+- The README now shows the Android Home view in a current-generation
+  Pixel-style phone shell with an Android status bar and gesture navigation,
+  next to the desktop screenshot. It is captured from the real phone UI against
+  the Live Demo mock, in English and Chinese, and refreshes with the other
+  documentation images when the version or phone UI changes.
+- The desktop README screenshot now includes simulated macOS window controls
+  with close, minimize, and zoom glyphs, matching the app's overlay title bar.
 
 ## [0.2.2] - 2026-10-20
 

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
  * Capture the Live Demo Home view into docs/images/home.png (en) and
- * docs/images/home.zh-CN.png (zh), without the marketing window bar.
- * Matches the GitHub Pages iframe (1180x690).
+ * docs/images/home.zh-CN.png (zh) at the GitHub Pages iframe size (1180x690),
+ * with simulated macOS window controls.
  *
  * Usage:
  *   bash scripts/capture-demo-home.sh
@@ -18,6 +18,13 @@ import { chromium } from "playwright";
 const VIEWPORT = { width: 1180, height: 690 };
 const SCALE = 2;
 const PREVIEW_PORT = 4175;
+
+/** macOS traffic lights: close, minimize, zoom. */
+const TRAFFIC_LIGHTS = [
+  { color: "#ff5f57", symbol: "close" },
+  { color: "#febc2e", symbol: "minimize" },
+  { color: "#28c840", symbol: "zoom" },
+];
 
 /** One capture per README language; the parameters are identical otherwise. */
 const TARGETS = [
@@ -159,6 +166,63 @@ async function verifyMockedHomeData(page) {
   }
 }
 
+/**
+ * Overlay the three macOS window controls on the Live Demo page. The desktop
+ * app uses an overlay title bar (`titleBarStyle: "Overlay"`), so the lights sit
+ * on top of the sidebar instead of a separate title bar strip.
+ */
+async function addMacWindowControls(page) {
+  await page.evaluate((lights) => {
+    const glyphs = {
+      close:
+        '<svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+        '<path d="M4.1 4.1 7.9 7.9M7.9 4.1 4.1 7.9" stroke="rgba(0, 0, 0, 0.55)" stroke-width="1.4" stroke-linecap="round" />' +
+        "</svg>",
+      minimize:
+        '<svg width="8" height="8" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+        '<path d="M4 6h4" stroke="rgba(0, 0, 0, 0.55)" stroke-width="1.4" stroke-linecap="round" />' +
+        "</svg>",
+      zoom:
+        '<svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+        '<path d="M7.1 4.9 10 2M10 2H7.8M10 2v2.2" stroke="rgba(0, 0, 0, 0.55)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />' +
+        '<path d="M4.9 7.1 2 10M2 10h2.2M2 10V7.8" stroke="rgba(0, 0, 0, 0.55)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />' +
+        "</svg>",
+    };
+    document.getElementById("ice-box-capture-window-controls")?.remove();
+    const controls = document.createElement("div");
+    controls.id = "ice-box-capture-window-controls";
+    Object.assign(controls.style, {
+      position: "fixed",
+      top: "12px",
+      left: "12px",
+      display: "flex",
+      gap: "8px",
+      zIndex: "2147483647",
+      pointerEvents: "none",
+    });
+    for (const light of lights) {
+      const dot = document.createElement("span");
+      Object.assign(dot.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "12px",
+        height: "12px",
+        borderRadius: "50%",
+        backgroundColor: light.color,
+        lineHeight: "0",
+        boxShadow:
+          "inset 0 0.5px 0 rgba(255, 255, 255, 0.35), " +
+          "inset 0 0 0 0.5px rgba(0, 0, 0, 0.22), " +
+          "0 0 0 0.5px rgba(0, 0, 0, 0.14)",
+      });
+      dot.innerHTML = glyphs[light.symbol];
+      controls.append(dot);
+    }
+    document.body.append(controls);
+  }, TRAFFIC_LIGHTS);
+}
+
 async function capture(browser, baseUrl, target) {
   const context = await browser.newContext({
     viewport: VIEWPORT,
@@ -186,6 +250,7 @@ async function capture(browser, baseUrl, target) {
       return el && el.getBoundingClientRect().height >= 80;
     }, { timeout: 15_000 });
     await verifyMockedHomeData(page);
+    await addMacWindowControls(page);
     await new Promise((resolve) => setTimeout(resolve, 400));
     return await page.screenshot({ type: "png" });
   } finally {
