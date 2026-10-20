@@ -20,12 +20,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
-
-type Filter = "all" | "user" | "system";
 
 type Props = {
   /** When false the page stays mounted but reloads on reactivation. */
@@ -71,7 +68,6 @@ export function Apps({ active = true }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<InstalledApp | null>(null);
   const [pending, setPending] = useState<{
     packageName: string;
@@ -105,23 +101,16 @@ export function Apps({ active = true }: Props) {
     void load();
   }, [active, load]);
 
-  const counts = useMemo(() => {
-    const system = apps.filter((app) => app.system).length;
-    return { all: apps.length, system, user: apps.length - system };
-  }, [apps]);
-
   const filtered = useMemo(() => {
     const needle = keyword.trim().toLowerCase();
     return apps.filter((app) => {
-      if (filter === "user" && app.system) return false;
-      if (filter === "system" && !app.system) return false;
       if (!needle) return true;
       return (
         app.label.toLowerCase().includes(needle) ||
         app.package_name.toLowerCase().includes(needle)
       );
     });
-  }, [apps, filter, keyword]);
+  }, [apps, keyword]);
 
   async function chooseMode(mode: AppProxyMode) {
     const app = selected;
@@ -169,39 +158,6 @@ export function Apps({ active = true }: Props) {
           className="pl-9"
         />
       </div>
-
-      <ToggleGroup
-        type="single"
-        variant="outline"
-        size="sm"
-        value={filter}
-        onValueChange={(value) => {
-          if (value === "all" || value === "user" || value === "system") {
-            setFilter(value);
-          }
-        }}
-        className="shrink-0"
-        aria-label={t("apps.filterAria")}
-      >
-        <ToggleGroupItem value="all" className="flex-1">
-          {t("apps.filter.all")}
-          <span className="ml-1 text-xs text-muted-foreground tabular-nums">
-            {counts.all}
-          </span>
-        </ToggleGroupItem>
-        <ToggleGroupItem value="user" className="flex-1">
-          {t("apps.filter.user")}
-          <span className="ml-1 text-xs text-muted-foreground tabular-nums">
-            {counts.user}
-          </span>
-        </ToggleGroupItem>
-        <ToggleGroupItem value="system" className="flex-1">
-          {t("apps.filter.system")}
-          <span className="ml-1 text-xs text-muted-foreground tabular-nums">
-            {counts.system}
-          </span>
-        </ToggleGroupItem>
-      </ToggleGroup>
 
       <Card
         size="sm"

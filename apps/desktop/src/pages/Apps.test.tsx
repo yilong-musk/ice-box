@@ -86,7 +86,7 @@ describe("Apps", () => {
     });
   });
 
-  it("filters by search text and by user or system apps", async () => {
+  it("filters by search text", async () => {
     const { container } = render(<Apps />);
     const view = within(container);
 
@@ -100,16 +100,5 @@ describe("Apps", () => {
     expect(
       view.getByRole("button", { name: t("apps.selectAria", { app: "Bank" }) }),
     ).toBeInTheDocument();
-
-    fireEvent.change(view.getByRole("searchbox", { name: t("apps.searchAria") }), {
-      target: { value: "" },
-    });
-    fireEvent.click(view.getByRole("radio", { name: new RegExp(t("apps.filter.system")) }));
-    expect(
-      view.getByRole("button", { name: t("apps.selectAria", { app: "Settings" }) }),
-    ).toBeInTheDocument();
-    expect(
-      view.queryByRole("button", { name: t("apps.selectAria", { app: "Browser" }) }),
-    ).toBeNull();
   });
 });
