@@ -19,6 +19,8 @@ mod proc_memory;
 mod proxy_terminal;
 mod runtime;
 mod runtime_status;
+#[cfg(target_os = "windows")]
+mod session_end;
 mod shutdown;
 mod subscription_watch;
 mod tray;
@@ -229,6 +231,11 @@ pub fn run() {
             // user opened the app first) exits silently: stealing focus from
             // the desktop at login is the one thing this start must not do.
             let instance_lock = acquire_instance_lock(&paths, !login_item_launch)?;
+            // Restore the system proxy when Windows ends the session, even if
+            // the main thread is too busy or hung to run the quit path. Without
+            // it the registry keeps pointing at a core that the reboot killed.
+            #[cfg(target_os = "windows")]
+            session_end::install(paths.proxy_backup());
             // Shown only once this process owns the data dir: a second user
             // launch leaves through `acquire_instance_lock`, and showing the
             // window first would flash a blank one before that exit.

@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed stop no longer turns the system proxy off while the app stays open:
+  the core is stopped before the proxy is restored, so the UI and the OS agree
+  when the core cannot be terminated.
+- On Windows, the system proxy is restored when the OS ends the session. A
+  reboot no longer leaves proxy-aware applications without internet until
+  ice-box is started again.
+
 ## [0.2.2] - 2026-10-19
 
 ### Added
