@@ -19,10 +19,11 @@ pub use listen::{is_fake_ip, is_loopback_host, is_restricted_fetch_host, is_rest
 pub use paths::AppPaths;
 pub use platform::HostPlatform;
 pub use settings::{
-    clash_mode_name, default_auto_set_system_proxy, is_plausible_clash_api_secret,
-    tun_interface_name_valid, AppSettings, LanguagePreference, ProxyMode, SettingsPatch,
-    TrayDisplayMode, TunSettings, TunSettingsPatch, EXAMPLE_CLASH_API_SECRET,
-    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+    clash_mode_name, default_auto_set_system_proxy, is_android_package_name,
+    is_plausible_clash_api_secret, tun_interface_name_valid, AppProxyMode, AppSettings,
+    LanguagePreference, ProxyMode, SettingsPatch, TrayDisplayMode, TunSettings, TunSettingsPatch,
+    EXAMPLE_CLASH_API_SECRET, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU,
+    TUN_DEFAULT_STACK,
 };
 pub use ui::{UiMessage, UI_RAW_KEY};
 

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    build_input_from_nodes, rule_fingerprint, GroupSelections, NormalizedOutbound,
+    build_input_from_nodes, rule_fingerprint, AppProxyMode, GroupSelections, NormalizedOutbound,
     NormalizedProfile, NormalizedRoute, ProfileParseStats, ProxyMode, RuleOverrides, TunSettings,
 };
 use serde_json::{json, Value};
@@ -1804,6 +1804,96 @@ fn android_exclude_package_is_emitted_and_ios_ignores_it() {
     input.platform = HostPlatform::Android;
     input.tun_exclude_package = Some("com.yilong-musk.icebox".into());
     assert!(build_runtime_config(&input).is_err());
+}
+
+#[test]
+fn android_app_proxy_rules_precede_modes_and_stay_android_only() {
+    let mut input = build_input_from_nodes(
+        LocalTemplate::default(),
+        vec![socks("a"), socks("b")],
+        Some("a".into()),
+    );
+    input.platform = HostPlatform::Android;
+    input
+        .template
+        .app_proxies
+        .insert("com.example.browser".into(), AppProxyMode::Proxy);
+    input
+        .template
+        .app_proxies
+        .insert("com.example.bank".into(), AppProxyMode::Direct);
+    input
+        .template
+        .app_proxies
+        .insert("com.example.game".into(), AppProxyMode::Block);
+    input
+        .template
+        .app_proxies
+        .insert("com.example.default".into(), AppProxyMode::Follow);
+
+    let cfg = build_runtime_json(&input).expect("android app rules");
+    let rules = cfg["route"]["rules"].as_array().expect("rules");
+    let app_rules: Vec<&Value> = rules
+        .iter()
+        .filter(|rule| rule.get("package_name").is_some())
+        .collect();
+    assert_eq!(app_rules.len(), 3, "follow emits no rule: {cfg}");
+    assert_eq!(app_rules[0]["outbound"], "block");
+    assert_eq!(app_rules[0]["package_name"], json!(["com.example.game"]));
+    assert_eq!(app_rules[1]["outbound"], "direct");
+    assert_eq!(app_rules[1]["package_name"], json!(["com.example.bank"]));
+    assert_eq!(app_rules[2]["outbound"], "proxy");
+    assert_eq!(app_rules[2]["package_name"], json!(["com.example.browser"]));
+
+    let first_app = rules
+        .iter()
+        .position(|rule| rule.get("package_name").is_some())
+        .unwrap();
+    let first_mode = rules
+        .iter()
+        .position(|rule| rule.get("clash_mode").is_some())
+        .unwrap();
+    assert!(
+        first_app < first_mode,
+        "per-app choices must override the active clash mode"
+    );
+
+    input.platform = HostPlatform::Ios;
+    let ios = build_runtime_json(&input).expect("ios ignores app rules");
+    assert!(ios["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|rule| rule.get("package_name").is_none()));
+
+    input.platform = HostPlatform::MacOs;
+    let desktop = build_runtime_json(&input).expect("desktop ignores app rules");
+    assert!(desktop["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|rule| rule.get("package_name").is_none()));
+}
+
+#[test]
+fn direct_only_mobile_config_keeps_block_and_direct_app_rules() {
+    let mut template = LocalTemplate::default();
+    template
+        .app_proxies
+        .insert("com.example.game".into(), AppProxyMode::Block);
+    template
+        .app_proxies
+        .insert("com.example.browser".into(), AppProxyMode::Proxy);
+    let cfg = build_direct_only_config(&template, CaptureIntent::Diagnostic, HostPlatform::Android)
+        .expect("direct-only app rules");
+    let rules = cfg["route"]["rules"].as_array().expect("rules");
+    let app_rules: Vec<&Value> = rules
+        .iter()
+        .filter(|rule| rule.get("package_name").is_some())
+        .collect();
+    assert_eq!(app_rules.len(), 2);
+    assert_eq!(app_rules[0]["outbound"], "block");
+    assert_eq!(app_rules[1]["outbound"], "direct");
 }
 
 #[test]

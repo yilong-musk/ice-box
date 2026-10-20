@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The Apps page lists every installed app for per-app routing. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <application>
         <receiver
             android:name="com.yilongmusk.icebox.tunnel.InstallResultReceiver"

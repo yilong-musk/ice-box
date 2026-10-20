@@ -46,11 +46,16 @@ TUN switch, launch-at-login, the tray, and subscription auto-update. A profile
 changes when the user imports or refreshes it. The power button connects or
 disconnects the VPN, and the first start asks for the system VPN permission.
 The app's own package is excluded from the tunnel, so subscription fetches and
-update checks stay direct. A window narrower than 768px uses a bottom tab bar;
-a wider window uses the sidebar, with the same phone capabilities. Settings
-checks GitHub Releases, downloads the arm64 APK, and hands it to the system
-installer. The same page explains battery-optimization exemption, strict
-Private DNS, and always-on VPN.
+update checks stay direct. The phone Home page also carries the node list, so
+exits can be selected and probed without leaving Home. The Apps page lists
+installed applications and assigns each one a routing override: follow the
+active rules, use the selected proxy, connect directly, or block. These choices
+are emitted as sing-box `package_name` rules ahead of the clash-mode rules, so
+an explicit per-app choice wins in every routing mode. A window narrower than
+768px uses a bottom tab bar; a wider window uses the sidebar, with the same
+phone capabilities. Settings checks GitHub Releases, downloads the arm64 APK,
+and hands it to the system installer. The same page explains
+battery-optimization exemption, strict Private DNS, and always-on VPN.
 
 The sections below describe the desktop shell. Android differences are the
 table and the paragraph above.

@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ice_config::{
-    load_group_selections, load_rule_overrides, load_settings, redact_config_str, rule_fingerprint,
-    rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
-    save_settings_for, set_proxy_service_enabled_for, AppError, AppPaths, AppSettings, ErrorCode,
-    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
+    is_android_package_name, load_group_selections, load_rule_overrides, load_settings,
+    redact_config_str, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
+    save_group_selections, save_rule_overrides, save_settings_for, set_proxy_service_enabled_for,
+    AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode, NormalizedProfile, ProxyMode,
+    RuleOverrides, SettingsPatch,
 };
 use ice_core::{
     proxy_delay, proxy_group_heads, proxy_selected_now, GroupHead, HealthEndpoints, TrafficDelta,
@@ -381,6 +382,24 @@ impl MobileHost {
         let paths = self.paths()?.clone();
         let mut settings = load_settings(&paths.settings())?;
         settings.proxy_mode = mode;
+        save_settings_for(&paths.settings(), &settings, PLATFORM)
+    }
+
+    /// Persist one Android app's routing override. `Follow` clears the entry.
+    pub fn set_app_proxy(&mut self, package: &str, mode: AppProxyMode) -> Result<(), AppError> {
+        if !is_android_package_name(package) {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!("not an Android package name: {package}"),
+            ));
+        }
+        let paths = self.paths()?.clone();
+        let mut settings = load_settings(&paths.settings())?;
+        if mode == AppProxyMode::Follow {
+            settings.app_proxies.remove(package);
+        } else {
+            settings.app_proxies.insert(package.to_string(), mode);
+        }
         save_settings_for(&paths.settings(), &settings, PLATFORM)
     }
 

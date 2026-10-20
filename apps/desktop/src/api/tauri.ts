@@ -3,7 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, CheckAppUpdateResponse, DelayTestResponse, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -101,6 +101,9 @@ export const api = {
     invoke<void>("set_tray_update_available", { version }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
+  /** The Apps page is phone-only; the desktop shell has no package rules. */
+  listApps: async (): Promise<InstalledApp[]> => [],
+  setAppProxy: async (_packageName: string, _mode: AppProxyMode) => {},
   addSubscription: (
     url: string,
     name?: string,

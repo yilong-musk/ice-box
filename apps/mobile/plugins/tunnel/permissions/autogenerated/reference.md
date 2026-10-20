@@ -11,6 +11,7 @@ Prepare, start, stop, and inspect the platform VPN tunnel.
 - `allow-status`
 - `allow-shared-dir`
 - `allow-memory`
+- `allow-list-apps`
 - `allow-device-status`
 - `allow-request-battery-exemption`
 - `allow-copy-text`
@@ -103,6 +104,32 @@ Enables the install_apk command without any pre-configured scope.
 <td>
 
 Denies the install_apk command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:allow-list-apps`
+
+</td>
+<td>
+
+Enables the list_apps command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`tunnel:deny-list-apps`
+
+</td>
+<td>
+
+Denies the list_apps command without any pre-configured scope.
 
 </td>
 </tr>

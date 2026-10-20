@@ -62,6 +62,18 @@ pub struct TunnelSnapshot {
     pub memory_bytes: Option<u64>,
 }
 
+/// An installed Android application the Apps page can route.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledApp {
+    pub package_name: String,
+    pub label: String,
+    /// Preinstalled / system image application.
+    pub system: bool,
+    /// Optional `data:image/...;base64,...` launcher icon.
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
 #[cfg(target_os = "android")]
 #[derive(Debug, Clone, Deserialize)]
 struct PermissionResponse {
@@ -155,6 +167,27 @@ impl<R: Runtime> Tunnel<R> {
                 .run_mobile_plugin("memory", ())
                 .map_err(|err| TunnelError::Plugin(err.to_string()))?;
             return Ok(response.bytes);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(TunnelError::Unavailable)
+        }
+    }
+
+    /// User-visible installed applications, sorted by user apps first.
+    pub fn list_apps(&self) -> Result<Vec<InstalledApp>, TunnelError> {
+        #[cfg(target_os = "android")]
+        {
+            #[derive(Deserialize)]
+            struct AppsResponse {
+                #[serde(default)]
+                apps: Vec<InstalledApp>,
+            }
+            let response: AppsResponse = self
+                .handle
+                .run_mobile_plugin("list_apps", ())
+                .map_err(|err| TunnelError::Plugin(err.to_string()))?;
+            return Ok(response.apps);
         }
         #[cfg(not(target_os = "android"))]
         {

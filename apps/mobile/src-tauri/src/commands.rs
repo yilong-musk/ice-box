@@ -5,13 +5,13 @@
 
 use std::sync::Mutex;
 
-use ice_config::{AppError, AppPaths, ErrorCode, ProxyMode, SettingsPatch};
+use ice_config::{AppError, AppPaths, AppProxyMode, ErrorCode, ProxyMode, SettingsPatch};
 use ice_subscription::{
     subscription_share_text, AutoUpdateInterval, SubscriptionManager, SubscriptionShareKind,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
-use tauri_plugin_tunnel::{Tunnel, TunnelError};
+use tauri_plugin_tunnel::{InstalledApp, Tunnel, TunnelError};
 use uuid::Uuid;
 
 use crate::config::PLATFORM;
@@ -74,6 +74,12 @@ pub struct SetActiveRequest {
 #[derive(Deserialize)]
 pub struct SetProxyModeRequest {
     pub mode: ProxyMode,
+}
+
+#[derive(Deserialize)]
+pub struct SetAppProxyRequest {
+    pub package_name: String,
+    pub mode: AppProxyMode,
 }
 
 #[derive(Deserialize)]
@@ -468,6 +474,11 @@ pub fn set_active_subscription(
 }
 
 #[tauri::command]
+pub fn list_apps(tunnel: State<'_, Tunnel<Wry>>) -> Result<Vec<InstalledApp>, AppError> {
+    tunnel.list_apps().map_err(map_tunnel)
+}
+
+#[tauri::command]
 pub fn list_nodes(
     app: AppHandle,
     host: State<'_, Mutex<MobileHost>>,
@@ -626,6 +637,21 @@ pub fn set_proxy_mode(
 ) -> Result<(), AppError> {
     let mut host = ready(&app, &host, &tunnel)?;
     host.set_proxy_mode(req.mode)?;
+    apply_config(&mut host, &tunnel)?;
+    drop(host);
+    notify(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_app_proxy(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+    req: SetAppProxyRequest,
+) -> Result<(), AppError> {
+    let mut host = ready(&app, &host, &tunnel)?;
+    host.set_app_proxy(&req.package_name, req.mode)?;
     apply_config(&mut host, &tunnel)?;
     drop(host);
     notify(&app);

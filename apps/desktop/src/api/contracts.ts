@@ -146,6 +146,19 @@ export type StatusResponse = {
 
 export type ProxyMode = "rule" | "global" | "direct";
 
+/** Android per-app routing override. `follow` keeps the active rules/mode. */
+export type AppProxyMode = "follow" | "proxy" | "direct" | "block";
+
+/** An installed Android application the Apps page can route. */
+export type InstalledApp = {
+  package_name: string;
+  label: string;
+  /** Preinstalled / system image application. */
+  system: boolean;
+  /** Optional `data:image/...;base64,...` launcher icon. */
+  icon: string | null;
+};
+
 
 /** macOS menu-bar item: icon with the live speed readout, icon only, or
  * readout only. Stored on every platform; the Settings page shows the control
@@ -178,6 +191,8 @@ export type AppSettings = {
   proxy_service_enabled: boolean;
   allow_lan: boolean;
   proxy_mode: ProxyMode;
+  /** Android per-app routing overrides keyed by application id. */
+  app_proxies?: Record<string, AppProxyMode>;
   tun: TunSettings;
   auto_default_rules: boolean;
   /** "system" follows the OS locale; otherwise an explicit UI language. */
@@ -298,6 +313,8 @@ export type SettingsPatch = {
   proxy_service_enabled?: boolean;
   allow_lan?: boolean;
   proxy_mode?: ProxyMode;
+  /** Replaces the whole Android per-app map; `{}` clears every override. */
+  app_proxies?: Record<string, AppProxyMode>;
   tun?: Partial<TunSettings> & { interface_name?: string | null };
   auto_default_rules?: boolean;
   language?: "system" | "zh" | "en";
@@ -414,6 +431,10 @@ export interface CoreApi {
   getSettings(): Promise<AppSettings>;
   saveSettings(patch: SettingsPatch): Promise<void>;
   setProxyMode(mode: ProxyMode): Promise<void>;
+  /** Android only: installed applications, user apps first. */
+  listApps(): Promise<InstalledApp[]>;
+  /** Android only: persist one app's routing override and reload the tunnel. */
+  setAppProxy(packageName: string, mode: AppProxyMode): Promise<void>;
   addSubscription(url: string, name?: string, autoUpdate?: boolean, interval?: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta>;
   /** Import a sing-box JSON document. The body is not a subscription URL. */
   importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta>;

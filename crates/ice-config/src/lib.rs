@@ -29,9 +29,9 @@ pub use build::{
 pub use clash_secret::ensure_clash_api_secret;
 pub use error::{AppError, ErrorCode};
 pub use ice_types::{
-    is_fake_ip, is_loopback_host, is_plausible_clash_api_secret, is_restricted_fetch_host,
-    is_restricted_ip, AppPaths, HostPlatform, UiMessage, ENGINE_COMPAT_CORE_VERSION,
-    EXAMPLE_CLASH_API_SECRET,
+    is_android_package_name, is_fake_ip, is_loopback_host, is_plausible_clash_api_secret,
+    is_restricted_fetch_host, is_restricted_ip, AppPaths, AppProxyMode, HostPlatform, UiMessage,
+    ENGINE_COMPAT_CORE_VERSION, EXAMPLE_CLASH_API_SECRET,
 };
 pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
 pub use redact::{redact_config_json, redact_config_str};
@@ -53,6 +53,7 @@ pub use settings::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -141,6 +142,10 @@ pub struct LocalTemplate {
     /// Routing mode applied at build time (rule / global / direct).
     #[serde(default)]
     pub proxy_mode: ProxyMode,
+    /// Android per-app route overrides keyed by application id. Ignored on
+    /// non-Android platforms.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub app_proxies: BTreeMap<String, AppProxyMode>,
     /// Validated TUN capture parameters. On desktop the TUN inbound is emitted
     /// only when the build intent is [`CaptureIntent::Tun`], never from
     /// `tun.enabled` alone. Android and iOS always emit it.
@@ -162,6 +167,7 @@ impl Default for LocalTemplate {
             clash_api_secret: default_clash_api_secret(),
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
+            app_proxies: BTreeMap::new(),
             tun: TunSettings::default(),
         }
     }
@@ -177,6 +183,7 @@ impl From<&AppSettings> for LocalTemplate {
             clash_api_secret: String::new(),
             allow_lan: settings.allow_lan,
             proxy_mode: settings.proxy_mode,
+            app_proxies: settings.app_proxies.clone(),
             tun: settings.tun.clone(),
         }
     }

@@ -13,9 +13,9 @@ use crate::atomic::write_bytes_atomic;
 use crate::is_loopback_host;
 use crate::runtime_config::{tagged_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
-use crate::settings::{clash_mode_name, TunSettings};
+use crate::settings::{clash_mode_name, AppProxyMode, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
-use ice_types::is_plausible_clash_api_secret;
+use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 
 /// Connection routes are INFO. The Logs page filters to those plus
 /// important events unless debug mode is on; the 20 MiB cap bounds disk.
@@ -32,6 +32,45 @@ fn clash_api_block(template: &LocalTemplate) -> Value {
         "secret": template.clash_api_secret,
         "default_mode": clash_mode_name(template.proxy_mode),
     })
+}
+
+/// Per-app route rules for the Android VPN.
+///
+/// Explicit choices must override both the subscription rule set and the
+/// active clash mode, so callers insert these rules after the reserved capture
+/// rules and before the `clash_mode` rules. Packages are grouped by target to
+/// keep a long selection a handful of rules. Non-Android platforms ignore the
+/// map; a `follow` entry never emits a rule.
+fn app_proxy_rules(
+    proxies: &std::collections::BTreeMap<String, AppProxyMode>,
+    proxy_target: &str,
+    platform: HostPlatform,
+) -> Vec<Value> {
+    if platform != HostPlatform::Android || proxies.is_empty() {
+        return Vec::new();
+    }
+    let mut proxy = Vec::new();
+    let mut direct = Vec::new();
+    let mut block = Vec::new();
+    for (package, mode) in proxies {
+        if !is_android_package_name(package) {
+            continue;
+        }
+        match mode {
+            AppProxyMode::Follow => {}
+            AppProxyMode::Proxy => proxy.push(package.clone()),
+            AppProxyMode::Direct => direct.push(package.clone()),
+            AppProxyMode::Block => block.push(package.clone()),
+        }
+    }
+    let mut rules = Vec::new();
+    for (packages, outbound) in [(block, "block"), (direct, "direct"), (proxy, proxy_target)] {
+        if packages.is_empty() {
+            continue;
+        }
+        rules.push(json!({ "package_name": packages, "outbound": outbound }));
+    }
+    rules
 }
 
 pub fn build_direct_only_config(
@@ -67,6 +106,7 @@ fn build_direct_only_config_with(
     // path stays direct even in direct-only fallback.
     let mut rules = Vec::new();
     prepend_capture_rules(&mut rules, &template.tun, platform, capture_intent);
+    rules.extend(app_proxy_rules(&template.app_proxies, "direct", platform));
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
     let route = json!({
@@ -435,6 +475,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             input.platform,
             capture_intent,
         );
+        final_rules.extend(app_proxy_rules(
+            &input.template.app_proxies,
+            &global_target,
+            input.platform,
+        ));
         final_rules.push(json!({ "clash_mode": "global", "outbound": global_target }));
         final_rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
         let enabled_sub_rules: Vec<Value> = input
@@ -929,33 +974,6 @@ fn wireguard_address(outbound: &Value) -> Value {
     }
 }
 
-fn android_package_name_ok(name: &str) -> bool {
-    let mut parts = name.split('.');
-    let Some(first) = parts.next() else {
-        return false;
-    };
-    if !android_ident(first) {
-        return false;
-    }
-    let mut more = false;
-    for part in parts {
-        if !android_ident(part) {
-            return false;
-        }
-        more = true;
-    }
-    more && name.len() <= 255
-}
-
-fn android_ident(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
-        _ => return false,
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
 /// Same physical-network exclusions as the desktop TUN inbound. libbox turns
 /// this into Android `VpnService.Builder.excludeRoute`, so those prefixes
 /// never enter the tunnel.
@@ -1002,7 +1020,7 @@ fn android_exclude_package(
     let Some(package) = package.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    if !android_package_name_ok(package) {
+    if !is_android_package_name(package) {
         return Err(ConfigError::invalid(format!(
             "tun_exclude_package is not an Android package name: {package}"
         )));

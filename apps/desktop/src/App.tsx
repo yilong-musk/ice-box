@@ -12,6 +12,7 @@ import {
   ArrowUpCircle,
   Bot,
   House,
+  LayoutGrid,
   ListFilter,
   Rss,
   ScrollText,
@@ -21,6 +22,7 @@ import {
 import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/client";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
+import { Apps } from "./pages/Apps";
 import { Subscriptions } from "./pages/Subscriptions";
 import { Rules } from "./pages/Rules";
 import { Logs } from "./pages/Logs";
@@ -57,7 +59,15 @@ import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import logo from "./assets/logo.png";
 
-type Tab = "home" | "nodes" | "subs" | "rules" | "settings" | "mcp" | "logs";
+type Tab =
+  | "home"
+  | "nodes"
+  | "apps"
+  | "subs"
+  | "rules"
+  | "settings"
+  | "mcp"
+  | "logs";
 
 const SIDEBAR_WIDTH = "11rem";
 
@@ -92,6 +102,7 @@ const NAV_ITEMS: {
 }[] = [
   { id: "home", labelKey: "app.nav.home", icon: House },
   { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
+  { id: "apps", labelKey: "app.nav.apps", icon: LayoutGrid },
   { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
   { id: "subs", labelKey: "app.nav.subs", icon: Rss },
   { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
@@ -292,9 +303,14 @@ function AppShell() {
 
   const phone = isPhoneShell();
   const desktop = isDesktopShell();
-  const navItems = NAV_ITEMS.filter(
-    (item) => (desktop || item.id !== "mcp") && (!phone || item.id !== "logs"),
-  );
+  const navItems = NAV_ITEMS.filter((item) => {
+    if (item.id === "mcp") return desktop;
+    if (item.id === "logs") return !phone;
+    // Phones move the node list into Home and reuse the tab slot for Apps.
+    if (item.id === "apps") return phone;
+    if (item.id === "nodes") return !phone;
+    return true;
+  });
   const current = navItems.find((item) => item.id === tab);
 
   const pages = (
@@ -308,9 +324,14 @@ function AppShell() {
           />
         </TabPane>
       )}
-      {visited.has("nodes") && (
+      {!phone && visited.has("nodes") && (
         <TabPane active={tab === "nodes"}>
           <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+        </TabPane>
+      )}
+      {phone && visited.has("apps") && (
+        <TabPane active={tab === "apps"}>
+          <Apps active={tab === "apps"} />
         </TabPane>
       )}
       {visited.has("subs") && (

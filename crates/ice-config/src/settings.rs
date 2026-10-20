@@ -10,9 +10,10 @@ use crate::error::{AppError, ErrorCode};
 use crate::HostPlatform;
 
 pub use ice_types::{
-    clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppSettings,
-    LanguagePreference, ProxyMode, SettingsPatch, TrayDisplayMode, TunSettings, TunSettingsPatch,
-    TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU, TUN_DEFAULT_STACK,
+    clash_mode_name, default_auto_set_system_proxy, tun_interface_name_valid, AppProxyMode,
+    AppSettings, LanguagePreference, ProxyMode, SettingsPatch, TrayDisplayMode, TunSettings,
+    TunSettingsPatch, TUN_DEFAULT_IPV4_ADDRESS, TUN_DEFAULT_IPV6_ADDRESS, TUN_DEFAULT_MTU,
+    TUN_DEFAULT_STACK,
 };
 
 /// Result of loading `settings.json`, including a one-shot recovery diagnostic.
@@ -265,6 +266,51 @@ mod tests {
         .expect("save direct");
         assert_eq!(load_settings(&path).unwrap().proxy_mode, ProxyMode::Direct);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn app_proxies_round_trip_and_legacy_settings_default_to_empty() {
+        let path = temp_settings_path("app-proxies");
+        let legacy = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, legacy).expect("write");
+        let loaded = load_settings(&path).expect("legacy without app_proxies");
+        assert!(loaded.app_proxies.is_empty());
+
+        let mut settings = AppSettings::default();
+        settings
+            .app_proxies
+            .insert("com.example.browser".into(), AppProxyMode::Proxy);
+        settings
+            .app_proxies
+            .insert("com.example.bank".into(), AppProxyMode::Direct);
+        settings
+            .app_proxies
+            .insert("com.example.game".into(), AppProxyMode::Block);
+        save_settings(&path, &settings).expect("save app proxies");
+        assert_eq!(
+            load_settings(&path).unwrap().app_proxies,
+            settings.app_proxies
+        );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn app_proxies_reject_invalid_package_names() {
+        let path = temp_settings_path("app-proxies-invalid");
+        let mut settings = AppSettings::default();
+        settings
+            .app_proxies
+            .insert("not a package".into(), AppProxyMode::Proxy);
+        let err = save_settings(&path, &settings).expect_err("reject invalid package");
+        assert_eq!(err.code, "config.invalid");
+        assert!(!path.exists(), "validation must fail before the write");
     }
 
     #[test]

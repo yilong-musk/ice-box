@@ -4,6 +4,8 @@
 //!
 //! Load/save lives in `ice-config`. Validation is pure.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::listen::is_loopback_host;
@@ -21,6 +23,54 @@ pub enum ProxyMode {
     Global,
     /// Ignore rules; send all traffic out `direct`.
     Direct,
+}
+
+/// Per-app routing override for the Android VPN (see `app_proxies`).
+///
+/// `Follow` keeps the app on the active rule set / proxy mode and is never
+/// emitted as a route rule. `Proxy` bypasses the subscription rules and uses
+/// the selected proxy group, `Direct` connects without the tunnel, and
+/// `Block` rejects the app's connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppProxyMode {
+    /// No per-app rule; follow the active routing rules and proxy mode.
+    #[default]
+    Follow,
+    /// Bypass subscription rules and use the selected proxy group.
+    Proxy,
+    /// Always connect directly.
+    Direct,
+    /// Block the app's connections.
+    Block,
+}
+
+/// Android application id: at least two dot-separated Java identifiers.
+pub fn is_android_package_name(name: &str) -> bool {
+    let mut parts = name.split('.');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if !android_ident(first) {
+        return false;
+    }
+    let mut more = false;
+    for part in parts {
+        if !android_ident(part) {
+            return false;
+        }
+        more = true;
+    }
+    more && name.len() <= 255
+}
+
+fn android_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 /// UI language preference. `System` follows the OS locale; the frontend
@@ -331,6 +381,12 @@ pub struct AppSettings {
     /// Routing mode; defaults to `rule` for existing `settings.json` files.
     #[serde(default)]
     pub proxy_mode: ProxyMode,
+    /// Android per-app routing overrides keyed by application id. Empty means
+    /// every app follows the active routing rules. The map is stored on every
+    /// platform so a settings file survives a data-directory move, but only
+    /// Android config generation emits package rules.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub app_proxies: BTreeMap<String, AppProxyMode>,
     /// TUN capture parameters. Defaults to disabled for existing `settings.json`
     /// files; no settings migration ever enables TUN implicitly (`docs/tun.md`).
     #[serde(default)]
@@ -398,6 +454,7 @@ impl Default for AppSettings {
             proxy_service_enabled: false,
             allow_lan: false,
             proxy_mode: ProxyMode::Rule,
+            app_proxies: BTreeMap::new(),
             tun: TunSettings::default(),
             auto_default_rules: true,
             language: LanguagePreference::System,
@@ -453,6 +510,14 @@ impl AppSettings {
                 "mixed_port must differ from clash_api_port",
             ));
         }
+        for package in self.app_proxies.keys() {
+            if !is_android_package_name(package) {
+                return Err(AppError::new(
+                    ErrorCode::ConfigInvalid,
+                    format!("app_proxies key is not an Android package name: {package}"),
+                ));
+            }
+        }
         self.tun.validate_for(platform)?;
         Ok(())
     }
@@ -489,6 +554,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.proxy_mode {
             next.proxy_mode = v;
+        }
+        if let Some(v) = &patch.app_proxies {
+            next.app_proxies = v.clone();
         }
         if let Some(tun) = &patch.tun {
             next.tun = tun.apply(&self.tun);
@@ -546,6 +614,10 @@ pub struct SettingsPatch {
     pub allow_lan: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_mode: Option<ProxyMode>,
+    /// Replaces the whole Android per-app map. `None` keeps the current map;
+    /// an empty map clears every override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_proxies: Option<BTreeMap<String, AppProxyMode>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tun: Option<TunSettingsPatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Android has an Apps page that lists installed applications and lets each one
+  follow the active rules, use the selected proxy, connect directly, or be
+  blocked. The choices are stored in `settings.json` and emitted as sing-box
+  `package_name` rules that take precedence over the routing mode.
+
+### Changed
+
+- The phone Home page now includes the node list. The old Nodes tab is replaced
+  by the Apps tab on phones; desktop navigation is unchanged.
+
 ### Fixed
 
 - A failed stop no longer turns the system proxy off while the app stays open:

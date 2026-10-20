@@ -15,6 +15,7 @@ import {
   type StatusResponse,
 } from "../api/client";
 import { isPhoneShell } from "@platform/shell";
+import { Nodes } from "./Nodes";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -1145,6 +1146,12 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         )}
 
       </div>
+
+      {phone ? (
+        <div className="flex h-[min(34rem,62svh)] min-h-0 shrink-0 flex-col">
+          <Nodes onNavigate={onNavigate} active={active} embedded />
+        </div>
+      ) : null}
 
       {!tunUiHidden && (
         <TunInstallDialog
