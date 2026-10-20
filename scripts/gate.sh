@@ -68,6 +68,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   if [[ -z "${CI:-}" ]]; then
     echo "== capture demo home =="
     bash "$ROOT/scripts/capture-demo-home.sh"
+
+    echo "== capture demo mobile =="
+    bash "$ROOT/scripts/capture-demo-mobile.sh"
   fi
 fi
 

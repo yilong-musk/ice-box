@@ -6,6 +6,7 @@
 # Node / frontend
 node_modules
 dist/
+dist-capture/
 *.tsbuildinfo
 
 # OS

@@ -30,6 +30,17 @@
 
 <sub>安装前想先看看？<a href="https://yilong-musk.github.io/ice-box/">在线演示</a>在浏览器中运行真实的桌面端界面，后端为模拟数据。</sub>
 
+<br>
+<br>
+
+<p>
+  <img src="docs/images/mobile-home.zh-CN.png" alt="ice-box Android 主页：VPN 状态、分流模式、选中节点和节点列表" width="210">
+  &nbsp;&nbsp;
+  <img src="docs/images/mobile-apps.zh-CN.png" alt="ice-box Android 应用页：按应用分流" width="210">
+</p>
+
+<sub>在 Android 上，同一个应用切换为手机界面：节点在主页，应用页可按应用分流。</sub>
+
 </div>
 
 <br>

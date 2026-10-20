@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The README now shows the Android Home and Apps views next to the desktop
+  screenshot. They are captured from the real phone shell against the Live Demo
+  mock, in English and Chinese, and refresh with the other documentation
+  images when the version or phone UI changes.
+
 ## [0.2.2] - 2026-10-20
 
 ### Added

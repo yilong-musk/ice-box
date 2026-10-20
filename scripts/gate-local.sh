@@ -53,4 +53,7 @@ bash scripts/test-verify-android-apk.sh
 echo "== capture demo home =="
 bash scripts/capture-demo-home.sh
 
+echo "== capture demo mobile =="
+bash scripts/capture-demo-mobile.sh
+
 echo "gate-local: OK"
