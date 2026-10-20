@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "status",
     "shared_dir",
     "memory",
+    "list_apps",
     "device_status",
     "request_battery_exemption",
     "copy_text",

@@ -10,6 +10,7 @@ permissions = [
   "allow-status",
   "allow-shared-dir",
   "allow-memory",
+  "allow-list-apps",
   "allow-device-status",
   "allow-request-battery-exemption",
   "allow-copy-text",

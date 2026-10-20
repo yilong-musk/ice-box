@@ -499,18 +499,21 @@ pub fn orchestrate_disable_system_proxy(
     Ok(())
 }
 
-/// Stop: restore proxy first (if applied), then kill core.
+/// Stop: kill the core first, then restore the system proxy.
+///
+/// The core is stopped before the proxy is restored so a stop failure leaves
+/// the applied proxy untouched: the app keeps running with a live core, and
+/// the UI keeps reporting what the OS is actually using. Restoring first would
+/// turn the proxy off while the core is still alive, so a failed stop would
+/// strand the app showing "proxy on" with no working OS proxy.
 pub fn orchestrate_stop(
     app_paths: &AppPaths,
     core: &mut dyn CoreHandle,
     proxy: &dyn SystemProxy,
 ) -> Result<(), AppError> {
-    let restore_err = restore_and_clear_flag(&app_paths.proxy_backup(), proxy).err();
-    if let Some(ref err) = restore_err {
-        tracing::error!(error = %err, "restore system proxy during stop");
-    }
     core.stop(&app_paths.pid()).map_err(AppError::from)?;
-    if let Some(err) = restore_err {
+    if let Err(err) = restore_and_clear_flag(&app_paths.proxy_backup(), proxy) {
+        tracing::error!(error = %err, "restore system proxy during stop");
         return Err(AppError::new(
             ErrorCode::ProxyRestoreFailed,
             format!("core stopped, but system proxy recovery failed: {err}"),
@@ -876,8 +879,8 @@ mod tests {
     use ice_config::NormalizedOutbound as NO;
     use ice_config::ProxyMode;
     use ice_core::{
-        CoreController, ImmediateHealthProbe, MockClashApi, MockReloadMode, MockReloader,
-        MockSpawner, SequenceHealthProbe,
+        CoreController, ImmediateHealthProbe, ManagedProcess, MockClashApi, MockReloadMode,
+        MockReloader, MockSpawner, ProcessSpawner, SequenceHealthProbe,
     };
     use ice_engine::{
         write_subscription_success, SubscriptionFormat, SubscriptionMeta, SubscriptionPaths,
@@ -999,6 +1002,53 @@ mod tests {
             Box::new(MockReloader::new(MockReloadMode::Ok)),
             Duration::from_millis(50),
             Duration::from_millis(50),
+        )
+    }
+
+    /// A child that never acknowledges terminate or kill, mirroring the
+    /// "process survived TERM and KILL" stop failure seen on Windows.
+    struct StubbornProcess {
+        id: u32,
+    }
+
+    impl ManagedProcess for StubbornProcess {
+        fn id(&self) -> u32 {
+            self.id
+        }
+
+        fn request_terminate(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn force_kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+            Ok(None)
+        }
+    }
+
+    struct StubbornSpawner;
+
+    impl ProcessSpawner for StubbornSpawner {
+        fn spawn(
+            &self,
+            _binary: &Path,
+            _config: &Path,
+            _log_file: &Path,
+        ) -> Result<Box<dyn ManagedProcess>, ice_core::CoreError> {
+            Ok(Box::new(StubbornProcess { id: 5000 }))
+        }
+    }
+
+    fn mock_core_never_stops() -> CoreController<StubbornSpawner, ImmediateHealthProbe> {
+        CoreController::with_deps(
+            StubbornSpawner,
+            ImmediateHealthProbe,
+            Box::new(MockReloader::default()),
+            Duration::from_millis(50),
+            Duration::from_millis(10),
         )
     }
 
@@ -1247,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn g7_5_stop_restores_then_kills_idempotent() {
+    fn g7_5_stop_kills_then_restores_idempotent() {
         let paths = temp_app("stop");
         seed_one_node(&paths);
         let settings = test_settings();
@@ -1275,6 +1325,40 @@ mod tests {
         assert_eq!(order.lock().unwrap().as_slice(), &["restore"]);
 
         orchestrate_stop(&paths, &mut core, &proxy).unwrap();
+        let _ = fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn stop_failure_keeps_system_proxy_applied() {
+        let paths = temp_app("stop-fail-keeps-proxy");
+        seed_one_node(&paths);
+        let settings = test_settings();
+        let mut core = mock_core_never_stops();
+        let proxy = TrackProxy::default();
+        let bin = marker_bin(&paths);
+        orchestrate_start(
+            &paths,
+            &settings,
+            &mut core,
+            bin,
+            None,
+            CaptureIntent::Diagnostic,
+        )
+        .unwrap();
+        orchestrate_enable_system_proxy(&paths, &settings, &core, &proxy).unwrap();
+
+        let err = orchestrate_stop(&paths, &mut core, &proxy).expect_err("stop must fail");
+        assert_eq!(err.code, "core.spawn_failed");
+        assert_eq!(
+            proxy.restore_calls.get(),
+            0,
+            "a failed stop must leave the applied system proxy untouched"
+        );
+        assert!(
+            ProxyBackupFile::load(&paths.proxy_backup())
+                .unwrap()
+                .applied
+        );
         let _ = fs::remove_dir_all(paths.root());
     }
 

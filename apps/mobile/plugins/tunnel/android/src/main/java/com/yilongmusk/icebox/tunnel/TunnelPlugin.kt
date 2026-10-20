@@ -9,11 +9,16 @@ import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.net.VpnService
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Base64
 import androidx.activity.result.ActivityResult
 import app.tauri.PermissionState
 import app.tauri.annotation.ActivityCallback
@@ -22,12 +27,16 @@ import app.tauri.annotation.Permission
 import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.util.Locale
+import java.util.concurrent.Executors
 import org.json.JSONObject
 
 @TauriPlugin(
@@ -42,6 +51,12 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
     private val statusLock = Any()
     private var lastStatus: JSONObject? = null
     private var pendingExport: ByteArray? = null
+    // Package enumeration and icon encoding are too slow for the Android main
+    // thread, where Tauri schedules @Command handlers. Keep them on one daemon
+    // worker so repeated page visits cannot pile up threads.
+    private val appsExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ice-box-list-apps").apply { isDaemon = true }
+    }
     // Keep these strings aligned with TunnelFiles.kt in the app module.
     // They stay inside this class so the two modules can share a package
     // without clashing top-level names.
@@ -60,6 +75,13 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         const val OTHER_LIVE_STATUS_MAX_AGE_MS = 60_000L
         const val MAX_EXPORT_BYTES = 16 * 1024 * 1024
     }
+
+    private data class AppEntry(
+        val label: String,
+        val system: Boolean,
+        val payload: JSObject,
+    )
+
     @Command
     fun prepare(invoke: Invoke) {
         val notifications = getPermissionState("notifications")
@@ -151,6 +173,81 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         }
         invoke.resolve(payload)
     }
+
+    /**
+     * Every installed application except ice-box itself. The app's own
+     * package is always excluded from the VPN, so a per-app choice for it
+     * would never take effect. Icons are returned as small WebP data URLs.
+     *
+     * Runs on [appsExecutor]: enumerating packages and encoding every icon
+     * would block the main thread long enough to make the Apps page janky.
+     */
+    @Command
+    fun list_apps(invoke: Invoke) {
+        appsExecutor.execute {
+            try {
+                invoke.resolve(appsPayload())
+            } catch (err: Exception) {
+                invoke.reject(err.message ?: err.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun appsPayload(): JSObject {
+        val manager = activity.packageManager
+        val density = activity.resources.displayMetrics.density
+        val iconPx = (40 * density).toInt().coerceAtLeast(40)
+        val entries = manager.getInstalledApplications(0)
+            .asSequence()
+            .filter { it.packageName != activity.packageName }
+            .map { info ->
+                val label = runCatching {
+                    manager.getApplicationLabel(info).toString()
+                }.getOrDefault(info.packageName)
+                val system = info.isSystemApp()
+                val payload = JSObject()
+                payload.put("package_name", info.packageName)
+                payload.put("label", label)
+                payload.put("system", system)
+                val icon = appIcon(manager, info, iconPx)
+                if (icon == null) {
+                    payload.put("icon", JSONObject.NULL)
+                } else {
+                    payload.put("icon", icon)
+                }
+                AppEntry(label.lowercase(Locale.getDefault()), system, payload)
+            }
+            .sortedWith(compareBy<AppEntry> { it.system }.thenBy { it.label })
+            .map { it.payload }
+            .toList()
+        val payload = JSObject()
+        payload.put("apps", JSArray(entries))
+        return payload
+    }
+
+    private fun ApplicationInfo.isSystemApp(): Boolean =
+        (flags and ApplicationInfo.FLAG_SYSTEM) != 0
+
+    private fun appIcon(
+        manager: PackageManager,
+        info: ApplicationInfo,
+        size: Int,
+    ): String? = runCatching {
+        val drawable = info.loadIcon(manager)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            drawable.setBounds(0, 0, size, size)
+            drawable.draw(canvas)
+            val out = ByteArrayOutputStream()
+            if (!bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 90, out)) {
+                return@runCatching null
+            }
+            "data:image/webp;base64,${Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)}"
+        } finally {
+            bitmap.recycle()
+        }
+    }.getOrNull()
 
     @Command
     fun device_status(invoke: Invoke) {

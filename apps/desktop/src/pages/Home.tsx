@@ -15,6 +15,7 @@ import {
   type StatusResponse,
 } from "../api/client";
 import { isPhoneShell } from "@platform/shell";
+import { Nodes } from "./Nodes";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -127,27 +128,9 @@ function RunUptime({ since }: { since: number }) {
   return <>{formatUptime(now - since)}</>;
 }
 
-/** OS network link as reported by the mobile webview (`online` / `offline`). */
-function useNetworkOnline(): boolean {
-  const [online, setOnline] = useState(
-    () => typeof navigator !== "undefined" && navigator.onLine,
-  );
-  useEffect(() => {
-    const sync = () => setOnline(navigator.onLine);
-    window.addEventListener("online", sync);
-    window.addEventListener("offline", sync);
-    return () => {
-      window.removeEventListener("online", sync);
-      window.removeEventListener("offline", sync);
-    };
-  }, []);
-  return online;
-}
-
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
   useLanguagePreference();
   const phone = isPhoneShell();
-  const networkOnline = useNetworkOnline();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
   const runtimeRef = useRef(runtime);
@@ -692,28 +675,19 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     : mcpSupported
       ? t("mcp.stopped")
       : t("common.dash");
-  const platformStatusRow = phone
-    ? {
-        label: t("home.health.network"),
-        value: networkOnline
-          ? t("home.network.online")
-          : t("home.network.offline"),
-        valueClassName: networkOnline ? "text-ok" : "text-destructive",
-        testId: "home-health-network",
-      }
-    : {
-        label: t("home.health.mcp"),
-        value: mcpValue,
-        title: mcpStatus?.error ?? undefined,
-        valueClassName: mcpRunning
-          ? "text-ok"
-          : mcpStatus?.error
-            ? "text-destructive"
-            : mcpSupported
-              ? "text-muted-foreground"
-              : undefined,
-        testId: "home-health-mcp",
-      };
+  const platformStatusRow = {
+    label: t("home.health.mcp"),
+    value: mcpValue,
+    title: mcpStatus?.error ?? undefined,
+    valueClassName: mcpRunning
+      ? "text-ok"
+      : mcpStatus?.error
+        ? "text-destructive"
+        : mcpSupported
+          ? "text-muted-foreground"
+          : undefined,
+    testId: "home-health-mcp",
+  };
   const infoRows: {
     label: string;
     value: string;
@@ -727,7 +701,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       valueClassName: `status status-${core?.status ?? "unknown"}`,
       testId: "home-health-core",
     },
-    {
+  ];
+  if (!phone) {
+    infoRows.push({
       label: t("home.health.memory"),
       value: memoryLabel(memory),
       title: memoryTip,
@@ -737,9 +713,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         memoryToneValue === "warn" && "text-warn",
         memoryToneValue === "bad" && "text-destructive",
       ),
-    },
-    platformStatusRow,
-  ];
+    });
+    infoRows.push(platformStatusRow);
+  }
 
   const powerOn = phone ? vpnActive : proxyOn;
   const canToggle = phone ? !busy : canToggleProxy;
@@ -859,6 +835,36 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   <Power />
                   <span className="text-sm font-medium">{powerTitle}</span>
                 </Button>
+                {phone && (
+                  <>
+                    <div className="flex min-w-0 items-center justify-between gap-3">
+                      <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                        {t("home.health.core")}
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-right text-sm font-medium",
+                          `status status-${core?.status ?? "unknown"}`,
+                        )}
+                        data-testid="home-proxy-core-status"
+                      >
+                        {formatCoreStatus(core?.status)}
+                      </span>
+                    </div>
+                    <div className="flex min-w-0 items-center justify-between gap-3">
+                      <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                        {t("home.outbound.node")}
+                      </span>
+                      <span
+                        className="min-w-0 flex-1 truncate text-right text-sm font-medium"
+                        title={currentNodeLabel}
+                        data-testid="home-current-node"
+                      >
+                        {currentNodeLabel}
+                      </span>
+                    </div>
+                  </>
+                )}
                 {tunCardVisible && (
                   <div className="flex items-center gap-3 whitespace-nowrap">
                     <span className="text-xs font-medium text-muted-foreground">
@@ -980,62 +986,26 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        <Card size="sm" className="w-full min-w-0">
-          <CardHeader>
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              {t("home.healthTitle")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ItemGroup className="w-full gap-0">
-              {infoRows.map((row, index) => (
-                <div key={row.label}>
-                  {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                  <Item size="xs" className="justify-between rounded-none px-0">
-                    <ItemDescription>{row.label}</ItemDescription>
-                    <ItemTitle
-                      className={row.valueClassName}
-                      title={row.title ?? row.value}
-                      data-testid={row.testId}
-                    >
-                      {row.value}
-                    </ItemTitle>
-                  </Item>
-                </div>
-              ))}
-            </ItemGroup>
-          </CardContent>
-        </Card>
-
-        <div
-          className={cn(
-            "flex min-w-0 flex-col gap-3",
-            !phone &&
-              "col-start-1 row-span-2 row-start-2 min-h-0 overflow-y-auto",
-          )}
-        >
-          <Card
-            size="sm"
-            className="flex w-full min-h-fit min-w-0 flex-1 flex-col"
-          >
+        {!phone && (
+          <Card size="sm" className="w-full min-w-0">
             <CardHeader>
               <CardTitle className="text-xs font-medium text-muted-foreground">
-                {t("home.outboundTitle")}
+                {t("home.healthTitle")}
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-1 flex-col">
-              <ItemGroup className="w-full flex-1 gap-0">
-                {outboundRows.map((row, index) => (
-                  <div key={row.label} className="flex flex-1 flex-col">
+            <CardContent>
+              <ItemGroup className="w-full gap-0">
+                {infoRows.map((row, index) => (
+                  <div key={row.label}>
                     {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                    <Item size="xs" className="flex-1 justify-between rounded-none px-0">
-                      <ItemDescription className="whitespace-nowrap">{row.label}</ItemDescription>
+                    <Item size="xs" className="justify-between rounded-none px-0">
+                      <ItemDescription>{row.label}</ItemDescription>
                       <ItemTitle
-                        className={cn("min-w-0 flex-1 justify-end", row.valueClassName)}
-                        title={row.value}
+                        className={row.valueClassName}
+                        title={row.title ?? row.value}
                         data-testid={row.testId}
                       >
-                        <span className="min-w-0 truncate">{row.value}</span>
+                        {row.value}
                       </ItemTitle>
                     </Item>
                   </div>
@@ -1043,106 +1013,145 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               </ItemGroup>
             </CardContent>
           </Card>
+        )}
 
-          <Card size="sm" className="flex w-full min-h-fit min-w-0 flex-1 flex-col">
-            <CardHeader>
-              <CardTitle className="text-xs font-medium text-muted-foreground">
-                {t("home.inboundTitle")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col justify-between gap-3">
-              <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
-                {inboundLabel}
-              </p>
-              {!phone && cliProxyEndpoint ? (
-                <div className="flex flex-col gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="w-full justify-center gap-2"
-                    aria-label={t("home.copyCliProxy")}
-                    title={t("home.copyCliProxyHint")}
-                    onClick={() => void onCopyCliProxy()}
-                  >
-                    <Copy />
-                    <span className="truncate">
-                      {copiedCliProxy
-                        ? t("home.copyCliProxyCopied")
-                        : t("home.copyCliProxy")}
-                    </span>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="w-full justify-center gap-2"
-                    aria-label={t("home.openCliProxy")}
-                    title={t("home.openCliProxyHint")}
-                    onClick={() => void onOpenCliProxy()}
-                  >
-                    <Terminal />
-                    <span className="truncate">{t("home.openCliProxy")}</span>
-                  </Button>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-        </div>
-
-        <Card
-          size="sm"
-          className={cn(
-            "flex w-full min-w-0 flex-col",
-            !phone && "col-span-2 col-start-2 row-span-2 row-start-2 min-h-0",
-          )}
-        >
-          <CardHeader className="shrink-0">
-            <CardTitle className="text-xs font-medium text-muted-foreground">
-              {t("home.trafficTitle")}
-            </CardTitle>
-            <CardDescription>{t("home.trafficDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col">
-            {!hasNodes && !running ? (
-              <EmptyState
-                framed={false}
-                className="my-auto"
-                title={emptyTitle}
-                description={emptyDescription}
-                actionLabel={t("home.goToSubs")}
-                onAction={() => onNavigate?.("subs")}
-              />
-            ) : (
-              <>
-                {!hasNodes ? (
-                  <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{emptyTitle}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {t("home.autoSwitchHint")}
-                      </p>
+        {!phone && (
+          <div className="flex min-w-0 flex-col gap-3 col-start-1 row-span-2 row-start-2 min-h-0 overflow-y-auto">
+            <Card
+              size="sm"
+              className="flex w-full min-h-fit min-w-0 flex-1 flex-col"
+            >
+              <CardHeader>
+                <CardTitle className="text-xs font-medium text-muted-foreground">
+                  {t("home.outboundTitle")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col">
+                <ItemGroup className="w-full flex-1 gap-0">
+                  {outboundRows.map((row, index) => (
+                    <div key={row.label} className="flex flex-1 flex-col">
+                      {index > 0 ? <ItemSeparator className="my-0" /> : null}
+                      <Item size="xs" className="flex-1 justify-between rounded-none px-0">
+                        <ItemDescription className="whitespace-nowrap">{row.label}</ItemDescription>
+                        <ItemTitle
+                          className={cn("min-w-0 flex-1 justify-end", row.valueClassName)}
+                          title={row.value}
+                          data-testid={row.testId}
+                        >
+                          <span className="min-w-0 truncate">{row.value}</span>
+                        </ItemTitle>
+                      </Item>
                     </div>
+                  ))}
+                </ItemGroup>
+              </CardContent>
+            </Card>
+
+            <Card size="sm" className="flex w-full min-h-fit min-w-0 flex-1 flex-col">
+              <CardHeader>
+                <CardTitle className="text-xs font-medium text-muted-foreground">
+                  {t("home.inboundTitle")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex min-h-0 flex-1 flex-col justify-between gap-3">
+                <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
+                  {inboundLabel}
+                </p>
+                {cliProxyEndpoint ? (
+                  <div className="flex flex-col gap-2">
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => onNavigate?.("subs")}
+                      variant="outline"
+                      className="w-full justify-center gap-2"
+                      aria-label={t("home.copyCliProxy")}
+                      title={t("home.copyCliProxyHint")}
+                      onClick={() => void onCopyCliProxy()}
                     >
-                      {t("home.goToSubs")}
+                      <Copy />
+                      <span className="truncate">
+                        {copiedCliProxy
+                          ? t("home.copyCliProxyCopied")
+                          : t("home.copyCliProxy")}
+                      </span>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="w-full justify-center gap-2"
+                      aria-label={t("home.openCliProxy")}
+                      title={t("home.openCliProxyHint")}
+                      onClick={() => void onOpenCliProxy()}
+                    >
+                      <Terminal />
+                      <span className="truncate">{t("home.openCliProxy")}</span>
                     </Button>
                   </div>
                 ) : null}
-                <TrafficChart
-                  className="min-h-0"
-                  running={running}
-                  paused={modeBusy || busy || !active}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {!phone && (
+          <Card
+            size="sm"
+            className="col-span-2 col-start-2 row-span-2 row-start-2 flex min-h-0 w-full min-w-0 flex-col"
+          >
+            <CardHeader className="shrink-0">
+              <CardTitle className="text-xs font-medium text-muted-foreground">
+                {t("home.trafficTitle")}
+              </CardTitle>
+              <CardDescription>{t("home.trafficDesc")}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex min-h-0 flex-1 flex-col">
+              {!hasNodes && !running ? (
+                <EmptyState
+                  framed={false}
+                  className="my-auto"
+                  title={emptyTitle}
+                  description={emptyDescription}
+                  actionLabel={t("home.goToSubs")}
+                  onAction={() => onNavigate?.("subs")}
                 />
-              </>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <>
+                  {!hasNodes ? (
+                    <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{emptyTitle}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t("home.autoSwitchHint")}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => onNavigate?.("subs")}
+                      >
+                        {t("home.goToSubs")}
+                      </Button>
+                    </div>
+                  ) : null}
+                  <TrafficChart
+                    className="min-h-0"
+                    running={running}
+                    paused={modeBusy || busy || !active}
+                  />
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
       </div>
+
+      {phone ? (
+        <div className="flex h-[min(34rem,62svh)] min-h-0 shrink-0 flex-col">
+          <Nodes onNavigate={onNavigate} active={active} embedded />
+        </div>
+      ) : null}
 
       {!tunUiHidden && (
         <TunInstallDialog

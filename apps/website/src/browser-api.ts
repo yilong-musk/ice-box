@@ -3,8 +3,10 @@
 import type {
   ApiContract,
   AppSettings,
+  AppProxyMode,
   CheckAppUpdateResponse,
   DelayTestResponse,
+  InstalledApp,
   ListRulesRequest,
   ListRulesResponse,
   McpStatus,
@@ -66,6 +68,7 @@ const settings: AppSettings = {
   launch_at_login: false,
   allow_lan: false,
   proxy_mode: "rule",
+  app_proxies: {},
   auto_default_rules: true,
   language: "en",
   check_app_updates: true,
@@ -349,6 +352,8 @@ export const api = {
   async copyProxyCommand(): Promise<void> { await delay(); },
   async openProxyTerminal(): Promise<void> { await delay(); },
   async setProxyMode(mode: ProxyMode): Promise<void> { settings.proxy_mode = mode; await delay(120); },
+  async listApps(): Promise<InstalledApp[]> { return []; },
+  async setAppProxy(_packageName: string, _mode: AppProxyMode): Promise<void> {},
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },
   async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null, source: "remote" as const }; subscriptions.push(sub); return sub; },
   async importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta> {

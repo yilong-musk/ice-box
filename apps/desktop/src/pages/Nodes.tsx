@@ -49,6 +49,8 @@ type Props = {
   onNavigate?: (tab: "subs") => void;
   /** When false the page stays mounted but stops polling. */
   active?: boolean;
+  /** Render inside the phone Home page: no title-bar portal, inline actions. */
+  embedded?: boolean;
 };
 
 /** HTML id-safe token derived from a possibly spaced group tag. */
@@ -378,7 +380,7 @@ const NodeRow = memo(function NodeRow({
   );
 });
 
-export function Nodes({ onNavigate, active = true }: Props) {
+export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
@@ -728,30 +730,40 @@ export function Nodes({ onNavigate, active = true }: Props) {
     [layout.rows, viewportTop, viewport.height],
   );
 
+  const batchButton = (
+    <>
+      {embedded && busy && batchProgress ? (
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {batchProgress}
+        </span>
+      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={!running || busy || nodes.length === 0}
+        onClick={() => void onBatchTest()}
+      >
+        {t("nodes.batchTest")}
+      </Button>
+      {busy && batchProgress ? (
+        <Button type="button" size="sm" variant="outline" onClick={onCancelBatch}>
+          {t("common.cancel")}
+        </Button>
+      ) : null}
+    </>
+  );
+
   return (
-    <div className="nodes-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="nodes-panel">
-      {active ? (
-        <TitlebarActions>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!running || busy || nodes.length === 0}
-            onClick={() => void onBatchTest()}
-          >
-            {t("nodes.batchTest")}
-          </Button>
-          {busy && batchProgress ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={onCancelBatch}
-            >
-              {t("common.cancel")}
-            </Button>
-          ) : null}
-        </TitlebarActions>
+    <div
+      className={cn(
+        "nodes-panel flex min-h-0 flex-1 flex-col gap-3",
+        embedded && "h-full",
+      )}
+      data-testid="nodes-panel"
+    >
+      {active && !embedded ? (
+        <TitlebarActions>{batchButton}</TitlebarActions>
       ) : null}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
@@ -762,6 +774,14 @@ export function Nodes({ onNavigate, active = true }: Props) {
       )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {embedded ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {t("app.nav.nodes")}
+            </span>
+            {batchButton}
+          </div>
+        ) : null}
         <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">

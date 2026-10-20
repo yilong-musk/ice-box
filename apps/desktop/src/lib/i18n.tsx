@@ -58,6 +58,7 @@ const zh = {
   // --- app shell ---
   "app.nav.home": "主页",
   "app.nav.nodes": "节点",
+  "app.nav.apps": "应用",
   "app.nav.rules": "规则",
   "app.nav.subs": "订阅",
   "app.nav.subsTab": "订阅",
@@ -166,6 +167,31 @@ const zh = {
   "nodes.listAria": "节点列表",
   "nodes.noTestableGroup": "当前策略组没有可测的出口",
   "nodes.noTestable": "当前没有可测的出口",
+
+  // --- apps page (Android) ---
+  "apps.title": "应用代理",
+  "apps.desc":
+    "为每个应用选择单独的分流方式；未设置的应用跟随当前规则和代理模式。",
+  "apps.searchPlaceholder": "搜索应用名称或包名",
+  "apps.searchAria": "搜索应用",
+  "apps.loading": "正在读取应用列表…",
+  "apps.emptyTitle": "没有找到应用",
+  "apps.emptyDesc": "没有与搜索条件匹配的应用。",
+  "apps.listAria": "应用列表",
+  "apps.modeAria": "应用代理方式",
+  "apps.mode.follow": "默认",
+  "apps.mode.proxy": "代理",
+  "apps.mode.direct": "直连",
+  "apps.mode.block": "拦截",
+  "apps.mode.followDesc": "使用当前的规则和代理模式",
+  "apps.mode.proxyDesc": "绕过规则，固定走当前选中的代理节点",
+  "apps.mode.directDesc": "不经过代理，直接连接网络",
+  "apps.mode.blockDesc": "阻止这个应用联网",
+  "apps.selectAria": "设置 {app} 的代理方式",
+  "apps.sheetDesc": "选择这个应用的分流方式",
+  "apps.systemBadge": "系统",
+  "apps.applying": "正在应用…",
+  "apps.applyFailed": "更新这个应用失败：{detail}",
 
   // --- subscriptions page ---
   "subs.url": "订阅链接",
@@ -547,6 +573,7 @@ const en: Record<MessageKey, string> = {
   // --- app shell ---
   "app.nav.home": "Home",
   "app.nav.nodes": "Nodes",
+  "app.nav.apps": "Apps",
   "app.nav.rules": "Rules",
   "app.nav.subs": "Subscriptions",
   "app.nav.subsTab": "Subs",
@@ -657,6 +684,31 @@ const en: Record<MessageKey, string> = {
   "nodes.listAria": "Node list",
   "nodes.noTestableGroup": "This group has no testable exit",
   "nodes.noTestable": "No testable exits",
+
+  // --- apps page (Android) ---
+  "apps.title": "App Proxy",
+  "apps.desc":
+    "Choose a routing mode for individual apps. Apps without a choice follow the active rules and proxy mode.",
+  "apps.searchPlaceholder": "Search app names or package ids",
+  "apps.searchAria": "Search apps",
+  "apps.loading": "Loading installed apps…",
+  "apps.emptyTitle": "No apps found",
+  "apps.emptyDesc": "No apps match your search.",
+  "apps.listAria": "App list",
+  "apps.modeAria": "App proxy mode",
+  "apps.mode.follow": "Default",
+  "apps.mode.proxy": "Proxy",
+  "apps.mode.direct": "Direct",
+  "apps.mode.block": "Block",
+  "apps.mode.followDesc": "Use the active rules and proxy mode",
+  "apps.mode.proxyDesc": "Bypass rules and use the selected proxy node",
+  "apps.mode.directDesc": "Connect directly without the proxy",
+  "apps.mode.blockDesc": "Block this app's network access",
+  "apps.selectAria": "Set the proxy mode for {app}",
+  "apps.sheetDesc": "Choose how this app is routed",
+  "apps.systemBadge": "System",
+  "apps.applying": "Applying…",
+  "apps.applyFailed": "Could not update this app: {detail}",
 
   // --- subscriptions page ---
   "subs.url": "Subscription URL",

@@ -8,8 +8,10 @@ import type {
   ApiContract,
   AppErrorPayload,
   AppSettings,
+  AppProxyMode,
   CheckAppUpdateResponse,
   DelayTestResponse,
+  InstalledApp,
   ListRulesRequest,
   ListRulesResponse,
   McpStatus,
@@ -70,6 +72,11 @@ export const api = {
   saveSettings: (patch: SettingsPatch) => invoke<void>("save_settings", { patch }),
   setProxyMode: (mode: ProxyMode) =>
     invoke<void>("set_proxy_mode", { req: { mode } }),
+  listApps: () => invoke<InstalledApp[]>("list_apps"),
+  setAppProxy: (packageName: string, mode: AppProxyMode) =>
+    invoke<void>("set_app_proxy", {
+      req: { package_name: packageName, mode },
+    }),
   addSubscription: (url: string, name?: string) =>
     invoke<SubscriptionMeta>("add_subscription", {
       req: {

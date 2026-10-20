@@ -50,14 +50,6 @@ function healthRows(): string[] {
   ];
 }
 
-function mobileHealthRows(): string[] {
-  return [
-    t("home.health.core"),
-    t("home.health.memory"),
-    t("home.health.network"),
-  ];
-}
-
 vi.mock("../api/client", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
@@ -499,48 +491,28 @@ describe("Home", () => {
     expect(view.getByTestId("home-health-mcp").className).toContain("text-ok");
   });
 
-  it("shows network connectivity instead of MCP status on the phone shell", async () => {
+  it("moves core status into the phone shell proxy status card", async () => {
     phoneShell.value = true;
-    const previous = Object.getOwnPropertyDescriptor(window.navigator, "onLine");
-    Object.defineProperty(window.navigator, "onLine", {
-      configurable: true,
-      get: () => true,
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-proxy-core-status")).toHaveTextContent(
+        t("home.coreStatus.stopped"),
+      );
     });
-
-    try {
-      const { container } = render(<Home />);
-      const view = within(container);
-
-      await waitFor(() => {
-        expect(view.getByTestId("home-health-network")).toHaveTextContent(
-          t("home.network.online"),
-        );
-      });
-      expect(healthRowLabels(container)).toEqual(mobileHealthRows());
-      expect(view.queryByTestId("home-health-mcp")).toBeNull();
-      expect(getMcpStatus).not.toHaveBeenCalled();
-
-      Object.defineProperty(window.navigator, "onLine", {
-        configurable: true,
-        get: () => false,
-      });
-      fireEvent(window, new Event("offline"));
-      expect(view.getByTestId("home-health-network")).toHaveTextContent(
-        t("home.network.offline"),
-      );
-      expect(view.getByTestId("home-health-network").className).toContain(
-        "text-destructive",
-      );
-    } finally {
-      if (previous) {
-        Object.defineProperty(window.navigator, "onLine", previous);
-      } else {
-        Object.defineProperty(window.navigator, "onLine", {
-          configurable: true,
-          get: () => true,
-        });
-      }
-    }
+    expect(
+      view
+        .getByTestId("home-proxy-core-status")
+        .compareDocumentPosition(view.getByTestId("home-current-node")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(view.queryByText(t("home.healthTitle"))).toBeNull();
+    expect(view.queryByTestId("home-health-core")).toBeNull();
+    expect(view.queryByTestId("home-health-memory")).toBeNull();
+    expect(view.queryByTestId("home-health-network")).toBeNull();
+    expect(view.queryByTestId("home-health-mcp")).toBeNull();
+    expect(getMcpStatus).not.toHaveBeenCalled();
   });
 
   it("shows a stopped MCP service and its error", async () => {
@@ -1354,8 +1326,28 @@ describe("Home", () => {
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
-  it("scrolls mobile Home and omits an unavailable exit IP row", async () => {
+  it("hides desktop-only Home details on mobile", async () => {
     phoneShell.value = true;
+    getStatus.mockResolvedValue({
+      core: {
+        status: "stopped",
+        message: null,
+        inbound_host: null,
+        inbound_port: null,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+      has_nodes: true,
+      selected_outbound: {
+        tag: "Proxies",
+        outbound_type: "selector",
+        group_now: "HK-1",
+      },
+      ...tunStatus,
+    });
     const { container } = render(<Home />);
     const view = within(container);
 
@@ -1366,10 +1358,16 @@ describe("Home", () => {
       "overflow-y-auto",
       "overscroll-contain",
     );
-    const outboundCard = view
-      .getByText(t("home.outboundTitle"))
+    expect(view.queryByText(t("home.inboundTitle"))).toBeNull();
+    expect(view.queryByText(t("home.trafficTitle"))).toBeNull();
+    const statusCard = view
+      .getByText(t("home.proxyStatus"))
       .closest("[data-slot=card]") as HTMLElement;
-    expect(within(outboundCard).queryByTestId("home-outbound-ip")).toBeNull();
+    expect(within(statusCard).getByTestId("home-current-node")).toHaveTextContent(
+      "Proxies → HK-1",
+    );
+    expect(view.queryByText(t("home.outboundTitle"))).toBeNull();
+    expect(view.queryByTestId("home-outbound-ip")).toBeNull();
   });
 
   it("shows permission-required state with a system-proxy fallback action", async () => {

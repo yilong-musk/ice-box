@@ -26,6 +26,7 @@ const getStatus = vi.fn();
 const getSettings = vi.fn();
 const saveSettings = vi.fn();
 const listNodes = vi.fn();
+const listApps = vi.fn();
 const setTrayLanguage = vi.fn();
 const setTrayUpdateAvailable = vi.fn();
 const listenTrayUpdateClick = vi.fn();
@@ -114,6 +115,8 @@ vi.mock("./api/client", () => ({
   api: {
     getStatus: (...args: unknown[]) => getStatus(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
+    listApps: (...args: unknown[]) => listApps(...args),
+    setAppProxy: vi.fn().mockResolvedValue(undefined),
     getSettings: (...args: unknown[]) => getSettings(...args),
     restoreLaunchProxy: (...args: unknown[]) => restoreLaunchProxy(...args),
     checkAppUpdate: (...args: unknown[]) => checkAppUpdate(...args),
@@ -161,6 +164,7 @@ describe("App", () => {
     setTrayUpdateAvailable.mockResolvedValue(undefined);
     listenTrayUpdateClick.mockResolvedValue(() => {});
     listNodes.mockResolvedValue([]);
+    listApps.mockResolvedValue([]);
     checkAppUpdate.mockResolvedValue({
       available: false,
       version: null,
@@ -561,11 +565,15 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByTestId("phone-tab-bar")).toBeInTheDocument();
     });
+    expect(view.getByTestId("app-main")).toHaveClass("pt-3");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
     expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
       "aria-current",
       "page",
     );
+    expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
+    expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(view.queryByTestId("logs-panel")).not.toBeInTheDocument();
@@ -575,6 +583,38 @@ describe("App", () => {
       expect(checkAppUpdate).toHaveBeenCalled();
     });
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
+  });
+
+  it("opens the Apps page from the phone tab bar", async () => {
+    phoneShell.value = true;
+    desktopShell.value = false;
+    window.innerWidth = 390;
+    listApps.mockResolvedValue([
+      {
+        package_name: "com.example.browser",
+        label: "Browser",
+        system: false,
+        icon: null,
+      },
+    ]);
+
+    const { container } = render(<App />);
+    const view = within(container);
+
+    fireEvent.click(
+      await view.findByRole("button", { name: t("app.nav.apps") }),
+    );
+    await waitFor(() => {
+      expect(view.getByTestId("apps-panel")).toBeInTheDocument();
+    });
+    expect(
+      await view.findByRole("button", {
+        name: t("apps.selectAria", { app: "Browser" }),
+      }),
+    ).toBeInTheDocument();
+    expect(
+      view.getByTestId("nodes-panel").closest("[data-active]"),
+    ).toHaveAttribute("data-active", "false");
   });
 
   it("uses the sidebar when the phone shell is wide", async () => {
@@ -595,6 +635,8 @@ describe("App", () => {
       "aria-current",
       "page",
     );
+    expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(restoreLaunchProxy).not.toHaveBeenCalled();
