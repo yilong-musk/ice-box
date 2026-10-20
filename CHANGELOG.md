@@ -5,17 +5,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-20
+
 ### Added
 
 - Android has an Apps page that lists installed applications and lets each one
   follow the active rules, use the selected proxy, connect directly, or be
   blocked. The choices are stored in `settings.json` and emitted as sing-box
   `package_name` rules that take precedence over the routing mode.
+- The Android VPN notification shows live upload and download rates, refreshed
+  from the running core while the app is in the background.
 
 ### Changed
 
 - The phone Home page now includes the node list. The old Nodes tab is replaced
   by the Apps tab on phones; desktop navigation is unchanged.
+- The phone Home screen puts the core state and selected node in the proxy
+  status card. It no longer shows the separate traffic, outbound, inbound,
+  memory, connectivity, or service-status modules. Desktop Home is unchanged.
+- Phone pages keep consistent spacing below the system status bar.
 
 ### Fixed
 
@@ -25,20 +33,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - On Windows, the system proxy is restored when the OS ends the session. A
   reboot no longer leaves proxy-aware applications without internet until
   ice-box is started again.
-
-## [0.2.2] - 2026-10-19
-
-### Added
-
-- The Android VPN notification shows live upload and download rates, refreshed
-  from the running core while the app is in the background.
-
-### Changed
-
-- The phone Home screen puts the core state and selected node in the proxy
-  status card. It no longer shows the separate traffic, outbound, inbound,
-  memory, connectivity, or service-status modules. Desktop Home is unchanged.
-- Phone pages keep consistent spacing below the system status bar.
 
 ## [0.2.1] - 2026-10-19
 
