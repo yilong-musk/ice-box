@@ -191,7 +191,7 @@ const zh = {
   "apps.sheetDesc": "选择这个应用的分流方式",
   "apps.systemBadge": "系统",
   "apps.applying": "正在应用…",
-  "apps.applyFailed": "保存失败：{detail}",
+  "apps.applyFailed": "更新这个应用失败：{detail}",
 
   // --- subscriptions page ---
   "subs.url": "订阅链接",
@@ -708,7 +708,7 @@ const en: Record<MessageKey, string> = {
   "apps.sheetDesc": "Choose how this app is routed",
   "apps.systemBadge": "System",
   "apps.applying": "Applying…",
-  "apps.applyFailed": "Could not save: {detail}",
+  "apps.applyFailed": "Could not update this app: {detail}",
 
   // --- subscriptions page ---
   "subs.url": "Subscription URL",

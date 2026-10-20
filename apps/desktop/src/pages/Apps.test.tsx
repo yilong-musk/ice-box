@@ -86,6 +86,28 @@ describe("Apps", () => {
     });
   });
 
+  it("shows a failed update in the sheet without duplicating it on the page", async () => {
+    setAppProxy.mockRejectedValueOnce("disk full");
+    const { container } = render(<Apps />);
+    const view = within(container);
+
+    fireEvent.click(
+      await view.findByRole("button", {
+        name: t("apps.selectAria", { app: "Browser" }),
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: new RegExp(`^${t("apps.mode.proxy")}`) }),
+    );
+
+    const message = t("apps.applyFailed", { detail: "disk full" });
+    await waitFor(() => {
+      expect(screen.getByText(message)).toBeInTheDocument();
+    });
+    expect(screen.getByText(t("apps.sheetDesc"))).toBeInTheDocument();
+    expect(view.queryByText(message)).toBeNull();
+  });
+
   it("filters by search text", async () => {
     const { container } = render(<Apps />);
     const view = within(container);

@@ -67,6 +67,7 @@ export function Apps({ active = true }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modeError, setModeError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
   const [selected, setSelected] = useState<InstalledApp | null>(null);
   const [pending, setPending] = useState<{
@@ -86,6 +87,7 @@ export function Apps({ active = true }: Props) {
       setApps(list);
       setProxies(settings.app_proxies ?? {});
       setError(null);
+      setModeError(null);
     } catch (e) {
       if (!isStale(gen)) setError(formatInvokeError(e));
     } finally {
@@ -120,7 +122,7 @@ export function Apps({ active = true }: Props) {
       return;
     }
     setPending({ packageName: app.package_name, mode });
-    setError(null);
+    setModeError(null);
     try {
       await api.setAppProxy(app.package_name, mode);
       setProxies((prev) => {
@@ -131,7 +133,7 @@ export function Apps({ active = true }: Props) {
       });
       setSelected(null);
     } catch (e) {
-      setError(t("apps.applyFailed", { detail: formatInvokeError(e) }));
+      setModeError(t("apps.applyFailed", { detail: formatInvokeError(e) }));
     } finally {
       setPending(null);
     }
@@ -193,7 +195,10 @@ export function Apps({ active = true }: Props) {
                       type="button"
                       aria-label={t("apps.selectAria", { app: app.label })}
                       className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-muted"
-                      onClick={() => setSelected(app)}
+                      onClick={() => {
+                        setModeError(null);
+                        setSelected(app);
+                      }}
                     >
                       {app.icon ? (
                         <img
@@ -251,7 +256,10 @@ export function Apps({ active = true }: Props) {
       <Sheet
         open={selected !== null}
         onOpenChange={(open) => {
-          if (!open) setSelected(null);
+          if (!open) {
+            setSelected(null);
+            setModeError(null);
+          }
         }}
       >
         <SheetContent
@@ -271,8 +279,8 @@ export function Apps({ active = true }: Props) {
               ) : null}
             </SheetDescription>
           </SheetHeader>
-          {error ? (
-            <ErrorAlert className="mx-3 mb-2 shrink-0">{error}</ErrorAlert>
+          {modeError ? (
+            <ErrorAlert className="mx-3 mb-2 shrink-0">{modeError}</ErrorAlert>
           ) : null}
           <div
             className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-2"
