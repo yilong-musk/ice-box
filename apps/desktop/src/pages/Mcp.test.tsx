@@ -61,7 +61,9 @@ function deferred<T>() {
 
 describe("Mcp", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // Reset, not clear: a test that fails mid-action can leave queued
+    // `mockReturnValueOnce` values that would starve the next test's poll.
+    vi.resetAllMocks();
     getMcpStatus.mockResolvedValue(status());
     setMcpEnabled.mockResolvedValue(status());
     restartMcp.mockResolvedValue(status());
@@ -90,11 +92,14 @@ describe("Mcp", () => {
     const view = within(render(<Mcp />).container);
     const toggle = await view.findByRole("switch", { name: t("mcp.enable") });
     expect(toggle).not.toBeChecked();
+    // The switch starts disabled until the first status poll resolves.
+    await waitFor(() => expect(toggle).toBeEnabled());
 
     fireEvent.click(toggle);
     await waitFor(() => expect(setMcpEnabled).toHaveBeenLastCalledWith(true));
     expect(toggle).toBeChecked();
 
+    await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
     await waitFor(() => expect(setMcpEnabled).toHaveBeenLastCalledWith(false));
     expect(toggle).not.toBeChecked();
@@ -114,6 +119,7 @@ describe("Mcp", () => {
       timeout: 3000,
     });
 
+    await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toBeChecked());
 
@@ -136,6 +142,7 @@ describe("Mcp", () => {
     const toggle = await view.findByRole("switch", { name: t("mcp.enable") });
 
     getMcpStatus.mockReturnValueOnce(staleDuringAction.promise);
+    await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
     await waitFor(() => expect(setMcpEnabled).toHaveBeenCalledWith(true));
     await waitFor(() => expect(getMcpStatus).toHaveBeenCalledTimes(2), {
@@ -186,6 +193,7 @@ describe("Mcp", () => {
     const view = within(render(<Mcp />).container);
     const toggle = await view.findByRole("switch", { name: t("mcp.enable") });
 
+    await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(view.getByRole("alert")).toHaveTextContent("persist failed");
