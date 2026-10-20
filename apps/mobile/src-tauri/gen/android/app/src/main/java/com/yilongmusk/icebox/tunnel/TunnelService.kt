@@ -52,6 +52,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     private var monitorStarted = false
     private var server: CommandServer? = null
     private var tun: ParcelFileDescriptor? = null
+    @Volatile
     private var phase = "stopped"
     private var foregroundFailed = false
 
@@ -60,8 +61,12 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     private var destroyed = false
     private var memoryTask: java.util.concurrent.ScheduledFuture<*>? = null
     private var trafficReporter: Thread? = null
+    /**
+     * Invalidates the current reporter when it is stopped. A new start bumps it
+     * again, so a reporter that wakes up after a quick stop/start cannot resume.
+     */
     @Volatile
-    private var trafficReporting = false
+    private var trafficGeneration = 0L
     @Volatile
     private var trafficSocket: Socket? = null
 
@@ -235,29 +240,32 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
      */
     private fun startTrafficReports() {
         if (trafficReporter?.isAlive == true) return
-        trafficReporting = true
-        trafficReporter = Thread({ trafficReportLoop() }, "ice-box-traffic").apply {
+        val generation = ++trafficGeneration
+        trafficReporter = Thread({ trafficReportLoop(generation) }, "ice-box-traffic").apply {
             isDaemon = true
             start()
         }
     }
 
     private fun stopTrafficReports() {
-        trafficReporting = false
+        trafficGeneration++
         runCatching { trafficSocket?.close() }
         trafficSocket = null
         trafficReporter?.interrupt()
         trafficReporter = null
     }
 
-    private fun trafficReportLoop() {
-        while (trafficReporting && !destroyed) {
+    private fun trafficRunActive(generation: Long): Boolean =
+        generation == trafficGeneration && !destroyed
+
+    private fun trafficReportLoop(generation: Long) {
+        while (trafficRunActive(generation)) {
             try {
-                streamTraffic()
+                streamTraffic(generation)
             } catch (_: InterruptedException) {
                 return
             } catch (err: Exception) {
-                if (!trafficReporting || destroyed) return
+                if (!trafficRunActive(generation)) return
                 Log.d(NetworkMonitor.TAG, "traffic notification retry: ${err.message}")
             }
             try {
@@ -273,7 +281,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
      * raw loopback socket avoids Android's cleartext HTTP policy while keeping
      * the API bearer token out of a URL or log line.
      */
-    private fun streamTraffic() {
+    private fun streamTraffic(generation: Long) {
         val config = JSONObject(File(sharedDir(this), "config.json").readText())
         val clashApi = config
             .getJSONObject("experimental")
@@ -306,11 +314,12 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
                 while (reader.readLine()?.isNotEmpty() == true) {
                     // Skip response headers; the body is chunked JSON lines.
                 }
-                while (trafficReporting && !destroyed) {
+                while (trafficRunActive(generation)) {
                     val line = reader.readLine() ?: error("traffic stream ended")
                     if (!line.trimStart().startsWith("{")) continue
                     val sample = JSONObject(line)
                     postTrafficNotification(
+                        generation,
                         up = sample.optLong("up", 0L),
                         down = sample.optLong("down", 0L),
                     )
@@ -322,8 +331,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    private fun postTrafficNotification(up: Long, down: Long) {
-        if (!trafficReporting || destroyed || phase != "connected") return
+    private fun postTrafficNotification(generation: Long, up: Long, down: Long) {
+        if (!trafficRunActive(generation) || phase != "connected") return
         runCatching {
             getSystemService(NotificationManager::class.java).notify(
                 NOTIFICATION_ID,

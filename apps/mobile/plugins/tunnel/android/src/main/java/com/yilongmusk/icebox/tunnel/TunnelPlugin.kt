@@ -36,6 +36,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.util.Locale
+import java.util.concurrent.Executors
 import org.json.JSONObject
 
 @TauriPlugin(
@@ -50,6 +51,12 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
     private val statusLock = Any()
     private var lastStatus: JSONObject? = null
     private var pendingExport: ByteArray? = null
+    // Package enumeration and icon encoding are too slow for the Android main
+    // thread, where Tauri schedules @Command handlers. Keep them on one daemon
+    // worker so repeated page visits cannot pile up threads.
+    private val appsExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ice-box-list-apps").apply { isDaemon = true }
+    }
     // Keep these strings aligned with TunnelFiles.kt in the app module.
     // They stay inside this class so the two modules can share a package
     // without clashing top-level names.
@@ -171,42 +178,51 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
      * Every installed application except ice-box itself. The app's own
      * package is always excluded from the VPN, so a per-app choice for it
      * would never take effect. Icons are returned as small WebP data URLs.
+     *
+     * Runs on [appsExecutor]: enumerating packages and encoding every icon
+     * would block the main thread long enough to make the Apps page janky.
      */
     @Command
     fun list_apps(invoke: Invoke) {
-        try {
-            val manager = activity.packageManager
-            val density = activity.resources.displayMetrics.density
-            val iconPx = (40 * density).toInt().coerceAtLeast(40)
-            val entries = manager.getInstalledApplications(0)
-                .asSequence()
-                .filter { it.packageName != activity.packageName }
-                .map { info ->
-                    val label = runCatching {
-                        manager.getApplicationLabel(info).toString()
-                    }.getOrDefault(info.packageName)
-                    val system = info.isSystemApp()
-                    val payload = JSObject()
-                    payload.put("package_name", info.packageName)
-                    payload.put("label", label)
-                    payload.put("system", system)
-                    val icon = appIcon(manager, info, iconPx)
-                    if (icon == null) {
-                        payload.put("icon", JSONObject.NULL)
-                    } else {
-                        payload.put("icon", icon)
-                    }
-                    AppEntry(label.lowercase(Locale.getDefault()), system, payload)
-                }
-                .sortedWith(compareBy<AppEntry> { it.system }.thenBy { it.label })
-                .map { it.payload }
-                .toList()
-            val payload = JSObject()
-            payload.put("apps", JSArray(entries))
-            invoke.resolve(payload)
-        } catch (err: Exception) {
-            invoke.reject(err.message ?: err.javaClass.simpleName)
+        appsExecutor.execute {
+            try {
+                invoke.resolve(appsPayload())
+            } catch (err: Exception) {
+                invoke.reject(err.message ?: err.javaClass.simpleName)
+            }
         }
+    }
+
+    private fun appsPayload(): JSObject {
+        val manager = activity.packageManager
+        val density = activity.resources.displayMetrics.density
+        val iconPx = (40 * density).toInt().coerceAtLeast(40)
+        val entries = manager.getInstalledApplications(0)
+            .asSequence()
+            .filter { it.packageName != activity.packageName }
+            .map { info ->
+                val label = runCatching {
+                    manager.getApplicationLabel(info).toString()
+                }.getOrDefault(info.packageName)
+                val system = info.isSystemApp()
+                val payload = JSObject()
+                payload.put("package_name", info.packageName)
+                payload.put("label", label)
+                payload.put("system", system)
+                val icon = appIcon(manager, info, iconPx)
+                if (icon == null) {
+                    payload.put("icon", JSONObject.NULL)
+                } else {
+                    payload.put("icon", icon)
+                }
+                AppEntry(label.lowercase(Locale.getDefault()), system, payload)
+            }
+            .sortedWith(compareBy<AppEntry> { it.system }.thenBy { it.label })
+            .map { it.payload }
+            .toList()
+        val payload = JSObject()
+        payload.put("apps", JSArray(entries))
+        return payload
     }
 
     private fun ApplicationInfo.isSystemApp(): Boolean =
