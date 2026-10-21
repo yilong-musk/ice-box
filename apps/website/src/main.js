@@ -60,7 +60,7 @@ root.innerHTML = `
         </div>
       </div>
     </section>
-    <section class="demo-section page-wrap" id="demo"><div class="macbook"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"><span></span><span></span></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
+    <section class="demo-section page-wrap" id="demo"><div class="macbook"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
     <section class="download page-wrap" id="download" aria-labelledby="download-title">
       <div class="download-head">
         <div>
