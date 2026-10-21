@@ -30,12 +30,7 @@ English · [简体中文](README.zh-CN.md)
 
 <sub>Curious before installing? The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the real desktop UI in your browser against a simulated backend. On Android the same app becomes a phone-first UI.</sub>
 
-<br>
-<br>
-
 </div>
-
-<br>
 
 ## Install
 

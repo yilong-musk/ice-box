@@ -30,12 +30,7 @@
 
 <sub>安装前想先看看？<a href="https://yilong-musk.github.io/ice-box/">在线演示</a>在浏览器中运行真实的桌面端界面，后端为模拟数据。在 Android 上，同一个应用切换为手机界面。</sub>
 
-<br>
-<br>
-
 </div>
-
-<br>
 
 ## 安装
 
