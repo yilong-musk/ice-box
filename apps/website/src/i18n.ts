@@ -20,7 +20,7 @@ const zh = {
   "head.title": "ice-box — 代理，保持简单",
   "head.description":
     "ice-box — 面向 macOS、Windows 与 Android 的轻量代理客户端。上手简单、启动迅速，运行时占用小。",
-  "hero.title": "低运行时内存和CPU占用，<br>让代理保持简单",
+  "hero.title": "低运行开销，AGENT友好<br>基于sing-box的跨平台代理工具",
   "hero.installer": "下载",
   "hero.installerPlatform": "下载 {platform} 版本",
   "hero.more": "更多安装包下载",
@@ -52,8 +52,7 @@ const en: Record<MarketingKey, string> = {
   "head.title": "ice-box — proxy, kept simple",
   "head.description":
     "ice-box — a lightweight proxy client for macOS, Windows, and Android. Easy to set up, quick to start, and light on memory and CPU once it runs.",
-  "hero.title":
-    "Low memory and CPU use while it runs,<br>so the proxy stays simple",
+  "hero.title": "Low overhead, agent-friendly<br>multi-platform proxy built on sing-box",
   "hero.installer": "Download",
   "hero.installerPlatform": "Download {platform}",
   "hero.more": "More installers",

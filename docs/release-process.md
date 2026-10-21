@@ -106,9 +106,17 @@ run it before tagging.
 bash scripts/gate-local.sh
 ```
 
-Commit the updated desktop and Android screenshots (`docs/images/home.png`,
-`home.zh-CN.png`, `mobile-home.png`, and `mobile-home.zh-CN.png`) together with
-`docs/images/home.version` and `docs/images/mobile.version`.
+Recapture the documentation images, then compose the README product shot:
+
+```bash
+bash scripts/capture-demo-home.sh
+bash scripts/capture-demo-mobile.sh
+(cd apps/website && npm run capture-hero)
+```
+
+The capture scripts write the desktop and phone screenshots plus their version
+files to `docs/images/`. Those intermediates are ignored by git; commit only the
+composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,

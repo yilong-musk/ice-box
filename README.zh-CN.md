@@ -25,19 +25,13 @@
 <br>
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="docs/images/home.zh-CN.png" alt="ice-box 主页：代理状态、模式切换、出口节点和实时流量图" width="880">
+  <img src="docs/images/hero.zh-CN.png" alt="ice-box 桌面端与 Android 端：代理状态、模式切换、出口节点、实时流量图，以及手机端主页的节点列表" width="880">
 </a>
 
-<sub>安装前想先看看？<a href="https://yilong-musk.github.io/ice-box/">在线演示</a>在浏览器中运行真实的桌面端界面，后端为模拟数据。</sub>
+<sub>安装前想先看看？<a href="https://yilong-musk.github.io/ice-box/">在线演示</a>在浏览器中运行真实的桌面端界面，后端为模拟数据。在 Android 上，同一个应用切换为手机界面。</sub>
 
 <br>
 <br>
-
-<p>
-  <img src="docs/images/mobile-home.zh-CN.png" alt="ice-box Android 主页（最新 Pixel 手机壳效果）：VPN 状态、分流模式、选中节点和节点列表" width="250">
-</p>
-
-<sub>在 Android 上，同一个应用切换为手机界面：节点位于主页。</sub>
 
 </div>
 

@@ -194,6 +194,9 @@ function phoneShellHtml(screenshot) {
   const screenWidth = VIEWPORT.width;
   const { bezelX, bezelY, radius, padding, statusBar, navBar } = PHONE_SHELL;
   const screenHeight = VIEWPORT.height + statusBar + navBar;
+  // Edge-to-edge: the app renders into the gesture navigation area, so the
+  // captured page is taller than the safe content area by the navigation inset.
+  const captureHeight = VIEWPORT.height + navBar;
   const shellWidth = screenWidth + bezelX * 2;
   const shellHeight = screenHeight + bezelY * 2;
   const screenRadius = radius - bezelY;
@@ -275,25 +278,21 @@ function phoneShellHtml(screenshot) {
       }
       .clock { font-size: 12.5px; font-weight: 600; letter-spacing: 0.1px; }
       .status-icons { display: flex; align-items: center; gap: 5px; }
-      .network { font-size: 9px; font-weight: 700; letter-spacing: 0.2px; }
       .status-icons svg { display: block; }
       .screen img {
         display: block;
-        flex: 0 0 ${VIEWPORT.height}px;
+        flex: 0 0 ${captureHeight}px;
         width: 100%;
-        height: ${VIEWPORT.height}px;
-      }
-      .nav-bar {
-        display: flex;
-        flex: 0 0 ${navBar}px;
-        align-items: center;
-        justify-content: center;
-        height: ${navBar}px;
-        background: #0b0c0e;
+        height: ${captureHeight}px;
       }
       .gesture-pill {
+        position: absolute;
+        z-index: 2;
+        bottom: 10px;
+        left: 50%;
         width: 104px;
         height: 4px;
+        transform: translateX(-50%);
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.85);
         box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
@@ -332,15 +331,8 @@ function phoneShellHtml(screenshot) {
           <div class="status-bar">
             <span class="clock">12:00</span>
             <div class="status-icons">
-              <span class="network">5G</span>
-              <svg width="14" height="12" viewBox="0 0 14 12" fill="none" aria-hidden="true">
-                <rect x="0.5" y="8" width="2.2" height="3.5" rx="0.7" fill="#ecedef" />
-                <rect x="4" y="6" width="2.2" height="5.5" rx="0.7" fill="#ecedef" />
-                <rect x="7.5" y="3.5" width="2.2" height="8" rx="0.7" fill="#ecedef" />
-                <rect x="11" y="1" width="2.2" height="10.5" rx="0.7" fill="#ecedef" />
-              </svg>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 2.5 20 5.5v6c0 4.5-3.2 8.2-8 10-4.8-1.8-8-5.5-8-10v-6L12 2.5Z" stroke="#ecedef" stroke-width="2" stroke-linejoin="round" />
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12.65 10A5.99 5.99 0 0 0 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 0 0 5.65-4H17v4h4v-4h2v-4H12.65ZM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z" fill="#ecedef" />
               </svg>
               <svg width="14" height="12" viewBox="0 0 14 12" fill="none" aria-hidden="true">
                 <path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round" />
@@ -356,9 +348,7 @@ function phoneShellHtml(screenshot) {
             </div>
           </div>
           <img src="${image}" alt="" />
-          <div class="nav-bar">
-            <span class="gesture-pill"></span>
-          </div>
+          <span class="gesture-pill"></span>
           <span class="camera"></span>
         </div>
       </div>
@@ -411,7 +401,9 @@ async function visitApps(page, target) {
 
 async function capture(browser, baseUrl, target) {
   const context = await browser.newContext({
-    viewport: VIEWPORT,
+    // The viewport includes the gesture navigation inset so the phone UI draws
+    // edge-to-edge behind the system navigation bar, as it does on Android.
+    viewport: { width: VIEWPORT.width, height: VIEWPORT.height + PHONE_SHELL.navBar },
     deviceScaleFactor: SCALE,
     isMobile: true,
     hasTouch: true,
@@ -430,6 +422,12 @@ async function capture(browser, baseUrl, target) {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
+    // MainActivity sets --ice-nav-inset from the real navigation bar height on
+    // Android; the browser mock reports no safe-area inset, so provide it once
+    // the document exists (init scripts run before documentElement is created).
+    await page.evaluate((navInset) => {
+      document.documentElement.style.setProperty("--ice-nav-inset", `${navInset}px`);
+    }, PHONE_SHELL.navBar);
     await page.getByTestId("phone-shell").waitFor({ timeout: 30_000 });
 
     // The embedded node list shares the runtime store. On the first frame the

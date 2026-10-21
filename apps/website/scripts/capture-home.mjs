@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
  * Capture the Live Demo Home view into docs/images/home.png (en) and
- * docs/images/home.zh-CN.png (zh) at the GitHub Pages iframe size (1180x690),
- * with simulated macOS window controls.
+ * docs/images/home.zh-CN.png (zh) at the desktop app's default window size
+ * (860x620), with simulated macOS window controls.
  *
  * Usage:
  *   bash scripts/capture-demo-home.sh
@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const VIEWPORT = { width: 1180, height: 690 };
+const VIEWPORT = { width: 860, height: 620 };
 const SCALE = 2;
 const PREVIEW_PORT = 4175;
 

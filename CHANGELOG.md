@@ -7,13 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- The README now shows the Android Home view in a current-generation
-  Pixel-style phone shell with an Android status bar and gesture navigation,
-  next to the desktop screenshot. It is captured from the real phone UI against
-  the Live Demo mock, in English and Chinese, and refreshes with the other
-  documentation images when the version or phone UI changes.
-- The desktop README screenshot now includes simulated macOS window controls
-  with close, minimize, and zoom glyphs, matching the app's overlay title bar.
+- The README now opens with one product shot: the desktop window on the left
+  and the Android Home view in a current-generation Pixel-style phone shell on
+  the right. Both are captured from the real UI against the Live Demo mock, in
+  English and Chinese. The composed images are the only README product shots
+  kept in the repository; the separate captures are generated on demand.
+- The desktop README screenshot now uses the app's default 860x620 window
+  proportions and includes simulated macOS window controls with close,
+  minimize, and zoom glyphs, matching the app's overlay title bar.
+
+### Changed
+
+- The website hero stacks the headline above the download actions and version
+  details, with the whole block centered.
+- The website headline describes ice-box as a low-overhead, agent-friendly
+  multi-platform proxy built on sing-box.
+- The website Live Demo is framed in a MacBook Pro product shell with a
+  desktop wallpaper, and the app is shown as a window at its default 860x620
+  size instead of filling the screen or using a fixed 690px height.
 
 ## [0.2.2] - 2026-10-20
 
