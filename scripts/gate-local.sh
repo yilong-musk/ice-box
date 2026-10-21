@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Quick local gate before committing: fmt, clippy, lib tests, ice-tun-sys
-# integration tests, tsc, vitest, and a Live Demo Home screenshot when the
-# app version or UI files changed.
+# integration tests, tsc, vitest, the Live Demo Home and Android Home
+# screenshots when the app version or UI files changed, and the composed README
+# hero on every run.
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).
 set -euo pipefail
 
@@ -52,5 +53,11 @@ bash scripts/test-verify-android-apk.sh
 
 echo "== capture demo home =="
 bash scripts/capture-demo-home.sh
+
+echo "== capture demo mobile =="
+bash scripts/capture-demo-mobile.sh
+
+echo "== compose README hero =="
+(cd apps/website && npm run capture-hero)
 
 echo "gate-local: OK"

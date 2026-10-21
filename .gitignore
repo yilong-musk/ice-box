@@ -6,7 +6,19 @@
 # Node / frontend
 node_modules
 dist/
+dist-capture/
 *.tsbuildinfo
+
+# README screenshot sources. Generated locally by scripts/capture-demo-*.sh;
+# only the composed docs/images/hero*.png product shots are committed.
+docs/images/home.png
+docs/images/home.zh-CN.png
+docs/images/home.version
+docs/images/mobile-home.png
+docs/images/mobile-home.zh-CN.png
+docs/images/mobile-apps.png
+docs/images/mobile-apps.zh-CN.png
+docs/images/mobile.version
 
 # OS
 .DS_Store

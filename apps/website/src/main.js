@@ -60,7 +60,7 @@ root.innerHTML = `
         </div>
       </div>
     </section>
-    <section class="demo-section page-wrap" id="demo"><div class="app-window"><div class="window-bar"><span class="window-dots"><i></i><i></i><i></i></span><strong>ice-box <small></small></strong><span>${displayVersion}</span></div><iframe src="./demo.html"></iframe></div></section>
+    <section class="demo-section page-wrap" id="demo"><div class="macbook"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
     <section class="download page-wrap" id="download" aria-labelledby="download-title">
       <div class="download-head">
         <div>
@@ -92,12 +92,33 @@ const parts = {
   moreDownloads: root.querySelector(".text-link"),
   downloadKicker: root.querySelector(".download-kicker"),
   downloadTitle: root.querySelector("#download-title"),
-  windowBar: root.querySelector(".window-bar small"),
-  demoFrame: root.querySelector(".app-window iframe"),
+  demoCaption: root.querySelector(".demo-caption-label"),
+  demoFrame: root.querySelector(".demo-screen iframe"),
   languageToggle: root.querySelector(".nav-language"),
 };
 
 const currentPlatform = detectPlatform(navigator.userAgent);
+
+/**
+ * The Live Demo renders the desktop app at its default 860x620 window size and
+ * scales that window to the available screen width, so the demo matches the
+ * app and the README screenshots. Below 1100px the laptop shell is dropped and
+ * the demo uses the full container width instead.
+ */
+const DEMO_WINDOW = { width: 860, height: 620 };
+const DEMO_SHELL_MIN_WIDTH = 1100;
+
+function fitDemoFrame() {
+  const frame = parts.demoFrame;
+  if (window.matchMedia(`(max-width: ${DEMO_SHELL_MIN_WIDTH}px)`).matches) {
+    frame.style.zoom = "";
+    return;
+  }
+  frame.style.zoom = String(frame.parentElement.clientWidth / DEMO_WINDOW.width);
+}
+
+fitDemoFrame();
+window.addEventListener("resize", fitDemoFrame);
 
 /** Platform names, first-launch notes, and which row matches this browser. */
 function applyDownloadCopy(next) {
@@ -152,7 +173,7 @@ function applyCopy(next) {
   parts.downloadKicker.textContent = marketingText("download.kicker", language);
   parts.downloadTitle.textContent = marketingText("download.title", language);
   applyDownloadCopy(language);
-  parts.windowBar.textContent = marketingText("demo.windowBar", language);
+  parts.demoCaption.textContent = marketingText("demo.windowBar", language);
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
   parts.languageToggle.textContent = marketingText(
     "nav.languageToggle",

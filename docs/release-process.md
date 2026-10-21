@@ -106,8 +106,19 @@ run it before tagging.
 bash scripts/gate-local.sh
 ```
 
-Commit the updated `docs/images/home.png`, `docs/images/home.zh-CN.png`, and
-`docs/images/home.version` with the release.
+The gate recaptures the documentation screenshots when the version or the UI
+changed, and recomposes the README product shot from them on every run. To
+refresh them explicitly:
+
+```bash
+bash scripts/capture-demo-home.sh
+bash scripts/capture-demo-mobile.sh
+(cd apps/website && npm run capture-hero)
+```
+
+The capture scripts write the desktop and phone screenshots plus their version
+files to `docs/images/`. Those intermediates are ignored by git; commit only the
+composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,
