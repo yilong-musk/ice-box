@@ -22,9 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   details, with the whole block centered.
 - The website headline describes ice-box as a low-overhead, agent-friendly
   multi-platform proxy built on sing-box.
-- The website Live Demo is framed in a MacBook Pro product shell with a
-  desktop wallpaper, and the app is shown as a window at its default 860x620
-  size instead of filling the screen or using a fixed 690px height.
+- The website Live Demo is framed in a laptop shell drawn in CSS on a desktop
+  wallpaper, and the app is shown as a window at its default 860x620 size
+  instead of filling the screen or using a fixed 690px height. Below 1100px the
+  shell is dropped so the demo reflows at full width and stays readable.
 
 ## [0.2.2] - 2026-10-20
 

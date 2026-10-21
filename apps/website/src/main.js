@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import logoUrl from "../../desktop/src/assets/logo.png";
-import macbookShell from "./assets/macbook-pro.png";
 import { version as appVersion } from "../../desktop/package.json";
 import {
   LANGUAGE_STORAGE_KEY,
@@ -61,7 +60,7 @@ root.innerHTML = `
         </div>
       </div>
     </section>
-    <section class="demo-section page-wrap" id="demo"><div class="macbook"><img class="macbook-shell" src="${macbookShell}" width="2200" height="1340" alt="MacBook Pro" /><div class="macbook-display"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
+    <section class="demo-section page-wrap" id="demo"><div class="macbook"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
     <section class="download page-wrap" id="download" aria-labelledby="download-title">
       <div class="download-head">
         <div>
@@ -103,13 +102,15 @@ const currentPlatform = detectPlatform(navigator.userAgent);
 /**
  * The Live Demo renders the desktop app at its default 860x620 window size and
  * scales that window to the available screen width, so the demo matches the
- * app and the README screenshots. Narrow viewports keep a fixed-height screen.
+ * app and the README screenshots. Below 1100px the laptop shell is dropped and
+ * the demo reflows at its own width, so the text stays readable.
  */
 const DEMO_WINDOW = { width: 860, height: 620 };
+const DEMO_SHELL_MIN_WIDTH = 1100;
 
 function fitDemoFrame() {
   const frame = parts.demoFrame;
-  if (window.matchMedia("(max-width: 800px)").matches) {
+  if (window.matchMedia(`(max-width: ${DEMO_SHELL_MIN_WIDTH}px)`).matches) {
     frame.style.zoom = "";
     return;
   }
