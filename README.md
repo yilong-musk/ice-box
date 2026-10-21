@@ -28,7 +28,7 @@ English · [简体中文](README.zh-CN.md)
   <img src="docs/images/hero.png" alt="ice-box on desktop and Android: proxy status, mode switches, exit node, live traffic chart, and the phone-first Home with the node list" width="880">
 </a>
 
-<sub>Curious before installing? The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the real desktop UI in your browser against a simulated backend. On Android the same app becomes a phone-first UI.</sub>
+<sub>Curious before installing? The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the real desktop UI and the phone-first Android UI in your browser against a simulated backend.</sub>
 
 </div>
 

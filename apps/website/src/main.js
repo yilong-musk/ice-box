@@ -19,6 +19,7 @@ import {
   resolveInitialLanguage,
 } from "./i18n";
 import "./style.css";
+import "./phone-demo.css";
 
 /** Same source as the desktop app and the Live Demo title bar (`APP_VERSION`). */
 const displayVersion = `v${appVersion}`;
@@ -61,6 +62,33 @@ root.innerHTML = `
       </div>
     </section>
     <section class="demo-section page-wrap" id="demo"><div class="macbook"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"></div></div><p class="demo-caption"><strong>ice-box</strong><span class="demo-caption-label"></span><span>${displayVersion}</span></p></section>
+    <section class="phone-demo page-wrap" id="android-demo" aria-labelledby="phone-demo-title">
+      <div class="phone-demo-copy">
+        <p class="phone-demo-kicker"></p>
+        <h2 id="phone-demo-title"></h2>
+        <p class="phone-demo-body"></p>
+      </div>
+      <div class="phone-demo-stage">
+        <div class="phone-frame">
+          <span class="phone-sim" aria-hidden="true"></span>
+          <div class="phone-screen">
+            <div class="phone-status-bar" aria-hidden="true">
+              <span class="phone-clock"></span>
+              <div class="phone-status-icons">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12.65 10A5.99 5.99 0 0 0 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 0 0 5.65-4H17v4h4v-4h2v-4H12.65ZM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z" fill="#ecedef"/></svg>
+                <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><path d="M3.1 6.7C4.2 5.7 5.5 5.1 7 5.1s2.8.6 3.9 1.6" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><path d="M5.2 9.1C5.8 8.5 6.4 8.2 7 8.2s1.2.3 1.8.9" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><circle cx="7" cy="10.4" r="0.9" fill="#ecedef"/></svg>
+                <svg width="22" height="11" viewBox="0 0 22 11" fill="none"><rect x="0.5" y="0.5" width="19" height="10" rx="2.5" stroke="#ecedef" stroke-opacity="0.85"/><rect x="2" y="2" width="14.5" height="7" rx="1.4" fill="#ecedef"/><rect x="20.2" y="3.5" width="1.5" height="4" rx="0.75" fill="#ecedef" fill-opacity="0.85"/></svg>
+              </div>
+            </div>
+            <div class="phone-viewport">
+              <iframe src="./mobile-demo.html" title="ice-box Android UI demo" loading="lazy"></iframe>
+              <span class="phone-gesture" aria-hidden="true"></span>
+            </div>
+            <span class="phone-camera" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="download page-wrap" id="download" aria-labelledby="download-title">
       <div class="download-head">
         <div>
@@ -94,6 +122,11 @@ const parts = {
   downloadTitle: root.querySelector("#download-title"),
   demoCaption: root.querySelector(".demo-caption-label"),
   demoFrame: root.querySelector(".demo-screen iframe"),
+  phoneDemoKicker: root.querySelector(".phone-demo-kicker"),
+  phoneDemoTitle: root.querySelector("#phone-demo-title"),
+  phoneDemoBody: root.querySelector(".phone-demo-body"),
+  phoneDemoFrame: root.querySelector(".phone-viewport iframe"),
+  phoneClock: root.querySelector(".phone-clock"),
   languageToggle: root.querySelector(".nav-language"),
 };
 
@@ -119,6 +152,16 @@ function fitDemoFrame() {
 
 fitDemoFrame();
 window.addEventListener("resize", fitDemoFrame);
+
+/** The phone frame's status bar shows the visitor's local time, refreshed
+ * every half minute so the live demo does not look frozen. */
+function updatePhoneClock() {
+  const now = new Date();
+  parts.phoneClock.textContent = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+updatePhoneClock();
+window.setInterval(updatePhoneClock, 30_000);
 
 /** Platform names, first-launch notes, and which row matches this browser. */
 function applyDownloadCopy(next) {
@@ -175,6 +218,13 @@ function applyCopy(next) {
   applyDownloadCopy(language);
   parts.demoCaption.textContent = marketingText("demo.windowBar", language);
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
+  parts.phoneDemoKicker.textContent = marketingText("phoneDemo.kicker", language);
+  parts.phoneDemoTitle.textContent = marketingText("phoneDemo.title", language);
+  parts.phoneDemoBody.textContent = marketingText("phoneDemo.body", language);
+  parts.phoneDemoFrame.title = marketingText(
+    "phoneDemo.iframeTitle",
+    language,
+  );
   parts.languageToggle.textContent = marketingText(
     "nav.languageToggle",
     language,

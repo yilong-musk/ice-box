@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Quick local gate before committing: fmt, clippy, lib tests, ice-tun-sys
 # integration tests, tsc, vitest, the Live Demo Home and Android Home
-# screenshots when the app version or UI files changed, and the composed README
-# hero on every run.
+# screenshots when the app version or UI files changed, the mobile Live Demo
+# smoke, and the composed README hero on every run.
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).
 set -euo pipefail
 
@@ -38,6 +38,11 @@ echo "== tsc --noEmit =="
 
 echo "== website installer links =="
 (cd apps/website && npm test)
+
+echo "== mobile live demo smoke =="
+# Builds the site, then drives the phone iframe: tabs, apps fixtures, VPN
+# power toggle, and the landing-page language bridge.
+(cd apps/website && npm run build && npx playwright install chromium && npm run test:mobile-demo)
 
 echo "== vitest =="
 (cd apps/desktop && npm test)

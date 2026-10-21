@@ -44,6 +44,7 @@ describe("application architecture boundaries", () => {
     expect(website).toContain('find: "@platform/api"');
     expect(website).toContain('find: "@platform/shell"');
     expect(website).toContain('src/browser-shell.ts');
+    expect(website).toContain("mobile-demo.html");
     expect(website).not.toContain("resolveId");
     const browserShell = readFileSync(
       path.join(desktop, "../website/src/browser-shell.ts"),
@@ -53,7 +54,15 @@ describe("application architecture boundaries", () => {
       path.join(desktop, "../mobile/src/shell.ts"),
       "utf8",
     );
-    expect(browserShell).toContain("return false");
+    expect(browserShell).toContain("isPhoneShell");
+    expect(browserShell).toContain("isDesktopShell");
+    expect(browserShell).toContain("data-shell");
+    expect(browserShell).toContain('"phone"');
+    const mobileDemo = readFileSync(
+      path.join(desktop, "../website/mobile-demo.html"),
+      "utf8",
+    );
+    expect(mobileDemo).toContain('data-shell="phone"');
     expect(mobileShell).toContain("isDesktopShell");
     expect(mobileShell).toContain("return false");
     const desktopVite = readFileSync(path.join(desktop, "vite.config.ts"), "utf8");

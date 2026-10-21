@@ -34,7 +34,7 @@ through React or the application's configuration code.
 |--------|-------|------|---------|
 | macOS and Windows | [`apps/desktop`](../apps/desktop) | One sing-box process. TUN starts it through a privileged runner | System proxy or [TUN](tun.md) |
 | Android | [`apps/mobile`](../apps/mobile) | libbox inside the VPN service process (`:tunnel`) | Android VPN service |
-| Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop UI |
+| Website | [`apps/website`](../apps/website) | None | None. The Live Demo binds a simulated backend to the desktop and phone UIs |
 
 Only the macOS and Windows desktop shell exposes a real MCP service. Android
 neither starts nor renders that control surface; the website Live Demo renders

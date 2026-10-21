@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test src/downloads.test.ts",
+    "test:mobile-demo": "node ./scripts/smoke-mobile-demo.mjs",
     "test:performance": "node ./scripts/smoke-performance.mjs",
     "capture-home": "node ./scripts/capture-home.mjs",
     "capture-hero": "node ./scripts/compose-hero.mjs"

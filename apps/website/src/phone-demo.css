@@ -1,0 +1,217 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Live phone demo: the real Android UI in an iframe, framed in a Pixel-style
+   shell. The frame dimensions mirror `apps/website/scripts/capture-mobile.mjs`
+   so the live demo and the README screenshot show the same device. */
+
+.phone-demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 64px;
+  padding-block: 8px 96px;
+}
+
+.phone-demo-copy {
+  max-width: 460px;
+}
+
+.phone-demo-kicker {
+  margin: 0 0 10px;
+  color: var(--green);
+  font: 11px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.phone-demo-copy h2 {
+  margin: 0 0 14px;
+  font-size: clamp(26px, 2.6vw, 38px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+  text-wrap: pretty;
+}
+
+.phone-demo-body {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.phone-demo-stage {
+  display: flex;
+  width: 418px;
+  max-width: 100%;
+  justify-content: center;
+}
+
+.phone-frame {
+  position: relative;
+  width: 100%;
+  padding: 16px 14px;
+  border-radius: 48px;
+  background: linear-gradient(
+    145deg,
+    #6d6e72 0%,
+    #303135 8%,
+    #121315 26%,
+    #0c0d0f 62%,
+    #232427 88%,
+    #55565a 100%
+  );
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 28px 56px rgba(0, 0, 0, 0.6),
+    0 4px 14px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.9);
+}
+
+/* Volume and power buttons on the right edge; the SIM tray sits on the left. */
+.phone-frame::before,
+.phone-frame::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(180deg, #5a5b5f, #26272a 45%, #4a4b4f);
+  box-shadow: inset 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.phone-frame::before {
+  top: 168px;
+  height: 60px;
+}
+
+.phone-frame::after {
+  top: 244px;
+  height: 42px;
+}
+
+.phone-sim {
+  position: absolute;
+  left: -2px;
+  top: 220px;
+  width: 2px;
+  height: 26px;
+  border-radius: 1px;
+  background: #202124;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.phone-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 32px;
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.95);
+}
+
+.phone-status-bar {
+  display: flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 14px 0 16px;
+  background: #131416;
+  color: #ecedef;
+  font-family: var(--sans);
+}
+
+.phone-clock {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-status-icons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.phone-status-icons svg {
+  display: block;
+}
+
+.phone-viewport {
+  position: relative;
+  aspect-ratio: 390 / 868;
+  background: #000;
+}
+
+/* `mobile-demo.tsx` reports the same 24px inset Android does, so the app's tab
+   bar clears the gesture pill drawn over the bottom of the viewport. */
+
+.phone-viewport iframe {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0a0d0b;
+}
+
+.phone-gesture {
+  position: absolute;
+  z-index: 2;
+  bottom: 10px;
+  left: 50%;
+  width: 104px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.phone-camera {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #1c2430 0%, #05070a 55%, #000 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 0 2px rgba(90, 130, 200, 0.35);
+}
+
+/* Inner screen highlight, above the app but below the gesture bar. */
+.phone-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 0 14px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .phone-demo {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+    justify-items: center;
+    padding-block: 0 72px;
+    text-align: center;
+  }
+
+  .phone-demo-copy {
+    max-width: 560px;
+  }
+}

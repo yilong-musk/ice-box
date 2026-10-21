@@ -27,6 +27,7 @@ export default defineConfig({
       input: {
         main: path.resolve(root, "index.html"),
         demo: path.resolve(root, "demo.html"),
+        mobileDemo: path.resolve(root, "mobile-demo.html"),
       },
     },
   },

@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The website Live Demo now includes the phone-first Android UI in a phone
+  frame, running against the same simulated backend as the desktop demo. Tabs,
+  the VPN power button, per-app routing, language, and theme are interactive.
+- The local gate builds the website and smoke-tests the mobile Live Demo: phone
+  shell, five tabs, Apps fixtures, the VPN toggle, and the language bridge from
+  the landing page into the iframe.
 - The README now opens with one product shot: the desktop window on the left
   and the Android Home view in a current-generation Pixel-style phone shell on
   the right. Both are captured from the real UI against the Live Demo mock, in

@@ -326,7 +326,7 @@ export const api = {
   async listenCoreStatusChanged(): Promise<() => void> {
     return () => {};
   },
-  async listenStateChanged(): Promise<() => void> {
+  async listenStateChanged(_handler: () => void): Promise<() => void> {
     return () => {};
   },
   async listenWindowHidden(): Promise<() => void> {

@@ -43,6 +43,11 @@ const zh = {
     "没有应用商店。系统询问时，允许安装来自此来源的应用。",
   "demo.windowBar": "实时产品演示",
   "demo.iframeTitle": "ice-box 真实桌面端界面演示",
+  "phoneDemo.kicker": "Android",
+  "phoneDemo.title": "同一套应用，手机优先。",
+  "phoneDemo.body":
+    "真实的 Android 界面，连着同一套模拟后端。切换标签、开关 VPN、调整应用分流都可以直接试。",
+  "phoneDemo.iframeTitle": "ice-box 真实 Android 界面演示",
   "nav.languageToggle": "EN",
   "nav.languageToggleAria": "切换到英文",
 } as const;
@@ -75,6 +80,11 @@ const en: Record<MarketingKey, string> = {
     "There is no app store listing. Allow installs from this source when Android asks.",
   "demo.windowBar": "live product demo",
   "demo.iframeTitle": "ice-box real desktop frontend demo",
+  "phoneDemo.kicker": "Android",
+  "phoneDemo.title": "The same app, phone-first.",
+  "phoneDemo.body":
+    "The real Android UI against the same simulated backend. Switch tabs, toggle the VPN, and try per-app routing.",
+  "phoneDemo.iframeTitle": "ice-box real Android UI demo",
   "nav.languageToggle": "中文",
   "nav.languageToggleAria": "Switch to Chinese",
 };
