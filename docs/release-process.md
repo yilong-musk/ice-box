@@ -106,7 +106,8 @@ run it before tagging.
 bash scripts/gate-local.sh
 ```
 
-Recapture the documentation images, then compose the README product shot:
+The gate recaptures the documentation screenshots and composes the README
+product shot when the version or the UI changed. To refresh them explicitly:
 
 ```bash
 bash scripts/capture-demo-home.sh

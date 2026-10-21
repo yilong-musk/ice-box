@@ -42,12 +42,14 @@ screenshots_missing() {
 ui_changed() {
   git diff --name-only HEAD -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
+    apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
     apps/website/src/browser-api.ts
 }
 
 untracked_ui() {
   git ls-files --others --exclude-standard -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
+    apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
     apps/website/src/browser-api.ts
 }
 
@@ -79,10 +81,15 @@ if [[ ! -d apps/website/node_modules/playwright ]]; then
   echo "  (cd apps/website && npm ci && npx playwright install chromium)" >&2
   exit 1
 fi
-if [[ ! -x apps/mobile/node_modules/.bin/vite ]]; then
-  echo "capture-demo-mobile: install desktop deps first (mobile links them):" >&2
+if [[ ! -x apps/desktop/node_modules/.bin/vite ]]; then
+  echo "capture-demo-mobile: install desktop deps first (the mobile app reuses them):" >&2
   echo "  (cd apps/desktop && npm ci)" >&2
   exit 1
+fi
+# `npm run build`/`dev` in apps/mobile links the desktop install here; a fresh
+# clone has not run either yet.
+if [[ ! -e apps/mobile/node_modules ]]; then
+  ln -sfn ../desktop/node_modules apps/mobile/node_modules
 fi
 
 echo "== playwright chromium =="

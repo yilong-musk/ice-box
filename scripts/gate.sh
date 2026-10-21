@@ -71,6 +71,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
 
     echo "== capture demo mobile =="
     bash "$ROOT/scripts/capture-demo-mobile.sh"
+
+    echo "== compose README hero =="
+    (cd "$ROOT/apps/website" && npm run capture-hero)
   fi
 fi
 

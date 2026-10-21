@@ -41,10 +41,6 @@ const TARGETS = [
     // Power button label (`home.power.vpnStop`) proving the language and
     // that the mocked tunnel is connected.
     vpnStopLabel: "Disconnect VPN",
-    homeLabel: "Home",
-    // Only used to leave Home before re-entering it, so the runtime store
-    // refreshes against the loaded status.
-    appsLabel: "Apps",
     screenshots: {
       home: "docs/images/mobile-home.png",
     },
@@ -53,15 +49,14 @@ const TARGETS = [
     language: "zh",
     locale: "zh-CN",
     vpnStopLabel: "断开 VPN",
-    homeLabel: "主页",
-    // Only used to leave Home before re-entering it, so the runtime store
-    // refreshes against the loaded status.
-    appsLabel: "应用",
     screenshots: {
       home: "docs/images/mobile-home.zh-CN.png",
     },
   },
 ];
+
+/** Tab order in `App.tsx`: Home, Apps, Rules, Subs, Settings. */
+const TAB_INDEX = { home: 0, apps: 1 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const websiteDir = path.resolve(scriptDir, "..");
@@ -383,14 +378,18 @@ async function addPhoneShell(browser, screenshot) {
 }
 
 /**
+ * Tab button by position, so the capture does not depend on translated labels.
+ */
+function tabButton(page, tab) {
+  return page.getByTestId("phone-tab-bar").getByRole("button").nth(TAB_INDEX[tab]);
+}
+
+/**
  * Visit Apps once so returning to Home reloads the node state. The screenshot
  * itself is taken only on Home.
  */
-async function visitApps(page, target) {
-  await page
-    .getByTestId("phone-tab-bar")
-    .getByRole("button", { name: target.appsLabel, exact: true })
-    .click();
+async function visitApps(page) {
+  await tabButton(page, "apps").click();
   await page.getByTestId("apps-panel").waitFor({ timeout: 15_000 });
   await page
     .getByTestId("apps-panel")
@@ -434,11 +433,8 @@ async function capture(browser, baseUrl, target) {
     // store can still be empty, so leave and re-enter Home once: the second
     // activation refreshes the node state against the loaded status and drops
     // the transient "service not running" warning.
-    await visitApps(page, target);
-    await page
-      .getByTestId("phone-tab-bar")
-      .getByRole("button", { name: target.homeLabel, exact: true })
-      .click();
+    await visitApps(page);
+    await tabButton(page, "home").click();
     await page
       .getByTestId("nodes-panel")
       .getByRole("alert")
@@ -464,8 +460,9 @@ if (!fs.existsSync(path.join(websiteDir, "node_modules/playwright"))) {
 }
 if (!fs.existsSync(viteBin())) {
   console.error(
-    "capture-mobile: install desktop deps first (mobile links them):\n" +
-      "  (cd apps/desktop && npm ci)",
+    "capture-mobile: install desktop deps first (the mobile app reuses them):\n" +
+      "  (cd apps/desktop && npm ci)\n" +
+      "  (cd apps/mobile && npm run build)  # links node_modules on a fresh clone",
   );
   process.exit(1);
 }
