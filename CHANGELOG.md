@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The website Live Demo is framed in a laptop shell drawn in CSS on a desktop
   wallpaper, and the app is shown as a window at its default 860x620 size
   instead of filling the screen or using a fixed 690px height. Below 1100px the
-  shell is dropped so the demo reflows at full width and stays readable.
+  shell is dropped so the demo uses the full container width.
 
 ## [0.2.2] - 2026-10-20
 

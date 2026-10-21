@@ -12,10 +12,9 @@ Run commands from the repository root. Development prerequisites are in the
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, and production build |
 
 The local gate omits desktop Rust tests because GTK/WebKit dependencies may be
-unavailable. Its screenshot step refreshes the documentation images — the
-desktop Home view, the Android Home view, and the composed README hero — when
-the version or relevant UI files change, or when any image is missing. CI skips
-screenshot capture.
+unavailable. Its screenshot step refreshes the desktop and Android Home captures
+when the version or relevant UI files change, or when any capture is missing,
+and recomposes the README hero on every run. CI skips screenshot capture.
 
 CI runs the full gate on Linux and `GATE_SCOPE=rust` on macOS/Windows; packaging
 jobs build separately. `GATE_SCOPE=frontend` runs only the frontend half.

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Quick local gate before committing: fmt, clippy, lib tests, ice-tun-sys
 # integration tests, tsc, vitest, the Live Demo Home and Android Home
-# screenshots, and the composed README hero when the app version or UI files
-# changed.
+# screenshots when the app version or UI files changed, and the composed README
+# hero on every run.
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, no ice-box crate).
 set -euo pipefail
 

@@ -20,7 +20,8 @@ const zh = {
   "head.title": "ice-box — 代理，保持简单",
   "head.description":
     "ice-box — 面向 macOS、Windows 与 Android 的轻量代理客户端。上手简单、启动迅速，运行时占用小。",
-  "hero.title": "低运行开销，AGENT友好<br>基于sing-box的跨平台代理工具",
+  "hero.title":
+    "低运行开销，Agent 友好<br>基于 sing-box 的跨平台代理工具",
   "hero.installer": "下载",
   "hero.installerPlatform": "下载 {platform} 版本",
   "hero.more": "更多安装包下载",

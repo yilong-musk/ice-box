@@ -103,7 +103,7 @@ const currentPlatform = detectPlatform(navigator.userAgent);
  * The Live Demo renders the desktop app at its default 860x620 window size and
  * scales that window to the available screen width, so the demo matches the
  * app and the README screenshots. Below 1100px the laptop shell is dropped and
- * the demo reflows at its own width, so the text stays readable.
+ * the demo uses the full container width instead.
  */
 const DEMO_WINDOW = { width: 860, height: 620 };
 const DEMO_SHELL_MIN_WIDTH = 1100;

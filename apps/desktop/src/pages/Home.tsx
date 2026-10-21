@@ -1069,7 +1069,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       onClick={() => void onCopyCliProxy()}
                     >
                       <Copy />
-                      <span className="truncate">
+                      <span className="truncate text-xs">
                         {copiedCliProxy
                           ? t("home.copyCliProxyCopied")
                           : t("home.copyCliProxy")}
@@ -1085,7 +1085,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       onClick={() => void onOpenCliProxy()}
                     >
                       <Terminal />
-                      <span className="truncate">{t("home.openCliProxy")}</span>
+                      <span className="truncate text-xs">{t("home.openCliProxy")}</span>
                     </Button>
                   </div>
                 ) : null}

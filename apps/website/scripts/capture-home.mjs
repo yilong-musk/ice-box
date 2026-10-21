@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { waitForAppFonts } from "./capture-fonts.mjs";
 
 const VIEWPORT = { width: 860, height: 620 };
 const SCALE = 2;
@@ -250,6 +251,9 @@ async function capture(browser, baseUrl, target) {
       return el && el.getBoundingClientRect().height >= 80;
     }, { timeout: 15_000 });
     await verifyMockedHomeData(page);
+    // Wait for Inter before the shot: the fallback font changes text metrics,
+    // which decides whether long labels truncate.
+    await waitForAppFonts(page);
     await addMacWindowControls(page);
     await new Promise((resolve) => setTimeout(resolve, 400));
     return await page.screenshot({ type: "png" });

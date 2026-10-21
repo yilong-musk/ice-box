@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { waitForAppFonts } from "./capture-fonts.mjs";
 
 const VIEWPORT = { width: 390, height: 844 };
 const SCALE = 2;
@@ -442,6 +443,9 @@ async function capture(browser, baseUrl, target) {
       .waitFor({ state: "detached", timeout: 15_000 });
 
     await verifyHomeData(page, target);
+    // Wait for Inter before the shot: the fallback font changes text metrics
+    // and can shift the phone layout.
+    await waitForAppFonts(page);
     await settle(page);
     const home = await page.screenshot({ type: "png" });
 
