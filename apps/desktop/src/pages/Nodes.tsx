@@ -507,9 +507,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     };
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { allowDuringFavorite?: boolean }) => {
     // A favorite write owns the optimistic list until its post-success refresh.
-    if (favoriteInFlightRef.current) return;
+    // That refresh passes `allowDuringFavorite` because the single-flight guard
+    // intentionally stays set until the list has caught up with the backend.
+    if (favoriteInFlightRef.current && opts?.allowDuringFavorite !== true) return;
     const gen = nextGeneration();
     try {
       // Read the status directly instead of the shared store's cached value:
@@ -717,9 +719,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         setNodes(applyFavoriteToNodes(previous, node.tag, !wasFavorite));
         try {
           await api.setNodeFavorite(node.tag, !wasFavorite);
-          favoriteInFlightRef.current = false;
-          if (mountedRef.current) setFavoritePending(false);
-          if (mountedRef.current && activeRef.current) await refresh();
+          if (mountedRef.current && activeRef.current) {
+            await refresh({ allowDuringFavorite: true });
+          }
         } catch (e) {
           // Keep the snapshot as the last backend result; reverting to
           // `previous` restores the rows without writing a favorite state.
@@ -728,6 +730,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
             setError(formatInvokeError(e));
           }
         } finally {
+          // Stay single-flight through the post-success refresh: a second star
+          // click must not race the list while it is catching up.
           favoriteInFlightRef.current = false;
           if (mountedRef.current) setFavoritePending(false);
         }

@@ -5,8 +5,9 @@
 //! Favorites are local UI preferences, not subscription parsing state. Each
 //! subscription owns an ordered tag list, newest favorite first. Stale tags
 //! stay on disk when a provider refresh drops them, so the pin returns if the
-//! same tag reappears. Reads and writes are serialized by a module-level
-//! mutex; the atomic write protects readers from partial files.
+//! same tag reappears. Mutations are serialized by a module-level mutex;
+//! readers rely on the atomic write to see either the previous or the next
+//! complete file.
 
 use crate::atomic::write_json_atomic;
 use crate::{AppError, ErrorCode};
@@ -59,32 +60,70 @@ impl NodeFavorites {
 
 /// Load favorites. A missing file is empty; a corrupt wrapper degrades to
 /// empty. Invalid subscription keys and malformed entries are skipped without
-/// discarding the rest of the file.
+/// discarding the rest of the file. A file with an unknown version also reads
+/// as empty, but writes refuse to touch it so a downgraded build cannot erase
+/// newer data.
 pub fn load_node_favorites(path: &Path) -> NodeFavorites {
+    match load_favorites(path) {
+        LoadedFavorites::Ready(favorites) => favorites,
+        LoadedFavorites::UnsupportedVersion => NodeFavorites::default(),
+    }
+}
+
+enum LoadedFavorites {
+    Ready(NodeFavorites),
+    UnsupportedVersion,
+}
+
+fn load_favorites(path: &Path) -> LoadedFavorites {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return NodeFavorites::default();
+            return LoadedFavorites::Ready(NodeFavorites::default());
         }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err, "load node favorites");
-            return NodeFavorites::default();
+            return LoadedFavorites::Ready(NodeFavorites::default());
         }
     };
     parse_favorites(&raw)
 }
 
-fn parse_favorites(raw: &str) -> NodeFavorites {
+fn load_favorites_for_write(path: &Path) -> Result<NodeFavorites, AppError> {
+    match load_favorites(path) {
+        LoadedFavorites::Ready(favorites) => Ok(favorites),
+        LoadedFavorites::UnsupportedVersion => Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "node favorites: file version is not supported; update the app or remove node-favorites.json",
+        )),
+    }
+}
+
+fn parse_favorites(raw: &str) -> LoadedFavorites {
     let value: Value = match serde_json::from_str(raw) {
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(error = %err, "node favorites: corrupt file treated as empty");
-            return NodeFavorites::default();
+            return LoadedFavorites::Ready(NodeFavorites::default());
         }
     };
+    match value.get("version").and_then(Value::as_u64) {
+        Some(version) if version == u64::from(FAVORITES_VERSION) => {}
+        Some(version) => {
+            tracing::warn!(
+                version,
+                "node favorites: unsupported version treated as empty"
+            );
+            return LoadedFavorites::UnsupportedVersion;
+        }
+        None => {
+            tracing::warn!("node favorites: missing or invalid version treated as empty");
+            return LoadedFavorites::UnsupportedVersion;
+        }
+    }
     let Some(subscriptions) = value.get("subscriptions").and_then(Value::as_object) else {
         tracing::warn!("node favorites: missing subscriptions object treated as empty");
-        return NodeFavorites::default();
+        return LoadedFavorites::Ready(NodeFavorites::default());
     };
     let mut favorites = NodeFavorites::default();
     for (key, value) in subscriptions {
@@ -115,7 +154,7 @@ fn parse_favorites(raw: &str) -> NodeFavorites {
             favorites.subscriptions.insert(subscription, cleaned);
         }
     }
-    favorites
+    LoadedFavorites::Ready(favorites)
 }
 
 #[derive(Serialize)]
@@ -150,7 +189,7 @@ pub fn set_node_favorite(
     let _guard = FAVORITES_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut favorites = load_node_favorites(path);
+    let mut favorites = load_favorites_for_write(path)?;
     let previous = favorites.subscriptions.get(&subscription).cloned();
     if favorite {
         let mut tags = favorites
@@ -182,7 +221,7 @@ pub fn remove_subscription_favorites(path: &Path, subscription: Uuid) -> Result<
     let _guard = FAVORITES_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut favorites = load_node_favorites(path);
+    let mut favorites = load_favorites_for_write(path)?;
     if favorites.subscriptions.remove(&subscription).is_none() {
         return Ok(());
     }
@@ -216,6 +255,34 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "{not json").unwrap();
         assert_eq!(load_node_favorites(&path), NodeFavorites::default());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn unsupported_or_missing_versions_load_empty_and_refuse_writes() {
+        let path = temp_path("version");
+        let id = Uuid::new_v4();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for body in [
+            json!({"version": 2, "subscriptions": { id.to_string(): ["A"] }}),
+            json!({"version": "1", "subscriptions": { id.to_string(): ["A"] }}),
+            json!({"subscriptions": { id.to_string(): ["A"] }}),
+        ] {
+            let raw = serde_json::to_string(&body).unwrap();
+            fs::write(&path, &raw).unwrap();
+            assert!(load_node_favorites(&path).tags(id).is_empty());
+
+            let err = set_node_favorite(&path, id, "B", true).expect_err("unsupported version");
+            assert_eq!(err.code, ErrorCode::ConfigInvalid.as_str());
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                raw,
+                "an unsupported wrapper must survive a write attempt"
+            );
+        }
+
+        let err = remove_subscription_favorites(&path, id).expect_err("unsupported version");
+        assert_eq!(err.code, ErrorCode::ConfigInvalid.as_str());
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

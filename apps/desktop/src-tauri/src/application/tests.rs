@@ -3,7 +3,9 @@
 use super::*;
 use crate::capture::CaptureController;
 use crate::orchestrate::generate_config;
-use ice_config::{set_node_favorite, set_proxy_service_enabled, AppPaths, NormalizedOutbound};
+use ice_config::{
+    load_node_favorites, set_node_favorite, set_proxy_service_enabled, AppPaths, NormalizedOutbound,
+};
 use ice_engine::{
     load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
     SubscriptionPaths,
@@ -1801,5 +1803,35 @@ fn set_node_favorite_validates_the_active_profile_and_does_not_rewrite_config() 
     )
     .expect_err("no active subscription");
     assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn remove_subscription_use_case_purges_that_subscriptions_favorites() {
+    struct Host;
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("favorite-remove");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    set_node_favorite(&state.paths.node_favorites(), id, "n1", true).unwrap();
+    assert!(load_node_favorites(&state.paths.node_favorites()).contains(id, "n1"));
+
+    remove_subscription_use_case(&Host, &state, IdRequest { id }).expect("remove subscription");
+    assert!(
+        load_node_favorites(&state.paths.node_favorites())
+            .tags(id)
+            .is_empty(),
+        "removing a subscription must purge its favorites"
+    );
     let _ = fs::remove_dir_all(state.paths.root());
 }

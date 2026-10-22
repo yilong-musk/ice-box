@@ -1044,6 +1044,51 @@ describe("Nodes", () => {
     });
   });
 
+  it("keeps the single-flight guard through the post-success refresh", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+    const fetchesBefore = listNodes.mock.calls.length;
+
+    let releaseRefresh: (nodes: Array<Record<string, unknown>>) => void = () => {};
+    listNodes.mockImplementation(
+      () =>
+        new Promise<Array<Record<string, unknown>>>((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    );
+
+    fireEvent.click(star(rowOf(view, "node-a")));
+    await waitFor(() => {
+      expect(setNodeFavorite).toHaveBeenCalledWith("node-a", true);
+      expect(listNodes.mock.calls.length).toBe(fetchesBefore + 1);
+    });
+    expect(star(rowOf(view, "node-a"), true)).toBeDisabled();
+
+    fireEvent.click(star(rowOf(view, "node-b")));
+    expect(setNodeFavorite).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseRefresh([
+        {
+          tag: "node-a",
+          outbound_type: "socks",
+          group_now: null,
+          group_all: null,
+          favorite: true,
+          favorite_rank: 0,
+        },
+        {
+          tag: "node-b",
+          outbound_type: "vmess",
+          group_now: null,
+          group_all: null,
+        },
+      ]);
+    });
+    await waitFor(() => expect(star(rowOf(view, "node-b"))).toBeEnabled());
+  });
+
   it("rolls back and shows the error when the favorite write fails", async () => {
     setNodeFavorite.mockRejectedValueOnce("favorite failed");
     const { container } = render(<Nodes />);
