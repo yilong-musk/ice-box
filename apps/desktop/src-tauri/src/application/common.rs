@@ -13,9 +13,10 @@ pub(crate) use crate::shutdown::graceful_stop;
 pub(crate) use crate::AppState;
 pub(crate) use ice_config::NormalizedOutbound;
 pub(crate) use ice_config::{
-    load_group_selections, load_rule_overrides, redact_config_str, rule_fingerprint,
-    rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
-    save_settings_for as persist_settings, set_proxy_service_enabled_for, AppError, AppPaths,
+    load_group_selections, load_node_favorites, load_rule_overrides, redact_config_str,
+    remove_subscription_favorites, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
+    save_group_selections, save_rule_overrides, save_settings_for as persist_settings,
+    set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for, AppError, AppPaths,
     AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
     SettingsPatch, TrayDisplayMode, UiMessage,
 };
@@ -348,6 +349,9 @@ impl RulePage {
 #[derive(Clone)]
 pub struct ProfileCacheEntry {
     sig: ProfileSig,
+    /// Active subscription that produced `profile`. Read from the same index
+    /// revision so favorites can never be scoped to a different subscription.
+    pub subscription: Uuid,
     pub profile: Arc<NormalizedProfile>,
     rule_page: Arc<Mutex<Option<Arc<RulePage>>>>,
 }
@@ -484,8 +488,12 @@ pub(crate) fn cached_profile(state: &AppState) -> Result<Option<ProfileCacheEntr
         Err(SubscriptionError::NoActiveSubscription) => return Ok(None),
         Err(err) => return Err(AppError::from(err)),
     };
+    let Some(subscription) = active.map(|meta| meta.id) else {
+        return Ok(None);
+    };
     let entry = ProfileCacheEntry {
         sig,
+        subscription,
         profile,
         rule_page: Arc::new(Mutex::new(None)),
     };

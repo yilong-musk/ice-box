@@ -443,6 +443,7 @@ pub fn run() {
             commands::export_subscription_singbox,
             commands::list_nodes,
             commands::set_selected_node,
+            commands::set_node_favorite,
             commands::set_group_selection,
             commands::test_node_delay,
             commands::get_rule_overview,

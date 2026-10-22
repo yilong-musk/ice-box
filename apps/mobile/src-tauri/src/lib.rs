@@ -46,6 +46,7 @@ pub fn run() {
             commands::list_apps,
             commands::list_nodes,
             commands::set_selected_node,
+            commands::set_node_favorite,
             commands::set_group_selection,
             commands::test_node_delay,
             commands::get_traffic_snapshot,

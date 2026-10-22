@@ -3,7 +3,7 @@
 use super::*;
 use crate::capture::CaptureController;
 use crate::orchestrate::generate_config;
-use ice_config::{set_proxy_service_enabled, AppPaths, NormalizedOutbound};
+use ice_config::{set_node_favorite, set_proxy_service_enabled, AppPaths, NormalizedOutbound};
 use ice_engine::{
     load_index, read_profile, write_subscription_success, SubscriptionFormat, SubscriptionMeta,
     SubscriptionPaths,
@@ -1704,4 +1704,102 @@ fn exit_probe_fails_closed_without_settings_and_cache_key_tracks_route_state() {
         rule_key,
         exit_probe_cache_key(&moved, proxy_url, "Proxy", Some("HK-1"))
     );
+}
+
+#[test]
+fn collect_nodes_marks_the_active_subscriptions_favorites() {
+    let state = temp_state_with_node("favorite-mark");
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let first = load_index(&paths).unwrap().items[0].id;
+    set_node_favorite(&state.paths.node_favorites(), first, "n1", true).unwrap();
+
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert!(nodes[0].favorite);
+    assert_eq!(nodes[0].favorite_rank, Some(0));
+
+    let second = Uuid::new_v4();
+    let meta = SubscriptionMeta {
+        id: second,
+        name: "second".into(),
+        url: "https://example.com/second".into(),
+        active: false,
+        format: SubscriptionFormat::SingBox,
+        node_count: 1,
+        group_count: 0,
+        rule_count: 0,
+        has_dns: false,
+        parse_warnings: vec![],
+        last_updated: None,
+        last_error: None,
+        etag: None,
+        last_modified: None,
+        userinfo: None,
+        provider_info: vec![],
+        auto_update: false,
+        auto_update_interval: None,
+        source: ice_engine::SubscriptionSource::Remote,
+    };
+    let profile = ice_config::NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+        tag: "n2".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n2","server":"1.1.1.1","server_port":2}),
+        ),
+    }]);
+    write_subscription_success(&paths, &meta, "{}", &profile).unwrap();
+    ice_engine::set_active(&paths, second, true).unwrap();
+
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes[0].tag, "n2");
+    assert!(!nodes[0].favorite);
+    assert_eq!(nodes[0].favorite_rank, None);
+
+    ice_engine::set_active(&paths, first, true).unwrap();
+    let nodes = collect_nodes(&state).unwrap();
+    assert_eq!(nodes[0].tag, "n1");
+    assert!(nodes[0].favorite);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_node_favorite_validates_the_active_profile_and_does_not_rewrite_config() {
+    let state = temp_state_with_node("favorite-toggle");
+    fs::write(state.paths.config(), b"runtime-config").unwrap();
+    set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "n1".into(),
+            favorite: true,
+        },
+    )
+    .expect("favorite");
+    assert_eq!(
+        fs::read_to_string(state.paths.config()).unwrap(),
+        "runtime-config",
+        "a favorite must not regenerate the runtime config"
+    );
+
+    let err = set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "missing".into(),
+            favorite: true,
+        },
+    )
+    .expect_err("unknown tag");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid.as_str());
+
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    let id = load_index(&paths).unwrap().items[0].id;
+    ice_engine::remove_subscription(&paths, id).unwrap();
+    let err = set_node_favorite_use_case(
+        &state,
+        SetNodeFavoriteRequest {
+            tag: "n1".into(),
+            favorite: false,
+        },
+    )
+    .expect_err("no active subscription");
+    assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
+    let _ = fs::remove_dir_all(state.paths.root());
 }

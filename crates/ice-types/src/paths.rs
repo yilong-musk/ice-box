@@ -97,6 +97,11 @@ impl AppPaths {
         self.root.join("rules.json")
     }
 
+    /// Persisted per-subscription node favorites (`node-favorites.json`).
+    pub fn node_favorites(&self) -> PathBuf {
+        self.root.join("node-favorites.json")
+    }
+
     pub fn pid(&self) -> PathBuf {
         self.root.join("sing-box.pid")
     }
@@ -186,6 +191,10 @@ mod tests {
         assert_eq!(
             p.rule_overrides(),
             PathBuf::from("/tmp/ice-box-data/rules.json")
+        );
+        assert_eq!(
+            p.node_favorites(),
+            PathBuf::from("/tmp/ice-box-data/node-favorites.json")
         );
         assert_eq!(p.pid(), PathBuf::from("/tmp/ice-box-data/sing-box.pid"));
         assert_eq!(

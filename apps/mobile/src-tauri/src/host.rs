@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ice_config::{
-    is_android_package_name, load_group_selections, load_rule_overrides, load_settings,
-    redact_config_str, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
-    save_group_selections, save_rule_overrides, save_settings_for, set_proxy_service_enabled_for,
+    is_android_package_name, load_group_selections, load_node_favorites, load_rule_overrides,
+    load_settings, redact_config_str, remove_subscription_favorites, rule_fingerprint,
+    rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
+    save_settings_for, set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for,
     AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode, NormalizedProfile, ProxyMode,
     RuleOverrides, SettingsPatch,
 };
@@ -19,8 +20,8 @@ use ice_core::{
     TrafficMonitor, TrafficSnapshot, DELAY_TEST_URL,
 };
 use ice_subscription::{
-    read_index, redact_subscription_url_for_ui, ProfileCache, SubscriptionError,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
+    active_subscription, read_index, redact_subscription_url_for_ui, ProfileCache,
+    SubscriptionError, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -166,6 +167,9 @@ impl MobileHost {
 
     pub fn remove_subscription(&self, id: Uuid) -> Result<(), AppError> {
         self.manager()?.remove(id)?;
+        if let Err(err) = remove_subscription_favorites(&self.paths()?.node_favorites(), id) {
+            log::warn!("remove_subscription: purge favorites failed: {err}");
+        }
         Ok(())
     }
 
@@ -175,10 +179,13 @@ impl MobileHost {
     }
 
     pub fn list_nodes(&self, live: bool) -> Result<Vec<NodeInfo>, AppError> {
-        let profile = self.profile()?;
+        let Some((subscription, profile)) = self.profile_with_subscription()? else {
+            return Ok(vec![]);
+        };
         let paths = self.paths()?;
         let settings = load_settings(&paths.settings())?;
         let selections = load_group_selections(&paths.group_selections());
+        let favorites = load_node_favorites(&paths.node_favorites());
         let groups = if live {
             self.cached_group_heads(&settings)
         } else {
@@ -210,6 +217,7 @@ impl MobileHost {
                 } else {
                     None
                 };
+                let favorite_rank = favorites.favorite_rank(subscription, &outbound.tag);
                 NodeInfo {
                     tag: outbound.tag.clone(),
                     outbound_type: ty,
@@ -218,9 +226,29 @@ impl MobileHost {
                         .or(static_now)
                         .filter(|_| is_group),
                     group_all: if is_group { Some(members) } else { None },
+                    favorite: favorite_rank.is_some(),
+                    favorite_rank,
                 }
             })
             .collect())
+    }
+
+    /// Favorite or unfavorite a tag for the active subscription. A UI
+    /// preference: no config rewrite and no tunnel reload.
+    pub fn set_node_favorite(&self, tag: &str, favorite: bool) -> Result<(), AppError> {
+        let Some((subscription, profile)) = self.profile_with_subscription()? else {
+            return Err(AppError::new(
+                ErrorCode::ConfigEmptyOutbounds,
+                "no active subscription",
+            ));
+        };
+        if !profile.all_outbounds().any(|outbound| outbound.tag == tag) {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!("unknown node tag: {tag}"),
+            ));
+        }
+        persist_node_favorite(&self.paths()?.node_favorites(), subscription, tag, favorite)
     }
 
     pub fn set_selected_node(&mut self, tag: &str) -> Result<(), AppError> {
@@ -707,20 +735,34 @@ impl MobileHost {
 
     /// Tags, types, and group members. Connection fields stay on disk.
     fn profile(&self) -> Result<Arc<NormalizedProfile>, AppError> {
+        Ok(self
+            .profile_with_subscription()?
+            .map(|(_, profile)| profile)
+            .unwrap_or_else(|| Arc::new(NormalizedProfile::from_nodes_only(vec![]))))
+    }
+
+    /// Active subscription id paired with its resident profile. `None` means
+    /// no subscription is active; [`Self::profile`] cannot be used for that
+    /// check because it turns the missing subscription into an empty profile.
+    fn profile_with_subscription(
+        &self,
+    ) -> Result<Option<(Uuid, Arc<NormalizedProfile>)>, AppError> {
         let paths = self.paths()?;
         let settings = load_settings(&paths.settings())?;
         let sub_paths = SubscriptionPaths::from_app(paths);
         let index = read_index(&sub_paths)?;
+        let Some(meta) = active_subscription(&index) else {
+            return Ok(None);
+        };
+        let subscription = meta.id;
         match self.profile_cache.load_resident(
             &sub_paths,
             &index,
             settings.auto_default_rules,
             PLATFORM,
         ) {
-            Ok(profile) => Ok(profile),
-            Err(SubscriptionError::NoActiveSubscription) => {
-                Ok(Arc::new(NormalizedProfile::from_nodes_only(vec![])))
-            }
+            Ok(profile) => Ok(Some((subscription, profile))),
+            Err(SubscriptionError::NoActiveSubscription) => Ok(None),
             Err(err) => Err(err.into()),
         }
     }
@@ -917,6 +959,8 @@ pub struct NodeInfo {
     pub outbound_type: String,
     pub group_now: Option<String>,
     pub group_all: Option<Vec<String>>,
+    pub favorite: bool,
+    pub favorite_rank: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1101,5 +1145,114 @@ mod group_cache_tests {
         assert_eq!(host.preferred_cached_now("proxy").as_deref(), Some("jp"));
         let groups = host.fresh_groups().expect("fresh groups");
         assert_eq!(groups[0].now, "jp");
+    }
+}
+
+#[cfg(test)]
+mod favorite_tests {
+    use super::*;
+    use ice_config::load_node_favorites;
+    use ice_subscription::{write_subscription_success, SubscriptionFormat, SubscriptionSource};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn host_with_subscription(label: &str) -> (MobileHost, Uuid, AppPaths) {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-mobile-favorites-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths::new(&dir);
+        paths.ensure_dirs().unwrap();
+        let mut host = MobileHost::new();
+        host.ensure_paths(AppPaths::new(&dir), None).unwrap();
+
+        let id = Uuid::new_v4();
+        let meta = SubscriptionMeta {
+            id,
+            name: "test".into(),
+            url: "https://example.com/sub".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 2,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            provider_info: vec![],
+            auto_update: false,
+            auto_update_interval: None,
+            source: SubscriptionSource::Remote,
+        };
+        let profile = ice_config::NormalizedProfile::from_nodes_only(vec![
+            ice_config::NormalizedOutbound {
+                tag: "n1".into(),
+                outbound: Arc::new(
+                    serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+                ),
+            },
+            ice_config::NormalizedOutbound {
+                tag: "n2".into(),
+                outbound: Arc::new(
+                    serde_json::json!({"type":"socks","tag":"n2","server":"1.1.1.1","server_port":2}),
+                ),
+            },
+        ]);
+        write_subscription_success(&SubscriptionPaths::from_app(&paths), &meta, "{}", &profile)
+            .unwrap();
+        (host, id, paths)
+    }
+
+    #[test]
+    fn list_nodes_marks_favorites_and_toggles_do_not_rewrite_the_config() {
+        let (host, id, paths) = host_with_subscription("mark");
+        std::fs::write(paths.config(), b"runtime-config").unwrap();
+
+        let nodes = host.list_nodes(false).unwrap();
+        assert!(nodes.iter().all(|node| !node.favorite));
+
+        let err = host.set_node_favorite("missing", true).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid.as_str());
+
+        host.set_node_favorite("n2", true).unwrap();
+        let nodes = host.list_nodes(false).unwrap();
+        let n2 = nodes.iter().find(|node| node.tag == "n2").unwrap();
+        assert!(n2.favorite);
+        assert_eq!(n2.favorite_rank, Some(0));
+
+        host.set_node_favorite("n1", true).unwrap();
+        let nodes = host.list_nodes(false).unwrap();
+        let n1 = nodes.iter().find(|node| node.tag == "n1").unwrap();
+        let n2 = nodes.iter().find(|node| node.tag == "n2").unwrap();
+        assert_eq!(n1.favorite_rank, Some(0));
+        assert_eq!(n2.favorite_rank, Some(1));
+        assert!(load_node_favorites(&paths.node_favorites()).contains(id, "n1"));
+        assert_eq!(
+            std::fs::read_to_string(paths.config()).unwrap(),
+            "runtime-config",
+            "a favorite must not rewrite the tunnel config"
+        );
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn no_active_subscription_returns_empty_outbounds_and_removal_purges() {
+        let (host, id, paths) = host_with_subscription("purge");
+        host.set_node_favorite("n1", true).unwrap();
+        host.remove_subscription(id).unwrap();
+        assert!(load_node_favorites(&paths.node_favorites())
+            .tags(id)
+            .is_empty());
+
+        let err = host.set_node_favorite("n1", true).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
+        assert!(host.list_nodes(false).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(paths.root());
     }
 }
