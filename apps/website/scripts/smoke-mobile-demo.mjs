@@ -42,10 +42,13 @@ if (!fs.existsSync(path.join(distDir, "mobile-demo.html"))) {
 }
 
 function startPreview() {
-  const vite = path.join(websiteDir, "node_modules/.bin/vite");
+  // Resolve Vite's JS entry and run it with the current Node binary. The
+  // `node_modules/.bin/vite` shim is a `.cmd` file on Windows, which `spawn`
+  // cannot execute without a shell.
+  const viteBin = path.join(websiteDir, "node_modules", "vite", "bin", "vite.js");
   return spawn(
-    vite,
-    ["preview", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"],
+    process.execPath,
+    [viteBin, "preview", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"],
     { cwd: websiteDir, stdio: ["ignore", "pipe", "pipe"] },
   );
 }
