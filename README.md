@@ -9,7 +9,7 @@
 **Proxy, kept simple.**
 
 A lightweight proxy client for macOS, Windows, and Android.<br>
-Easy to set up, quick to start, quiet once it runs, and light on memory and CPU — with a bundled [sing-box](https://github.com/SagerNet/sing-box) core underneath.
+Easy to set up, quick to start, quiet once it runs, and agent-friendly — built on a [sing-box](https://github.com/SagerNet/sing-box) core.
 
 [![Release](https://img.shields.io/github/v/release/yilong-musk/ice-box?style=flat-square&label=release)](https://github.com/yilong-musk/ice-box/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/yilong-musk/ice-box/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/yilong-musk/ice-box/actions/workflows/ci.yml)
@@ -18,7 +18,7 @@ Easy to set up, quick to start, quiet once it runs, and light on memory and CPU 
 [![Core](https://img.shields.io/badge/sing--box-1.13.19-6f42c1?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![License](https://img.shields.io/github/license/yilong-musk/ice-box?style=flat-square)](LICENSE)
 
-[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [Stays light](#stays-light) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+[**Download**](https://github.com/yilong-musk/ice-box/releases/latest) · [**Live Demo**](https://yilong-musk.github.io/ice-box/) · [Install](#install) · [TUN](#tun-mode) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
 
 English · [简体中文](README.zh-CN.md)
 
@@ -28,7 +28,7 @@ English · [简体中文](README.zh-CN.md)
   <img src="docs/images/hero.png" alt="ice-box on desktop and Android: proxy status, mode switches, exit node, live traffic chart, and the phone-first Home with the node list" width="880">
 </a>
 
-<sub>Curious before installing? The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the real desktop UI and the phone-first Android UI in your browser against a simulated backend.</sub>
+<sub>The <a href="https://yilong-musk.github.io/ice-box/">Live Demo</a> runs the desktop and Android UIs in your browser against a simulated backend.</sub>
 
 </div>
 
@@ -38,44 +38,27 @@ Grab the installer for your platform from the [latest release](https://github.co
 
 | Platform | Installer | First launch |
 |---|---|---|
-| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. On macOS 15+ allow it in **System Settings → Privacy & Security → Open Anyway**; on older versions right-click **ice-box.app** and choose **Open**. Or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
-| **Windows** (x64) | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. The installer carries no Authenticode signature, so SmartScreen may ask you to confirm. |
-| **Android** (arm64) | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore. There is no Google Play listing. The first install asks Android for permission to install apps from this source. |
+| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. Allow it in **System Settings → Privacy & Security → Open Anyway** (macOS 15+), right-click **Open** (older versions), or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
+| **Windows** (x64) | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. It has no Authenticode signature, so SmartScreen may ask you to confirm. |
+| **Android** (arm64) | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore. There is no Google Play listing; Android asks for permission to install from this source. |
 
-**Updating.** On macOS and Windows, starting with 0.1.5, ice-box checks GitHub Releases in the background (toggle in Settings) and installs signature-verified updates from **Settings → App Updates**. Installations older than 0.1.5 need one manual upgrade first. On Android, **Settings → App Updates** checks the same catalog, downloads the arm64 APK inside the app, and hands it to the system installer. You confirm the install.
+**Updating.** On macOS and Windows (0.1.5+), ice-box checks GitHub Releases in the background and installs signature-verified updates from **Settings → App Updates**; older installs need one manual upgrade first. On Android, **Settings → App Updates** checks the same catalog, downloads the arm64 APK, and hands it to the system installer for confirmation.
 
 ## Quick start
 
-1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. On macOS and Windows, turn on **Auto update** if you like. Android refreshes a profile only when you import or refresh it. Traffic and expiry a provider publishes — as list entries (`Traffic: …`) or in the `subscription-userinfo` header — are parsed into one line on the subscription: used / total with the used share, plus the expiry date or “long-term”.
-2. **Pick a mode and a node.** On **Home** choose **Rule**, **Global**, or **Direct**. On **Nodes** pick an exit and test its latency.
-3. **Start the proxy service.** Press the power button. On macOS and Windows the system proxy is applied, or the TUN adapter comes up when TUN Mode is enabled. On Android the button connects the VPN after the system permission prompt. The traffic chart starts moving.
+1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. Desktop can auto-update profiles; Android refreshes only on import or manual refresh. Provider traffic and expiry from list entries or the `subscription-userinfo` header are summarized on the subscription line.
+2. **Pick a mode and a node.** On **Home**, choose **Rule**, **Global**, or **Direct**. On desktop, open **Nodes** to pick an exit and test its latency; on Android, use the node list on **Home**.
+3. **Start the proxy service.** Press the power button. Desktop applies the system proxy or starts TUN when enabled; Android connects the VPN after the system permission prompt.
 
-No subscription yet? ice-box starts in direct-only mode, so the core, the capture, and the UI can be explored before anything is imported.
-
-## Stays light
-
-ice-box stays light on memory and CPU while it runs.
+No subscription yet? ice-box starts in direct-only mode, so the core, capture, and UI can be explored before importing anything.
 
 ## Launch at login
 
-On macOS and Windows, turn on **Settings → Startup → Launch at login** to have
-the system start ice-box after you log in. A login start stays in the tray: the window never
-opens, the core starts as usual, and the last proxy state (system proxy or TUN)
-is restored, so the proxy is up without touching anything.
+On macOS and Windows, enable **Settings → Startup → Launch at login**. A login start stays in the tray with the window hidden, starts the core, and restores the last proxy state.
 
-The entry is registered per user — a LaunchAgent plist under
-`~/Library/LaunchAgents` on macOS, a `Run` value under `HKCU` on Windows — and
-re-pointed at the installed app on every launch. macOS 13 and later list it as
-a background item under **System Settings → General → Login Items**, where it
-can also be switched off. The in-app switch stays authoritative — while it is
-on, ice-box rewrites the OS entry on every start — so switching the item off in
-System Settings does not clear the in-app setting; turn the ice-box toggle off
-to remove the entry. Running straight from the disk image is refused with an
-explanation, because macOS runs such a copy from a path that disappears after
-the next reboot.
+The entry is registered per user — a LaunchAgent plist under `~/Library/LaunchAgents` on macOS, an `HKCU` `Run` value on Windows — and re-pointed at the installed app on every launch. macOS 13+ also lists it under **System Settings → General → Login Items**; the in-app switch stays authoritative, so turning the entry off there does not clear it. Running straight from the disk image is refused because that path disappears after reboot.
 
-Android has no login item. **Settings → System** explains battery-optimization
-exemption, strict Private DNS, and always-on VPN, which connects at boot.
+Android has no login item. **Settings → System** explains battery-optimization exemption, strict Private DNS, and always-on VPN.
 
 ## TUN mode
 
@@ -83,43 +66,17 @@ On macOS and Windows, TUN captures traffic at the network layer, covering apps t
 
 ## Agent access with MCP
 
-The macOS and Windows desktop app can expose a local MCP service for Agent
-clients. Open **MCP** above **Logs** and **Settings**, enable the service, and
-copy the generated client configuration. The Agent controls the running desktop
-session: it uses the same settings, subscriptions, data directory, core, and
-proxy session as the GUI instead of starting another runtime.
+The macOS and Windows app exposes an opt-in local MCP service. Open **MCP** above **Logs** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
 
-### Agent-friendly capabilities
+- **34 tools.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
+- **Safe by default.** MCP listens only on authenticated loopback with a random control token that is never included in the copied client config.
+- **Built-in stdio bridge.** The generated config launches the same executable in bridge mode, so no separate daemon or protocol adapter is needed.
 
-- **One shared live session.** GUI actions and Agent calls use the same
-  application state, orchestration locks, data directory, core, and capture
-  backend. State changes are announced to the other control surface.
-- **A broad tool surface.** The server exposes 34 tools for status, settings,
-  traffic, subscriptions, nodes and groups, rules, logs, runtime diagnostics,
-  proxy control, and protected TUN recovery.
-- **Machine-readable results.** Tool schemas and safety annotations are
-  discoverable through `tools/list`. Results include MCP text plus
-  `structuredContent` when available; failures set `isError` and preserve the
-  application error code and message.
-- **Safe defaults.** MCP is opt-in, listens only on loopback, requires a random
-  control token, and never includes that token in the copied client config.
-  Disabling, restarting, or quitting the app removes the active endpoint and
-  token.
-- **A simple stdio bridge.** The generated client config launches the same
-  executable in bridge mode, so Agent clients need no separate daemon or
-  protocol adapter. The bridge exits when its Agent session or the desktop
-  service closes.
-
-MCP is off by default and listens only on authenticated loopback. It is not
-available in the Android app; the website demo renders the MCP page with a
-simulated service. See [`docs/mcp.md`](docs/mcp.md) for setup, tool coverage,
-lifecycle, and security boundaries.
+MCP is desktop-only: Android has no MCP, and the website demo uses a simulated service. See [`docs/mcp.md`](docs/mcp.md) for setup, lifecycle, and security boundaries.
 
 ## Development
 
-Rust (stable), Node.js 22, and the Xcode Command Line Tools on macOS. An
-Android build also needs JDK 17, Go, and an Android SDK (`ANDROID_HOME`) with
-the packages installed by `scripts/ci-install-android-sdk.sh`.
+Rust (stable), Node.js 22, and the Xcode Command Line Tools on macOS. Android builds also need JDK 17, Go, and an Android SDK (`ANDROID_HOME`) with the packages installed by `scripts/ci-install-android-sdk.sh`.
 
 ```bash
 cd apps/desktop && npm install && cd ../..
@@ -130,7 +87,7 @@ npm run dev
 | Command | Purpose |
 |---|---|
 | `npm run dev:mac-arm64` / `dev:mac-x64` / `dev:win` | Run against a specific host target |
-| `npm run gate` | fmt, clippy, Rust tests, tsc, vitest |
+| `npm run gate` | Full workspace gate: fmt, clippy, Rust tests, typechecks, builds, smoke tests, fixtures |
 | `npm run fetch-singbox && npm run build` | Build the macOS `.dmg` |
 | `npm run fetch-singbox -- win && npm run build:win` | Build the Windows NSIS installer |
 | `npm run acceptance` / `acceptance:tun` / `acceptance:win` | Live acceptance gates on a real host |
@@ -141,20 +98,19 @@ npm run dev
 apps/desktop    React UI + Tauri shell for macOS and Windows
 apps/mobile     Android shell; reuses the desktop UI
 apps/website    GitHub Pages site and Live Demo
-crates/         Rust workspace: subscription, config, engine, proxy-sys, tun-sys, helper
-docs/           Architecture, TUN, testing, release process
+crates/         Rust workspace (main crates): ice-app, ice-config, ice-core, ice-engine, ice-subscription, ice-proxy-sys, ice-tun-sys, ice-elevate, ice-helper, ice-types, ...
 ```
 
 ## Documentation
 
 | Document | What you will find |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | System structure for macOS, Windows, and Android, component responsibilities, data flow, and design boundaries |
-| [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, shared-runtime model, tool coverage, and security boundaries |
-| [`docs/tun.md`](docs/tun.md) | TUN behavior, state machine, recovery, platform configuration, and limits |
+| [`docs/architecture.md`](docs/architecture.md) | System structure, component responsibilities, data flow, and design boundaries |
+| [`docs/mcp.md`](docs/mcp.md) | Desktop MCP setup, shared-runtime model, tools, and security |
+| [`docs/tun.md`](docs/tun.md) | TUN behavior, recovery, platform configuration, and limits |
 | [`docs/testing.md`](docs/testing.md) | Local and CI gate coverage, manual live tests |
-| [`docs/release-process.md`](docs/release-process.md) | Version bump, changelog, gate, tag, release pipeline |
-| [`CHANGELOG.md`](CHANGELOG.md) | What changed in every release |
+| [`docs/release-process.md`](docs/release-process.md) | Versioning, signing, packaging, and publishing |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
 ## License
 

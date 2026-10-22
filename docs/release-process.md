@@ -82,7 +82,7 @@ and refreshes `Cargo.lock` (`cargo check --workspace --quiet`).
 Add a section to `CHANGELOG.md` (Keep a Changelog style):
 
 ```markdown
-## [0.1.2] - 2026-09-01
+## [0.1.2] - 2026-08-31
 
 ### Added
 ...
@@ -210,12 +210,6 @@ git config http.proxy http://127.0.0.1:17890
 `gh` (the GitHub CLI) is not affected and can be used as a fallback check
 during outages. Retry with a short sleep between attempts; connections usually
 recover within a minute or two.
-
-### Node.js 20 deprecation warning in CI
-
-`actions/download-artifact@v6` still runs on Node 20 and is forced to Node 24
-on GitHub-hosted runners (warning only). Fixed by `@v7`; do not downgrade.
-`actions/upload-artifact@v6` already runs on Node 24.
 
 ## Distribution constraints
 

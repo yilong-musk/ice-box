@@ -8,13 +8,14 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Formatting, clippy and Rust library tests excluding the desktop crate; TUN integration tests; desktop/website/mobile typechecks; website installer-link tests; the mobile Live Demo smoke test; Vitest; updater fixtures; Android version-code fixtures; demo screenshots and the composed README hero |
+| `bash scripts/gate-local.sh` | Formatting; clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`); TUN integration tests; desktop/website/mobile typechecks; website installer-link tests; the mobile Live Demo smoke test; Vitest; updater fixtures; Android version-code and APK-signer fixtures; demo screenshots and the composed README hero |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
 
-The local gate omits desktop Rust tests because GTK/WebKit dependencies may be
-unavailable. Its screenshot step refreshes the desktop and Android Home captures
-when the version or relevant UI files change, or when any capture is missing,
-and recomposes the README hero on every run. CI skips screenshot capture.
+The local gate omits the desktop and mobile Tauri shells from clippy and Rust
+tests because GTK/WebKit dependencies may be unavailable. Its screenshot step
+refreshes the desktop and Android Home captures when the version or relevant UI
+files change, or when any capture is missing, and recomposes the README hero on
+every run. CI skips screenshot capture.
 
 The mobile Live Demo smoke test builds the website, serves `dist` with
 `vite preview`, and checks the phone iframe on the landing page: the node-list
