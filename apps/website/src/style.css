@@ -99,6 +99,11 @@
   outline-offset: 3px;
 }
 @media (max-width: 800px) {
+  /* The desktop window cannot reflow below its minimum width, so phones get
+     the Android Live Demo only. The lazy iframe never loads while hidden. */
+  .demo-section {
+    display: none;
+  }
   .brand {
     font-size: 16px;
   }

@@ -9,8 +9,12 @@
  *   - the landing page loads `mobile-demo.html` in the phone frame
  *   - the phone node list does not flash "service not running"
  *   - the phone shell renders all five tabs
- *   - the Apps fixtures load and per-app routing survives a tab round trip
+ *   - every demo node carries a country flag
+ *   - the Apps fixtures load, every row has an icon, and per-app routing
+ *     survives a tab round trip
+ *   - switching subscriptions replaces the node list
  *   - the VPN power button toggles and the node list follows it
+ *   - capture mode keeps the subscription expiry in the future
  *   - language and theme changes on the site reach the iframe
  *
  * Usage:
@@ -140,6 +144,13 @@ try {
     .locator('[data-testid="nodes-panel"] [role="listitem"]')
     .first()
     .waitFor({ timeout: 15_000 });
+  const firstNode = await frame
+    .locator('[data-testid="nodes-panel"] [role="listitem"]')
+    .first()
+    .textContent();
+  if (!firstNode?.includes("🇯🇵 Tokyo / edge-01")) {
+    throw new Error(`nodes fixture must carry country flags, got ${JSON.stringify(firstNode)}`);
+  }
   if (
     (await frame.getByText("Proxy service not running: delay tests").count()) > 0
   ) {
@@ -157,7 +168,11 @@ try {
   const appRows = frame.locator('[data-testid="apps-panel"] [role="listitem"]');
   await appRows.first().waitFor({ timeout: 15_000 });
   const apps = await appRows.count();
-  if (apps !== 8) throw new Error(`apps fixture must show 8 rows, got ${apps}`);
+  if (apps !== 20) throw new Error(`apps fixture must show 20 rows, got ${apps}`);
+  const appIcons = await appRows.locator("img").count();
+  if (appIcons !== apps) {
+    throw new Error(`every app row must show a real icon, got ${appIcons}/${apps}`);
+  }
 
   // A routing change is optimistic in the UI, so revisit the tab: the value
   // must come back from the fixture store rather than the seeded default.
@@ -178,7 +193,24 @@ try {
   await page.waitForTimeout(600);
   await youtube.getByText("Direct", { exact: true }).waitFor({ timeout: 8000 });
 
+  await tabs.nth(3).click();
+  const subItems = frame.locator('[data-testid="subs-panel"] [data-slot="item"]');
+  await subItems.first().waitFor({ timeout: 15_000 });
+  if ((await subItems.count()) !== 3) {
+    throw new Error(`subscriptions fixture must show 3 rows, got ${await subItems.count()}`);
+  }
+
+  // Switching profiles must load that subscription's node list: the Work
+  // profile advertises 12 nodes, while the Personal profile has 18.
+  await subItems.nth(1).getByRole("switch", { name: "Activate" }).click();
+  await subItems.nth(1).getByText("Active", { exact: true }).waitFor({ timeout: 8000 });
   await tabs.nth(0).click();
+  const homeNodeRows = frame
+    .getByTestId("home-panel")
+    .locator('[data-testid="nodes-panel"] [role="listitem"]');
+  await homeNodeRows.first().waitFor({ timeout: 15_000 });
+  await waitForAttribute(homeNodeRows.first(), "aria-setsize", "12");
+
   const power = frame.locator('[data-testid="home-panel"] button[aria-pressed]');
   if ((await power.textContent())?.trim() !== "Disconnect VPN") {
     throw new Error("phone demo must boot with the VPN connected");
@@ -216,6 +248,32 @@ try {
   if (errors.length > 0) {
     throw new Error(`browser console errors:\n${errors.join("\n")}`);
   }
+
+  // Capture mode must keep the fixture expiry in the future: the subscription
+  // list compares it with the real clock, so a date frozen at CAPTURE_NOW would
+  // turn every screenshot into an "Expired" state.
+  const captureContext = await browser.newContext({
+    viewport: { width: 390, height: 868 },
+    colorScheme: "dark",
+    locale: "en-US",
+  });
+  await captureContext.addInitScript(() => {
+    window.localStorage.setItem("ice-box.theme", "dark");
+    window.localStorage.setItem("ice-box.language", "en");
+  });
+  const capturePage = await captureContext.newPage();
+  await capturePage.goto(`${BASE_URL}/mobile-demo.html?capture=1`);
+  await capturePage.getByTestId("phone-shell").waitFor({ timeout: 30_000 });
+  await capturePage.getByTestId("phone-tab-bar").getByRole("button").nth(3).click();
+  const captureSubs = capturePage.locator(
+    '[data-testid="subs-panel"] [data-slot="item"]',
+  );
+  await captureSubs.first().waitFor({ timeout: 15_000 });
+  if ((await capturePage.getByText(/Expired/).count()) > 0) {
+    throw new Error("capture mode must not mark the subscription fixtures as expired");
+  }
+  await captureContext.close();
+
   console.log("smoke-mobile-demo: OK");
 } catch (error) {
   process.exitCode = 1;

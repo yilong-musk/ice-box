@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /* Live phone demo: the real Android UI in an iframe, framed in a Pixel-style
-   shell. The frame dimensions mirror `apps/website/scripts/capture-mobile.mjs`
-   so the live demo and the README screenshot show the same device. */
+   shell. The aspect ratio and chrome mirror `apps/website/scripts/capture-mobile.mjs`,
+   while the stage scales the whole device to fit the landing page. */
 
 .phone-demo {
   display: grid;
@@ -42,7 +42,7 @@
 
 .phone-demo-stage {
   display: flex;
-  width: 418px;
+  width: 380px;
   max-width: 100%;
   justify-content: center;
 }
@@ -235,5 +235,17 @@
 
   .phone-demo-copy {
     max-width: 560px;
+  }
+
+  .phone-demo-stage {
+    width: min(100%, 336px);
+  }
+}
+
+/* Phones only show the Android demo, so its introduction is redundant: drop
+   the copy and let the phone frame follow the hero directly. */
+@media (max-width: 800px) {
+  .phone-demo-copy {
+    display: none;
   }
 }

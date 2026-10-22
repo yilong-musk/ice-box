@@ -55,13 +55,15 @@ function isCaptureMode(): boolean {
 const CAPTURE_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
 const DEMO_LANDING_IP = "203.0.113.42";
 const DEMO_INITIAL_RUN_MS = 18 * 60_000 + 42_000;
+const TOKYO_NODE = "🇯🇵 Tokyo / edge-01";
+const SINGAPORE_NODE = "🇸🇬 Singapore / edge-02";
 
 const settings: AppSettings = {
   mixed_listen: "127.0.0.1",
   mixed_port: 17890,
   clash_api_listen: "127.0.0.1",
   clash_api_port: 19090,
-  selected_tag: "Tokyo / edge-01",
+  selected_tag: TOKYO_NODE,
   auto_set_system_proxy: true,
   proxy_service_enabled: false,
   tray_display_mode: "icon_and_speed",
@@ -87,33 +89,79 @@ const settings: AppSettings = {
   },
 };
 
-const nodes: NodeInfo[] = [
-  { tag: "Tokyo / edge-01", outbound_type: "vmess", group_now: null, group_all: null },
-  { tag: "Singapore / edge-02", outbound_type: "trojan", group_now: null, group_all: null },
-  { tag: "Los Angeles / edge-03", outbound_type: "shadowsocks", group_now: null, group_all: null },
-  { tag: "Frankfurt / edge-04", outbound_type: "hysteria2", group_now: null, group_all: null },
-  { tag: "Seoul / edge-05", outbound_type: "vless", group_now: null, group_all: null },
-  { tag: "Hong Kong / edge-06", outbound_type: "trojan", group_now: null, group_all: null },
-  { tag: "Sydney / edge-07", outbound_type: "shadowsocks", group_now: null, group_all: null },
-  { tag: "London / edge-08", outbound_type: "vless", group_now: null, group_all: null },
-  { tag: "New York / edge-09", outbound_type: "vmess", group_now: null, group_all: null },
-  { tag: "Toronto / edge-10", outbound_type: "trojan", group_now: null, group_all: null },
-  { tag: "Amsterdam / edge-11", outbound_type: "hysteria2", group_now: null, group_all: null },
-  { tag: "Paris / edge-12", outbound_type: "shadowsocks", group_now: null, group_all: null },
-  { tag: "Mumbai / edge-13", outbound_type: "vless", group_now: null, group_all: null },
-  { tag: "Dubai / edge-14", outbound_type: "trojan", group_now: null, group_all: null },
-  { tag: "São Paulo / edge-15", outbound_type: "vmess", group_now: null, group_all: null },
-  { tag: "Zurich / edge-16", outbound_type: "hysteria2", group_now: null, group_all: null },
-  { tag: "Osaka / edge-17", outbound_type: "vless", group_now: null, group_all: null },
-  { tag: "Helsinki / edge-18", outbound_type: "trojan", group_now: null, group_all: null },
+const personalNodes: NodeInfo[] = [
+  { tag: TOKYO_NODE, outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: SINGAPORE_NODE, outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇺🇸 Los Angeles / edge-03", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇩🇪 Frankfurt / edge-04", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇰🇷 Seoul / edge-05", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇭🇰 Hong Kong / edge-06", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇦🇺 Sydney / edge-07", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇬🇧 London / edge-08", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇺🇸 New York / edge-09", outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: "🇨🇦 Toronto / edge-10", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇳🇱 Amsterdam / edge-11", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇫🇷 Paris / edge-12", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇮🇳 Mumbai / edge-13", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇦🇪 Dubai / edge-14", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇧🇷 São Paulo / edge-15", outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: "🇨🇭 Zurich / edge-16", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇯🇵 Osaka / edge-17", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇫🇮 Helsinki / edge-18", outbound_type: "trojan", group_now: null, group_all: null },
 ];
 
-/** Demo quota: 125 GiB of a 500 GiB plan, always 45 days from expiring. */
+/**
+ * Each demo subscription exposes a different node list, so switching profiles
+ * changes the Nodes and Home pages. Every list keeps the two tags referenced
+ * by the rules and log fixtures.
+ */
+const workNodes = personalNodes.slice(0, 12);
+
+const streamingNodes: NodeInfo[] = [
+  ...personalNodes,
+  { tag: "🇯🇵 Fukuoka / edge-19", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇸🇬 Jurong / edge-20", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇺🇸 Seattle / edge-21", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇺🇸 Miami / edge-22", outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: "🇨🇦 Vancouver / edge-23", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇬🇧 Manchester / edge-24", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇩🇪 Berlin / edge-25", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇫🇷 Marseille / edge-26", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇳🇱 Rotterdam / edge-27", outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: "🇨🇭 Geneva / edge-28", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇸🇪 Stockholm / edge-29", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇳🇴 Oslo / edge-30", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇮🇹 Milan / edge-31", outbound_type: "hysteria2", group_now: null, group_all: null },
+  { tag: "🇪🇸 Madrid / edge-32", outbound_type: "vmess", group_now: null, group_all: null },
+  { tag: "🇵🇱 Warsaw / edge-33", outbound_type: "shadowsocks", group_now: null, group_all: null },
+  { tag: "🇹🇷 Istanbul / edge-34", outbound_type: "trojan", group_now: null, group_all: null },
+  { tag: "🇿🇦 Johannesburg / edge-35", outbound_type: "vless", group_now: null, group_all: null },
+  { tag: "🇦🇷 Buenos Aires / edge-36", outbound_type: "hysteria2", group_now: null, group_all: null },
+];
+
+/** Capture mode freezes timestamps, so README screenshots stay reproducible. */
+function demoNowMs(): number {
+  return isCaptureMode() ? CAPTURE_NOW : Date.now();
+}
+
+/**
+ * Capture mode freezes expiration dates too, but the UI compares them with the
+ * real clock. A date derived from `CAPTURE_NOW` would therefore age into
+ * "Expired"; pin capture-mode expiry far enough ahead instead.
+ */
+const CAPTURE_EXPIRY_MS = Date.UTC(2030, 0, 1);
+
+function demoExpiryMs(days: number): number {
+  const base = isCaptureMode() ? CAPTURE_EXPIRY_MS : Date.now();
+  return base + days * 24 * 3600_000;
+}
+
+/** Demo quota: 125 GiB of a 500 GiB plan. */
 const DEMO_QUOTA = {
   upload: 4 * 1024 ** 3,
   download: 121 * 1024 ** 3,
   total: 500 * 1024 ** 3,
-  expire: Math.floor(Date.now() / 1000) + 45 * 24 * 3600,
+  expire: Math.floor(demoExpiryMs(45) / 1000),
 };
 
 const subscriptions: SubscriptionMeta[] = [
@@ -123,12 +171,12 @@ const subscriptions: SubscriptionMeta[] = [
     url: "https://demo.ice-box.dev/profile.yaml",
     active: true,
     format: "Clash",
-    node_count: nodes.length,
+    node_count: personalNodes.length,
     group_count: 3,
     rule_count: 42,
     has_dns: true,
     parse_warnings: [],
-    last_updated: new Date((isCaptureMode() ? CAPTURE_NOW : Date.now()) - 4 * 60_000).toISOString(),
+    last_updated: new Date(demoNowMs() - 4 * 60_000).toISOString(),
     last_error: null,
     etag: null,
     last_modified: null,
@@ -142,13 +190,79 @@ const subscriptions: SubscriptionMeta[] = [
     auto_update: true,
     auto_update_interval: "one_hour",
   },
+  {
+    id: "demo-work",
+    name: "Work profile",
+    url: "https://demo.ice-box.dev/work-singbox.json",
+    active: false,
+    format: "sing-box",
+    node_count: workNodes.length,
+    group_count: 2,
+    rule_count: 18,
+    has_dns: false,
+    parse_warnings: [],
+    last_updated: new Date(demoNowMs() - 2 * 60 * 60_000).toISOString(),
+    last_error: null,
+    etag: "\"demo-work-3\"",
+    last_modified: null,
+    userinfo: {
+      upload: 2 * 1024 ** 3,
+      download: 16 * 1024 ** 3,
+      total: 200 * 1024 ** 3,
+      expire: Math.floor(demoExpiryMs(90) / 1000),
+    },
+    provider_info: [],
+    auto_update: true,
+    auto_update_interval: "six_hours",
+    source: "remote",
+  },
+  {
+    id: "demo-streaming",
+    name: "Streaming profile",
+    url: "https://demo.ice-box.dev/streaming.yaml",
+    active: false,
+    format: "Clash",
+    node_count: streamingNodes.length,
+    group_count: 4,
+    rule_count: 0,
+    has_dns: true,
+    parse_warnings: [],
+    last_updated: new Date(demoNowMs() - 26 * 60 * 60_000).toISOString(),
+    last_error: null,
+    etag: null,
+    last_modified: new Date(demoNowMs() - 26 * 60 * 60_000).toUTCString(),
+    // This provider reports usage in the list body instead of the header.
+    userinfo: null,
+    provider_info: [
+      "Traffic: 28.4 GB | 100 GB",
+      `Expire: ${new Date(demoExpiryMs(120)).toISOString().slice(0, 10)}`,
+    ],
+    auto_update: false,
+    auto_update_interval: null,
+    source: "remote",
+  },
 ];
 
+/** Nodes loaded by each demo subscription; the active one drives the UI. */
+const nodesBySubscription: Record<string, NodeInfo[]> = {
+  "demo-profile": personalNodes,
+  "demo-work": workNodes,
+  "demo-streaming": streamingNodes,
+};
+
+function activeSubscription(): SubscriptionMeta | undefined {
+  return subscriptions.find((sub) => sub.active);
+}
+
+function activeNodes(): NodeInfo[] {
+  return nodesBySubscription[activeSubscription()?.id ?? ""] ?? personalNodes;
+}
+
 const ruleRows = [
-  ["domain", "github.com", "Tokyo / edge-01"],
-  ["domain_suffix", "googleapis.com", "Singapore / edge-02"],
+  ["domain", "github.com", TOKYO_NODE],
+  ["domain_suffix", "googleapis.com", SINGAPORE_NODE],
   ["geoip", "cn", "direct"],
-  ["final", "match all remaining traffic", "Tokyo / edge-01"],
+  ["final", "match all remaining traffic", TOKYO_NODE],
 ].map(([rule_type, value, outbound], index) => ({
   index,
   fingerprint: `demo-rule-${index}`,
@@ -163,6 +277,8 @@ let runningSinceMs = Date.now() - DEMO_INITIAL_RUN_MS;
 let trafficTick = 0;
 let mcpEnabled = true;
 let mcpRunning = true;
+/** Keeps imported ids unique after a demo subscription is deleted. */
+let subscriptionSequence = subscriptions.length;
 
 function demoMcpStatus(): McpStatus {
   const bridgeExecutable = "/Applications/ice-box.app/Contents/MacOS/ice-box";
@@ -235,8 +351,9 @@ export const api = {
       helper_stale: false,
       tun_elevation_ready: true,
       tray_display_supported: false,
-      has_nodes: nodes.length > 0,
+      has_nodes: activeNodes().length > 0,
       selected_outbound: (() => {
+        const nodes = activeNodes();
         const node = nodes.find((item) => item.tag === settings.selected_tag) ?? nodes[0];
         if (!node) return null;
         return {
@@ -288,7 +405,7 @@ export const api = {
   },
   async setTrayLanguage(): Promise<void> {},
   async setTrayUpdateAvailable(): Promise<void> {},
-  async listNodes(): Promise<NodeInfo[]> { await delay(); return [...nodes]; },
+  async listNodes(): Promise<NodeInfo[]> { await delay(); return [...activeNodes()]; },
   async setSelectedNode(tag: string): Promise<void> { settings.selected_tag = tag; await delay(); },
   async setGroupSelection(): Promise<void> { await delay(); },
   async testNodeDelay(tag: string): Promise<DelayTestResponse> { await delay(300); return { tag, delay_ms: 42 + Math.floor(Math.random() * 90) }; },
@@ -351,7 +468,7 @@ export const api = {
   async getLogView(_n: number): Promise<string[]> {
     await delay();
     const user = [
-      "INFO 09-08 22:04:31 api.github.com:443 → Tokyo / edge-01",
+      `INFO 09-08 22:04:31 api.github.com:443 → ${TOKYO_NODE}`,
       "INFO 09-08 22:04:16 ice_core: subscription Profile refreshed",
     ];
     if (!settings.log_debug) return user;
@@ -361,7 +478,7 @@ export const api = {
       "INFO 09-08 22:04:29 [TCP] dial api.github.com:443",
     ];
   },
-  async getRuntimeConfig(): Promise<string> { return "{\n  \"route\": { \"final\": \"Tokyo / edge-01\" }\n}"; },
+  async getRuntimeConfig(): Promise<string> { return JSON.stringify({ route: { final: TOKYO_NODE } }, null, 2); },
   async revealDataDir(): Promise<void> {},
   async copyProxyCommand(): Promise<void> { await delay(); },
   async openProxyTerminal(): Promise<void> { await delay(); },
@@ -369,20 +486,86 @@ export const api = {
   async listApps(): Promise<InstalledApp[]> { return []; },
   async setAppProxy(_packageName: string, _mode: AppProxyMode): Promise<void> {},
   async listSubscriptions(): Promise<SubscriptionMeta[]> { await delay(); return [...subscriptions]; },
-  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> { await delay(180); const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url, name: name || "Imported profile", auto_update: autoUpdate, auto_update_interval: autoUpdate ? interval : null, source: "remote" as const }; subscriptions.push(sub); return sub; },
+  async addSubscription(url: string, name?: string, autoUpdate = false, interval: SubscriptionAutoUpdateInterval = "one_hour"): Promise<SubscriptionMeta> {
+    await delay(180);
+    const sub: SubscriptionMeta = {
+      id: `demo-${++subscriptionSequence}`,
+      name: name || "Imported profile",
+      url,
+      active: false,
+      format: "Clash",
+      node_count: 0,
+      group_count: 0,
+      rule_count: 0,
+      has_dns: false,
+      parse_warnings: [],
+      last_updated: new Date(demoNowMs()).toISOString(),
+      last_error: null,
+      etag: null,
+      last_modified: null,
+      userinfo: null,
+      provider_info: [],
+      auto_update: autoUpdate,
+      auto_update_interval: autoUpdate ? interval : null,
+      source: "remote",
+    };
+    subscriptions.push(sub);
+    return sub;
+  },
   async importSubscriptionFile(content: string, name?: string): Promise<SubscriptionMeta> {
     await delay(180);
     const trimmed = content.trim();
     if (!trimmed.startsWith("{") || (!trimmed.includes("\"outbounds\"") && !trimmed.includes("\"endpoints\""))) {
       throw { code: "sub.parse_failed", message: "invalid sing-box subscription: not a sing-box configuration" };
     }
-    const sub = { ...subscriptions[0], id: `demo-${subscriptions.length + 1}`, url: "", name: name || "Imported file", auto_update: false, auto_update_interval: null, source: "file" as const, format: "sing_box" };
+    const sub: SubscriptionMeta = {
+      id: `demo-${++subscriptionSequence}`,
+      name: name || "Imported file",
+      url: "",
+      active: false,
+      format: "sing_box",
+      node_count: 0,
+      group_count: 0,
+      rule_count: 0,
+      has_dns: false,
+      parse_warnings: [],
+      last_updated: new Date(demoNowMs()).toISOString(),
+      last_error: null,
+      etag: null,
+      last_modified: null,
+      userinfo: null,
+      provider_info: [],
+      auto_update: false,
+      auto_update_interval: null,
+      source: "file",
+    };
     subscriptions.push(sub);
     return sub;
   },
   async removeSubscription(id: string): Promise<{ ok: boolean }> { await delay(); const index = subscriptions.findIndex((sub) => sub.id === id); if (index >= 0) subscriptions.splice(index, 1); return { ok: true }; },
-  async updateSubscription(): Promise<SubscriptionMeta> { await delay(220); return subscriptions[0]; },
-  async setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.active = active; return sub; },
+  async updateSubscription(id: string): Promise<SubscriptionMeta> {
+    await delay(220);
+    const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
+    sub.last_updated = new Date(demoNowMs()).toISOString();
+    sub.last_error = null;
+    return sub;
+  },
+  async setSubscriptionActive(id: string, active: boolean): Promise<SubscriptionMeta> {
+    await delay();
+    const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
+    // A profile switch activates exactly one subscription.
+    if (active) {
+      for (const item of subscriptions) item.active = item.id === sub.id;
+      // Keep the selection inside the newly active profile's node list.
+      const nextNodes = nodesBySubscription[sub.id];
+      if (nextNodes && !nextNodes.some((node) => node.tag === settings.selected_tag)) {
+        settings.selected_tag = nextNodes[0]?.tag ?? null;
+      }
+    } else {
+      sub.active = false;
+    }
+    return sub;
+  },
   async setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.auto_update = autoUpdate; sub.auto_update_interval = autoUpdate ? interval : null; return sub; },
   async subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string> {
     await delay();

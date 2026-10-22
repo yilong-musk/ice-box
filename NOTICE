@@ -40,6 +40,14 @@ When redistributing a binary build of ice-box that includes sing-box:
 3. Do not use the name "sing-box" or imply association with that project
    without prior consent, as required by the upstream additional clause.
 
+### Dashboard Icons
+
+The website Live Demo bundles a subset of
+[Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) under
+`apps/website/src/assets/app-icons/` for the simulated Android application
+list. The icons are licensed under the Apache License 2.0; the full text is in
+that directory's `LICENSE` file. The marks remain trademarks of their owners.
+
 ### Twemoji Country Flags (via country-flag-emoji-polyfill)
 
 The desktop app may bundle `TwemojiCountryFlags.woff2` (a flag-only subset of

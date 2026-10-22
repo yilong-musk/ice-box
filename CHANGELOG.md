@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The website Live Demo shows country flags on every node, a 20-app Android
+  list with real brand icons, and three sample subscriptions with their own
+  node lists.
 - The website Live Demo now includes the phone-first Android UI in a phone
   frame, running against the same simulated backend as the desktop demo. Tabs,
   the VPN power button, per-app routing, language, and theme are interactive.
@@ -24,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The website hides the desktop Live Demo and the mobile demo's introduction
+  below 800px, so phones show only the Android demo. The phone frame is scaled
+  down slightly, and the desktop iframe is lazy-loaded and never fetched while
+  hidden.
 - The website hero stacks the headline above the download actions and version
   details, with the whole block centered.
 - The website headline describes ice-box as a low-overhead, agent-friendly

@@ -17,17 +17,50 @@ import type {
   StatusResponse,
 } from "../../desktop/src/api/contracts";
 import { readLanguagePreference } from "../../desktop/src/lib/language";
+import chromeIcon from "./assets/app-icons/chrome.svg?url";
+import discordIcon from "./assets/app-icons/discord.svg?url";
+import githubIcon from "./assets/app-icons/github.svg?url";
+import gmailIcon from "./assets/app-icons/gmail.svg?url";
+import googleCalendarIcon from "./assets/app-icons/google-calendar.svg?url";
+import googleDriveIcon from "./assets/app-icons/google-drive.svg?url";
+import googleMapsIcon from "./assets/app-icons/google-maps.svg?url";
+import googlePhotosIcon from "./assets/app-icons/google-photos.svg?url";
+import instagramIcon from "./assets/app-icons/instagram.svg?url";
+import netflixIcon from "./assets/app-icons/netflix.svg?url";
+import redditIcon from "./assets/app-icons/reddit.svg?url";
+import signalIcon from "./assets/app-icons/signal.svg?url";
+import slackIcon from "./assets/app-icons/slack.svg?url";
+import spotifyIcon from "./assets/app-icons/spotify.svg?url";
+import telegramIcon from "./assets/app-icons/telegram.svg?url";
+import tiktokIcon from "./assets/app-icons/tiktok.svg?url";
+import twitchIcon from "./assets/app-icons/twitch.svg?url";
+import whatsappIcon from "./assets/app-icons/whatsapp.svg?url";
+import xIcon from "./assets/app-icons/x.svg?url";
+import youtubeIcon from "./assets/app-icons/youtube.svg?url";
 
-/** One app per routing mode so the Apps page shows every badge. */
+/** A realistic Android app list with launcher icons; every routing mode has
+ * at least one row, and the rest stay on the default follow rules. */
 const apps: InstalledApp[] = [
-  { package_name: "com.google.android.youtube", label: "YouTube", system: false, icon: null },
-  { package_name: "com.android.chrome", label: "Chrome", system: true, icon: null },
-  { package_name: "org.telegram.messenger", label: "Telegram", system: false, icon: null },
-  { package_name: "com.spotify.music", label: "Spotify", system: false, icon: null },
-  { package_name: "com.google.android.gm", label: "Gmail", system: true, icon: null },
-  { package_name: "com.github.android", label: "GitHub", system: false, icon: null },
-  { package_name: "com.netflix.mediaclient", label: "Netflix", system: false, icon: null },
-  { package_name: "com.google.android.apps.maps", label: "Maps", system: true, icon: null },
+  { package_name: "com.google.android.youtube", label: "YouTube", system: false, icon: youtubeIcon },
+  { package_name: "com.android.chrome", label: "Chrome", system: true, icon: chromeIcon },
+  { package_name: "org.telegram.messenger", label: "Telegram", system: false, icon: telegramIcon },
+  { package_name: "com.spotify.music", label: "Spotify", system: false, icon: spotifyIcon },
+  { package_name: "com.google.android.gm", label: "Gmail", system: true, icon: gmailIcon },
+  { package_name: "com.github.android", label: "GitHub", system: false, icon: githubIcon },
+  { package_name: "com.netflix.mediaclient", label: "Netflix", system: false, icon: netflixIcon },
+  { package_name: "com.google.android.apps.maps", label: "Maps", system: true, icon: googleMapsIcon },
+  { package_name: "com.instagram.android", label: "Instagram", system: false, icon: instagramIcon },
+  { package_name: "com.whatsapp", label: "WhatsApp", system: false, icon: whatsappIcon },
+  { package_name: "com.discord", label: "Discord", system: false, icon: discordIcon },
+  { package_name: "com.Slack", label: "Slack", system: false, icon: slackIcon },
+  { package_name: "com.zhiliaoapp.musically", label: "TikTok", system: false, icon: tiktokIcon },
+  { package_name: "com.twitter.android", label: "X", system: false, icon: xIcon },
+  { package_name: "org.thoughtcrime.securesms", label: "Signal", system: false, icon: signalIcon },
+  { package_name: "com.reddit.frontpage", label: "Reddit", system: false, icon: redditIcon },
+  { package_name: "tv.twitch.android.app", label: "Twitch", system: false, icon: twitchIcon },
+  { package_name: "com.google.android.apps.photos", label: "Photos", system: true, icon: googlePhotosIcon },
+  { package_name: "com.google.android.apps.docs", label: "Drive", system: true, icon: googleDriveIcon },
+  { package_name: "com.google.android.calendar", label: "Calendar", system: true, icon: googleCalendarIcon },
 ];
 
 const appProxies: Record<string, AppProxyMode> = {
@@ -36,6 +69,16 @@ const appProxies: Record<string, AppProxyMode> = {
   "org.telegram.messenger": "proxy",
   "com.google.android.gm": "direct",
   "com.github.android": "block",
+  "com.netflix.mediaclient": "proxy",
+  "com.instagram.android": "proxy",
+  "com.whatsapp": "direct",
+  "com.discord": "proxy",
+  "com.Slack": "block",
+  "com.zhiliaoapp.musically": "block",
+  "com.twitter.android": "proxy",
+  "org.thoughtcrime.securesms": "direct",
+  "com.reddit.frontpage": "proxy",
+  "com.google.android.apps.docs": "direct",
 };
 
 /**

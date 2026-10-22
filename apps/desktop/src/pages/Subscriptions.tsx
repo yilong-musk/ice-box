@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Share } from "lucide-react";
+import { Plus, Share } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -180,12 +180,15 @@ export function Subscriptions({ active = true }: Props) {
             size="sm"
             variant="outline"
             disabled={busy}
+            aria-label={t("subs.importTitle")}
+            title={phone ? t("subs.importTitle") : undefined}
             onClick={() => {
               setError(null);
               setImportOpen(true);
             }}
           >
-            {t("subs.importTitle")}
+            {phone ? <Plus /> : null}
+            {phone ? null : t("subs.importTitle")}
           </Button>
         </TitlebarActions>
       ) : null}
@@ -223,7 +226,7 @@ export function Subscriptions({ active = true }: Props) {
                         s.active ? "border-foreground/30 bg-muted" : "bg-muted"
                       }
                     >
-                      <ItemHeader>
+                      <ItemHeader className={phone ? "flex-wrap" : undefined}>
                         <ItemTitle title={s.name}>
                           <span className="truncate">{s.name}</span>
                           {s.source === "file" ? (
@@ -233,7 +236,13 @@ export function Subscriptions({ active = true }: Props) {
                           ) : null}
                           {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                         </ItemTitle>
-                        <ItemActions className="flex-nowrap">
+                        <ItemActions
+                          className={
+                            phone
+                              ? "w-full flex-nowrap justify-end"
+                              : "flex-nowrap"
+                          }
+                        >
                           <Button
                             type="button"
                             size="sm"
