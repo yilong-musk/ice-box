@@ -363,6 +363,34 @@ mod tests {
     }
 
     #[test]
+    fn adding_past_the_cap_drops_the_oldest_tag() {
+        let path = temp_path("add-cap");
+        let id = Uuid::new_v4();
+        let tags: Vec<String> = (0..MAX_FAVORITES_PER_SUBSCRIPTION)
+            .map(|index| format!("node-{index}"))
+            .collect();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "version": 1,
+                "subscriptions": { id.to_string(): tags }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        set_node_favorite(&path, id, "newest", true).unwrap();
+
+        let loaded = load_node_favorites(&path);
+        let loaded_tags = loaded.tags(id);
+        assert_eq!(loaded_tags.len(), MAX_FAVORITES_PER_SUBSCRIPTION);
+        assert_eq!(loaded_tags.first().map(String::as_str), Some("newest"));
+        assert_eq!(loaded_tags.last().map(String::as_str), Some("node-498"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn toggling_moves_to_front_and_clears_empty_subscriptions() {
         let path = temp_path("toggle");
         let id = Uuid::new_v4();

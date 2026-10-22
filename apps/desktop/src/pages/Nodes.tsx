@@ -232,6 +232,7 @@ type NodeRowProps = {
   running: boolean;
   busy: boolean;
   favoritePending: boolean;
+  selectionPending: boolean;
   embedded: boolean;
   delay: DelayCell;
   delays: Record<string, DelayCell>;
@@ -253,6 +254,7 @@ const NodeRow = memo(function NodeRow({
   running,
   busy,
   favoritePending,
+  selectionPending,
   embedded,
   delay,
   delays,
@@ -339,7 +341,7 @@ const NodeRow = memo(function NodeRow({
             <ItemActions className="flex-nowrap">
               <FavoriteButton
                 node={node}
-                pending={favoritePending}
+                pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
               <button
@@ -384,7 +386,7 @@ const NodeRow = memo(function NodeRow({
               {delayBadge(delay)}
               <FavoriteButton
                 node={node}
-                pending={favoritePending}
+                pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
               <button
@@ -452,9 +454,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [favoritePending, setFavoritePending] = useState(false);
+  const [selectionPending, setSelectionPending] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const cancelRef = useRef(false);
   const favoriteInFlightRef = useRef(false);
+  const selectionInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const activeRef = useRef(active);
   const delayRunRef = useRef(0);
@@ -708,7 +712,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const onToggleFavorite = useCallback(
     (node: NodeInfo) => {
       void (async () => {
-        if (favoriteInFlightRef.current) return;
+        if (favoriteInFlightRef.current || selectionInFlightRef.current) return;
         favoriteInFlightRef.current = true;
         setFavoritePending(true);
         // Invalidate any poll that started before the optimistic update.
@@ -767,6 +771,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }
 
   async function onSelect(tag: string) {
+    if (favoriteInFlightRef.current || selectionInFlightRef.current) return;
+    selectionInFlightRef.current = true;
+    setSelectionPending(true);
     nextGeneration();
     setBusy(true);
     setError(null);
@@ -785,11 +792,18 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {
-      if (mountedRef.current) setBusy(false);
+      selectionInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSelectionPending(false);
+        setBusy(false);
+      }
     }
   }
 
   async function onGroupSelect(group: string, member: string) {
+    if (favoriteInFlightRef.current || selectionInFlightRef.current) return;
+    selectionInFlightRef.current = true;
+    setSelectionPending(true);
     nextGeneration();
     setBusy(true);
     setError(null);
@@ -809,7 +823,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     } catch (e) {
       if (mountedRef.current) setError(formatInvokeError(e));
     } finally {
-      if (mountedRef.current) setBusy(false);
+      selectionInFlightRef.current = false;
+      if (mountedRef.current) {
+        setSelectionPending(false);
+        setBusy(false);
+      }
     }
   }
 
@@ -915,6 +933,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
                       running={running}
                       busy={busy}
                       favoritePending={favoritePending}
+                      selectionPending={selectionPending}
                       embedded={embedded}
                       delay={delays[n.tag] ?? null}
                       delays={expanded ? delays : EMPTY_DELAYS}

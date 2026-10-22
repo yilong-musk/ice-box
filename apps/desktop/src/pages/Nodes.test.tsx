@@ -1044,6 +1044,36 @@ describe("Nodes", () => {
     });
   });
 
+  it("ignores a star click while a selection is pending", async () => {
+    let release: () => void = () => {};
+    setSelectedNode.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    const row = rowOf(view, "node-b");
+    fireEvent.click(
+      within(row).getByRole("button", { name: t("nodes.select") }),
+    );
+    await waitFor(() => expect(star(row)).toBeDisabled());
+
+    fireEvent.click(star(row));
+    expect(setNodeFavorite).not.toHaveBeenCalled();
+    expect(
+      readNodesSnapshot()?.nodes.find((node) => node.tag === "node-b")?.favorite,
+    ).not.toBe(true);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(star(rowOf(view, "node-b"))).toBeEnabled());
+  });
+
   it("keeps the single-flight guard through the post-success refresh", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
