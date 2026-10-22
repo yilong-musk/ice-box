@@ -39,6 +39,12 @@ jobs:
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/${{ matrix.app }}
+      # npm 10 still calls the retired quick audit endpoint, which can reject a
+      # valid lockfile with "Invalid package tree" (400). npm 11 uses the bulk
+      # advisory endpoint instead.
+      - name: Use npm with the bulk audit endpoint
+        run: npm install --global npm@11
+
       - name: Audit high and critical advisories
         run: npm audit --audit-level=high
         working-directory: apps/${{ matrix.app }}
