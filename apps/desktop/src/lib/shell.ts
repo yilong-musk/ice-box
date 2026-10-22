@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** Desktop and the desktop website demo. The mobile build and the phone demo
- * alias this module. */
+/** Desktop and the desktop website demo. The mobile build and the phone
+ * website demo provide their own `@platform/shell`. */
 export function isPhoneShell(): boolean {
   return false;
 }

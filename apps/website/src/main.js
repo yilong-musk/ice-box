@@ -8,6 +8,11 @@ import {
   resolveLanguage,
 } from "../../desktop/src/lib/language";
 import {
+  THEME_STORAGE_KEY,
+  readThemePreference,
+  resolveTheme,
+} from "../../desktop/src/lib/theme";
+import {
   INSTALLER_PLATFORMS,
   detectPlatform,
   installerDownloadUrl,
@@ -75,9 +80,9 @@ root.innerHTML = `
             <div class="phone-status-bar" aria-hidden="true">
               <span class="phone-clock"></span>
               <div class="phone-status-icons">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12.65 10A5.99 5.99 0 0 0 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 0 0 5.65-4H17v4h4v-4h2v-4H12.65ZM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z" fill="#ecedef"/></svg>
-                <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><path d="M3.1 6.7C4.2 5.7 5.5 5.1 7 5.1s2.8.6 3.9 1.6" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><path d="M5.2 9.1C5.8 8.5 6.4 8.2 7 8.2s1.2.3 1.8.9" stroke="#ecedef" stroke-width="1.6" stroke-linecap="round"/><circle cx="7" cy="10.4" r="0.9" fill="#ecedef"/></svg>
-                <svg width="22" height="11" viewBox="0 0 22 11" fill="none"><rect x="0.5" y="0.5" width="19" height="10" rx="2.5" stroke="#ecedef" stroke-opacity="0.85"/><rect x="2" y="2" width="14.5" height="7" rx="1.4" fill="#ecedef"/><rect x="20.2" y="3.5" width="1.5" height="4" rx="0.75" fill="#ecedef" fill-opacity="0.85"/></svg>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12.65 10A5.99 5.99 0 0 0 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 0 0 5.65-4H17v4h4v-4h2v-4H12.65ZM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z" fill="currentColor"/></svg>
+                <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.1 6.7C4.2 5.7 5.5 5.1 7 5.1s2.8.6 3.9 1.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M5.2 9.1C5.8 8.5 6.4 8.2 7 8.2s1.2.3 1.8.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="7" cy="10.4" r="0.9" fill="currentColor"/></svg>
+                <svg width="22" height="11" viewBox="0 0 22 11" fill="none"><rect x="0.5" y="0.5" width="19" height="10" rx="2.5" stroke="currentColor" stroke-opacity="0.85"/><rect x="2" y="2" width="14.5" height="7" rx="1.4" fill="currentColor"/><rect x="20.2" y="3.5" width="1.5" height="4" rx="0.75" fill="currentColor" fill-opacity="0.85"/></svg>
               </div>
             </div>
             <div class="phone-viewport">
@@ -126,6 +131,7 @@ const parts = {
   phoneDemoTitle: root.querySelector("#phone-demo-title"),
   phoneDemoBody: root.querySelector(".phone-demo-body"),
   phoneDemoFrame: root.querySelector(".phone-viewport iframe"),
+  phoneFrame: root.querySelector(".phone-frame"),
   phoneClock: root.querySelector(".phone-clock"),
   languageToggle: root.querySelector(".nav-language"),
 };
@@ -162,6 +168,17 @@ function updatePhoneClock() {
 
 updatePhoneClock();
 window.setInterval(updatePhoneClock, 30_000);
+
+/** The phone frame draws Android system chrome, so its status bar follows the
+ * same stored theme the embedded app uses. */
+function applyPhoneFrameTheme() {
+  parts.phoneFrame.dataset.theme = resolveTheme(readThemePreference());
+}
+
+applyPhoneFrameTheme();
+window
+  .matchMedia?.("(prefers-color-scheme: dark)")
+  .addEventListener?.("change", applyPhoneFrameTheme);
 
 /** Platform names, first-launch notes, and which row matches this browser. */
 function applyDownloadCopy(next) {
@@ -245,12 +262,15 @@ parts.languageToggle.addEventListener("click", () => {
   applyCopy(next);
 });
 
-// The Live Demo writes `ice-box.language` when the visitor changes the
-// language there; a storage event never reaches the document that wrote it.
+// The Live Demo writes `ice-box.language` and `ice-box.theme` when the visitor
+// changes them there; a storage event never reaches the document that wrote it.
 window.addEventListener("storage", (event) => {
-  if (event.key !== LANGUAGE_STORAGE_KEY) return;
-  if (!isLanguagePreference(event.newValue)) return;
-  applyCopy(resolveLanguage(event.newValue));
+  if (event.key === LANGUAGE_STORAGE_KEY) {
+    if (!isLanguagePreference(event.newValue)) return;
+    applyCopy(resolveLanguage(event.newValue));
+    return;
+  }
+  if (event.key === THEME_STORAGE_KEY) applyPhoneFrameTheme();
 });
 
 applyCopy(language);

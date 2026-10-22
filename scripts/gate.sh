@@ -50,6 +50,14 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== website installer links =="
   (cd apps/website && npm test)
 
+  echo "== website build =="
+  (cd apps/website && npm run build)
+
+  echo "== mobile live demo smoke =="
+  # Builds are already in place; drives the phone iframe: node-list warning,
+  # tabs, apps fixtures, per-app routing, VPN power toggle, language and theme.
+  (cd apps/website && npx playwright install chromium && npm run test:mobile-demo)
+
   echo "== vitest =="
   (cd apps/desktop && npm test)
 

@@ -10,9 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The website Live Demo now includes the phone-first Android UI in a phone
   frame, running against the same simulated backend as the desktop demo. Tabs,
   the VPN power button, per-app routing, language, and theme are interactive.
-- The local gate builds the website and smoke-tests the mobile Live Demo: phone
-  shell, five tabs, Apps fixtures, the VPN toggle, and the language bridge from
-  the landing page into the iframe.
+- The gate builds the website and smoke-tests the mobile Live Demo: phone
+  shell, five tabs, Apps fixtures, per-app routing, the VPN toggle, and the
+  language and theme bridges from the landing page into the iframe.
 - The README now opens with one product shot: the desktop window on the left
   and the Android Home view in a current-generation Pixel-style phone shell on
   the right. Both are captured from the real UI against the Live Demo mock, in
@@ -32,6 +32,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   wallpaper, and the app is shown as a window at its default 860x620 size
   instead of filling the screen or using a fixed 690px height. Below 1100px the
   shell is dropped so the demo uses the full container width.
+
+### Fixed
+
+- The phone Home node list no longer flashes the "proxy service not running"
+  warning when it mounts before the shared runtime status has loaded.
 
 ## [0.2.2] - 2026-10-20
 

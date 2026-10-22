@@ -386,7 +386,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const runtime = useRuntimeStore();
   const runtimeRef = useRef(runtime);
   runtimeRef.current = runtime;
-  const shareStatus = runtime != null;
   const [nodes, setNodes] = useState<NodeInfo[]>(
     () => readNodesSnapshot()?.nodes ?? [],
   );
@@ -461,9 +460,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const refresh = useCallback(async () => {
     const gen = nextGeneration();
     try {
-      const statusPromise = shareStatus
-        ? Promise.resolve(runtimeRef.current?.status ?? null)
-        : api.getStatus();
+      // Read the status directly instead of the shared store's cached value:
+      // right after a state-changed event that cache still holds the previous
+      // running/stopped state, and on a cold start it is empty. Either race
+      // made the node list flash "proxy service not running" or keep stale
+      // Test/Select controls. One status read per poll is cheap.
+      const statusPromise = api.getStatus();
       const [n, settings, status] = await Promise.all([
         api.listNodes(),
         api.getSettings(),
@@ -488,7 +490,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         setListReady(true);
       }
     }
-  }, [isStale, nextGeneration, shareStatus]);
+  }, [isStale, nextGeneration]);
 
   // The tray menu can switch the active exit (flat pick or group member) while
   // this page is on screen. Those selections are otherwise read only on poll

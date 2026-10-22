@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
+import { RuntimeStoreProvider } from "../lib/runtimeStore";
 import { Nodes } from "./Nodes";
 
 const listNodes = vi.fn();
@@ -107,6 +108,31 @@ describe("Nodes", () => {
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+  });
+
+  it("does not warn while the service status is still loading", async () => {
+    getStatus.mockImplementation(async () => {
+      // Hold the status past the node/settings reads: the list used to render
+      // with running=false before the status arrived and flashed the warning.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return {
+        core: { status: "running", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
+        subscription_count: 1,
+        proxy_recovery_warning: null,
+        system_proxy_applied: true,
+        system_proxy_recorded: true,
+        system_proxy_available: true,
+      };
+    });
+    const { container } = render(
+      <RuntimeStoreProvider>
+        <Nodes />
+      </RuntimeStoreProvider>,
+    );
+    const view = within(container);
+
+    await view.findAllByText("node-a");
+    expect(view.queryByText(t("nodes.notRunningWarn"))).not.toBeInTheDocument();
   });
 
   it("publishes the selected node to the shared snapshot", async () => {

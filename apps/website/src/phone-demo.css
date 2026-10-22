@@ -125,6 +125,13 @@
   font-family: var(--sans);
 }
 
+/* The status bar belongs to the emulated OS, so it follows the same stored
+   theme as the embedded app instead of the dark site chrome. */
+.phone-frame[data-theme="light"] .phone-status-bar {
+  background: #f4f5f7;
+  color: #16181a;
+}
+
 .phone-clock {
   font-size: 12.5px;
   font-weight: 600;
@@ -148,6 +155,10 @@
   background: #000;
 }
 
+.phone-frame[data-theme="light"] .phone-viewport {
+  background: #f4f5f7;
+}
+
 /* `mobile-demo.tsx` reports the same 24px inset Android does, so the app's tab
    bar clears the gesture pill drawn over the bottom of the viewport. */
 
@@ -159,6 +170,10 @@
   height: 100%;
   border: 0;
   background: #0a0d0b;
+}
+
+.phone-frame[data-theme="light"] .phone-viewport iframe {
+  background: #fbfbfc;
 }
 
 .phone-gesture {
@@ -173,6 +188,11 @@
   background: rgba(255, 255, 255, 0.85);
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
   pointer-events: none;
+}
+
+.phone-frame[data-theme="light"] .phone-gesture {
+  background: rgba(20, 22, 24, 0.6);
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.6);
 }
 
 .phone-camera {
@@ -202,7 +222,9 @@
   pointer-events: none;
 }
 
-@media (max-width: 900px) {
+/* Stack at the same breakpoint as the laptop shell above (`style.css`), so the
+   two demos keep one rhythm on narrow screens. */
+@media (max-width: 1100px) {
   .phone-demo {
     grid-template-columns: minmax(0, 1fr);
     gap: 36px;
