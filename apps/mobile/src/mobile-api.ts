@@ -51,6 +51,8 @@ export const api = {
   listNodes: () => invoke<NodeInfo[]>("list_nodes"),
   setSelectedNode: (tag: string) =>
     invoke<void>("set_selected_node", { req: { tag } }),
+  setNodeFavorite: (tag: string, favorite: boolean) =>
+    invoke<void>("set_node_favorite", { req: { tag, favorite } }),
   setGroupSelection: (group: string, member: string) =>
     invoke<void>("set_group_selection", { req: { group, member } }),
   testNodeDelay: (tag: string) =>

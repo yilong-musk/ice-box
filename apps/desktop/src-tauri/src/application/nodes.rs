@@ -10,6 +10,10 @@ pub struct NodeInfo {
     pub group_now: Option<String>,
     /// Live member tags of a strategy group, when core running.
     pub group_all: Option<Vec<String>>,
+    /// Whether the tag is favorited in the active subscription.
+    pub favorite: bool,
+    /// Position in the active subscription's favorites (`0` = newest).
+    pub favorite_rank: Option<usize>,
 }
 
 /// Node list with the live group state. Shared by the `list_nodes` command and
@@ -20,6 +24,7 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
     };
     let settings = current_settings(&state.paths)?;
     let selections = load_group_selections(&state.paths.group_selections());
+    let favorites = load_node_favorites(&state.paths.node_favorites());
     let core = state.core_snapshot.load();
     let core_running = core.state.status == CoreStatus::Running;
     let live = if core_running {
@@ -66,6 +71,7 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
                 .unwrap_or_default();
             let static_now = static_group_now(o, &ty, &selections);
             let listed = |tag: &str| static_members.iter().any(|member| member == tag);
+            let favorite_rank = favorites.favorite_rank(entry.subscription, &o.tag);
             NodeInfo {
                 tag: o.tag.clone(),
                 outbound_type: ty,
@@ -77,6 +83,8 @@ pub(crate) fn collect_nodes(state: &AppState) -> Result<Vec<NodeInfo>, AppError>
                     .or(static_now)
                     .filter(|_| is_group),
                 group_all: if is_group { Some(static_members) } else { None },
+                favorite: favorite_rank.is_some(),
+                favorite_rank,
             }
         })
         .collect())
@@ -1070,6 +1078,42 @@ pub(crate) fn remove_custom_rule_use_case(
     })();
     broadcast_state_change(app);
     result
+}
+
+#[derive(Deserialize)]
+pub struct SetNodeFavoriteRequest {
+    pub tag: String,
+    pub favorite: bool,
+}
+
+/// Persist a node favorite for the active subscription.
+///
+/// The orchestration lock serializes the profile read and the small file write
+/// with subscription switches, removals, and applies. A favorite is a UI
+/// preference: it never regenerates the runtime config or touches the core.
+pub(crate) fn set_node_favorite_use_case(
+    state: &AppState,
+    req: SetNodeFavoriteRequest,
+) -> Result<(), AppError> {
+    let _orch = lock_orchestrate(state)?;
+    let entry = cached_profile(state)?
+        .ok_or_else(|| AppError::new(ErrorCode::ConfigEmptyOutbounds, "no active subscription"))?;
+    if !entry
+        .profile
+        .all_outbounds()
+        .any(|outbound| outbound.tag == req.tag)
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            format!("unknown node tag: {}", req.tag),
+        ));
+    }
+    persist_node_favorite(
+        &state.paths.node_favorites(),
+        entry.subscription,
+        &req.tag,
+        req.favorite,
+    )
 }
 
 pub(crate) fn set_selected_node_use_case(

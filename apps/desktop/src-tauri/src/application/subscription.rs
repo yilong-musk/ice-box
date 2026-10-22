@@ -158,6 +158,9 @@ pub(crate) fn remove_subscription_use_case(
     let _orch = lock_orchestrate(state)?;
     let paths = SubscriptionPaths::from_app(&state.paths);
     ice_engine::remove_subscription(&paths, req.id).map_err(AppError::from)?;
+    if let Err(err) = remove_subscription_favorites(&state.paths.node_favorites(), req.id) {
+        tracing::warn!(id = %req.id, error = %err.message, "remove_subscription: purge favorites failed");
+    }
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);

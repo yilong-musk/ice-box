@@ -12,6 +12,7 @@ const listNodes = vi.fn();
 const getSettings = vi.fn();
 const getStatus = vi.fn();
 const setSelectedNode = vi.fn();
+const setNodeFavorite = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
 const listenStateChanged = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("../api/client", () => ({
     getSettings: (...args: unknown[]) => getSettings(...args),
     getStatus: (...args: unknown[]) => getStatus(...args),
     setSelectedNode: (...args: unknown[]) => setSelectedNode(...args),
+    setNodeFavorite: (...args: unknown[]) => setNodeFavorite(...args),
     setGroupSelection: (...args: unknown[]) => setGroupSelection(...args),
     testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
@@ -81,6 +83,7 @@ describe("Nodes", () => {
     });
     setGroupSelection.mockResolvedValue(undefined);
     setSelectedNode.mockResolvedValue(undefined);
+    setNodeFavorite.mockResolvedValue(undefined);
     testNodeDelay.mockImplementation(async (tag: string) => ({
       tag,
       delay_ms: 42,
@@ -820,6 +823,371 @@ describe("Nodes", () => {
     });
     await waitFor(() => {
       expect(screen.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
+    });
+  });
+
+  function rowOf(view: ReturnType<typeof within>, tag: string): HTMLElement {
+    const toggle = view.queryByRole("button", { name: tag });
+    const item =
+      toggle?.closest("[data-slot='item']") ??
+      view.getByText(tag).closest("[data-slot='item']");
+    expect(item).not.toBeNull();
+    return item as HTMLElement;
+  }
+
+  function star(row: HTMLElement, favorite = false): HTMLButtonElement {
+    return within(row).getByRole("button", {
+      name: t(favorite ? "nodes.unfavoriteAria" : "nodes.favoriteAria"),
+    }) as HTMLButtonElement;
+  }
+
+  function rowTitles(container: HTMLElement): string[] {
+    return [
+      ...container.querySelectorAll(
+        `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
+      ),
+    ].map((el) =>
+      (el.textContent ?? "")
+        .replace(new RegExp(t("nodes.inUse"), "g"), "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
+  }
+
+  function useBackendNodes(nodes: Array<Record<string, unknown>>) {
+    const backend = nodes.map((node) => ({ ...node }));
+    listNodes.mockImplementation(async () => backend.map((node) => ({ ...node })));
+    return backend;
+  }
+
+  it("shows a star on top-level rows and none on expanded members", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(
+      view.getAllByRole("button", { name: t("nodes.favoriteAria") }),
+    ).toHaveLength(4);
+
+    await expandGroup(view, "选择组");
+    expect(
+      view.getAllByRole("button", { name: t("nodes.favoriteAria") }),
+    ).toHaveLength(4);
+    expect(
+      view.queryByLabelText(
+        t("nodes.setMemberAria", { member: "node-b", group: "选择组" }),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("toggles a favorite without selecting or expanding the row", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    fireEvent.click(star(rowOf(view, "选择组")));
+
+    await waitFor(() => {
+      expect(setNodeFavorite).toHaveBeenCalledWith("选择组", true);
+    });
+    expect(setSelectedNode).not.toHaveBeenCalled();
+    expect(
+      view.queryByLabelText(t("nodes.membersAria", { group: "选择组" })),
+    ).not.toBeInTheDocument();
+  });
+
+  it("pins the newest favorite above earlier favorites", async () => {
+    const backend = useBackendNodes([
+      {
+        tag: "node-a",
+        outbound_type: "socks",
+        group_now: null,
+        group_all: null,
+        favorite: true,
+        favorite_rank: 0,
+      },
+      {
+        tag: "node-b",
+        outbound_type: "vmess",
+        group_now: null,
+        group_all: null,
+        favorite: false,
+        favorite_rank: null,
+      },
+    ]);
+    setNodeFavorite.mockImplementation(async (tag: string, favorite: boolean) => {
+      for (const node of backend) {
+        if (node.tag === tag) {
+          node.favorite = favorite;
+          node.favorite_rank = favorite ? 0 : null;
+        } else if (favorite && node.favorite === true) {
+          node.favorite_rank = Number(node.favorite_rank ?? 0) + 1;
+        }
+      }
+    });
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(rowTitles(container)).toEqual(["node-a", "node-b"]);
+    });
+
+    fireEvent.click(star(rowOf(view, "node-b")));
+
+    await waitFor(() => {
+      expect(setNodeFavorite).toHaveBeenCalledWith("node-b", true);
+      expect(rowTitles(container)).toEqual(["node-b", "node-a"]);
+    });
+  });
+
+  it("restores the provider position after unfavoriting", async () => {
+    const backend = useBackendNodes([
+      {
+        tag: "node-a",
+        outbound_type: "socks",
+        group_now: null,
+        group_all: null,
+        favorite: false,
+        favorite_rank: null,
+      },
+      {
+        tag: "node-b",
+        outbound_type: "vmess",
+        group_now: null,
+        group_all: null,
+        favorite: true,
+        favorite_rank: 0,
+      },
+    ]);
+    setNodeFavorite.mockImplementation(async (tag: string, favorite: boolean) => {
+      for (const node of backend) {
+        if (node.tag === tag) {
+          node.favorite = favorite;
+          node.favorite_rank = favorite ? 0 : null;
+        }
+      }
+    });
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(rowTitles(container)).toEqual(["node-b", "node-a"]);
+    });
+
+    fireEvent.click(star(rowOf(view, "node-b"), true));
+
+    await waitFor(() => {
+      expect(setNodeFavorite).toHaveBeenCalledWith("node-b", false);
+      expect(rowTitles(container)).toEqual(["node-a", "node-b"]);
+    });
+  });
+
+  it("keeps the optimistic star while the write is in flight and ignores a poll", async () => {
+    let release: () => void = () => {};
+    setNodeFavorite.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+    const fetches = listNodes.mock.calls.length;
+
+    const row = rowOf(view, "node-a");
+    fireEvent.click(star(row));
+
+    await waitFor(() => {
+      expect(star(row, true)).toHaveAttribute("aria-pressed", "true");
+    });
+    expect(star(row, true)).toBeDisabled();
+    expect(readNodesSnapshot()?.nodes[0]?.favorite).not.toBe(true);
+
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    expect(listNodes.mock.calls.length).toBe(fetches);
+
+    release();
+    await waitFor(() => expect(star(rowOf(view, "node-a"))).toBeEnabled());
+  });
+
+  it("sends one request for a rapid second click and disables row actions", async () => {
+    let release: () => void = () => {};
+    setNodeFavorite.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    const first = star(rowOf(view, "node-a"));
+    fireEvent.click(first);
+    fireEvent.click(star(rowOf(view, "node-b")));
+    fireEvent.click(first);
+    expect(setNodeFavorite).toHaveBeenCalledTimes(1);
+    expect(setNodeFavorite).toHaveBeenCalledWith("node-a", true);
+
+    for (const starButton of container.querySelectorAll("button[aria-pressed]")) {
+      expect(starButton).toBeDisabled();
+    }
+    for (const name of [t("nodes.test"), t("nodes.select")]) {
+      for (const button of view.getAllByRole("button", { name })) {
+        expect(button).toBeDisabled();
+      }
+    }
+
+    await act(async () => {
+      release();
+    });
+  });
+
+  it("ignores a star click while a selection is pending", async () => {
+    let release: () => void = () => {};
+    setSelectedNode.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    const row = rowOf(view, "node-b");
+    fireEvent.click(
+      within(row).getByRole("button", { name: t("nodes.select") }),
+    );
+    await waitFor(() => expect(star(row)).toBeDisabled());
+
+    fireEvent.click(star(row));
+    expect(setNodeFavorite).not.toHaveBeenCalled();
+    expect(
+      readNodesSnapshot()?.nodes.find((node) => node.tag === "node-b")?.favorite,
+    ).not.toBe(true);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(star(rowOf(view, "node-b"))).toBeEnabled());
+  });
+
+  it("keeps the single-flight guard through the post-success refresh", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+    const fetchesBefore = listNodes.mock.calls.length;
+
+    let releaseRefresh: (nodes: Array<Record<string, unknown>>) => void = () => {};
+    listNodes.mockImplementation(
+      () =>
+        new Promise<Array<Record<string, unknown>>>((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    );
+
+    fireEvent.click(star(rowOf(view, "node-a")));
+    await waitFor(() => {
+      expect(setNodeFavorite).toHaveBeenCalledWith("node-a", true);
+      expect(listNodes.mock.calls.length).toBe(fetchesBefore + 1);
+    });
+    expect(star(rowOf(view, "node-a"), true)).toBeDisabled();
+
+    fireEvent.click(star(rowOf(view, "node-b")));
+    expect(setNodeFavorite).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseRefresh([
+        {
+          tag: "node-a",
+          outbound_type: "socks",
+          group_now: null,
+          group_all: null,
+          favorite: true,
+          favorite_rank: 0,
+        },
+        {
+          tag: "node-b",
+          outbound_type: "vmess",
+          group_now: null,
+          group_all: null,
+        },
+      ]);
+    });
+    await waitFor(() => expect(star(rowOf(view, "node-b"))).toBeEnabled());
+  });
+
+  it("rolls back and shows the error when the favorite write fails", async () => {
+    setNodeFavorite.mockRejectedValueOnce("favorite failed");
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    fireEvent.click(star(rowOf(view, "node-a")));
+
+    expect(await view.findByText("favorite failed")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(star(rowOf(view, "node-a"))).toHaveAttribute("aria-pressed", "false");
+    });
+    expect(
+      readNodesSnapshot()?.nodes.find((node) => node.tag === "node-a")?.favorite,
+    ).not.toBe(true);
+  });
+
+  it("keeps the star enabled while the core is stopped", async () => {
+    getStatus.mockResolvedValue({
+      core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: true,
+    });
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(star(rowOf(view, "node-a"))).toBeEnabled();
+  });
+
+  it("renders the backend favorite flag after a subscription switch", async () => {
+    useBackendNodes([
+      {
+        tag: "node-a",
+        outbound_type: "socks",
+        group_now: null,
+        group_all: null,
+        favorite: true,
+        favorite_rank: 0,
+      },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(star(rowOf(view, "node-a"), true)).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    listNodes.mockResolvedValue([
+      {
+        tag: "node-a",
+        outbound_type: "socks",
+        group_now: null,
+        group_all: null,
+        favorite: false,
+        favorite_rank: null,
+      },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+
+    await waitFor(() => {
+      expect(star(rowOf(view, "node-a"))).toHaveAttribute("aria-pressed", "false");
     });
   });
 });

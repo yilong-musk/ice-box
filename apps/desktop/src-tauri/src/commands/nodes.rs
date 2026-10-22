@@ -88,6 +88,20 @@ pub async fn set_selected_node(app: AppHandle, req: TagRequest) -> Result<(), Ap
     .await
 }
 
+/// Favorite or unfavorite a top-level node or strategy group. A UI preference:
+/// persists only, never regenerates the config or reloads the core.
+#[tauri::command]
+pub async fn set_node_favorite(
+    app: AppHandle,
+    req: SetNodeFavoriteRequest,
+) -> Result<(), AppError> {
+    run_blocking("set_node_favorite", move || {
+        let state = app.state::<AppState>();
+        set_node_favorite_use_case(state.inner(), req)
+    })
+    .await
+}
+
 /// Switch a strategy group member: persists the selection always, and applies
 /// it live when the core is running. Same path as the tray node menu.
 #[tauri::command]

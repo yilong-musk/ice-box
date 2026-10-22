@@ -10,6 +10,7 @@ mod atomic;
 mod build;
 mod clash_secret;
 mod error;
+mod favorites;
 mod profile;
 mod redact;
 mod rule_overrides;
@@ -28,6 +29,10 @@ pub use build::{
 };
 pub use clash_secret::ensure_clash_api_secret;
 pub use error::{AppError, ErrorCode};
+pub use favorites::{
+    load_node_favorites, remove_subscription_favorites, set_node_favorite, NodeFavorites,
+    MAX_FAVORITES_PER_SUBSCRIPTION,
+};
 pub use ice_types::{
     is_android_package_name, is_fake_ip, is_loopback_host, is_plausible_clash_api_secret,
     is_restricted_fetch_host, is_restricted_ip, AppPaths, AppProxyMode, HostPlatform, UiMessage,

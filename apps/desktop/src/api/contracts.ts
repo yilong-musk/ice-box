@@ -267,6 +267,10 @@ export type NodeInfo = {
   group_now: string | null;
   /** Live member tags of a strategy group; null for leaf nodes or when core not running. */
   group_all: string[] | null;
+  /** Whether the tag is favorited in the active subscription. Optional for older fixtures. */
+  favorite?: boolean;
+  /** Position in the favorites list (0 = newest). Optional/absent when not favorited. */
+  favorite_rank?: number | null;
 };
 
 
@@ -417,6 +421,8 @@ export interface CoreApi {
   listSubscriptions(): Promise<SubscriptionMeta[]>;
   listNodes(): Promise<NodeInfo[]>;
   setSelectedNode(tag: string): Promise<void>;
+  /** Favorite a top-level node or group; a local preference that never reloads the core. */
+  setNodeFavorite(tag: string, favorite: boolean): Promise<void>;
   setGroupSelection(group: string, member: string): Promise<void>;
   testNodeDelay(tag: string): Promise<DelayTestResponse>;
   getTrafficSnapshot(): Promise<TrafficSnapshot>;

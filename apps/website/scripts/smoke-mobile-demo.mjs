@@ -159,6 +159,29 @@ try {
     );
   }
 
+  // Favoriting pins the row to the top of this subscription's list. The next
+  // profile switch must show its own (empty) favorite set.
+  const nodeRows = frame.locator(
+    '[data-testid="nodes-panel"] [role="listitem"]',
+  );
+  await nodeRows
+    .nth(1)
+    .getByRole("button", { name: "Favorite node" })
+    .click();
+  await nodeRows
+    .first()
+    .getByText("🇸🇬 Singapore / edge-02")
+    .waitFor({ timeout: 8000 });
+  // The optimistic star must survive the post-success refresh.
+  if (
+    (await nodeRows
+      .first()
+      .getByRole("button", { name: "Unfavorite node" })
+      .count()) !== 1
+  ) {
+    throw new Error("favorited node must keep its filled star");
+  }
+
   const tabs = frame.getByTestId("phone-tab-bar").getByRole("button");
   if ((await tabs.count()) !== 5) {
     throw new Error(`phone tab bar must show 5 tabs, got ${await tabs.count()}`);
@@ -210,8 +233,17 @@ try {
     .locator('[data-testid="nodes-panel"] [role="listitem"]');
   await homeNodeRows.first().waitFor({ timeout: 15_000 });
   await waitForAttribute(homeNodeRows.first(), "aria-setsize", "12");
+  await homeNodeRows
+    .first()
+    .getByText("🇯🇵 Tokyo / edge-01")
+    .waitFor({ timeout: 8000 });
+  if (
+    (await frame.getByRole("button", { name: "Unfavorite node" }).count()) !== 0
+  ) {
+    throw new Error("favorites must stay scoped to the demo subscription");
+  }
 
-  const power = frame.locator('[data-testid="home-panel"] button[aria-pressed]');
+  const power = frame.locator('[data-testid="home-panel"] button[data-size="lg"]');
   if ((await power.textContent())?.trim() !== "Disconnect VPN") {
     throw new Error("phone demo must boot with the VPN connected");
   }

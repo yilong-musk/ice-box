@@ -633,6 +633,8 @@ mod tests {
             outbound_type: if all.is_some() { "selector" } else { "socks" }.to_string(),
             group_now: now.map(str::to_string),
             group_all: all.map(|members| members.iter().map(|m| m.to_string()).collect()),
+            favorite: false,
+            favorite_rank: None,
         }
     }
 

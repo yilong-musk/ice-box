@@ -157,6 +157,10 @@ const zh = {
   "nodes.testCurrent": "测当前出口延迟",
   "nodes.test": "测速",
   "nodes.select": "选用",
+  "nodes.favoriteAria": "收藏节点",
+  "nodes.unfavoriteAria": "取消收藏节点",
+  "nodes.favorite": "收藏节点",
+  "nodes.unfavorite": "取消收藏",
   "nodes.notRunningWarn":
     "代理服务未运行：测延迟不可用；切换出口会保存，启动后生效。",
   "nodes.batchTest": "批量测延迟",
@@ -674,6 +678,10 @@ const en: Record<MessageKey, string> = {
   "nodes.testCurrent": "Test delay of current exit",
   "nodes.test": "Test",
   "nodes.select": "Select",
+  "nodes.favoriteAria": "Favorite node",
+  "nodes.unfavoriteAria": "Unfavorite node",
+  "nodes.favorite": "Favorite node",
+  "nodes.unfavorite": "Unfavorite node",
   "nodes.notRunningWarn":
     "Proxy service not running: delay tests are unavailable; switching exits is saved and applies after start.",
   "nodes.batchTest": "Batch Test",

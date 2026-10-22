@@ -27,6 +27,12 @@ pub struct TagRequest {
 }
 
 #[derive(Deserialize)]
+pub struct SetNodeFavoriteRequest {
+    pub tag: String,
+    pub favorite: bool,
+}
+
+#[derive(Deserialize)]
 pub struct GroupSelectionRequest {
     pub group: String,
     pub member: String,
@@ -507,6 +513,19 @@ pub fn set_selected_node(
     drop(host);
     notify(&app);
     Ok(())
+}
+
+/// Favorite or unfavorite a node. A UI preference: the config and tunnel are
+/// not touched, so this works with the VPN stopped.
+#[tauri::command]
+pub fn set_node_favorite(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+    req: SetNodeFavoriteRequest,
+) -> Result<(), AppError> {
+    let host = ready(&app, &host, &tunnel)?;
+    host.set_node_favorite(&req.tag, req.favorite)
 }
 
 #[tauri::command]

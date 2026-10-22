@@ -94,6 +94,17 @@ runtime configuration remain separate. This preserves provider input and user
 intent across regeneration. Persistent writes use atomic replacement, with
 backups or journals where rollback and recovery require them.
 
+Local preferences include per-group selections (`group-selections.json`), rule
+overrides (`rules.json`), and per-subscription node favorites
+(`node-favorites.json`). The favorites file is a versioned wrapper keyed by
+subscription UUID with an ordered tag list per subscription, newest first,
+capped at 500 tags. On read, an unknown file version is treated as empty
+rather than parsed with the current schema; writes refuse to replace that file,
+so a downgraded build cannot erase newer data. Stale tags stay on disk across
+provider refreshes and are hidden until the same tag reappears. A favorite
+toggle is a UI preference only: it never regenerates the runtime configuration
+or reloads the core.
+
 Provider-reported usage and expiry ride along with the subscription metadata
 rather than the profile, in both shapes providers use: the `subscription-userinfo`
 counters (used / quota / expiry) and the info entries panels embed in the proxy
