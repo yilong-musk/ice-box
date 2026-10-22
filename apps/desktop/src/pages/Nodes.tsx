@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Star } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -29,14 +29,17 @@ import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import { memberWindow, nodeLayout, visibleNodeRows, MEMBER_ROW_HEIGHT, NODE_ROW_HEIGHT } from "../lib/virtualNodes";
 import {
+  applyFavoriteToNodes,
   applyGroupNowToNodes,
   applySelectedTagToNodes,
   delayTestTagsForGroup,
   delayTestTagsForList,
   delayResultTone,
   formatDelay,
+  isFavoriteNode,
   isGroupType,
   nodesEqual,
+  orderNodesByFavorite,
   readNodesSnapshot,
   releaseNodeMemberLists,
   resolveSelectedTag,
@@ -92,6 +95,34 @@ function delayBadge(delay: DelayCell) {
     <span data-testid="delay-idle" className="text-xs text-muted-foreground">
       {formatDelay(delay)}
     </span>
+  );
+}
+
+function FavoriteButton({
+  node,
+  pending,
+  onToggle,
+}: {
+  node: NodeInfo;
+  pending: boolean;
+  onToggle: (node: NodeInfo) => void;
+}) {
+  const favorite = isFavoriteNode(node);
+  return (
+    <button
+      type="button"
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+        favorite ? "text-warn" : "text-muted-foreground",
+      )}
+      disabled={pending}
+      aria-pressed={favorite}
+      aria-label={t(favorite ? "nodes.unfavoriteAria" : "nodes.favoriteAria")}
+      title={t(favorite ? "nodes.unfavorite" : "nodes.favorite")}
+      onClick={() => onToggle(node)}
+    >
+      <Star className={cn("size-4", favorite && "fill-current")} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -200,12 +231,15 @@ type NodeRowProps = {
   showDivider: boolean;
   running: boolean;
   busy: boolean;
+  favoritePending: boolean;
+  embedded: boolean;
   delay: DelayCell;
   delays: Record<string, DelayCell>;
   onToggleGroup: (tag: string, open: boolean) => void;
   onTest: (node: NodeInfo) => void;
   onSelect: (tag: string) => void;
   onGroupSelect: (group: string, member: string) => void;
+  onToggleFavorite: (node: NodeInfo) => void;
   lang: ResolvedLanguage;
 };
 
@@ -218,12 +252,15 @@ const NodeRow = memo(function NodeRow({
   showDivider,
   running,
   busy,
+  favoritePending,
+  embedded,
   delay,
   delays,
   onToggleGroup,
   onTest,
   onSelect,
   onGroupSelect,
+  onToggleFavorite,
   lang,
 }: NodeRowProps) {
   const expandable =
@@ -287,7 +324,7 @@ const NodeRow = memo(function NodeRow({
                 <span className={badgeVariants({ variant: "outline" })}>
                   → {node.group_now}
                 </span>
-              ) : (
+              ) : embedded ? null : (
                 <span
                   className={cn(
                     badgeVariants({ variant: "ghost" }),
@@ -300,10 +337,15 @@ const NodeRow = memo(function NodeRow({
               {delayBadge(delay)}
             </div>
             <ItemActions className="flex-nowrap">
+              <FavoriteButton
+                node={node}
+                pending={favoritePending}
+                onToggle={onToggleFavorite}
+              />
               <button
                 type="button"
                 className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy}
+                disabled={!running || busy || favoritePending}
                 title={
                   expanded
                     ? t("nodes.testAllMembers")
@@ -316,7 +358,7 @@ const NodeRow = memo(function NodeRow({
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
-                disabled={busy || selected}
+                disabled={busy || selected || favoritePending}
                 onClick={() => onSelect(node.tag)}
               >
                 {t("nodes.select")}
@@ -340,10 +382,15 @@ const NodeRow = memo(function NodeRow({
             </ItemContent>
             <ItemActions className="flex-nowrap">
               {delayBadge(delay)}
+              <FavoriteButton
+                node={node}
+                pending={favoritePending}
+                onToggle={onToggleFavorite}
+              />
               <button
                 type="button"
                 className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy}
+                disabled={!running || busy || favoritePending}
                 onClick={() => onTest(node)}
               >
                 {t("nodes.test")}
@@ -351,7 +398,7 @@ const NodeRow = memo(function NodeRow({
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
-                disabled={busy || selected}
+                disabled={busy || selected || favoritePending}
                 onClick={() => onSelect(node.tag)}
               >
                 {t("nodes.select")}
@@ -369,7 +416,7 @@ const NodeRow = memo(function NodeRow({
           groupNow={node.group_now}
           selectable={node.outbound_type === "selector"}
           running={running}
-          busy={busy}
+          busy={busy || favoritePending}
           delays={delays}
           onGroupSelect={onGroupSelect}
           lang={lang}
@@ -404,8 +451,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [favoritePending, setFavoritePending] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const cancelRef = useRef(false);
+  const favoriteInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const activeRef = useRef(active);
   const delayRunRef = useRef(0);
@@ -426,9 +475,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
   const listVisible = active && (runtime?.visible ?? true);
+  const orderedNodes = useMemo(() => orderNodesByFavorite(nodes), [nodes]);
   const layout = useMemo(
-    () => (listVisible ? nodeLayout(nodes, expandedGroups) : EMPTY_LAYOUT),
-    [listVisible, nodes, expandedGroups],
+    () => (listVisible ? nodeLayout(orderedNodes, expandedGroups) : EMPTY_LAYOUT),
+    [listVisible, orderedNodes, expandedGroups],
   );
   const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
   const updateViewport = useCallback(() => {
@@ -458,6 +508,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, []);
 
   const refresh = useCallback(async () => {
+    // A favorite write owns the optimistic list until its post-success refresh.
+    if (favoriteInFlightRef.current) return;
     const gen = nextGeneration();
     try {
       // Read the status directly instead of the shared store's cached value:
@@ -651,6 +703,39 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     })();
   }, []);
 
+  const onToggleFavorite = useCallback(
+    (node: NodeInfo) => {
+      void (async () => {
+        if (favoriteInFlightRef.current) return;
+        favoriteInFlightRef.current = true;
+        setFavoritePending(true);
+        // Invalidate any poll that started before the optimistic update.
+        nextGeneration();
+        const previous = nodesRef.current;
+        const wasFavorite = isFavoriteNode(node);
+        setError(null);
+        setNodes(applyFavoriteToNodes(previous, node.tag, !wasFavorite));
+        try {
+          await api.setNodeFavorite(node.tag, !wasFavorite);
+          favoriteInFlightRef.current = false;
+          if (mountedRef.current) setFavoritePending(false);
+          if (mountedRef.current && activeRef.current) await refresh();
+        } catch (e) {
+          // Keep the snapshot as the last backend result; reverting to
+          // `previous` restores the rows without writing a favorite state.
+          if (mountedRef.current) {
+            setNodes(previous);
+            setError(formatInvokeError(e));
+          }
+        } finally {
+          favoriteInFlightRef.current = false;
+          if (mountedRef.current) setFavoritePending(false);
+        }
+      })();
+    },
+    [nextGeneration, refresh],
+  );
+
   const handleSelect = useCallback((tag: string) => {
     void onSelectRef.current(tag);
   }, []);
@@ -660,8 +745,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, []);
 
   async function onBatchTest() {
-    if (!running || nodes.length === 0) return;
-    const tags = delayTestTagsForList(nodes, expandedGroups);
+    if (!running || orderedNodes.length === 0) return;
+    const tags = delayTestTagsForList(orderedNodes, expandedGroups);
     if (tags.length === 0) {
       setError(t("nodes.noTestable"));
       return;
@@ -743,7 +828,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         type="button"
         size="sm"
         variant="outline"
-        disabled={!running || busy || nodes.length === 0}
+        disabled={!running || busy || favoritePending || nodes.length === 0}
         onClick={() => void onBatchTest()}
       >
         {t("nodes.batchTest")}
@@ -814,7 +899,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
                     expandedGroups.has(n.tag);
                   const memberRange = memberWindow(members, top, viewportTop, viewport.height);
                   return (
-                    <div key={n.tag} role="listitem" aria-posinset={index + 1} aria-setsize={nodes.length}
+                    <div key={n.tag} role="listitem" aria-posinset={index + 1} aria-setsize={orderedNodes.length}
                       className="absolute inset-x-0" style={{ top }}>
                     <NodeRow
                       memberStart={memberRange.start}
@@ -822,15 +907,18 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
                       node={n}
                       selected={n.tag === selectedTag}
                       expanded={expanded}
-                      showDivider={index < nodes.length - 1}
+                      showDivider={index < orderedNodes.length - 1}
                       running={running}
                       busy={busy}
+                      favoritePending={favoritePending}
+                      embedded={embedded}
                       delay={delays[n.tag] ?? null}
                       delays={expanded ? delays : EMPTY_DELAYS}
                       onToggleGroup={setGroupOpen}
                       onTest={onTest}
                       onSelect={handleSelect}
                       onGroupSelect={handleGroupSelect}
+                      onToggleFavorite={onToggleFavorite}
                       lang={lang}
                     />
                     </div>

@@ -22,7 +22,10 @@ export function readNodesSnapshot(): NodesSnapshot | undefined {
   return nodesSnapshot;
 }
 
-/** Monotonic counter; bumps on every snapshot write or clear. */
+/** Monotonic selection revision; advances when the snapshot is cleared or
+ * its selected tag changes. Content-only updates (favorites, group exits,
+ * member lists, running state) notify subscribers without bumping it, so Home
+ * does not mistake them for a node switch. */
 export function nodesSnapshotRevision(): number {
   return snapshotRevision;
 }
@@ -53,7 +56,9 @@ function snapshotsEqual(
 
 export function writeNodesSnapshot(next: NodesSnapshot): void {
   if (snapshotsEqual(nodesSnapshot, next)) return;
-  snapshotRevision += 1;
+  if (nodesSnapshot === undefined || nodesSnapshot.selectedTag !== next.selectedTag) {
+    snapshotRevision += 1;
+  }
   nodesSnapshot = next;
   notifySnapshot();
 }
@@ -101,6 +106,13 @@ export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
     ) {
       return false;
     }
+    if (isFavoriteNode(left) !== isFavoriteNode(right)) return false;
+    if (
+      isFavoriteNode(left) &&
+      (left.favorite_rank ?? null) !== (right.favorite_rank ?? null)
+    ) {
+      return false;
+    }
     const leftMembers = left.group_all;
     const rightMembers = right.group_all;
     if (leftMembers === rightMembers) continue;
@@ -112,6 +124,73 @@ export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
     }
   }
   return true;
+}
+
+/** Favorites are optional: a missing flag with a rank still counts. */
+export function isFavoriteNode(node: NodeInfo): boolean {
+  return node.favorite === true || node.favorite_rank != null;
+}
+
+function favoriteRank(node: NodeInfo): number {
+  return node.favorite_rank ?? Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Favorites first, newest first, then the provider order for everything else.
+ * Returns the original array when nothing is favorited.
+ */
+export function orderNodesByFavorite(nodes: NodeInfo[]): NodeInfo[] {
+  if (!nodes.some(isFavoriteNode)) return nodes;
+  return nodes
+    .map((node, index) => ({ node, index }))
+    .sort((left, right) => {
+      const leftFavorite = isFavoriteNode(left.node);
+      const rightFavorite = isFavoriteNode(right.node);
+      if (leftFavorite !== rightFavorite) return leftFavorite ? -1 : 1;
+      if (!leftFavorite) return left.index - right.index;
+      const rankDelta = favoriteRank(left.node) - favoriteRank(right.node);
+      return rankDelta !== 0 ? rankDelta : left.index - right.index;
+    })
+    .map((entry) => entry.node);
+}
+
+/**
+ * Optimistic favorite toggle. Favoriting puts the tag at rank 0 and shifts
+ * the other favorites down; unfavoriting closes the rank gap. New node
+ * objects are returned for changed rows, never mutated in place.
+ */
+export function applyFavoriteToNodes(
+  nodes: NodeInfo[],
+  tag: string,
+  favorite: boolean,
+): NodeInfo[] {
+  if (!nodes.some((node) => node.tag === tag)) return nodes;
+
+  const ordered = orderNodesByFavorite(nodes)
+    .filter((node) => isFavoriteNode(node) && node.tag !== tag)
+    .map((node) => node.tag);
+  const nextFavorites = favorite ? [tag, ...ordered] : ordered;
+  const ranks = new Map(nextFavorites.map((candidate, index) => [candidate, index]));
+  let changed = false;
+  const next = nodes.map((node) => {
+    const rank = ranks.get(node.tag);
+    if (node.tag === tag) {
+      if (favorite) {
+        const nextRank = rank ?? 0;
+        if (node.favorite === true && node.favorite_rank === nextRank) return node;
+        changed = true;
+        return { ...node, favorite: true, favorite_rank: nextRank };
+      }
+      if (node.favorite !== true && node.favorite_rank == null) return node;
+      changed = true;
+      return { ...node, favorite: false, favorite_rank: null };
+    }
+    if (rank === undefined) return node;
+    if (node.favorite === true && node.favorite_rank === rank) return node;
+    changed = true;
+    return { ...node, favorite: true, favorite_rank: rank };
+  });
+  return changed ? next : nodes;
 }
 
 export const STRATEGY_GROUP_TYPES = [
