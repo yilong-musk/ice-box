@@ -124,6 +124,14 @@ Results use MCP text content plus structured content when the result is an
 object. Tool failures set `isError` and return the application error code and
 message rather than claiming success.
 
+`list_nodes` rows carry `tag`, `outbound_type`, `group_now`, `group_all`,
+`favorite`, and `favorite_rank`. `favorite` is whether the node belongs to the
+active subscription's favorites, and `favorite_rank` is its position in that
+list (`0` is the most recently favorited) or `null` when it is not favorited.
+Both fields are read-only; favorites are managed in the desktop or Android UI.
+No other node or group tool reads or writes favorites, and the tray menu order
+is unchanged.
+
 `update_settings` rejects `proxy_service_enabled`; use
 `start_proxy_service` or `stop_proxy_service` so the live capture backend and
 the persisted next-launch preference change together. A successful

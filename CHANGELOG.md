@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Node favorites on desktop and Android: every top-level node or strategy
+  group has a star, favorited rows pin above the rest with the newest first,
+  and each subscription keeps its own list. Favorites persist in
+  `node-favorites.json` and never regenerate the config or reload the core.
+  MCP `list_nodes` exposes the read-only `favorite` and `favorite_rank` fields.
 - The website Live Demo shows country flags on every node, a 20-app Android
   list with real brand icons, and three sample subscriptions with their own
   node lists.
