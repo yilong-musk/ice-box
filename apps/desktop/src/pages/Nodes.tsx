@@ -112,7 +112,7 @@ function FavoriteButton({
     <button
       type="button"
       className={cn(
-        buttonVariants({ variant: "ghost", size: "icon-sm" }),
+        buttonVariants({ variant: "ghost", size: "icon" }),
         favorite ? "text-warn" : "text-muted-foreground",
       )}
       disabled={pending}
@@ -121,7 +121,7 @@ function FavoriteButton({
       title={t(favorite ? "nodes.unfavorite" : "nodes.favorite")}
       onClick={() => onToggle(node)}
     >
-      <Star className={cn("size-4", favorite && "fill-current")} aria-hidden="true" />
+      <Star className={cn("size-5", favorite && "fill-current")} aria-hidden="true" />
     </button>
   );
 }
