@@ -733,7 +733,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     <div
       className={cn(
         "home-panel flex min-h-0 flex-1 flex-col gap-3",
-        phone && "overflow-y-auto overscroll-contain",
+        // The phone Home screen scrolls like the Android app, but a visible
+        // desktop scrollbar does not belong inside the phone frame.
+        phone && "no-scrollbar overflow-y-auto overscroll-contain",
       )}
       data-testid="home-panel"
     >

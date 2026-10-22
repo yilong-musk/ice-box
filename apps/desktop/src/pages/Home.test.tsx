@@ -1355,6 +1355,7 @@ describe("Home", () => {
       expect(view.getByTestId("home-panel")).toBeInTheDocument();
     });
     expect(view.getByTestId("home-panel")).toHaveClass(
+      "no-scrollbar",
       "overflow-y-auto",
       "overscroll-contain",
     );

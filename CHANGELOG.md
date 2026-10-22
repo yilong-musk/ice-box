@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The phone Home screen in the website Live Demo no longer shows a desktop
+  scrollbar inside the phone frame.
 - The phone Home node list no longer flashes the "proxy service not running"
   warning when it mounts before the shared runtime status has loaded.
 
