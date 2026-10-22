@@ -250,6 +250,18 @@ const nodesBySubscription: Record<string, NodeInfo[]> = {
   "demo-streaming": streamingNodes,
 };
 
+/**
+ * Ordered favorite tags per demo subscription (newest first). Kept separate
+ * from the shared node fixtures so switching subscriptions shows its own set
+ * and `listNodes` never mutates the fixtures.
+ */
+const favoritesBySubscription: Record<string, string[]> = {};
+
+function activeFavorites(): string[] {
+  const id = activeSubscription()?.id;
+  return (id && favoritesBySubscription[id]) || [];
+}
+
 function activeSubscription(): SubscriptionMeta | undefined {
   return subscriptions.find((sub) => sub.active);
 }
@@ -405,8 +417,28 @@ export const api = {
   },
   async setTrayLanguage(): Promise<void> {},
   async setTrayUpdateAvailable(): Promise<void> {},
-  async listNodes(): Promise<NodeInfo[]> { await delay(); return [...activeNodes()]; },
+  async listNodes(): Promise<NodeInfo[]> {
+    await delay();
+    const favorites = activeFavorites();
+    return activeNodes().map((node) => {
+      const rank = favorites.indexOf(node.tag);
+      return {
+        ...node,
+        favorite: rank >= 0,
+        favorite_rank: rank >= 0 ? rank : null,
+      };
+    });
+  },
   async setSelectedNode(tag: string): Promise<void> { settings.selected_tag = tag; await delay(); },
+  async setNodeFavorite(tag: string, favorite: boolean): Promise<void> {
+    await delay();
+    const id = activeSubscription()?.id;
+    if (!id) return;
+    const next = (favoritesBySubscription[id] ?? []).filter((item) => item !== tag);
+    if (favorite) next.unshift(tag);
+    if (next.length > 0) favoritesBySubscription[id] = next;
+    else delete favoritesBySubscription[id];
+  },
   async setGroupSelection(): Promise<void> { await delay(); },
   async testNodeDelay(tag: string): Promise<DelayTestResponse> { await delay(300); return { tag, delay_ms: 42 + Math.floor(Math.random() * 90) }; },
   async getTrafficSnapshot(): Promise<TrafficSnapshot> {
@@ -542,7 +574,13 @@ export const api = {
     subscriptions.push(sub);
     return sub;
   },
-  async removeSubscription(id: string): Promise<{ ok: boolean }> { await delay(); const index = subscriptions.findIndex((sub) => sub.id === id); if (index >= 0) subscriptions.splice(index, 1); return { ok: true }; },
+  async removeSubscription(id: string): Promise<{ ok: boolean }> {
+    await delay();
+    const index = subscriptions.findIndex((sub) => sub.id === id);
+    if (index >= 0) subscriptions.splice(index, 1);
+    delete favoritesBySubscription[id];
+    return { ok: true };
+  },
   async updateSubscription(id: string): Promise<SubscriptionMeta> {
     await delay(220);
     const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];
