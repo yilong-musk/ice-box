@@ -255,6 +255,7 @@ const zh = {
   "subs.shareCopied": "已复制",
   "subs.shareExported": "已导出",
   "subs.shareCopyFailed": "复制失败",
+  "subs.updated": "订阅已更新",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "已保存，但应用失败：{detail}",
@@ -787,6 +788,7 @@ const en: Record<MessageKey, string> = {
   "subs.shareCopied": "Copied",
   "subs.shareExported": "Exported",
   "subs.shareCopyFailed": "Copy failed",
+  "subs.updated": "Subscription updated",
 
   // --- rules page ---
   "rules.savedButApplyFailed": "Saved, but applying failed: {detail}",

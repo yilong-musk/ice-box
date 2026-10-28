@@ -18,7 +18,7 @@ import {
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ErrorToast, useErrorToast } from "../components/ErrorToast";
+import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
@@ -82,7 +82,7 @@ export function Subscriptions({ active = true }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
     null,
   );
@@ -92,13 +92,13 @@ export function Subscriptions({ active = true }: Props) {
     toast,
     show: showToast,
     dismiss: dismissToast,
-  } = useErrorToast();
+  } = useCapsuleToast();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
-      if (isStale(gen)) return;
+      if (isStale(gen)) return true;
       const nextActive = activeSubscriptionId(next);
       // Drop the node snapshot only when the live profile moved. A mode or
       // service toggle also lands on `app://state-changed`.
@@ -108,12 +108,14 @@ export function Subscriptions({ active = true }: Props) {
       activeIdRef.current = nextActive;
       setItems(next);
       setLoadError(null);
+      return true;
     } catch (e) {
       if (!isStale(gen)) {
         const message = formatInvokeError(e);
         setLoadError(message);
         showToast(message);
       }
+      return false;
     }
   }, [isStale, nextGeneration, showToast]);
 
@@ -145,14 +147,22 @@ export function Subscriptions({ active = true }: Props) {
 
   async function run(
     action: () => Promise<unknown>,
-    options: { updating?: boolean; errorSurface?: "toast" | "dialog" } = {},
+    options: {
+      updatingId?: string;
+      errorSurface?: "toast" | "dialog";
+      successToast?: string;
+    } = {},
   ): Promise<boolean> {
-    const { updating: isUpdate = false, errorSurface = "toast" } = options;
+    const {
+      updatingId: rowUpdatingId,
+      errorSurface = "toast",
+      successToast,
+    } = options;
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();
     nextGeneration();
     setBusy(true);
-    if (isUpdate) setUpdating(true);
+    if (rowUpdatingId) setUpdatingId(rowUpdatingId);
     setError(null);
     setWarning(null);
     try {
@@ -161,7 +171,12 @@ export function Subscriptions({ active = true }: Props) {
       if (applyWarning) {
         setWarning(formatApplyWarning(applyWarning));
       }
-      await refresh();
+      // Only confirm once the reloaded list has landed; a failed refresh
+      // already replaced the notice with its own error toast.
+      const refreshed = await refresh();
+      if (successToast && refreshed && !applyWarning) {
+        showToast(successToast, "success");
+      }
       return true;
     } catch (e) {
       const message = formatInvokeError(e);
@@ -170,7 +185,7 @@ export function Subscriptions({ active = true }: Props) {
       await refresh();
       return false;
     } finally {
-      setUpdating(false);
+      setUpdatingId(null);
       setBusy(false);
     }
   }
@@ -307,11 +322,14 @@ export function Subscriptions({ active = true }: Props) {
                               disabled={busy}
                               onClick={() =>
                                 void run(() => api.updateSubscription(s.id), {
-                                  updating: true,
+                                  updatingId: s.id,
+                                  successToast: t("subs.updated"),
                                 })
                               }
                             >
-                              {updating ? t("common.updating") : t("common.update")}
+                              {updatingId === s.id
+                                ? t("common.updating")
+                                : t("common.update")}
                             </Button>
                           )}
                           <Button
@@ -445,7 +463,7 @@ export function Subscriptions({ active = true }: Props) {
           )}
         </CardContent>
       </Card>
-      <ErrorToast toast={toast} onDismiss={dismissToast} />
+      <CapsuleToast toast={toast} onDismiss={dismissToast} />
       <ImportSubscriptionDialog
         open={importOpen}
         busy={busy}

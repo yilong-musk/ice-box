@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- A successful manual subscription update now shows a floating capsule
+  confirmation on the Subscriptions page.
+
 ## [0.2.4] - 2026-10-28
 
 ### Added
