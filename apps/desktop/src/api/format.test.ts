@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { persistLanguagePreference } from "../lib/i18n";
-import { formatInvokeError } from "./format";
+import { formatInvokeError, formatUiMessageTitle } from "./format";
 
 describe("formatInvokeError", () => {
   beforeEach(() => {
@@ -58,5 +58,26 @@ describe("formatInvokeError", () => {
 
   it("stringifies unknown values", () => {
     expect(formatInvokeError("boom")).toBe("boom");
+  });
+});
+
+describe("formatUiMessageTitle", () => {
+  beforeEach(() => {
+    persistLanguagePreference("en");
+  });
+
+  it("keeps the localized title and drops the detail", () => {
+    expect(
+      formatUiMessageTitle({
+        key: "error.sub.fetch_failed",
+        params: { detail: "fetch failed: GET https://example.com" },
+      }),
+    ).toBe("Failed to download the subscription");
+  });
+
+  it("keeps raw text", () => {
+    expect(
+      formatUiMessageTitle({ key: "ui.raw", params: { text: "boom" } }),
+    ).toBe("boom");
   });
 });

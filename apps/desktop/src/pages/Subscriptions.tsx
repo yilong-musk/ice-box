@@ -6,6 +6,7 @@ import {
   api,
   formatInvokeError,
   formatUiMessage,
+  formatUiMessageTitle,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/client";
@@ -20,7 +21,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
-import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
+import { WarnAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -192,9 +193,6 @@ export function Subscriptions({ active = true }: Props) {
           </Button>
         </TitlebarActions>
       ) : null}
-      {error && !importOpen && (
-        <ErrorAlert className="shrink-0">{error}</ErrorAlert>
-      )}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -302,7 +300,7 @@ export function Subscriptions({ active = true }: Props) {
                         ) : null}
                         {s.last_error ? (
                           <ItemDescription className="text-destructive">
-                            {formatUiMessage(s.last_error)}
+                            {formatUiMessageTitle(s.last_error)}
                           </ItemDescription>
                         ) : null}
                         {warnings.length > 0 ? (

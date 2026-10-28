@@ -57,6 +57,16 @@ vi.mock("../api/client", () => ({
     if (m.key === "ui.raw") return m.params?.text ?? "";
     return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
   },
+  formatUiMessageTitle: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    const params = { ...(m.params ?? {}) };
+    delete params.detail;
+    return isMessageKey(m.key) ? t(m.key, params) : m.key;
+  },
 }));
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
@@ -314,6 +324,37 @@ describe("Subscriptions", () => {
         exact: false,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("does not show a page-level error alert when listing fails", async () => {
+    listSubscriptions.mockRejectedValue(new Error("boom"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(listSubscriptions).toHaveBeenCalled();
+    });
+    expect(view.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows only the subscription error title in the list", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({
+        name: "failed",
+        last_error: {
+          key: "error.sub.fetch_failed",
+          params: { detail: "fetch failed: certificate unknown issuer" },
+        },
+      }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("failed")).toBeInTheDocument();
+    });
+    expect(view.getByText(t("error.sub.fetch_failed"))).toBeInTheDocument();
+    expect(view.queryByText(/certificate unknown issuer/)).not.toBeInTheDocument();
   });
 
   it("shows the parsed usage and expiry for an embedded entry, not the raw text", async () => {

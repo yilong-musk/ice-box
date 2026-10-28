@@ -63,6 +63,21 @@ export function formatUiMessage(
 }
 
 /**
+ * Localized title of a structured message, without its `detail` suffix.
+ * Compact rows use this so a long fetch error does not dominate the line.
+ */
+export function formatUiMessageTitle(
+  msg: UiMessage | string | null | undefined,
+): string {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  if (msg.key === "ui.raw") return msg.params?.text ?? "";
+  const params = { ...(msg.params ?? {}) };
+  delete params.detail;
+  return isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
+}
+
+/**
  * Known IPC codes are translated via `t()`. Unknown payloads keep
  * `code: message` so a new backend code still surfaces.
  */
