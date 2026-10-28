@@ -32,8 +32,8 @@ pub use clash::{
 pub use decode::maybe_decode_base64;
 pub use error::SubscriptionError;
 pub use fetch::{
-    download_direct, DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode, MockFetcher,
-    PanicOnceMode, FETCH_TIMEOUT, MAX_BODY_BYTES,
+    download_direct, DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode,
+    MockFetcher, PanicOnceMode, FETCH_TIMEOUT, MAX_BODY_BYTES,
 };
 pub use manager::{FetchedAdd, FetchedUpdate, MemorySubscriptionManager, SubscriptionManager};
 pub use merge::{

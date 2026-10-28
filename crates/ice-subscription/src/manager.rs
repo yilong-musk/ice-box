@@ -10,7 +10,7 @@ use ice_config::{HostPlatform, NormalizedProfile};
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
-use crate::fetch::{DirectFetcher, FetchResponse, HttpFetcher};
+use crate::fetch::{DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher};
 use crate::merge::load_active_profile;
 use crate::store::{
     apply_error_to_index, apply_success_to_index, commit_subscription_success, load_index,
@@ -120,6 +120,23 @@ impl SubscriptionManager<DirectFetcher> {
     }
 }
 
+impl SubscriptionManager<DefaultFetcher> {
+    /// Open a manager whose fetches follow the app's default network path:
+    /// through the local mixed inbound when `proxy_url` is `Some`, direct
+    /// otherwise.
+    pub fn open_with_proxy(
+        paths: SubscriptionPaths,
+        platform: HostPlatform,
+        proxy_url: Option<String>,
+    ) -> Result<Self, SubscriptionError> {
+        Ok(Self::with_fetcher_on(
+            paths,
+            DefaultFetcher::new(proxy_url)?,
+            platform,
+        ))
+    }
+}
+
 impl<F: HttpFetcher> SubscriptionManager<F> {
     pub fn with_fetcher(paths: SubscriptionPaths, fetcher: F) -> Self {
         Self::with_fetcher_on(paths, fetcher, HostPlatform::MacOs)
@@ -167,11 +184,6 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         auto_update: bool,
         auto_update_interval: Option<AutoUpdateInterval>,
     ) -> Result<FetchedAdd, SubscriptionError> {
-        assert!(
-            self.fetcher.bypasses_system_proxy(),
-            "subscription fetch must bypass system proxy"
-        );
-
         validate_subscription_url(url)?;
 
         let id = Uuid::new_v4();

@@ -28,11 +28,12 @@ pub(crate) use ice_core::{
 pub(crate) use ice_engine::{
     active_subscription, host_platform, redact_subscription_url_for_log,
     redact_subscription_url_for_ui, subscription_share_text, write_subscription_error,
-    SubscriptionError, SubscriptionManager, SubscriptionPaths, SubscriptionShareKind,
+    DefaultFetcher, SubscriptionError, SubscriptionManager, SubscriptionPaths,
+    SubscriptionShareKind,
 };
 pub(crate) use ice_proxy_sys::{
     disk_proxy_state, is_proxy_live_applied, proxy_backup_indicates_ownership,
-    recover_if_applied_hinted, DiskProxyState, ProxyEndpoints, RecoverOutcome,
+    recover_if_applied_hinted, DiskProxyState, ProxyBackup, ProxyEndpoints, RecoverOutcome,
 };
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::path::Path;

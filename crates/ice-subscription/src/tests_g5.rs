@@ -4,9 +4,9 @@ use super::{
     detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
     parse_uri_list_profile, read_profile, resolve_selected_tag, set_active, set_auto_update,
-    subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
-    FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
-    SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
+    subscription_share_text, write_subscription_error, AutoUpdateInterval, DefaultFetcher,
+    DirectFetcher, FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher,
+    PanicOnceMode, SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
     SubscriptionPaths, SubscriptionShareKind, SubscriptionSource, SubscriptionUserInfo,
     CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
@@ -973,6 +973,10 @@ fn g5_11_disk_layout_order() {
 #[test]
 fn g5_12_fetcher_bypasses_system_proxy() {
     assert!(DirectFetcher.bypasses_system_proxy());
+    assert!(DefaultFetcher::new(None).unwrap().bypasses_system_proxy());
+    assert!(!DefaultFetcher::new(Some("http://127.0.0.1:17890".into()))
+        .unwrap()
+        .bypasses_system_proxy());
     let paths = temp_subs("proxy");
     let fetcher = MockFetcher {
         bypasses_proxy: true,

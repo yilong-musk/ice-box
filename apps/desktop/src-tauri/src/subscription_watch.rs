@@ -5,9 +5,7 @@
 use crate::application;
 use crate::orchestrate::current_settings;
 use crate::AppState;
-use ice_engine::{
-    host_platform, AutoUpdateInterval, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
-};
+use ice_engine::{AutoUpdateInterval, SubscriptionMeta};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -71,8 +69,13 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     if state.workers.is_paused_or_stopping() {
         return true;
     }
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = match application::subscription_manager(state) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            tracing::warn!(error = %err.message, "auto-update: open subscription manager failed");
+            return true;
+        }
+    };
     let items = match mgr.list() {
         Ok(items) => items,
         Err(err) => {

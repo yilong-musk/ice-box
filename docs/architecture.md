@@ -89,6 +89,11 @@ combines that profile with local settings, selections, rule overrides, and
 capture intent to produce the runtime configuration. Without a usable profile,
 the application can generate a direct-only configuration.
 
+On the desktop, subscription refreshes follow the OS system proxy like any
+browser request: while the app's proxy is applied they go through the local
+mixed inbound, and when no system proxy is set (including TUN-only mode) they
+connect directly.
+
 Raw subscriptions, normalized profiles, local preferences, and generated
 runtime configuration remain separate. This preserves provider input and user
 intent across regeneration. Persistent writes use atomic replacement, with

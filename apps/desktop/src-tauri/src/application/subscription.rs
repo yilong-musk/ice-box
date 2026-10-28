@@ -37,6 +37,55 @@ pub struct SetAutoUpdateRequest {
     pub auto_update_interval: Option<ice_engine::AutoUpdateInterval>,
 }
 
+/// Manager whose subscription fetches follow the system proxy, like a browser.
+pub(crate) fn subscription_manager(
+    state: &AppState,
+) -> Result<SubscriptionManager<DefaultFetcher>, AppError> {
+    let paths = SubscriptionPaths::from_app(&state.paths);
+    SubscriptionManager::open_with_proxy(paths, host_platform(), subscription_fetch_proxy(state))
+        .map_err(AppError::from)
+}
+
+/// System proxy for subscription fetches, or `None` for a direct connect.
+///
+/// The app applies its local mixed inbound as the OS system proxy while the
+/// proxy service runs, so reading the OS settings is what a browser does: the
+/// fetch follows the same proxy when one is on and goes direct when none is.
+fn subscription_fetch_proxy(state: &AppState) -> Option<String> {
+    let backend = state.proxy.lock().ok()?;
+    proxy_url_from_backup(&backend.backup().ok()?)
+}
+
+/// Pick the endpoint a browser would use. HTTP and HTTPS share the local mixed
+/// inbound; SOCKS is the fallback when no HTTP proxy is configured.
+fn proxy_url_from_backup(backup: &ProxyBackup) -> Option<String> {
+    if !backup.enabled {
+        return None;
+    }
+    let http = first_non_empty([backup.https.as_deref(), backup.http.as_deref()]);
+    if let Some(endpoint) = http {
+        return Some(with_proxy_scheme("http", endpoint));
+    }
+    let socks = first_non_empty([backup.socks.as_deref()])?;
+    Some(with_proxy_scheme("socks5", socks))
+}
+
+fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    values
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+}
+
+fn with_proxy_scheme(default_scheme: &str, endpoint: &str) -> String {
+    if endpoint.contains("://") {
+        endpoint.to_string()
+    } else {
+        format!("{default_scheme}://{endpoint}")
+    }
+}
+
 pub(crate) fn list_subscriptions_use_case(state: &AppState) -> Result<serde_json::Value, AppError> {
     let paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::load_index(&paths).map_err(AppError::from)?;
@@ -76,8 +125,7 @@ pub(crate) fn add_subscription_use_case(
     tracing::info!(url = %redacted, name = ?req.name, auto_update = req.auto_update, interval = ?req.auto_update_interval, "add_subscription: start");
     // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
     // save_settings are not queued behind it; the lock is taken for the disk write + Apply.
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = subscription_manager(state)?;
     let fetched = mgr
         .fetch_add(
             &req.url,
@@ -178,8 +226,7 @@ pub(crate) fn update_subscription_use_case(
 ) -> Result<serde_json::Value, AppError> {
     // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock; the lock is taken
     // for the disk write + Apply step.
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = subscription_manager(state)?;
     let fetched = match mgr.fetch_update(req.id) {
         Ok(upd) => upd,
         Err(err) => {
@@ -322,7 +369,44 @@ pub(crate) fn set_auto_update_subscription_use_case(
 
 #[cfg(test)]
 mod tests {
-    use super::singbox_export_filename;
+    use super::{proxy_url_from_backup, singbox_export_filename};
+    use crate::application::ProxyBackup;
+
+    #[test]
+    fn subscription_proxy_follows_the_system_browser_proxy() {
+        let disabled = ProxyBackup::default();
+        assert_eq!(proxy_url_from_backup(&disabled), None);
+
+        let mut backup = ProxyBackup {
+            enabled: true,
+            https: Some("127.0.0.1:17890".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            proxy_url_from_backup(&backup).as_deref(),
+            Some("http://127.0.0.1:17890")
+        );
+
+        backup.https = None;
+        backup.http = Some("10.0.0.2:8080".into());
+        assert_eq!(
+            proxy_url_from_backup(&backup).as_deref(),
+            Some("http://10.0.0.2:8080")
+        );
+
+        backup.http = None;
+        backup.socks = Some("127.0.0.1:1080".into());
+        assert_eq!(
+            proxy_url_from_backup(&backup).as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+
+        backup.socks = Some("socks5://127.0.0.1:1080".into());
+        assert_eq!(
+            proxy_url_from_backup(&backup).as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+    }
 
     #[test]
     fn export_filename_is_a_json_basename() {
