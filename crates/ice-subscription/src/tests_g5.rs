@@ -989,6 +989,32 @@ fn g5_12_fetcher_bypasses_system_proxy() {
 }
 
 #[test]
+fn g5_12b_update_fetch_works_when_the_fetcher_uses_a_proxy() {
+    let paths = temp_subs("proxy-update");
+    let fetcher = MockFetcher {
+        bypasses_proxy: false,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: r#"{"outbounds":[{"type":"socks","tag":"node","server":"1.1.1.1","server_port":1}]}"#.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    // `.invalid` would fail a local DNS check; a proxied fetcher resolves it.
+    let meta = mgr
+        .add("https://does-not-resolve.invalid/sub", None, false, None)
+        .unwrap();
+    let fetched = mgr
+        .fetch_update(meta.id)
+        .expect("a proxied update fetch must not be treated as misuse");
+    assert_eq!(fetched.meta.id, meta.id);
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
 fn g5_13_base64_wrapped_json() {
     let inner =
         fs::read_to_string(fixtures_dir().join("subscription-singbox-outbounds.json")).unwrap();

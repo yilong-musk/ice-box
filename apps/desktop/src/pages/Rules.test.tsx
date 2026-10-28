@@ -71,7 +71,7 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
       {
         index: null,
         fingerprint: "fp-custom",
-        rule: { domain: ["example.com"], outbound: "block" },
+        rule: { domain: ["example.com"], invert: true, outbound: "block" },
         custom: true,
         disabled: false,
         rule_type: "domain",
@@ -333,6 +333,7 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(updateCustomRule).toHaveBeenCalledWith("fp-custom", {
         domain: ["edited.com", "second.com"],
+        invert: true,
         outbound: "n1",
       });
     });

@@ -165,16 +165,28 @@ export function customRuleFormValues(
 /**
  * Compose a sing-box route rule object from interactive form fields.
  * `array` matchers take comma-separated values; returns null when the value is empty.
+ *
+ * `baseRule` keeps fields the form does not expose (extra matchers, `invert`,
+ * etc.). `replacedMatcherKey` removes the previous matcher when the user
+ * switches types so the edited rule does not accumulate stale matchers.
  */
 export function buildCustomRule(
   matcherKey: string,
   rawValue: string | boolean,
   outbound: string,
+  baseRule?: Record<string, unknown>,
+  replacedMatcherKey?: string,
 ): Record<string, unknown> | null {
   const def = RULE_MATCHER_DEFS.find((d) => d.key === matcherKey);
   if (!def) return null;
+  const next = { ...(baseRule ?? {}) };
+  if (replacedMatcherKey && replacedMatcherKey !== matcherKey) {
+    delete next[replacedMatcherKey];
+  }
   if (def.kind === "boolean") {
-    return { [def.key]: rawValue === true, outbound };
+    next[def.key] = rawValue === true;
+    next.outbound = outbound;
+    return next;
   }
   if (typeof rawValue !== "string") return null;
   const values = rawValue
@@ -182,5 +194,7 @@ export function buildCustomRule(
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   if (values.length === 0) return null;
-  return { [def.key]: values, outbound };
+  next[def.key] = values;
+  next.outbound = outbound;
+  return next;
 }

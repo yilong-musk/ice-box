@@ -326,7 +326,7 @@ describe("Subscriptions", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not show a page-level error alert when listing fails", async () => {
+  it("shows a capsule toast when listing fails", async () => {
     listSubscriptions.mockRejectedValue(new Error("boom"));
 
     const { container } = render(<Subscriptions />);
@@ -334,7 +334,55 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(listSubscriptions).toHaveBeenCalled();
     });
-    expect(view.queryByRole("alert")).not.toBeInTheDocument();
+    expect(view.getByTestId("error-toast")).toHaveTextContent("boom");
+  });
+
+  it("shows a capsule toast when toggling a subscription fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    vi.mocked(api.setSubscriptionActive).mockRejectedValueOnce(
+      new Error("activate failed"),
+    );
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    const row = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(
+      within(row).getByRole("switch", { name: t("common.activate") }),
+    );
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent(
+        "activate failed",
+      );
+    });
+  });
+
+  it("shows a capsule toast when removing a subscription fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    removeSubscription.mockRejectedValueOnce(new Error("delete failed"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("common.delete") }));
+    await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: t("common.delete"),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(removeSubscription).toHaveBeenCalled();
+      expect(view.getByTestId("error-toast")).toHaveTextContent("delete failed");
+    });
   });
 
   it("shows only the subscription error title in the list", async () => {

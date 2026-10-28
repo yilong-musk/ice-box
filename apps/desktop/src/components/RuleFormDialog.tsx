@@ -95,10 +95,15 @@ function RuleFormDialog({
   // lowercased as it is typed, and keep the rule itself lowercase too.
   const lowercaseInput = previewDef?.lowercase === true;
   const matcherText = lowercaseInput ? matcherValue.toLowerCase() : matcherValue;
+  const editingMatcherKey = editing
+    ? customRuleFormValues(editing.rule).matcherKey
+    : undefined;
   const previewRule = buildCustomRule(
     matcherKey,
     previewDef?.kind === "boolean" ? matcherBool : matcherText,
     outbound,
+    editing?.rule,
+    editingMatcherKey,
   );
 
   const isEditing = editing !== null;

@@ -18,7 +18,7 @@ use crate::store::{
     set_active, set_auto_update, write_subscription_error, write_subscription_success,
     SubscriptionPaths,
 };
-use crate::url::validate_subscription_url;
+use crate::url::{validate_subscription_url, validate_subscription_url_syntax};
 use crate::{
     meta_from_fetched_profile, meta_from_profile, normalize_raw_body, resolve_subscription_name,
     AutoUpdateInterval, SubscriptionFormat, SubscriptionIndex, SubscriptionMeta,
@@ -176,6 +176,19 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         self.apply_add(self.fetch_add(url, name, auto_update, auto_update_interval)?)
     }
 
+    /// Validate a fetch target before calling the fetcher.
+    ///
+    /// Direct fetchers resolve the host themselves and need the full SSRF
+    /// check. A proxied fetcher resolves through the proxy, so resolving here
+    /// would fail whenever the local resolver is the broken hop.
+    fn validate_fetch_url(&self, url: &str) -> Result<(), SubscriptionError> {
+        if self.fetcher.bypasses_system_proxy() {
+            validate_subscription_url(url)
+        } else {
+            validate_subscription_url_syntax(url)
+        }
+    }
+
     /// Network fetch phase of an add: validate URL, GET (no disk writes).
     pub fn fetch_add(
         &self,
@@ -184,7 +197,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         auto_update: bool,
         auto_update_interval: Option<AutoUpdateInterval>,
     ) -> Result<FetchedAdd, SubscriptionError> {
-        validate_subscription_url(url)?;
+        self.validate_fetch_url(url)?;
 
         let id = Uuid::new_v4();
         let fetched = self.fetcher.get(url, None, None)?;
@@ -315,8 +328,6 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Network fetch phase of an update: load meta, validate URL, GET (no disk writes).
     pub fn fetch_update(&self, id: Uuid) -> Result<FetchedUpdate, SubscriptionError> {
-        assert!(self.fetcher.bypasses_system_proxy());
-
         let index = load_index(&self.paths)?;
         let meta = index
             .items
@@ -333,7 +344,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             ));
         }
 
-        validate_subscription_url(&meta.url)?;
+        self.validate_fetch_url(&meta.url)?;
 
         let fetched = self.fetcher.get(
             &meta.url,

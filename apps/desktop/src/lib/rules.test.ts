@@ -105,6 +105,29 @@ describe("rule helpers", () => {
     });
   });
 
+  it("preserves fields the editor does not expose when editing", () => {
+    const base = {
+      domain_suffix: ["old.com"],
+      port: [443],
+      invert: true,
+      outbound: "direct",
+    };
+    expect(
+      buildCustomRule("domain_suffix", "new.com", "n1", base, "domain_suffix"),
+    ).toEqual({
+      domain_suffix: ["new.com"],
+      port: [443],
+      invert: true,
+      outbound: "n1",
+    });
+    expect(buildCustomRule("domain", "new.com", "n1", base, "domain_suffix")).toEqual({
+      domain: ["new.com"],
+      port: [443],
+      invert: true,
+      outbound: "n1",
+    });
+  });
+
   it("maps a stored custom rule back into the editor fields", () => {
     expect(
       customRuleFormValues({

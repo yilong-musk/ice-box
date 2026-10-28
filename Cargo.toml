@@ -43,7 +43,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-ureq = "2.12"
+ureq = { version = "2.12", features = ["socks-proxy"] }
 ice-core = { path = "crates/ice-core" }
 ice-proxy-sys = { path = "crates/ice-proxy-sys" }
 ice-types = { path = "crates/ice-types" }

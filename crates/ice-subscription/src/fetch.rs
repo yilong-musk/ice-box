@@ -9,6 +9,7 @@ use crate::error::SubscriptionError;
 use crate::tls_fetch::{tls_client_config, tls_get_pinned, url_path_query};
 use crate::url::{
     addrs_are_fake_ip, pin_url_to_ip, resolve_allowed_fetch_addrs, validate_subscription_url,
+    validate_subscription_url_syntax,
 };
 use crate::userinfo::{parse_userinfo_header, SubscriptionUserInfo};
 
@@ -368,7 +369,9 @@ fn handle_hop(
     Ok(Ok(hop))
 }
 
-/// GET with manual redirect handling; re-validates URL (incl. DNS) before each hop.
+/// GET with manual redirect handling. The direct path re-validates the URL
+/// (including DNS) before each hop; the proxy path re-checks its shape and lets
+/// the proxy resolve it.
 ///
 /// Direct mode connects to pre-resolved IPs (TLS SNI uses the original
 /// hostname). Proxy mode forwards the URL through the configured proxy, which
@@ -383,10 +386,10 @@ fn fetch_get(
     let mut current = url.to_string();
 
     for hop in 0..=MAX_REDIRECTS {
-        validate_subscription_url(&current)?;
-        let (host_header, addrs) = resolve_allowed_fetch_addrs(&current)?;
-
         if proxied {
+            // The proxy resolves the host. A local lookup here would make the
+            // fetch fail whenever the local resolver is the broken hop.
+            validate_subscription_url_syntax(&current)?;
             let response = proxied_request(agent, &current, hop, etag, last_modified, &current)?;
             let hop_resp = hop_from_ureq(response)?;
             match handle_hop(hop_resp, url, &current, hop)? {
@@ -398,10 +401,12 @@ fn fetch_get(
             }
         }
 
+        validate_subscription_url(&current)?;
+        let (host_header, addrs) = resolve_allowed_fetch_addrs(&current)?;
+
         // Fake-ip answers (198.18/15) must not fall back to a hostname
         // connect: ureq would resolve again without the SSRF filter (DNS
         // rebinding). Fail closed and tell the user to use a real resolver.
-        // Proxy mode skips this check: the mixed inbound resolves the host.
         refuse_fake_ip_connect(&addrs)?;
 
         let https = url_is_https(&current);
@@ -813,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn default_fetcher_with_proxy_routes_absolute_urls_through_it() {
+    fn default_fetcher_proxy_mode_skips_local_dns_and_routes_absolute_urls() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -829,27 +834,24 @@ mod tests {
 
         let fetcher = DefaultFetcher::new(Some(format!("http://{addr}"))).unwrap();
         assert!(!fetcher.bypasses_system_proxy());
-        let response = proxied_request(
-            &fetcher.agent,
-            "http://example.com/sub?t=1",
-            0,
-            None,
-            None,
-            "http://example.com/sub?t=1",
-        )
-        .expect("proxied request");
-        assert_eq!(response.status(), 200);
+        // `.invalid` never resolves locally; reaching the proxy proves the
+        // proxy path does not depend on the local DNS resolver.
+        let response = fetcher
+            .get("http://does-not-resolve.invalid/sub?t=1", None, None)
+            .expect("proxied request");
+        assert_eq!(response.body, "ok");
+        assert!(!response.not_modified);
 
         let head = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("proxy saw request");
         assert!(
-            head.starts_with("GET http://example.com/sub?t=1 HTTP/1.1\r\n"),
+            head.starts_with("GET http://does-not-resolve.invalid/sub?t=1 HTTP/1.1\r\n"),
             "{head}"
         );
         assert!(
             head.to_ascii_lowercase()
-                .contains("\r\nhost: example.com\r\n"),
+                .contains("\r\nhost: does-not-resolve.invalid\r\n"),
             "{head}"
         );
         proxy.join().expect("proxy thread");

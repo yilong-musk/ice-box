@@ -18,6 +18,7 @@ import {
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ErrorToast, useErrorToast } from "../components/ErrorToast";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
@@ -86,6 +87,11 @@ export function Subscriptions({ active = true }: Props) {
   );
   const [shareTarget, setShareTarget] = useState<SubscriptionMeta | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const {
+    toast,
+    show: showToast,
+    dismiss: dismissToast,
+  } = useErrorToast();
 
   const refresh = useCallback(async (keepError = false) => {
     const gen = nextGeneration();
@@ -102,9 +108,13 @@ export function Subscriptions({ active = true }: Props) {
       setItems(next);
       if (!keepError) setError(null);
     } catch (e) {
-      if (!isStale(gen)) setError(formatInvokeError(e));
+      if (!isStale(gen)) {
+        const message = formatInvokeError(e);
+        setError(message);
+        showToast(message);
+      }
     }
-  }, [isStale, nextGeneration]);
+  }, [isStale, nextGeneration, showToast]);
 
   useEffect(() => {
     void refresh();
@@ -132,7 +142,11 @@ export function Subscriptions({ active = true }: Props) {
     };
   }, [refresh]);
 
-  async function run(action: () => Promise<unknown>, isUpdate = false): Promise<boolean> {
+  async function run(
+    action: () => Promise<unknown>,
+    options: { updating?: boolean; errorSurface?: "toast" | "dialog" } = {},
+  ): Promise<boolean> {
+    const { updating: isUpdate = false, errorSurface = "toast" } = options;
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();
     nextGeneration();
@@ -149,7 +163,9 @@ export function Subscriptions({ active = true }: Props) {
       await refresh();
       return true;
     } catch (e) {
-      setError(formatInvokeError(e));
+      const message = formatInvokeError(e);
+      if (errorSurface === "dialog") setError(message);
+      else showToast(message);
       await refresh(true);
       return false;
     } finally {
@@ -173,7 +189,10 @@ export function Subscriptions({ active = true }: Props) {
   }
 
   return (
-    <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="subs-panel">
+    <div
+      className="subs-panel relative flex min-h-0 flex-1 flex-col gap-3"
+      data-testid="subs-panel"
+    >
       {active ? (
         <TitlebarActions>
           <Button
@@ -257,7 +276,9 @@ export function Subscriptions({ active = true }: Props) {
                               size="sm"
                               disabled={busy}
                               onClick={() =>
-                                void run(() => api.updateSubscription(s.id), true)
+                                void run(() => api.updateSubscription(s.id), {
+                                  updating: true,
+                                })
                               }
                             >
                               {updating ? t("common.updating") : t("common.update")}
@@ -391,26 +412,33 @@ export function Subscriptions({ active = true }: Props) {
           )}
         </CardContent>
       </Card>
+      <ErrorToast toast={toast} onDismiss={dismissToast} />
       <ImportSubscriptionDialog
         open={importOpen}
         busy={busy}
         error={error}
         onOpenChange={setImportOpen}
         onImportUrl={async (url, name, autoUpdate, interval) => {
-          const ok = await run(async () => {
-            await api.addSubscription(
-              url,
-              name,
-              phone ? false : autoUpdate,
-              interval,
-            );
-          });
+          const ok = await run(
+            async () => {
+              await api.addSubscription(
+                url,
+                name,
+                phone ? false : autoUpdate,
+                interval,
+              );
+            },
+            { errorSurface: "dialog" },
+          );
           if (ok) setImportOpen(false);
         }}
         onImportFile={async (content, name) => {
-          const ok = await run(async () => {
-            await api.importSubscriptionFile(content, name);
-          });
+          const ok = await run(
+            async () => {
+              await api.importSubscriptionFile(content, name);
+            },
+            { errorSurface: "dialog" },
+          );
           if (ok) setImportOpen(false);
         }}
       />

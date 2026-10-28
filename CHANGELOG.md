@@ -5,13 +5,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- Custom rules on the Rules page can no longer be disabled. Their action button
-  now opens the rule editor with the match type, value, and outbound prefilled;
-  saving replaces the rule in place and applies the new config. Custom rules are
-  always active, and legacy disabled marks on them are ignored.
-
 ## [0.2.4] - 2026-10-28
 
 ### Changed
@@ -21,6 +14,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inbound, and when no system proxy is set they connect directly. This keeps
   updates working when direct DNS or the direct route is intercepted, without
   routing traffic through a proxy that is off.
+- Custom rules on the Rules page can no longer be disabled. Their action button
+  now opens the rule editor with the match type, value, and outbound prefilled;
+  saving replaces the rule in place and applies the new config. Custom rules are
+  always active, and legacy disabled marks on them are ignored.
+- Subscription list loads and row actions now report failures as a floating
+  capsule notice instead of a page-wide banner. Import dialogs keep their inline
+  error, and row-level subscription errors show only the localized title.
+
+### Fixed
+
+- Subscription updates no longer panic when the system proxy is active.
+- Subscription refreshes through a system proxy no longer depend on the local
+  DNS resolver and support SOCKS-only proxy settings.
+- Editing a custom rule preserves fields the form does not expose, such as
+  additional matchers and `invert`.
 
 ## [0.2.3] - 2026-10-22
 
