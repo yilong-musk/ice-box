@@ -675,54 +675,9 @@ pub struct AddCustomRuleRequest {
 
 /// Validate a custom rule before it is persisted or emitted verbatim.
 fn validate_custom_rule(state: &AppState, rule: &serde_json::Value) -> Result<(), AppError> {
-    if !rule.is_object() {
-        return Err(AppError::new(
-            ErrorCode::ConfigInvalid,
-            "custom rule must be a JSON object",
-        ));
-    }
-    if rule.get("outbound").and_then(|v| v.as_str()).is_none() {
-        return Err(AppError::new(
-            ErrorCode::ConfigInvalid,
-            "custom rule must reference an outbound (e.g. \"outbound\": \"direct\")",
-        ));
-    }
-    // sing-box 1.13 removed the `geoip` / `geosite` rule options; custom rules are
-    // emitted verbatim into the runtime config, so these matchers would make sing-box
-    // exit FATAL on the next reload. Only subscription rules are geoip-expanded.
-    for key in ["geoip", "geosite"] {
-        if rule.get(key).is_some() {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                format!(
-                    "custom rule cannot use the `{key}` matcher (sing-box 1.13 removed it); use `rule_set` instead"
-                ),
-            ));
-        }
-    }
-    // Validate `rule_set` references against the active profile's rule-sets so a bad
-    // reference is caught here instead of failing every config build afterwards.
-    if let Ok(profile) = active_profile(state) {
-        let set_tags: Vec<&str> = profile
-            .route
-            .rule_sets
-            .iter()
-            .filter_map(|s| s.get("tag").and_then(|v| v.as_str()))
-            .collect();
-        if let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) {
-            for r in refs {
-                if let Some(t) = r.as_str() {
-                    if !set_tags.contains(&t) {
-                        return Err(AppError::new(
-                            ErrorCode::ConfigInvalid,
-                            format!("custom rule references unknown rule_set: {t}"),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    let profile = active_profile(state).ok();
+    validate_custom_rule_value(rule, profile.as_deref())
+        .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))
 }
 
 /// Validate + persist a custom rule (no Apply). Returns its fingerprint.

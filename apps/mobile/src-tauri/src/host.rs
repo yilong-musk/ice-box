@@ -12,8 +12,8 @@ use ice_config::{
     load_settings, redact_config_str, remove_subscription_favorites, rule_fingerprint,
     rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
     save_settings_for, set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for,
-    AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode, NormalizedProfile, ProxyMode,
-    RuleOverrides, SettingsPatch,
+    validate_custom_rule_value, AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode,
+    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 use ice_core::{
     proxy_delay, proxy_group_heads, proxy_selected_now, GroupHead, HealthEndpoints, TrafficDelta,
@@ -535,14 +535,10 @@ impl MobileHost {
     }
 
     pub fn add_custom_rule(&mut self, rule: Value) -> Result<String, AppError> {
-        if !rule.is_object() {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                "a custom rule must be a JSON object",
-            ));
-        }
         let paths = self.paths()?.clone();
         let profile = self.full_profile()?;
+        validate_custom_rule_value(&rule, Some(profile.as_ref()))
+            .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))?;
         let mut overrides = load_overrides(&paths, &profile);
         let fingerprint = rule_fingerprint(&rule);
         overrides.custom.push(rule);
@@ -555,14 +551,10 @@ impl MobileHost {
         fingerprint: &str,
         rule: Value,
     ) -> Result<String, AppError> {
-        if !rule.is_object() {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                "a custom rule must be a JSON object",
-            ));
-        }
         let paths = self.paths()?.clone();
         let profile = self.full_profile()?;
+        validate_custom_rule_value(&rule, Some(profile.as_ref()))
+            .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))?;
         let mut overrides = load_overrides(&paths, &profile);
         let Some(index) = overrides
             .custom
@@ -1302,6 +1294,32 @@ mod favorite_tests {
         let err = host.set_node_favorite("n1", true).unwrap_err();
         assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
         assert!(host.list_nodes(false).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn custom_rules_use_the_shared_validator() {
+        let (mut host, _id, paths) = host_with_subscription("custom-validation");
+
+        let err = host
+            .add_custom_rule(serde_json::json!({ "geoip": ["cn"], "outbound": "direct" }))
+            .unwrap_err();
+        assert!(
+            err.message.contains("sing-box 1.13 removed it"),
+            "{}",
+            err.message
+        );
+
+        let fingerprint = host
+            .add_custom_rule(serde_json::json!({ "domain": ["a.com"], "outbound": "direct" }))
+            .unwrap();
+        let err = host
+            .update_custom_rule(
+                &fingerprint,
+                serde_json::json!({ "rule_set": ["missing"], "outbound": "direct" }),
+            )
+            .unwrap_err();
+        assert!(err.message.contains("unknown rule_set"), "{}", err.message);
         let _ = std::fs::remove_dir_all(paths.root());
     }
 }

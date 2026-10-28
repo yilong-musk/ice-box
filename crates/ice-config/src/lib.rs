@@ -9,6 +9,7 @@
 mod atomic;
 mod build;
 mod clash_secret;
+mod custom_rule;
 mod error;
 mod favorites;
 mod profile;
@@ -28,6 +29,7 @@ pub use build::{
     write_runtime_config_file, ConfigError,
 };
 pub use clash_secret::ensure_clash_api_secret;
+pub use custom_rule::validate_custom_rule_value;
 pub use error::{AppError, ErrorCode};
 pub use favorites::{
     load_node_favorites, remove_subscription_favorites, set_node_favorite, NodeFavorites,

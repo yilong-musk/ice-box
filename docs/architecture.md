@@ -92,7 +92,13 @@ the application can generate a direct-only configuration.
 On the desktop, subscription refreshes follow the OS system proxy like any
 browser request: while the app's proxy is applied they go through the local
 mixed inbound, and when no system proxy is set (including TUN-only mode) they
-connect directly.
+connect directly. Only explicit HTTP/HTTPS/SOCKS endpoints are followed; PAC
+and WPAD scripts and the OS bypass list are not evaluated.
+
+Proxy mode deliberately leaves DNS resolution to the proxy, so the DNS-based
+SSRF check only runs on the direct path. Literal private hosts, restricted
+names, URL scheme/credential checks, and the https→http redirect downgrade
+check still run on every hop.
 
 Raw subscriptions, normalized profiles, local preferences, and generated
 runtime configuration remain separate. This preserves provider input and user

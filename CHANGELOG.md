@@ -7,19 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.4] - 2026-10-28
 
+### Added
+
+- The MCP bridge can replace a custom rule in place with
+  `update_custom_rule`.
+
 ### Changed
 
 - Desktop subscription refreshes now follow the OS system proxy, like a
   browser: while the app's proxy is applied they go through the local mixed
   inbound, and when no system proxy is set they connect directly. This keeps
   updates working when direct DNS or the direct route is intercepted, without
-  routing traffic through a proxy that is off.
+  routing traffic through a proxy that is off. Proxy mode leaves DNS to the
+  proxy, so only literal private hosts and restricted names are rejected
+  locally; the direct path keeps the full DNS SSRF check. PAC/WPAD scripts and
+  the OS bypass list are not evaluated.
 - Custom rules on the Rules page can no longer be disabled. Their action button
   now opens the rule editor with the match type, value, and outbound prefilled;
-  saving replaces the rule in place and applies the new config. Custom rules are
-  always active, and legacy disabled marks on them are ignored.
+  saving replaces the rule in place and applies the new config. Rules whose
+  matchers the form cannot represent open a raw JSON editor instead. Custom
+  rules are always active, and legacy disabled marks on them are ignored.
 - Subscription list loads and row actions now report failures as a floating
-  capsule notice instead of a page-wide banner. Import dialogs keep their inline
+  capsule notice instead of a page-wide banner. A failed list load also keeps a
+  persistent inline error with a Retry action, import dialogs keep their inline
   error, and row-level subscription errors show only the localized title.
 
 ### Fixed
@@ -27,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Subscription updates no longer panic when the system proxy is active.
 - Subscription refreshes through a system proxy no longer depend on the local
   DNS resolver and support SOCKS-only proxy settings.
+- Custom rule validation is shared by the desktop and mobile hosts, so both
+  reject the same matchers and rule-set references.
 - Editing a custom rule preserves fields the form does not expose, such as
   additional matchers and `invert`.
 

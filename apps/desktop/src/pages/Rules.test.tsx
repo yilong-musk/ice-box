@@ -343,6 +343,57 @@ describe("Rules", () => {
     });
   });
 
+  it("edits rules the form cannot represent as JSON", async () => {
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 4,
+        items: [
+          ...sampleList().items,
+          {
+            index: null,
+            fingerprint: "fp-json",
+            rule: { clash_mode: "global", outbound: "direct" },
+            custom: true,
+            disabled: false,
+            rule_type: "clash_mode",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("global")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("global").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+    await waitFor(() => {
+      expect(screen.getByText(t("ruleJson.title"))).toBeInTheDocument();
+    });
+    const textarea = screen.getByLabelText(
+      t("ruleJson.label"),
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toContain("clash_mode");
+
+    fireEvent.change(textarea, {
+      target: {
+        value: JSON.stringify({ clash_mode: "direct", outbound: "block" }),
+      },
+    });
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-json", {
+        clash_mode: "direct",
+        outbound: "block",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows apply warning from rule toggle", async () => {
     setRuleDisabled.mockResolvedValue({
       ok: true,

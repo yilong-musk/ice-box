@@ -7,6 +7,7 @@ import {
   MATCH_KEY_ORDER,
   RULE_TYPE_LABELS,
   buildCustomRule,
+  customRuleEditable,
   customRuleFormValues,
   pageCount,
   ruleMatchSummary,
@@ -151,6 +152,27 @@ describe("rule helpers", () => {
     expect(customRuleFormValues({ outbound: "direct" }).matcherKey).toBe(
       "domain",
     );
+  });
+
+  it("marks rules with an editable matcher as form-editable", () => {
+    expect(customRuleEditable({ domain: ["a.com"], outbound: "direct" })).toBe(
+      true,
+    );
+    expect(
+      customRuleEditable({ rule_set: ["cn"], outbound: "direct" }),
+    ).toBe(true);
+    expect(
+      customRuleEditable({ clash_mode: "global", outbound: "direct" }),
+    ).toBe(false);
+    expect(
+      customRuleEditable({
+        type: "logical",
+        mode: "and",
+        rules: [{ domain: ["a.com"] }],
+        outbound: "direct",
+      }),
+    ).toBe(false);
+    expect(customRuleEditable({ outbound: "direct" })).toBe(false);
   });
 
   it("rejects empty or unknown matchers", () => {

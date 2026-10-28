@@ -337,6 +337,26 @@ describe("Subscriptions", () => {
     expect(view.getByTestId("error-toast")).toHaveTextContent("boom");
   });
 
+  it("keeps a persistent load error with a retry action", async () => {
+    listSubscriptions.mockRejectedValueOnce(new Error("boom"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(t("subs.loadFailedTitle"))).toBeInTheDocument();
+    });
+    expect(view.getAllByText("boom").length).toBeGreaterThan(0);
+    expect(view.queryByText(t("subs.emptyTitle"))).not.toBeInTheDocument();
+
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    fireEvent.click(view.getByRole("button", { name: t("common.retry") }));
+
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    expect(view.queryByText(t("subs.loadFailedTitle"))).not.toBeInTheDocument();
+  });
+
   it("shows a capsule toast when toggling a subscription fails", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
     vi.mocked(api.setSubscriptionActive).mockRejectedValueOnce(

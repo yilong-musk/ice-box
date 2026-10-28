@@ -52,17 +52,37 @@ pub(crate) fn subscription_manager(
 /// proxy service runs, so reading the OS settings is what a browser does: the
 /// fetch follows the same proxy when one is on and goes direct when none is.
 fn subscription_fetch_proxy(state: &AppState) -> Option<String> {
-    let backend = state.proxy.lock().ok()?;
-    proxy_url_from_backup(&backend.backup().ok()?)
+    let backend = match state.proxy.lock() {
+        Ok(backend) => backend,
+        Err(_) => {
+            tracing::warn!("subscription fetch: proxy state lock poisoned; connecting directly");
+            return None;
+        }
+    };
+    match backend.backup() {
+        Ok(backup) => proxy_url_from_backup(&backup),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "subscription fetch: reading the system proxy failed; connecting directly"
+            );
+            None
+        }
+    }
 }
 
 /// Pick the endpoint a browser would use. HTTP and HTTPS share the local mixed
 /// inbound; SOCKS is the fallback when no HTTP proxy is configured.
+///
+/// Only explicit endpoints are used: PAC/WPAD scripts and the OS bypass list
+/// are not evaluated, and a single endpoint serves both http and https URLs.
 fn proxy_url_from_backup(backup: &ProxyBackup) -> Option<String> {
     if !backup.enabled {
         return None;
     }
-    let http = first_non_empty([backup.https.as_deref(), backup.http.as_deref()]);
+    // Prefer the HTTP endpoint when both are set: an HTTP proxy handles https
+    // via CONNECT, while a secure-web-only endpoint may not accept plain http.
+    let http = first_non_empty([backup.http.as_deref(), backup.https.as_deref()]);
     if let Some(endpoint) = http {
         return Some(with_proxy_scheme("http", endpoint));
     }
@@ -379,12 +399,21 @@ mod tests {
 
         let mut backup = ProxyBackup {
             enabled: true,
+            http: Some("10.0.0.2:8080".into()),
             https: Some("127.0.0.1:17890".into()),
             ..Default::default()
         };
         assert_eq!(
             proxy_url_from_backup(&backup).as_deref(),
-            Some("http://127.0.0.1:17890")
+            Some("http://10.0.0.2:8080"),
+            "the general HTTP endpoint is preferred when both are set"
+        );
+
+        backup.http = None;
+        assert_eq!(
+            proxy_url_from_backup(&backup).as_deref(),
+            Some("http://127.0.0.1:17890"),
+            "an https-only setting still works for both URL schemes"
         );
 
         backup.https = None;
@@ -406,6 +435,23 @@ mod tests {
             proxy_url_from_backup(&backup).as_deref(),
             Some("socks5://127.0.0.1:1080")
         );
+    }
+
+    #[test]
+    fn enabled_proxy_without_an_endpoint_connects_directly() {
+        let proxy_enabled = ProxyBackup {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(proxy_url_from_backup(&proxy_enabled), None);
+
+        // PAC/WPAD-only settings are not evaluated; the fetch goes direct.
+        let pac_only = ProxyBackup {
+            enabled: true,
+            extra: serde_json::json!({ "autoconfig_url": "http://wpad/wpad.dat" }),
+            ..Default::default()
+        };
+        assert_eq!(proxy_url_from_backup(&pac_only), None);
     }
 
     #[test]

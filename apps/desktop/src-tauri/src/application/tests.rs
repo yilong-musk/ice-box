@@ -1518,6 +1518,39 @@ fn update_custom_rule_replaces_and_clears_disabled_mark() {
 }
 
 #[test]
+fn update_custom_rule_rejects_duplicate_content() {
+    let state = temp_state_with_rules("rules-custom-duplicate", sample_rules());
+    let first = serde_json::json!({ "domain": ["a.com"], "outbound": "block" });
+    let second = serde_json::json!({ "domain": ["b.com"], "outbound": "block" });
+    let first_fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: first.clone(),
+        },
+    )
+    .unwrap();
+    persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: second.clone(),
+        },
+    )
+    .unwrap();
+
+    let err = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint: first_fp,
+            rule: second,
+        },
+    )
+    .expect_err("editing into an existing rule must fail");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("already exists"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
     use crate::application::settings::save_settings_inner_with_autostart;
     use std::path::PathBuf;

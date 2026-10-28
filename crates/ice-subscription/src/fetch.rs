@@ -388,7 +388,10 @@ fn fetch_get(
     for hop in 0..=MAX_REDIRECTS {
         if proxied {
             // The proxy resolves the host. A local lookup here would make the
-            // fetch fail whenever the local resolver is the broken hop.
+            // fetch fail whenever the local resolver is the broken hop. This is
+            // a deliberate SSRF trade-off: direct mode keeps the full DNS guard;
+            // proxy mode still rejects literal private hosts, restricted names,
+            // and https->http downgrades on every hop (see docs/architecture.md).
             validate_subscription_url_syntax(&current)?;
             let response = proxied_request(agent, &current, hop, etag, last_modified, &current)?;
             let hop_resp = hop_from_ureq(response)?;
@@ -862,5 +865,27 @@ mod tests {
         let fetcher = DefaultFetcher::new(Some("http://127.0.0.1:1".into())).unwrap();
         let err = fetcher.get("http://127.0.0.1/sub", None, None).unwrap_err();
         assert!(err.to_string().contains("not allowed"), "{err}");
+    }
+
+    #[test]
+    fn default_fetcher_proxy_mode_rejects_private_redirect_targets() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let proxy = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("proxy accept");
+            let mut head = [0u8; 1];
+            tcp.read_exact(&mut head).expect("proxy read");
+            tcp.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .expect("proxy write");
+        });
+
+        let fetcher = DefaultFetcher::new(Some(format!("http://{addr}"))).unwrap();
+        let err = fetcher
+            .get("http://example.com/sub", None, None)
+            .expect_err("a redirect to a private host must be rejected");
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        proxy.join().expect("proxy thread");
     }
 }

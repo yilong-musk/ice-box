@@ -68,7 +68,7 @@ On macOS and Windows, TUN captures traffic at the network layer, covering apps t
 
 The macOS and Windows app exposes an opt-in local MCP service. Open **MCP** above **Logs** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
 
-- **34 tools.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
+- **35 tools.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
 - **Safe by default.** MCP listens only on authenticated loopback with a random control token that is never included in the copied client config.
 - **Built-in stdio bridge.** The generated config launches the same executable in bridge mode, so no separate daemon or protocol adapter is needed.
 

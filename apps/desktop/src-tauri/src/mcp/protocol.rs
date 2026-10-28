@@ -10,11 +10,12 @@ use crate::application::{
     set_active_subscription_use_case, set_auto_update_subscription_use_case,
     set_group_selection_use_case, set_proxy_mode_inner, set_rule_disabled_use_case,
     set_selected_node_use_case, start_core_inner, start_service, stop_core_use_case,
-    subscription_share_use_case, test_node_delay_use_case, update_subscription_use_case,
-    AddCustomRuleRequest, AddSubscriptionRequest, GroupSelectionRequest, IdRequest,
-    ImportSubscriptionFileRequest, ListRulesRequest, LogViewRequest, RemoveCustomRuleRequest,
-    SetActiveRequest, SetAutoUpdateRequest, SetProxyModeRequest, SetRuleDisabledRequest,
-    SettingsPatch, TagRequest,
+    subscription_share_use_case, test_node_delay_use_case, update_custom_rule_use_case,
+    update_subscription_use_case, AddCustomRuleRequest, AddSubscriptionRequest,
+    GroupSelectionRequest, IdRequest, ImportSubscriptionFileRequest, ListRulesRequest,
+    LogViewRequest, RemoveCustomRuleRequest, SetActiveRequest, SetAutoUpdateRequest,
+    SetProxyModeRequest, SetRuleDisabledRequest, SettingsPatch, TagRequest,
+    UpdateCustomRuleRequest,
 };
 use crate::AppState;
 use ice_config::{AppError, ErrorCode};
@@ -277,6 +278,19 @@ pub fn tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {"rule": {"type": "object"}},
                 "required": ["rule"],
+                "additionalProperties": false
+            }),
+        ),
+        write_tool(
+            "update_custom_rule",
+            "Replace a custom sing-box route rule in place.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "fingerprint": {"type": "string"},
+                    "rule": {"type": "object"}
+                },
+                "required": ["fingerprint", "rule"],
                 "additionalProperties": false
             }),
         ),
@@ -669,6 +683,10 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
             let request: AddCustomRuleRequest = parse_args(args)?;
             add_custom_rule_use_case(app, state.inner(), request)
         }
+        "update_custom_rule" => {
+            let request: UpdateCustomRuleRequest = parse_args(args)?;
+            update_custom_rule_use_case(app, state.inner(), request)
+        }
         "remove_custom_rule" => {
             let request: RemoveCustomRuleRequest = parse_args(args)?;
             remove_custom_rule_use_case(app, state.inner(), request)
@@ -1001,6 +1019,43 @@ mod tests {
             &json!({"patch": {"mixed_port": 18080}})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn update_custom_rule_is_a_validated_write_tool() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "update_custom_rule")
+            .expect("update_custom_rule tool");
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool["annotations"]["destructiveHint"], true);
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["fingerprint", "rule"])
+        );
+
+        let rule = json!({ "domain": ["a.com"], "outbound": "direct" });
+        assert!(validate_tool_arguments(
+            "update_custom_rule",
+            &json!({ "fingerprint": "sha256:abc", "rule": rule })
+        )
+        .is_ok());
+        assert!(validate_tool_arguments("update_custom_rule", &json!({ "rule": rule })).is_err());
+        assert!(validate_tool_arguments(
+            "update_custom_rule",
+            &json!({ "fingerprint": "sha256:abc" })
+        )
+        .is_err());
+        assert!(validate_tool_arguments(
+            "update_custom_rule",
+            &json!({ "fingerprint": "sha256:abc", "rule": "not-an-object" })
+        )
+        .is_err());
+        assert!(validate_tool_arguments(
+            "update_custom_rule",
+            &json!({ "fingerprint": "sha256:abc", "rule": rule, "extra": true })
+        )
+        .is_err());
     }
 
     #[test]

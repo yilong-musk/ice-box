@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { CircleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -58,6 +59,15 @@ type Props = {
 /** Floating capsule for transient errors that have no row of their own. */
 export function ErrorToast({ toast, onDismiss, className }: Props) {
   if (!toast) return null;
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Escape") {
+      return;
+    }
+    event.preventDefault();
+    onDismiss();
+  }
+
   return (
     <div
       key={toast.id}
@@ -65,7 +75,9 @@ export function ErrorToast({ toast, onDismiss, className }: Props) {
       aria-live="assertive"
       data-testid="error-toast"
       title={toast.message}
+      tabIndex={0}
       onClick={onDismiss}
+      onKeyDown={handleKeyDown}
       className={cn(
         "absolute bottom-4 left-1/2 z-20 flex max-w-[min(90%,36rem)] -translate-x-1/2 cursor-pointer animate-in fade-in-0 slide-in-from-bottom-2 items-center gap-1.5 rounded-full bg-destructive px-4 py-1.5 text-xs font-medium text-background shadow-lg duration-200",
         className,

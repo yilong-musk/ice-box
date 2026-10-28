@@ -16,9 +16,9 @@ pub(crate) use ice_config::{
     load_group_selections, load_node_favorites, load_rule_overrides, redact_config_str,
     remove_subscription_favorites, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
     save_group_selections, save_rule_overrides, save_settings_for as persist_settings,
-    set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for, AppError, AppPaths,
-    AppSettings, CaptureIntent, ErrorCode, NormalizedProfile, ProxyMode, RuleOverrides,
-    SettingsPatch, TrayDisplayMode, UiMessage,
+    set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for,
+    validate_custom_rule_value, AppError, AppPaths, AppSettings, CaptureIntent, ErrorCode,
+    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch, TrayDisplayMode, UiMessage,
 };
 pub(crate) use ice_core::{
     pid_is_alive, proxy_delay, proxy_group_heads, proxy_selected_now, read_pid, select_group,

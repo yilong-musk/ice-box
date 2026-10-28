@@ -141,6 +141,18 @@ export type CustomRuleFormValues = {
   outbound: string;
 };
 
+/**
+ * Whether the interactive form can edit this rule without inventing a matcher.
+ *
+ * Rules added through MCP or a hand-edited `rules.json` may use matchers the
+ * form does not expose (`clash_mode`, logical rules, ...). Opening the form for
+ * those falls back to `domain`, and saving would add a second matcher instead
+ * of replacing the original one. Such rules must use the raw JSON editor.
+ */
+export function customRuleEditable(rule: Record<string, unknown>): boolean {
+  return RULE_MATCHER_DEFS.some((def) => rule[def.key] !== undefined);
+}
+
 /** Map a stored custom rule back into the interactive editor's fields. */
 export function customRuleFormValues(
   rule: Record<string, unknown>,

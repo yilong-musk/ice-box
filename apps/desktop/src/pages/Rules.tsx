@@ -11,6 +11,7 @@ import {
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";
+import { RuleJsonDialog } from "../components/RuleJsonDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
+  customRuleEditable,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
@@ -91,6 +93,7 @@ export function Rules({ onNavigate, active = true }: Props) {
   const [customForm, setCustomForm] = useState<
     { mode: "add" } | { mode: "edit"; row: RuleRow } | null
   >(null);
+  const [jsonForm, setJsonForm] = useState<RuleRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RuleRow | null>(null);
   const [nearBottom, setNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
@@ -467,7 +470,9 @@ export function Rules({ onNavigate, active = true }: Props) {
                               variant="outline"
                               disabled={busy}
                               onClick={() =>
-                                setCustomForm({ mode: "edit", row })
+                                customRuleEditable(row.rule)
+                                  ? setCustomForm({ mode: "edit", row })
+                                  : setJsonForm(row)
                               }
                             >
                               {t("common.edit")}
@@ -549,6 +554,17 @@ export function Rules({ onNavigate, active = true }: Props) {
         editing={customForm?.mode === "edit" ? customForm.row : null}
         onAdd={(rule) => onAddCustomRule(rule)}
         onUpdate={(fingerprint, rule) =>
+          onUpdateCustomRule(fingerprint, rule)
+        }
+      />
+      <RuleJsonDialog
+        open={jsonForm !== null}
+        editing={jsonForm}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setJsonForm(null);
+        }}
+        onSave={(fingerprint, rule) =>
           onUpdateCustomRule(fingerprint, rule)
         }
       />

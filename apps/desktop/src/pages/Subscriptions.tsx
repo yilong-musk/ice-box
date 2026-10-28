@@ -22,7 +22,7 @@ import { ErrorToast, useErrorToast } from "../components/ErrorToast";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
-import { WarnAlert } from "../components/StatusAlert";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -79,6 +79,7 @@ export function Subscriptions({ active = true }: Props) {
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -93,7 +94,7 @@ export function Subscriptions({ active = true }: Props) {
     dismiss: dismissToast,
   } = useErrorToast();
 
-  const refresh = useCallback(async (keepError = false) => {
+  const refresh = useCallback(async () => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
@@ -106,11 +107,11 @@ export function Subscriptions({ active = true }: Props) {
       }
       activeIdRef.current = nextActive;
       setItems(next);
-      if (!keepError) setError(null);
+      setLoadError(null);
     } catch (e) {
       if (!isStale(gen)) {
         const message = formatInvokeError(e);
-        setError(message);
+        setLoadError(message);
         showToast(message);
       }
     }
@@ -166,7 +167,7 @@ export function Subscriptions({ active = true }: Props) {
       const message = formatInvokeError(e);
       if (errorSurface === "dialog") setError(message);
       else showToast(message);
-      await refresh(true);
+      await refresh();
       return false;
     } finally {
       setUpdating(false);
@@ -212,14 +213,43 @@ export function Subscriptions({ active = true }: Props) {
           </Button>
         </TitlebarActions>
       ) : null}
+      {loadError && items.length > 0 ? (
+        <div className="flex items-center gap-2">
+          <ErrorAlert className="flex-1">{loadError}</ErrorAlert>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void refresh()}
+          >
+            {t("common.retry")}
+          </Button>
+        </div>
+      ) : null}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {items.length === 0 ? (
-            <div className="my-auto flex flex-col items-start gap-1">
-              <CardTitle>{t("subs.emptyTitle")}</CardTitle>
-              <CardDescription>{t("subs.emptyDesc")}</CardDescription>
+            <div className="my-auto flex flex-col items-start gap-2">
+              <CardTitle>
+                {loadError ? t("subs.loadFailedTitle") : t("subs.emptyTitle")}
+              </CardTitle>
+              <CardDescription
+                className={loadError ? "text-destructive" : undefined}
+              >
+                {loadError ?? t("subs.emptyDesc")}
+              </CardDescription>
+              {loadError ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void refresh()}
+                >
+                  {t("common.retry")}
+                </Button>
+              ) : null}
             </div>
           ) : (
             <ScrollArea
@@ -320,7 +350,10 @@ export function Subscriptions({ active = true }: Props) {
                           </ItemDescription>
                         ) : null}
                         {s.last_error ? (
-                          <ItemDescription className="text-destructive">
+                          <ItemDescription
+                            className="text-destructive"
+                            title={formatUiMessage(s.last_error)}
+                          >
                             {formatUiMessageTitle(s.last_error)}
                           </ItemDescription>
                         ) : null}

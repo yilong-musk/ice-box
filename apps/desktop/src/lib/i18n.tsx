@@ -47,6 +47,7 @@ const zh = {
   "common.updating": "更新中",
   "common.update": "更新",
   "common.refresh": "刷新",
+  "common.retry": "重试",
   "common.activate": "激活",
   "common.enable": "启用",
   "common.disable": "禁用",
@@ -228,6 +229,7 @@ const zh = {
   "subs.emptyTitle": "暂无订阅",
   "subs.emptyDesc":
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅链接或 sing-box 配置文件。",
+  "subs.loadFailedTitle": "无法加载订阅",
   "subs.listAria": "订阅列表",
   "subs.activeBadge": "已激活",
   "subs.summaryNodes": "{n} 节点",
@@ -433,6 +435,11 @@ const zh = {
   "ruleForm.preview": "预览：",
   "ruleForm.add": "添加",
   "ruleForm.save": "保存",
+  "ruleJson.title": "编辑规则 JSON",
+  "ruleJson.desc": "该规则使用了表单不支持的匹配条件，请直接编辑 JSON。",
+  "ruleJson.label": "规则 JSON",
+  "ruleJson.invalid": "JSON 无效：{detail}",
+  "ruleJson.object": "规则必须是一个 JSON 对象。",
 
   // --- traffic chart ---
   "traffic.down": "下行",
@@ -569,6 +576,7 @@ const en: Record<MessageKey, string> = {
   "common.updating": "Updating…",
   "common.update": "Update",
   "common.refresh": "Refresh",
+  "common.retry": "Retry",
   "common.activate": "Activate",
   "common.enable": "Enable",
   "common.disable": "Disable",
@@ -753,6 +761,7 @@ const en: Record<MessageKey, string> = {
   "subs.emptyTitle": "No subscriptions",
   "subs.emptyDesc":
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL or a sing-box config file.",
+  "subs.loadFailedTitle": "Could not load subscriptions",
   "subs.listAria": "Subscription list",
   "subs.activeBadge": "Active",
   "subs.summaryNodes": "{n} nodes",
@@ -958,6 +967,11 @@ const en: Record<MessageKey, string> = {
   "ruleForm.preview": "Preview: ",
   "ruleForm.add": "Add",
   "ruleForm.save": "Save",
+  "ruleJson.title": "Edit Rule JSON",
+  "ruleJson.desc": "This rule uses matchers the form does not support. Edit the JSON directly.",
+  "ruleJson.label": "Rule JSON",
+  "ruleJson.invalid": "Invalid JSON: {detail}",
+  "ruleJson.object": "The rule must be a JSON object.",
 
   // --- traffic chart ---
   "traffic.down": "Down",
