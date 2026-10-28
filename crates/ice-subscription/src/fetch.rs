@@ -700,6 +700,22 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// Read the request head up to the blank line. Closing a socket with
+    /// unread bytes makes Windows send an RST, which can discard the reply
+    /// the fake proxy just wrote, so tests must consume the whole head first.
+    fn read_request_head(tcp: &mut std::net::TcpStream) -> String {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && head.len() < 8192 {
+            match tcp.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => head.push(byte[0]),
+                Err(err) => panic!("proxy read: {err}"),
+            }
+        }
+        String::from_utf8_lossy(&head).into_owned()
+    }
+
     #[test]
     fn download_direct_rejects_a_disallowed_host_before_connecting() {
         let dest = std::env::temp_dir().join("ice-box-download-reject-test.apk");
@@ -827,9 +843,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let proxy = std::thread::spawn(move || {
             let (mut tcp, _) = listener.accept().expect("proxy accept");
-            let mut buf = [0u8; 2048];
-            let n = tcp.read(&mut buf).expect("proxy read");
-            tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+            tx.send(read_request_head(&mut tcp))
                 .expect("record request");
             tcp.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .expect("proxy write");
@@ -873,8 +887,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let proxy = std::thread::spawn(move || {
             let (mut tcp, _) = listener.accept().expect("proxy accept");
-            let mut head = [0u8; 1];
-            tcp.read_exact(&mut head).expect("proxy read");
+            let _ = read_request_head(&mut tcp);
             tcp.write_all(
                 b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             )
