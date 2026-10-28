@@ -343,6 +343,53 @@ describe("Rules", () => {
     });
   });
 
+  it("keeps port matchers numeric when editing", async () => {
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 1,
+        items: [
+          {
+            index: null,
+            fingerprint: "fp-port",
+            rule: { port: [443], outbound: "direct" },
+            custom: true,
+            disabled: false,
+            rule_type: "port",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("443")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("443").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(
+      (screen.getByLabelText(t("ruleForm.matcherType")) as HTMLSelectElement).value,
+    ).toBe("port");
+    expect(
+      (screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement).value,
+    ).toBe("443");
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
+      target: { value: "443, 8443" },
+    });
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-port", {
+        port: [443, 8443],
+        outbound: "direct",
+      });
+    });
+  });
+
   it("edits rules the form cannot represent as JSON", async () => {
     listRules.mockResolvedValue(
       sampleList({

@@ -107,6 +107,11 @@ export type RuleMatcherDef = {
    * so an uppercase pattern would never match.
    */
   lowercase?: boolean;
+  /**
+   * Emit JSON numbers instead of strings. Port matchers are `uint16` in
+   * sing-box, which rejects string values such as `"443"`.
+   */
+  numeric?: boolean;
 };
 
 /**
@@ -124,8 +129,8 @@ export const RULE_MATCHER_DEFS: RuleMatcherDef[] = [
   { key: "source_ip_cidr", label: "ruleType.sourceIpCidr", kind: "array", placeholder: "192.168.1.0/24" },
   { key: "source_ip_is_private", label: "ruleType.sourceIpIsPrivate", kind: "boolean", placeholder: "" },
   { key: "rule_set", label: "ruleType.ruleSet", kind: "array", placeholder: "geoip-cn" },
-  { key: "port", label: "ruleType.port", kind: "array", placeholder: "443, 8443" },
-  { key: "source_port", label: "ruleType.sourcePort", kind: "array", placeholder: "53" },
+  { key: "port", label: "ruleType.port", kind: "array", placeholder: "443, 8443", numeric: true },
+  { key: "source_port", label: "ruleType.sourcePort", kind: "array", placeholder: "53", numeric: true },
   { key: "network", label: "ruleType.network", kind: "array", placeholder: "tcp" },
   { key: "protocol", label: "ruleType.protocol", kind: "array", placeholder: "http" },
   { key: "process_name", label: "ruleType.processName", kind: "array", placeholder: "curl" },
@@ -176,7 +181,8 @@ export function customRuleFormValues(
 
 /**
  * Compose a sing-box route rule object from interactive form fields.
- * `array` matchers take comma-separated values; returns null when the value is empty.
+ * `array` matchers take comma-separated values; returns null when the value is
+ * empty or, for numeric matchers, not a valid port number.
  *
  * `baseRule` keeps fields the form does not expose (extra matchers, `invert`,
  * etc.). `replacedMatcherKey` removes the previous matcher when the user
@@ -201,12 +207,25 @@ export function buildCustomRule(
     return next;
   }
   if (typeof rawValue !== "string") return null;
-  const values = rawValue
+  const tokens = rawValue
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  if (values.length === 0) return null;
-  next[def.key] = values;
+  if (tokens.length === 0) return null;
+  if (def.numeric) {
+    const values: number[] = [];
+    for (const token of tokens) {
+      // Reject signs, decimals, exponents, and out-of-range ports instead of
+      // letting `Number` silently coerce or saturate them.
+      if (!/^\d+$/.test(token)) return null;
+      const value = Number(token);
+      if (value > 65535) return null;
+      values.push(value);
+    }
+    next[def.key] = values;
+  } else {
+    next[def.key] = tokens;
+  }
   next.outbound = outbound;
   return next;
 }

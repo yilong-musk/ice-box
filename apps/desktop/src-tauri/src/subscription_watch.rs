@@ -63,8 +63,8 @@ pub(crate) fn due_auto_update_ids(
 /// `FETCH_TIMEOUT`) run without the orchestrate lock so the background pass never
 /// queues Start/Stop/Settings behind it; the lock is taken with `try_lock` for
 /// the disk phase + Apply so a busy user operation simply defers the refresh.
-/// Returns `false` when the pass was deferred (orchestrate busy); the caller
-/// may retry shortly.
+/// Returns `false` when the pass was deferred (orchestrate busy or the
+/// subscription manager could not be opened); the caller may retry shortly.
 pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     if state.workers.is_paused_or_stopping() {
         return true;
@@ -72,8 +72,14 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     let mgr = match application::subscription_manager(state) {
         Ok(mgr) => mgr,
         Err(err) => {
-            tracing::warn!(error = %err.message, "auto-update: open subscription manager failed");
-            return true;
+            // Manager construction can fail on an unreadable or malformed system
+            // proxy. Treat it as a deferred pass so the startup loop retries
+            // instead of waiting for the next hourly tick.
+            tracing::warn!(
+                error = %err.message,
+                "auto-update: open subscription manager failed; deferring pass"
+            );
+            return false;
         }
     };
     let items = match mgr.list() {

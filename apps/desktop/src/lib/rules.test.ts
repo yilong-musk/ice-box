@@ -95,6 +95,20 @@ describe("rule helpers", () => {
     });
   });
 
+  it("builds numeric matcher rules as numbers", () => {
+    expect(buildCustomRule("port", "443, 8443", "direct")).toEqual({
+      port: [443, 8443],
+      outbound: "direct",
+    });
+    expect(buildCustomRule("source_port", " 53 ", "direct")).toEqual({
+      source_port: [53],
+      outbound: "direct",
+    });
+    // sing-box decodes ports as uint16; reject non-numeric or out-of-range input.
+    expect(buildCustomRule("port", "443, abc", "direct")).toBeNull();
+    expect(buildCustomRule("port", "70000", "direct")).toBeNull();
+  });
+
   it("builds boolean matcher rules", () => {
     expect(buildCustomRule("ip_is_private", true, "direct")).toEqual({
       ip_is_private: true,
@@ -129,6 +143,18 @@ describe("rule helpers", () => {
     });
   });
 
+  it("keeps numeric matchers numeric when editing", () => {
+    expect(
+      buildCustomRule(
+        "port",
+        "8443",
+        "n1",
+        { port: [443], invert: true, outbound: "direct" },
+        "port",
+      ),
+    ).toEqual({ port: [8443], invert: true, outbound: "n1" });
+  });
+
   it("maps a stored custom rule back into the editor fields", () => {
     expect(
       customRuleFormValues({
@@ -148,6 +174,14 @@ describe("rule helpers", () => {
       text: "true",
       bool: true,
       outbound: "block",
+    });
+    expect(
+      customRuleFormValues({ port: [443, 8443], outbound: "direct" }),
+    ).toEqual({
+      matcherKey: "port",
+      text: "443, 8443",
+      bool: false,
+      outbound: "direct",
     });
     expect(customRuleFormValues({ outbound: "direct" }).matcherKey).toBe(
       "domain",

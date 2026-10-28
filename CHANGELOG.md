@@ -41,6 +41,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reject the same matchers and rule-set references.
 - Editing a custom rule preserves fields the form does not expose, such as
   additional matchers and `invert`.
+- Editing or adding a custom rule keeps `port` / `source_port` matchers
+  numeric, so sing-box no longer rejects the regenerated config.
 
 ## [0.2.3] - 2026-10-22
 
