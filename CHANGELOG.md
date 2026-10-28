@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-28
+
+### Changed
+
+- Desktop subscription refreshes now follow the OS system proxy, like a
+  browser: while the app's proxy is applied they go through the local mixed
+  inbound, and when no system proxy is set they connect directly. This keeps
+  updates working when direct DNS or the direct route is intercepted, without
+  routing traffic through a proxy that is off.
+
 ## [0.2.3] - 2026-10-22
 
 ### Added
