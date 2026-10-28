@@ -89,12 +89,12 @@ Add a section to `CHANGELOG.md` (Keep a Changelog style):
 ```
 
 The GitHub Release body is deliberately short: `scripts/release-notes.sh` prints
-a headline and a link to this section in `CHANGELOG.md`. The full per-release
-notes stay in the changelog and are never
+the fixed summary line `Fixes and improvements` and a link to this section in
+`CHANGELOG.md`. The full per-release notes stay in the changelog and are never
 pasted into the release body. Verify locally before tagging:
 
 ```bash
-bash scripts/release-notes.sh v0.1.2   # short blurb + changelog link
+bash scripts/release-notes.sh v0.1.2   # fixed summary + changelog link
 ```
 
 The script fails when the version's changelog section is missing or empty, so
@@ -166,11 +166,12 @@ Published assets:
 ```bash
 gh run list --workflow release.yml --limit 1   # conclusion: success
 gh release view v0.1.2 --json assets           # dmg, exe, apk, tar.gz, sigs, latest.json
-gh release view v0.1.2 --json body             # short blurb + CHANGELOG.md link
+gh release view v0.1.2 --json body             # "Fixes and improvements" + CHANGELOG.md link
 ```
 
-The release body is the short blurb from `scripts/release-notes.sh`; the full
-notes stay one click away in `CHANGELOG.md`.
+The release body is the fixed summary plus changelog link from
+`scripts/release-notes.sh`; the full notes stay one click away in
+`CHANGELOG.md`.
 
 `latest.json` must list both `darwin-aarch64` and `windows-x86_64` with non-empty
 signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
