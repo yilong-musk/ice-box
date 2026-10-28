@@ -86,7 +86,8 @@ pub fn rule_type_of(rule: &Value) -> &'static str {
 /// User-level rule overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuleOverrides {
-    /// Fingerprints of rules skipped at config build time.
+    /// Fingerprints of subscription rules skipped at config build time.
+    /// Custom rules are always active; legacy custom fingerprints here are ignored.
     #[serde(default)]
     pub disabled: BTreeSet<String>,
     /// User-added rules, prepended ahead of subscription rules at build time.

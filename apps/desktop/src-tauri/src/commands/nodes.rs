@@ -66,6 +66,19 @@ pub async fn add_custom_rule(
     .await
 }
 
+/// Replace a user-added rule with an edited one.
+#[tauri::command]
+pub async fn update_custom_rule(
+    app: AppHandle,
+    req: UpdateCustomRuleRequest,
+) -> Result<serde_json::Value, AppError> {
+    run_blocking("update_custom_rule", move || {
+        let state = app.state::<AppState>();
+        update_custom_rule_use_case(&app, state.inner(), req)
+    })
+    .await
+}
+
 /// Remove a user-added rule (also clears its disabled mark).
 #[tauri::command]
 pub async fn remove_custom_rule(

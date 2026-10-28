@@ -7,6 +7,7 @@ import {
   MATCH_KEY_ORDER,
   RULE_TYPE_LABELS,
   buildCustomRule,
+  customRuleFormValues,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
@@ -102,6 +103,31 @@ describe("rule helpers", () => {
       source_ip_is_private: false,
       outbound: "direct",
     });
+  });
+
+  it("maps a stored custom rule back into the editor fields", () => {
+    expect(
+      customRuleFormValues({
+        domain_suffix: ["Example.com", "b.com"],
+        outbound: "n1",
+      }),
+    ).toEqual({
+      matcherKey: "domain_suffix",
+      text: "example.com, b.com",
+      bool: false,
+      outbound: "n1",
+    });
+    expect(
+      customRuleFormValues({ ip_is_private: true, outbound: "block" }),
+    ).toEqual({
+      matcherKey: "ip_is_private",
+      text: "true",
+      bool: true,
+      outbound: "block",
+    });
+    expect(customRuleFormValues({ outbound: "direct" }).matcherKey).toBe(
+      "domain",
+    );
   });
 
   it("rejects empty or unknown matchers", () => {

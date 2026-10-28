@@ -41,6 +41,7 @@ const zh = {
   // --- common ---
   "common.cancel": "取消",
   "common.confirm": "确认",
+  "common.edit": "编辑",
   "common.delete": "删除",
   "common.saved": "已保存",
   "common.updating": "更新中",
@@ -428,8 +429,10 @@ const zh = {
   "ruleForm.blockOption": "block（拦截）",
   "ruleForm.strategyGroupSuffix": "（策略组）",
   "ruleForm.matchBool": "匹配{label}",
+  "ruleForm.editTitle": "编辑自定义规则",
   "ruleForm.preview": "预览：",
   "ruleForm.add": "添加",
+  "ruleForm.save": "保存",
 
   // --- traffic chart ---
   "traffic.down": "下行",
@@ -560,6 +563,7 @@ const en: Record<MessageKey, string> = {
   // --- common ---
   "common.cancel": "Cancel",
   "common.confirm": "Confirm",
+  "common.edit": "Edit",
   "common.delete": "Delete",
   "common.saved": "Saved",
   "common.updating": "Updating…",
@@ -950,8 +954,10 @@ const en: Record<MessageKey, string> = {
   "ruleForm.blockOption": "block (Block)",
   "ruleForm.strategyGroupSuffix": " (group)",
   "ruleForm.matchBool": "Match {label}",
+  "ruleForm.editTitle": "Edit Custom Rule",
   "ruleForm.preview": "Preview: ",
   "ruleForm.add": "Add",
+  "ruleForm.save": "Save",
 
   // --- traffic chart ---
   "traffic.down": "Down",

@@ -689,7 +689,7 @@ fn windows_resolver_is_none_without_a_final_tag() {
 }
 
 #[test]
-fn disabled_rules_dropped_and_custom_rules_prepended() {
+fn disabled_subscription_rules_dropped_and_custom_rules_prepended() {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     profile.route.rules = vec![
         json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
@@ -736,11 +736,14 @@ fn disabled_rules_dropped_and_custom_rules_prepended() {
         .collect();
     assert_eq!(
         tags,
-        ["custom.com", "keep.com"],
-        "clash_mode rules first, then custom, disabled dropped"
+        ["custom.com", "off.com", "keep.com"],
+        "clash_mode rules first, then every custom rule; disabled subscription rules dropped"
     );
     assert!(!tags.iter().any(|t| t == "drop.com"));
-    assert!(!tags.iter().any(|t| t == "off.com"));
+    assert!(
+        tags.iter().any(|t| t == "off.com"),
+        "legacy disabled marks on custom rules are ignored"
+    );
 }
 
 #[test]

@@ -164,6 +164,11 @@ export const api = {
       "add_custom_rule",
       { req: { rule } },
     ),
+  updateCustomRule: (fingerprint: string, rule: Record<string, unknown>) =>
+    invoke<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>(
+      "update_custom_rule",
+      { req: { fingerprint, rule } },
+    ),
   removeCustomRule: (fingerprint: string) =>
     invoke<{ ok: boolean; apply_warning?: AppErrorPayload }>(
       "remove_custom_rule",

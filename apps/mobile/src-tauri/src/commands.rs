@@ -105,6 +105,12 @@ pub struct AddCustomRuleRequest {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateCustomRuleRequest {
+    pub fingerprint: String,
+    pub rule: serde_json::Value,
+}
+
+#[derive(Deserialize)]
 pub struct FingerprintRequest {
     pub fingerprint: String,
 }
@@ -727,6 +733,26 @@ pub fn add_custom_rule(
 ) -> Result<RuleMutation, AppError> {
     let mut host = ready(&app, &host, &tunnel)?;
     let fingerprint = host.add_custom_rule(req.rule)?;
+    let apply_warning = apply_config(&mut host, &tunnel).err();
+    drop(host);
+    notify(&app);
+    Ok(RuleMutation {
+        ok: true,
+        disabled: None,
+        fingerprint: Some(fingerprint),
+        apply_warning,
+    })
+}
+
+#[tauri::command]
+pub fn update_custom_rule(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+    req: UpdateCustomRuleRequest,
+) -> Result<RuleMutation, AppError> {
+    let mut host = ready(&app, &host, &tunnel)?;
+    let fingerprint = host.update_custom_rule(&req.fingerprint, req.rule)?;
     let apply_warning = apply_config(&mut host, &tunnel).err();
     drop(host);
     notify(&app);

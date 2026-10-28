@@ -451,7 +451,10 @@ impl MobileHost {
         types.sort_by(|a, b| b.count.cmp(&a.count).then(a.rule_type.cmp(&b.rule_type)));
         Ok(RuleOverview {
             total: rows.len(),
-            disabled: rows.iter().filter(|row| row.disabled).count(),
+            disabled: rows
+                .iter()
+                .filter(|row| !row.custom && row.disabled)
+                .count(),
             custom: rows.iter().filter(|row| row.custom).count(),
             rule_sets: profile.route.rule_sets.len(),
             types,
@@ -505,10 +508,27 @@ impl MobileHost {
         let paths = self.paths()?.clone();
         let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
-        match find_rule(&profile, &overrides, fingerprint) {
-            Some(rule) => overrides.set_rule_disabled(&rule, disabled),
-            None if !disabled => overrides.set_disabled(fingerprint.to_string(), false),
-            None => return Err(AppError::new(ErrorCode::ConfigInvalid, "rule not found")),
+        let subscription_rule = profile
+            .route
+            .rules
+            .iter()
+            .find(|rule| rule_matches_fingerprint(rule, fingerprint))
+            .cloned();
+        if let Some(rule) = subscription_rule {
+            overrides.set_rule_disabled(&rule, disabled);
+        } else if overrides
+            .custom
+            .iter()
+            .any(|rule| rule_matches_fingerprint(rule, fingerprint))
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rules cannot be disabled; edit or remove the rule instead",
+            ));
+        } else if !disabled {
+            overrides.set_disabled(fingerprint.to_string(), false);
+        } else {
+            return Err(AppError::new(ErrorCode::ConfigInvalid, "rule not found"));
         }
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(())
@@ -528,6 +548,48 @@ impl MobileHost {
         overrides.custom.push(rule);
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(fingerprint)
+    }
+
+    pub fn update_custom_rule(
+        &mut self,
+        fingerprint: &str,
+        rule: Value,
+    ) -> Result<String, AppError> {
+        if !rule.is_object() {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "a custom rule must be a JSON object",
+            ));
+        }
+        let paths = self.paths()?.clone();
+        let profile = self.full_profile()?;
+        let mut overrides = load_overrides(&paths, &profile);
+        let Some(index) = overrides
+            .custom
+            .iter()
+            .position(|candidate| rule_matches_fingerprint(candidate, fingerprint))
+        else {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule not found",
+            ));
+        };
+        let new_fingerprint = rule_fingerprint(&rule);
+        if overrides
+            .custom
+            .iter()
+            .enumerate()
+            .any(|(idx, candidate)| idx != index && rule_fingerprint(candidate) == new_fingerprint)
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule already exists",
+            ));
+        }
+        let previous = std::mem::replace(&mut overrides.custom[index], rule);
+        overrides.set_rule_disabled(&previous, false);
+        save_rule_overrides(&paths.rule_overrides(), &overrides)?;
+        Ok(new_fingerprint)
     }
 
     pub fn remove_custom_rule(&mut self, fingerprint: &str) -> Result<(), AppError> {
@@ -885,19 +947,6 @@ fn is_unselectable_group(profile: &NormalizedProfile, tag: &str) -> bool {
         && selection_group_for(profile, tag).is_none()
 }
 
-fn find_rule(
-    profile: &NormalizedProfile,
-    overrides: &RuleOverrides,
-    fingerprint: &str,
-) -> Option<Value> {
-    overrides
-        .custom
-        .iter()
-        .chain(profile.route.rules.iter())
-        .find(|rule| rule_matches_fingerprint(rule, fingerprint))
-        .cloned()
-}
-
 fn rule_rows(profile: &NormalizedProfile, overrides: &RuleOverrides) -> Vec<RuleRow> {
     let mut rows = Vec::new();
     for rule in &overrides.custom {
@@ -920,7 +969,7 @@ fn rule_row(
         fingerprint: rule_fingerprint(rule),
         rule: rule.clone(),
         custom,
-        disabled: overrides.is_rule_disabled(rule),
+        disabled: !custom && overrides.is_rule_disabled(rule),
         rule_type: rule_type_of(rule).to_string(),
     }
 }

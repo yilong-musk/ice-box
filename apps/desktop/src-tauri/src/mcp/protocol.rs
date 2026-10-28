@@ -259,7 +259,7 @@ pub fn tools() -> Vec<Value> {
         ),
         write_tool(
             "set_rule_disabled",
-            "Enable or disable a subscription or custom rule by fingerprint.",
+            "Enable or disable a subscription rule by fingerprint.",
             json!({
                 "type": "object",
                 "properties": {

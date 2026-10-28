@@ -134,6 +134,34 @@ export const RULE_MATCHER_DEFS: RuleMatcherDef[] = [
   { key: "inbound", label: "ruleType.inbound", kind: "array", placeholder: "mixed-in" },
 ];
 
+export type CustomRuleFormValues = {
+  matcherKey: string;
+  text: string;
+  bool: boolean;
+  outbound: string;
+};
+
+/** Map a stored custom rule back into the interactive editor's fields. */
+export function customRuleFormValues(
+  rule: Record<string, unknown>,
+): CustomRuleFormValues {
+  const def =
+    RULE_MATCHER_DEFS.find((candidate) => rule[candidate.key] !== undefined) ??
+    RULE_MATCHER_DEFS[0];
+  const raw = rule[def.key];
+  const text = Array.isArray(raw)
+    ? raw.map(String).join(", ")
+    : raw === undefined || raw === null
+      ? ""
+      : String(raw);
+  return {
+    matcherKey: def.key,
+    text: def.lowercase ? text.toLowerCase() : text,
+    bool: raw === true,
+    outbound: typeof rule.outbound === "string" ? rule.outbound : "direct",
+  };
+}
+
 /**
  * Compose a sing-box route rule object from interactive form fields.
  * `array` matchers take comma-separated values; returns null when the value is empty.

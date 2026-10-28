@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Custom rules on the Rules page can no longer be disabled. Their action button
+  now opens the rule editor with the match type, value, and outbound prefilled;
+  saving replaces the rule in place and applies the new config. Custom rules are
+  always active, and legacy disabled marks on them are ignored.
+
 ## [0.2.4] - 2026-10-28
 
 ### Changed

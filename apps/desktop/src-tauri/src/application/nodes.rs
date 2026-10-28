@@ -425,11 +425,7 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         }
         *counts.entry(rule_type_of(rule)).or_default() += 1;
     }
-    for rule in &overrides.custom {
-        if overrides.is_rule_disabled(rule) {
-            disabled += 1;
-        }
-    }
+    // Custom rules are always active; their legacy disabled marks are ignored.
     let mut types: Vec<RuleTypeCount> = counts
         .into_iter()
         .map(|(rule_type, count)| RuleTypeCount {
@@ -499,10 +495,10 @@ pub(crate) fn query_rules(
         if req.custom == Some(false) {
             continue;
         }
-        let disabled = overrides.is_rule_disabled(rule);
+        // Custom rules are always active; their legacy disabled marks are ignored.
         if !matches_filter(
             rule_type_of(rule),
-            disabled,
+            false,
             &want_disabled,
             &keyword,
             &req.rule_type,
@@ -548,7 +544,8 @@ pub(crate) fn query_rules(
                     fingerprint: rule_fingerprint(rule),
                     rule: rule.clone(),
                     custom: true,
-                    disabled: overrides.is_rule_disabled(rule),
+                    // Custom rules no longer support disabling.
+                    disabled: false,
                     rule_type: rule_type_of(rule).to_string(),
                 }
             }
@@ -651,11 +648,19 @@ pub(crate) fn persist_rule_disabled(
     }
     if let Some(rule) = rules
         .iter()
-        .chain(overrides.custom.iter())
         .find(|r| rule_matches_fingerprint(r, &req.fingerprint))
         .cloned()
     {
         overrides.set_rule_disabled(&rule, req.disabled);
+    } else if overrides
+        .custom
+        .iter()
+        .any(|r| rule_matches_fingerprint(r, &req.fingerprint))
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rules cannot be disabled; edit or remove the rule instead",
+        ));
     } else {
         overrides.set_disabled(req.fingerprint.clone(), req.disabled);
     }
@@ -668,18 +673,15 @@ pub struct AddCustomRuleRequest {
     pub rule: serde_json::Value,
 }
 
-/// Validate + persist a custom rule (no Apply). Returns its fingerprint.
-pub(crate) fn persist_add_custom_rule(
-    state: &AppState,
-    req: &AddCustomRuleRequest,
-) -> Result<String, AppError> {
-    if !req.rule.is_object() {
+/// Validate a custom rule before it is persisted or emitted verbatim.
+fn validate_custom_rule(state: &AppState, rule: &serde_json::Value) -> Result<(), AppError> {
+    if !rule.is_object() {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "custom rule must be a JSON object",
         ));
     }
-    if req.rule.get("outbound").and_then(|v| v.as_str()).is_none() {
+    if rule.get("outbound").and_then(|v| v.as_str()).is_none() {
         return Err(AppError::new(
             ErrorCode::ConfigInvalid,
             "custom rule must reference an outbound (e.g. \"outbound\": \"direct\")",
@@ -689,7 +691,7 @@ pub(crate) fn persist_add_custom_rule(
     // emitted verbatim into the runtime config, so these matchers would make sing-box
     // exit FATAL on the next reload. Only subscription rules are geoip-expanded.
     for key in ["geoip", "geosite"] {
-        if req.rule.get(key).is_some() {
+        if rule.get(key).is_some() {
             return Err(AppError::new(
                 ErrorCode::ConfigInvalid,
                 format!(
@@ -707,7 +709,7 @@ pub(crate) fn persist_add_custom_rule(
             .iter()
             .filter_map(|s| s.get("tag").and_then(|v| v.as_str()))
             .collect();
-        if let Some(refs) = req.rule.get("rule_set").and_then(|v| v.as_array()) {
+        if let Some(refs) = rule.get("rule_set").and_then(|v| v.as_array()) {
             for r in refs {
                 if let Some(t) = r.as_str() {
                     if !set_tags.contains(&t) {
@@ -720,6 +722,15 @@ pub(crate) fn persist_add_custom_rule(
             }
         }
     }
+    Ok(())
+}
+
+/// Validate + persist a custom rule (no Apply). Returns its fingerprint.
+pub(crate) fn persist_add_custom_rule(
+    state: &AppState,
+    req: &AddCustomRuleRequest,
+) -> Result<String, AppError> {
+    validate_custom_rule(state, &req.rule)?;
     let fp = rule_fingerprint(&req.rule);
     let mut overrides = load_overrides(state);
     if overrides.custom.iter().any(|r| rule_fingerprint(r) == fp) {
@@ -731,6 +742,47 @@ pub(crate) fn persist_add_custom_rule(
     overrides.custom.push(req.rule.clone());
     save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
     Ok(fp)
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCustomRuleRequest {
+    pub fingerprint: String,
+    pub rule: serde_json::Value,
+}
+
+/// Validate + persist a replacement custom rule (no Apply). Returns its new fingerprint.
+pub(crate) fn persist_update_custom_rule(
+    state: &AppState,
+    req: &UpdateCustomRuleRequest,
+) -> Result<String, AppError> {
+    validate_custom_rule(state, &req.rule)?;
+    let new_fp = rule_fingerprint(&req.rule);
+    let mut overrides = load_overrides(state);
+    let Some(index) = overrides
+        .custom
+        .iter()
+        .position(|rule| rule_matches_fingerprint(rule, &req.fingerprint))
+    else {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule not found",
+        ));
+    };
+    if overrides
+        .custom
+        .iter()
+        .enumerate()
+        .any(|(idx, rule)| idx != index && rule_fingerprint(rule) == new_fp)
+    {
+        return Err(AppError::new(
+            ErrorCode::ConfigInvalid,
+            "custom rule already exists",
+        ));
+    }
+    let previous = std::mem::replace(&mut overrides.custom[index], req.rule.clone());
+    overrides.set_rule_disabled(&previous, false);
+    save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
+    Ok(new_fp)
 }
 
 #[derive(Deserialize)]
@@ -1052,6 +1104,24 @@ pub(crate) fn add_custom_rule_use_case(
     let result = (|| {
         let _orch = lock_orchestrate(state)?;
         let fp = persist_add_custom_rule(state, &req)?;
+
+        let apply_warning = apply_after_rule_change(app, state)?;
+        let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
+        attach_apply_warning(&mut value, apply_warning);
+        Ok(value)
+    })();
+    broadcast_state_change(app);
+    result
+}
+
+pub(crate) fn update_custom_rule_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+    req: UpdateCustomRuleRequest,
+) -> Result<serde_json::Value, AppError> {
+    let result = (|| {
+        let _orch = lock_orchestrate(state)?;
+        let fp = persist_update_custom_rule(state, &req)?;
 
         let apply_warning = apply_after_rule_change(app, state)?;
         let mut value = serde_json::json!({ "ok": true, "fingerprint": fp });
