@@ -12,8 +12,8 @@ use ice_config::{
     load_settings, redact_config_str, remove_subscription_favorites, rule_fingerprint,
     rule_matches_fingerprint, rule_type_of, save_group_selections, save_rule_overrides,
     save_settings_for, set_node_favorite as persist_node_favorite, set_proxy_service_enabled_for,
-    AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode, NormalizedProfile, ProxyMode,
-    RuleOverrides, SettingsPatch,
+    validate_custom_rule_value, AppError, AppPaths, AppProxyMode, AppSettings, ErrorCode,
+    NormalizedProfile, ProxyMode, RuleOverrides, SettingsPatch,
 };
 use ice_core::{
     proxy_delay, proxy_group_heads, proxy_selected_now, GroupHead, HealthEndpoints, TrafficDelta,
@@ -451,7 +451,10 @@ impl MobileHost {
         types.sort_by(|a, b| b.count.cmp(&a.count).then(a.rule_type.cmp(&b.rule_type)));
         Ok(RuleOverview {
             total: rows.len(),
-            disabled: rows.iter().filter(|row| row.disabled).count(),
+            disabled: rows
+                .iter()
+                .filter(|row| !row.custom && row.disabled)
+                .count(),
             custom: rows.iter().filter(|row| row.custom).count(),
             rule_sets: profile.route.rule_sets.len(),
             types,
@@ -505,29 +508,89 @@ impl MobileHost {
         let paths = self.paths()?.clone();
         let profile = self.full_profile()?;
         let mut overrides = load_overrides(&paths, &profile);
-        match find_rule(&profile, &overrides, fingerprint) {
-            Some(rule) => overrides.set_rule_disabled(&rule, disabled),
-            None if !disabled => overrides.set_disabled(fingerprint.to_string(), false),
-            None => return Err(AppError::new(ErrorCode::ConfigInvalid, "rule not found")),
+        let subscription_rule = profile
+            .route
+            .rules
+            .iter()
+            .find(|rule| rule_matches_fingerprint(rule, fingerprint))
+            .cloned();
+        if let Some(rule) = subscription_rule {
+            overrides.set_rule_disabled(&rule, disabled);
+        } else if overrides
+            .custom
+            .iter()
+            .any(|rule| rule_matches_fingerprint(rule, fingerprint))
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rules cannot be disabled; edit or remove the rule instead",
+            ));
+        } else if !disabled {
+            overrides.set_disabled(fingerprint.to_string(), false);
+        } else {
+            return Err(AppError::new(ErrorCode::ConfigInvalid, "rule not found"));
         }
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(())
     }
 
     pub fn add_custom_rule(&mut self, rule: Value) -> Result<String, AppError> {
-        if !rule.is_object() {
-            return Err(AppError::new(
-                ErrorCode::ConfigInvalid,
-                "a custom rule must be a JSON object",
-            ));
-        }
         let paths = self.paths()?.clone();
         let profile = self.full_profile()?;
+        validate_custom_rule_value(&rule, Some(profile.as_ref()))
+            .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))?;
         let mut overrides = load_overrides(&paths, &profile);
         let fingerprint = rule_fingerprint(&rule);
+        if overrides
+            .custom
+            .iter()
+            .any(|candidate| rule_fingerprint(candidate) == fingerprint)
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule already exists",
+            ));
+        }
         overrides.custom.push(rule);
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(fingerprint)
+    }
+
+    pub fn update_custom_rule(
+        &mut self,
+        fingerprint: &str,
+        rule: Value,
+    ) -> Result<String, AppError> {
+        let paths = self.paths()?.clone();
+        let profile = self.full_profile()?;
+        validate_custom_rule_value(&rule, Some(profile.as_ref()))
+            .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))?;
+        let mut overrides = load_overrides(&paths, &profile);
+        let Some(index) = overrides
+            .custom
+            .iter()
+            .position(|candidate| rule_matches_fingerprint(candidate, fingerprint))
+        else {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule not found",
+            ));
+        };
+        let new_fingerprint = rule_fingerprint(&rule);
+        if overrides
+            .custom
+            .iter()
+            .enumerate()
+            .any(|(idx, candidate)| idx != index && rule_fingerprint(candidate) == new_fingerprint)
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule already exists",
+            ));
+        }
+        overrides.custom[index] = rule;
+        save_rule_overrides(&paths.rule_overrides(), &overrides)?;
+        Ok(new_fingerprint)
     }
 
     pub fn remove_custom_rule(&mut self, fingerprint: &str) -> Result<(), AppError> {
@@ -885,19 +948,6 @@ fn is_unselectable_group(profile: &NormalizedProfile, tag: &str) -> bool {
         && selection_group_for(profile, tag).is_none()
 }
 
-fn find_rule(
-    profile: &NormalizedProfile,
-    overrides: &RuleOverrides,
-    fingerprint: &str,
-) -> Option<Value> {
-    overrides
-        .custom
-        .iter()
-        .chain(profile.route.rules.iter())
-        .find(|rule| rule_matches_fingerprint(rule, fingerprint))
-        .cloned()
-}
-
 fn rule_rows(profile: &NormalizedProfile, overrides: &RuleOverrides) -> Vec<RuleRow> {
     let mut rows = Vec::new();
     for rule in &overrides.custom {
@@ -920,7 +970,7 @@ fn rule_row(
         fingerprint: rule_fingerprint(rule),
         rule: rule.clone(),
         custom,
-        disabled: overrides.is_rule_disabled(rule),
+        disabled: !custom && overrides.is_rule_disabled(rule),
         rule_type: rule_type_of(rule).to_string(),
     }
 }
@@ -1253,6 +1303,34 @@ mod favorite_tests {
         let err = host.set_node_favorite("n1", true).unwrap_err();
         assert_eq!(err.code, ErrorCode::ConfigEmptyOutbounds.as_str());
         assert!(host.list_nodes(false).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn custom_rules_use_the_shared_validator() {
+        let (mut host, _id, paths) = host_with_subscription("custom-validation");
+
+        let err = host
+            .add_custom_rule(serde_json::json!({ "geoip": ["cn"], "outbound": "direct" }))
+            .unwrap_err();
+        assert!(
+            err.message.contains("sing-box 1.13 removed it"),
+            "{}",
+            err.message
+        );
+
+        let custom = serde_json::json!({ "domain": ["a.com"], "outbound": "direct" });
+        let fingerprint = host.add_custom_rule(custom.clone()).unwrap();
+        let err = host.add_custom_rule(custom).unwrap_err();
+        assert!(err.message.contains("already exists"), "{}", err.message);
+
+        let err = host
+            .update_custom_rule(
+                &fingerprint,
+                serde_json::json!({ "rule_set": ["missing"], "outbound": "direct" }),
+            )
+            .unwrap_err();
+        assert!(err.message.contains("unknown rule_set"), "{}", err.message);
         let _ = std::fs::remove_dir_all(paths.root());
     }
 }

@@ -5,5 +5,10 @@ import { api as platformApi } from "@platform/api";
 import type { ApiContract } from "./contracts";
 
 export type * from "./contracts";
-export { formatDiagnostic, formatInvokeError, formatUiMessage } from "./format";
+export {
+  formatDiagnostic,
+  formatInvokeError,
+  formatUiMessage,
+  formatUiMessageTitle,
+} from "./format";
 export const api: ApiContract = platformApi;

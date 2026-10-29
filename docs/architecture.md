@@ -89,6 +89,23 @@ combines that profile with local settings, selections, rule overrides, and
 capture intent to produce the runtime configuration. Without a usable profile,
 the application can generate a direct-only configuration.
 
+On the desktop, subscription refreshes follow the OS system proxy like any
+browser request: while the app's proxy is applied they go through the local
+mixed inbound, and when no system proxy is set (including TUN-only mode) they
+connect directly. Only explicit HTTP/HTTPS/SOCKS endpoints are followed; PAC
+and WPAD scripts and the OS bypass list are not evaluated.
+
+Proxy mode deliberately leaves DNS resolution to the proxy, so the DNS-based
+SSRF check only runs on the direct path. Literal private hosts, restricted
+names (normalized for a trailing DNS root dot), URL scheme/credential checks,
+and the https→http redirect downgrade check still run on every hop.
+
+A proxy sees subscription requests: plain HTTP exposes the full URL, including
+any token in the path, to the proxy, while HTTPS exposes only the CONNECT
+target. Treat the configured system proxy as trusted for subscription
+credentials. When both HTTP and HTTPS endpoints are set, each scheme uses its
+matching endpoint and falls back to the other scheme, then SOCKS.
+
 Raw subscriptions, normalized profiles, local preferences, and generated
 runtime configuration remain separate. This preserves provider input and user
 intent across regeneration. Persistent writes use atomic replacement, with

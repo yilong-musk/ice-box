@@ -67,6 +67,7 @@ host and stop the app first. Core/TUN tests require the bundled binary
 | Windows TUN (G9.14) | `bash scripts/run-acceptance-windows-tun.sh` | Elevated Bash shell and MSVC toolchain |
 | System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS/Windows host |
 | HTTPS fetch | `cargo test -p ice-subscription --lib https_fetch_succeeds -- --ignored` | Network access |
+| HTTPS fetch through the app proxy | `ICE_BOX_TEST_PROXY=http://127.0.0.1:17890 cargo test -p ice-subscription --lib proxied_https_fetch_succeeds -- --ignored` | App running with the proxy on |
 | MCP bridge | manual: enable MCP, start the copied stdio configuration, and call `initialize`, `tools/list`, `get_status`, then `get_settings`; repeat after a service restart | Desktop app running; no proxy/TUN privilege needed |
 | macOS tray delay test | manual: click 「延迟测试」 / "Test Delay" on the top page and on a group page, then dismiss the menu mid-run | Real Mac with the app running; the menu must stay open with results streaming into the rows, and a dismissal must cancel the run and clear the results |
 

@@ -507,11 +507,14 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         // failing the whole build, so switching subscriptions can never break
         // Apply / Start; the rule stays persisted and resumes as soon as its
         // references exist again.
+        // Custom rules are always active. `load_rule_overrides` deletes rules
+        // disabled by an older version; skip any leftover mark defensively so a
+        // hand-edited or in-memory override can never re-enable one.
         let (custom_rules, dropped_custom): (Vec<Value>, Vec<String>) = input
             .rule_overrides
             .custom
             .iter()
-            .filter(|r| !input.rule_overrides.is_rule_disabled(r))
+            .filter(|rule| !input.rule_overrides.is_rule_disabled(rule))
             .fold(
                 (Vec::new(), Vec::new()),
                 |(mut usable, mut dropped), rule| {

@@ -86,7 +86,8 @@ pub fn rule_type_of(rule: &Value) -> &'static str {
 /// User-level rule overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RuleOverrides {
-    /// Fingerprints of rules skipped at config build time.
+    /// Fingerprints of subscription rules skipped at config build time.
+    /// Custom rules are always active; legacy custom marks are removed on load.
     #[serde(default)]
     pub disabled: BTreeSet<String>,
     /// User-added rules, prepended ahead of subscription rules at build time.
@@ -166,14 +167,50 @@ impl RuleOverrides {
         });
         self.disabled.remove(fingerprint);
     }
+
+    /// Delete custom rules that an older version marked as disabled.
+    ///
+    /// Custom rules are always active now. A disabled mark on one is a legacy
+    /// artifact; instead of silently re-enabling the rule, remove it and its
+    /// marks. Returns true when anything changed.
+    pub fn remove_legacy_disabled_custom_rules(&mut self) -> bool {
+        let disabled = self.disabled.clone();
+        let mut removed = Vec::new();
+        self.custom.retain(|rule| {
+            let sha = rule_fingerprint(rule);
+            let legacy = legacy_rule_fingerprint(rule);
+            if disabled.contains(&sha) || disabled.contains(&legacy) {
+                removed.push(sha);
+                removed.push(legacy);
+                false
+            } else {
+                true
+            }
+        });
+        if removed.is_empty() {
+            return false;
+        }
+        for fingerprint in removed {
+            self.disabled.remove(&fingerprint);
+        }
+        true
+    }
 }
 
 /// Load `rules.json`; a missing file yields the default (empty) overrides.
+///
+/// Legacy files could mark a custom rule as disabled. Those rules are deleted
+/// here (and the cleaned file is written back) so an upgrade cannot silently
+/// re-enable a rule the user had turned off.
 pub fn load_rule_overrides(path: &Path) -> RuleOverrides {
-    match fs::read_to_string(path) {
+    let mut overrides = match fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
         Err(_) => RuleOverrides::default(),
+    };
+    if overrides.remove_legacy_disabled_custom_rules() {
+        let _ = save_rule_overrides(path, &overrides);
     }
+    overrides
 }
 
 pub fn save_rule_overrides(path: &Path, overrides: &RuleOverrides) -> Result<(), ConfigError> {
@@ -259,6 +296,32 @@ mod tests {
             !o.is_disabled(&fp),
             "removing a custom rule clears its disabled mark"
         );
+    }
+
+    #[test]
+    fn disabled_custom_rules_are_deleted_on_load() {
+        let path = temp_file("custom-disabled");
+        let disabled = json!({ "domain": ["off.com"], "outbound": "block" });
+        let legacy_disabled = json!({ "domain": ["old-off.com"], "outbound": "block" });
+        let enabled = json!({ "domain": ["on.com"], "outbound": "direct" });
+        let mut overrides = RuleOverrides::default();
+        overrides.custom.push(disabled.clone());
+        overrides.custom.push(legacy_disabled.clone());
+        overrides.custom.push(enabled.clone());
+        overrides.set_rule_disabled(&disabled, true);
+        overrides.set_disabled(legacy_rule_fingerprint(&legacy_disabled), true);
+        save_rule_overrides(&path, &overrides).unwrap();
+
+        let loaded = load_rule_overrides(&path);
+        assert_eq!(loaded.custom, vec![enabled]);
+        assert!(!loaded.is_rule_disabled(&disabled));
+        assert!(!loaded.is_rule_disabled(&legacy_disabled));
+        assert!(loaded.disabled.is_empty());
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("off.com"), "{raw}");
+        assert!(!raw.contains("old-off.com"), "{raw}");
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

@@ -10,8 +10,28 @@ use ice_config::{is_fake_ip, is_restricted_fetch_host, is_restricted_ip};
 /// Allowed schemes for subscription import/update.
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
-/// Validate a user-supplied subscription URL before HTTP fetch.
+/// Validate a user-supplied subscription URL before a direct HTTP fetch.
 pub fn validate_subscription_url(raw: &str) -> Result<(), SubscriptionError> {
+    let parsed = parse_subscription_url(raw)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| SubscriptionError::FetchFailed("subscription URL missing host".into()))?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| SubscriptionError::FetchFailed("subscription URL missing port".into()))?;
+    validate_resolved_addresses(host, port)
+}
+
+/// Validate a URL's shape without resolving DNS.
+///
+/// Used when the fetch goes through a proxy: the proxy resolves the host, so
+/// a local lookup would reject the request whenever the local resolver is the
+/// broken hop. Literal private hosts and restricted names are still rejected.
+pub fn validate_subscription_url_syntax(raw: &str) -> Result<(), SubscriptionError> {
+    parse_subscription_url(raw).map(|_| ())
+}
+
+fn parse_subscription_url(raw: &str) -> Result<url::Url, SubscriptionError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(SubscriptionError::FetchFailed(
@@ -38,18 +58,13 @@ pub fn validate_subscription_url(raw: &str) -> Result<(), SubscriptionError> {
     let host = parsed
         .host_str()
         .ok_or_else(|| SubscriptionError::FetchFailed("subscription URL missing host".into()))?;
-
     if is_restricted_fetch_host(host) {
         return Err(SubscriptionError::FetchFailed(format!(
             "subscription URL host is not allowed: {host}"
         )));
     }
 
-    let port = parsed
-        .port_or_known_default()
-        .ok_or_else(|| SubscriptionError::FetchFailed("subscription URL missing port".into()))?;
-    validate_resolved_addresses(host, port)?;
-    Ok(())
+    Ok(parsed)
 }
 
 /// Redact subscription URL secrets before exposing to the WebView.
@@ -223,6 +238,26 @@ mod tests {
     #[test]
     fn accepts_public_https_url() {
         validate_subscription_url("https://example.com/sub.json").unwrap();
+    }
+
+    #[test]
+    fn syntax_validation_skips_dns_but_keeps_host_guards() {
+        assert!(
+            validate_subscription_url_syntax("https://does-not-resolve.invalid/sub").is_ok(),
+            "proxy fetches must not depend on the local resolver"
+        );
+        let err = validate_subscription_url_syntax("http://127.0.0.1/sub").unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        // URL parsers keep a trailing root dot on domain names. The proxy
+        // resolves it to the same loopback/link-local target, so the syntax
+        // guard must normalize it before matching.
+        let err = validate_subscription_url_syntax("http://localhost./sub").unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        let err =
+            validate_subscription_url_syntax("http://metadata.google.internal./sub").unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        let err = validate_subscription_url_syntax("file:///etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("scheme"), "{err}");
     }
 
     #[test]

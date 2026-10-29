@@ -27,10 +27,11 @@ pub use ice_subscription::{
     parse_subscription, read_index, read_profile, recover_subscription_dirs,
     redact_subscription_url_for_log, redact_subscription_url_for_ui, remove_subscription,
     resolve_selected_tag, set_active, set_auto_update, set_enabled, subscription_share_text,
-    write_subscription_error, write_subscription_success, AutoUpdateInterval, DirectFetcher,
-    FetchResponse, HttpFetcher, MemorySubscriptionManager, MockFetchMode, MockFetcher,
-    ProfileCache, SubscriptionError, SubscriptionFormat, SubscriptionIndex, SubscriptionManager,
-    SubscriptionMeta, SubscriptionPaths, SubscriptionShareKind, SubscriptionSource,
+    write_subscription_error, write_subscription_success, AutoUpdateInterval, DefaultFetcher,
+    DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager, MockFetchMode,
+    MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat, SubscriptionIndex,
+    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionProxy,
+    SubscriptionShareKind, SubscriptionSource,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 

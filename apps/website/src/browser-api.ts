@@ -626,6 +626,7 @@ export const api = {
   async listRules(req: ListRulesRequest): Promise<ListRulesResponse> { await delay(); const keyword = req.keyword?.toLowerCase() ?? ""; const filtered = ruleRows.filter((row) => JSON.stringify(row.rule).toLowerCase().includes(keyword)); return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) }; },
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
+  async updateCustomRule(fingerprint: string): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint }; },
   async removeCustomRule(): Promise<{ ok: boolean }> { return { ok: true }; },
   async getMcpStatus(): Promise<McpStatus> { await delay(); return demoMcpStatus(); },
   async setMcpEnabled(enabled: boolean): Promise<McpStatus> {

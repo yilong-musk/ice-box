@@ -11,6 +11,7 @@ import {
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";
+import { RuleJsonDialog } from "../components/RuleJsonDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
+  customRuleEditable,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
@@ -88,7 +90,10 @@ export function Rules({ onNavigate, active = true }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [applyWarning, setApplyWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customForm, setCustomForm] = useState<
+    { mode: "add" } | { mode: "edit"; row: RuleRow } | null
+  >(null);
+  const [jsonForm, setJsonForm] = useState<RuleRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RuleRow | null>(null);
   const [nearBottom, setNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
@@ -286,6 +291,28 @@ export function Rules({ onNavigate, active = true }: Props) {
     }
   }
 
+  async function onUpdateCustomRule(
+    fingerprint: string,
+    rule: Record<string, unknown>,
+  ) {
+    nextGeneration();
+    setBusy(true);
+    setApplyWarning(null);
+    try {
+      const r = await api.updateCustomRule(fingerprint, rule);
+      if (mountedRef.current && r.apply_warning) {
+        setApplyWarning(
+          `${formatInvokeError(r.apply_warning)}`,
+        );
+      }
+      await reloadAfterMutation();
+    } catch (e) {
+      if (mountedRef.current) throw new Error(formatInvokeError(e));
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  }
+
   const pages = pageCount(total, limit);
   const page = Math.floor(offset / limit) + 1;
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
@@ -323,7 +350,7 @@ export function Rules({ onNavigate, active = true }: Props) {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => setShowCustomForm(true)}
+              onClick={() => setCustomForm({ mode: "add" })}
             >
               {t("rules.addCustom")}
             </Button>
@@ -436,15 +463,33 @@ export function Rules({ onNavigate, active = true }: Props) {
                           <Badge variant="outline" title={outboundLabel}>
                             {outboundLabel}
                           </Badge>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => void onToggleDisabled(row)}
-                          >
-                            {row.disabled ? t("common.enable") : t("common.disable")}
-                          </Button>
+                          {row.custom ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() =>
+                                customRuleEditable(row.rule)
+                                  ? setCustomForm({ mode: "edit", row })
+                                  : setJsonForm(row)
+                              }
+                            >
+                              {t("common.edit")}
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() => void onToggleDisabled(row)}
+                            >
+                              {row.disabled
+                                ? t("common.enable")
+                                : t("common.disable")}
+                            </Button>
+                          )}
                           {row.custom ? (
                             <Button
                               type="button"
@@ -501,10 +546,27 @@ export function Rules({ onNavigate, active = true }: Props) {
         </CardContent>
       </Card>
       <RuleFormDialog
-        open={showCustomForm}
-        onOpenChange={setShowCustomForm}
+        open={customForm !== null}
+        onOpenChange={(open) => {
+          if (!open) setCustomForm(null);
+        }}
         busy={busy}
+        editing={customForm?.mode === "edit" ? customForm.row : null}
         onAdd={(rule) => onAddCustomRule(rule)}
+        onUpdate={(fingerprint, rule) =>
+          onUpdateCustomRule(fingerprint, rule)
+        }
+      />
+      <RuleJsonDialog
+        open={jsonForm !== null}
+        editing={jsonForm}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setJsonForm(null);
+        }}
+        onSave={(fingerprint, rule) =>
+          onUpdateCustomRule(fingerprint, rule)
+        }
       />
       <ConfirmDialog
         open={pendingDelete !== null}

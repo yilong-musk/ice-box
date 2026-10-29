@@ -10,6 +10,7 @@ const getRuleOverview = vi.fn();
 const listRules = vi.fn();
 const setRuleDisabled = vi.fn();
 const addCustomRule = vi.fn();
+const updateCustomRule = vi.fn();
 const removeCustomRule = vi.fn();
 const listNodes = vi.fn();
 const listenStateChanged = vi.fn();
@@ -20,6 +21,7 @@ vi.mock("../api/client", () => ({
     listRules: (...args: unknown[]) => listRules(...args),
     setRuleDisabled: (...args: unknown[]) => setRuleDisabled(...args),
     addCustomRule: (...args: unknown[]) => addCustomRule(...args),
+    updateCustomRule: (...args: unknown[]) => updateCustomRule(...args),
     removeCustomRule: (...args: unknown[]) => removeCustomRule(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
@@ -69,7 +71,7 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
       {
         index: null,
         fingerprint: "fp-custom",
-        rule: { domain: ["example.com"], outbound: "block" },
+        rule: { domain: ["example.com"], invert: true, outbound: "block" },
         custom: true,
         disabled: false,
         rule_type: "domain",
@@ -94,6 +96,7 @@ describe("Rules", () => {
     listRules.mockResolvedValue(sampleList());
     setRuleDisabled.mockResolvedValue({ ok: true, disabled: true });
     addCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-new" });
+    updateCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-custom" });
     removeCustomRule.mockResolvedValue({ ok: true });
     listenStateChanged.mockResolvedValue(() => {});
     listNodes.mockResolvedValue([
@@ -287,6 +290,154 @@ describe("Rules", () => {
     });
     await waitFor(() => {
       expect(getRuleOverview.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("edits a custom rule instead of disabling it", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("example.com")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
+    expect(
+      within(row).queryByRole("button", { name: t("common.disable") }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByText(t("ruleForm.editTitle"))).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement).value,
+    ).toBe("example.com");
+    expect(
+      (screen.getByLabelText(t("ruleForm.matcherType")) as HTMLSelectElement).value,
+    ).toBe("domain");
+    expect(
+      (screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement).value,
+    ).toBe("block");
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
+      target: { value: "edited.com, second.com" },
+    });
+    const outbound = screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(within(outbound).getByRole("option", { name: "n1" })).toBeInTheDocument();
+    });
+    fireEvent.change(outbound, { target: { value: "n1" } });
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-custom", {
+        domain: ["edited.com", "second.com"],
+        invert: true,
+        outbound: "n1",
+      });
+    });
+    expect(setRuleDisabled).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps port matchers numeric when editing", async () => {
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 1,
+        items: [
+          {
+            index: null,
+            fingerprint: "fp-port",
+            rule: { port: [443], outbound: "direct" },
+            custom: true,
+            disabled: false,
+            rule_type: "port",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("443")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("443").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(
+      (screen.getByLabelText(t("ruleForm.matcherType")) as HTMLSelectElement).value,
+    ).toBe("port");
+    expect(
+      (screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement).value,
+    ).toBe("443");
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
+      target: { value: "443, 8443" },
+    });
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-port", {
+        port: [443, 8443],
+        outbound: "direct",
+      });
+    });
+  });
+
+  it("edits rules the form cannot represent as JSON", async () => {
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 4,
+        items: [
+          ...sampleList().items,
+          {
+            index: null,
+            fingerprint: "fp-json",
+            rule: { clash_mode: "global", outbound: "direct" },
+            custom: true,
+            disabled: false,
+            rule_type: "clash_mode",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("global")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("global").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+    await waitFor(() => {
+      expect(screen.getByText(t("ruleJson.title"))).toBeInTheDocument();
+    });
+    const textarea = screen.getByLabelText(
+      t("ruleJson.label"),
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toContain("clash_mode");
+
+    fireEvent.change(textarea, {
+      target: {
+        value: JSON.stringify({ clash_mode: "direct", outbound: "block" }),
+      },
+    });
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-json", {
+        clash_mode: "direct",
+        outbound: "block",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 

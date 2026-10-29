@@ -6,6 +6,7 @@ import {
   api,
   formatInvokeError,
   formatUiMessage,
+  formatUiMessageTitle,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/client";
@@ -17,6 +18,7 @@ import {
 } from "../lib/subscriptions";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ImportSubscriptionDialog } from "../components/ImportSubscriptionDialog";
 import { ShareSubscriptionDialog } from "../components/ShareSubscriptionDialog";
@@ -77,20 +79,26 @@ export function Subscriptions({ active = true }: Props) {
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SubscriptionMeta | null>(
     null,
   );
   const [shareTarget, setShareTarget] = useState<SubscriptionMeta | null>(null);
   const activeIdRef = useRef<string | null>(null);
+  const {
+    toast,
+    show: showToast,
+    dismiss: dismissToast,
+  } = useCapsuleToast();
 
-  const refresh = useCallback(async (keepError = false) => {
+  const refresh = useCallback(async (notifyError = true): Promise<boolean> => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
-      if (isStale(gen)) return;
+      if (isStale(gen)) return true;
       const nextActive = activeSubscriptionId(next);
       // Drop the node snapshot only when the live profile moved. A mode or
       // service toggle also lands on `app://state-changed`.
@@ -99,11 +107,17 @@ export function Subscriptions({ active = true }: Props) {
       }
       activeIdRef.current = nextActive;
       setItems(next);
-      if (!keepError) setError(null);
+      setLoadError(null);
+      return true;
     } catch (e) {
-      if (!isStale(gen)) setError(formatInvokeError(e));
+      if (!isStale(gen)) {
+        const message = formatInvokeError(e);
+        setLoadError(message);
+        if (notifyError) showToast(message);
+      }
+      return false;
     }
-  }, [isStale, nextGeneration]);
+  }, [isStale, nextGeneration, showToast]);
 
   useEffect(() => {
     void refresh();
@@ -131,12 +145,24 @@ export function Subscriptions({ active = true }: Props) {
     };
   }, [refresh]);
 
-  async function run(action: () => Promise<unknown>, isUpdate = false): Promise<boolean> {
+  async function run(
+    action: () => Promise<unknown>,
+    options: {
+      updatingId?: string;
+      errorSurface?: "toast" | "dialog";
+      successToast?: string;
+    } = {},
+  ): Promise<boolean> {
+    const {
+      updatingId: rowUpdatingId,
+      errorSurface = "toast",
+      successToast,
+    } = options;
     // Subscription changes can replace the node list while the Nodes tab stays mounted.
     clearNodesSnapshot();
     nextGeneration();
     setBusy(true);
-    if (isUpdate) setUpdating(true);
+    if (rowUpdatingId) setUpdatingId(rowUpdatingId);
     setError(null);
     setWarning(null);
     try {
@@ -145,14 +171,24 @@ export function Subscriptions({ active = true }: Props) {
       if (applyWarning) {
         setWarning(formatApplyWarning(applyWarning));
       }
-      await refresh();
+      // Only confirm once the reloaded list has landed; a failed refresh
+      // shows its own error and suppresses the success notice.
+      const refreshed = await refresh();
+      if (successToast && refreshed && !applyWarning) {
+        showToast(successToast, "success");
+      }
       return true;
     } catch (e) {
-      setError(formatInvokeError(e));
-      await refresh(true);
+      const message = formatInvokeError(e);
+      if (errorSurface === "dialog") setError(message);
+      else showToast(message);
+      // Keep the action failure visible. If the refresh also fails, its
+      // persistent inline error is enough; replacing the toast would hide the
+      // error the user just triggered.
+      await refresh(false);
       return false;
     } finally {
-      setUpdating(false);
+      setUpdatingId(null);
       setBusy(false);
     }
   }
@@ -172,7 +208,10 @@ export function Subscriptions({ active = true }: Props) {
   }
 
   return (
-    <div className="subs-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="subs-panel">
+    <div
+      className="subs-panel relative flex min-h-0 flex-1 flex-col gap-3"
+      data-testid="subs-panel"
+    >
       {active ? (
         <TitlebarActions>
           <Button
@@ -192,17 +231,43 @@ export function Subscriptions({ active = true }: Props) {
           </Button>
         </TitlebarActions>
       ) : null}
-      {error && !importOpen && (
-        <ErrorAlert className="shrink-0">{error}</ErrorAlert>
-      )}
+      {loadError && items.length > 0 ? (
+        <div className="flex items-center gap-2">
+          <ErrorAlert className="flex-1">{loadError}</ErrorAlert>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void refresh()}
+          >
+            {t("common.retry")}
+          </Button>
+        </div>
+      ) : null}
       {warning && <WarnAlert className="shrink-0">{warning}</WarnAlert>}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardContent className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {items.length === 0 ? (
-            <div className="my-auto flex flex-col items-start gap-1">
-              <CardTitle>{t("subs.emptyTitle")}</CardTitle>
-              <CardDescription>{t("subs.emptyDesc")}</CardDescription>
+            <div className="my-auto flex flex-col items-start gap-2">
+              <CardTitle>
+                {loadError ? t("subs.loadFailedTitle") : t("subs.emptyTitle")}
+              </CardTitle>
+              <CardDescription
+                className={loadError ? "text-destructive" : undefined}
+              >
+                {loadError ?? t("subs.emptyDesc")}
+              </CardDescription>
+              {loadError ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void refresh()}
+                >
+                  {t("common.retry")}
+                </Button>
+              ) : null}
             </div>
           ) : (
             <ScrollArea
@@ -259,10 +324,15 @@ export function Subscriptions({ active = true }: Props) {
                               size="sm"
                               disabled={busy}
                               onClick={() =>
-                                void run(() => api.updateSubscription(s.id), true)
+                                void run(() => api.updateSubscription(s.id), {
+                                  updatingId: s.id,
+                                  successToast: t("subs.updated"),
+                                })
                               }
                             >
-                              {updating ? t("common.updating") : t("common.update")}
+                              {updatingId === s.id
+                                ? t("common.updating")
+                                : t("common.update")}
                             </Button>
                           )}
                           <Button
@@ -301,8 +371,11 @@ export function Subscriptions({ active = true }: Props) {
                           </ItemDescription>
                         ) : null}
                         {s.last_error ? (
-                          <ItemDescription className="text-destructive">
-                            {formatUiMessage(s.last_error)}
+                          <ItemDescription
+                            className="text-destructive"
+                            title={formatUiMessage(s.last_error)}
+                          >
+                            {formatUiMessageTitle(s.last_error)}
                           </ItemDescription>
                         ) : null}
                         {warnings.length > 0 ? (
@@ -393,26 +466,33 @@ export function Subscriptions({ active = true }: Props) {
           )}
         </CardContent>
       </Card>
+      <CapsuleToast toast={toast} onDismiss={dismissToast} />
       <ImportSubscriptionDialog
         open={importOpen}
         busy={busy}
         error={error}
         onOpenChange={setImportOpen}
         onImportUrl={async (url, name, autoUpdate, interval) => {
-          const ok = await run(async () => {
-            await api.addSubscription(
-              url,
-              name,
-              phone ? false : autoUpdate,
-              interval,
-            );
-          });
+          const ok = await run(
+            async () => {
+              await api.addSubscription(
+                url,
+                name,
+                phone ? false : autoUpdate,
+                interval,
+              );
+            },
+            { errorSurface: "dialog" },
+          );
           if (ok) setImportOpen(false);
         }}
         onImportFile={async (content, name) => {
-          const ok = await run(async () => {
-            await api.importSubscriptionFile(content, name);
-          });
+          const ok = await run(
+            async () => {
+              await api.importSubscriptionFile(content, name);
+            },
+            { errorSurface: "dialog" },
+          );
           if (ok) setImportOpen(false);
         }}
       />

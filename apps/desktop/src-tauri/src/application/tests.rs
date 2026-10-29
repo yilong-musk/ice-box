@@ -1368,6 +1368,30 @@ fn add_custom_rule_rejects_geoip_and_geosite_matchers() {
 }
 
 #[test]
+fn add_custom_rule_rejects_string_port_matchers() {
+    let state = temp_state_with_rules("rules-custom-port", sample_rules());
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": ["443"], "outbound": "direct" }),
+        },
+    )
+    .expect_err("string port must be rejected");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("port"), "{}", err.message);
+
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": [443, 8443], "outbound": "direct" }),
+        },
+    )
+    .expect("numeric ports accepted");
+    assert!(!fp.is_empty());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn add_custom_rule_validates_rule_set_references() {
     let state = temp_state_with_rules("rules-custom-set", vec![]);
     let sub = SubscriptionPaths::from_app(&state.paths);
@@ -1403,12 +1427,12 @@ fn add_custom_rule_validates_rule_set_references() {
 }
 
 #[test]
-fn custom_rule_disabled_dropped_from_runtime_config() {
+fn custom_rule_legacy_disabled_mark_is_deleted() {
     let state = temp_state_with_rules("rules-custom-off", sample_rules());
     let custom = serde_json::json!({ "domain": ["blockme.com"], "outbound": "block" });
     let fp = rule_fingerprint(&custom);
     let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
-    overrides.custom.push(custom);
+    overrides.custom.push(custom.clone());
     overrides.set_disabled(fp, true);
     save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
 
@@ -1422,9 +1446,126 @@ fn custom_rule_disabled_dropped_from_runtime_config() {
     let config: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
     let rules = config["route"]["rules"].as_array().unwrap();
-    assert!(!serde_json::to_string(rules)
-        .unwrap()
-        .contains("blockme.com"));
+    assert!(
+        !serde_json::to_string(rules)
+            .unwrap()
+            .contains("blockme.com"),
+        "a custom rule disabled by an older version must not be re-enabled"
+    );
+
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert!(overrides.custom.is_empty());
+    assert!(!overrides.is_rule_disabled(&custom));
+    assert!(overrides.disabled.is_empty());
+
+    let listed = query_rules(
+        &state,
+        &ListRulesRequest {
+            keyword: Some("blockme".into()),
+            rule_type: None,
+            disabled: None,
+            custom: Some(true),
+            offset: 0,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(listed.total, 0);
+    assert_eq!(rule_overview(&state).unwrap().disabled, 0);
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn set_rule_disabled_rejects_custom_rules() {
+    let state = temp_state_with_rules("rules-custom-disable", sample_rules());
+    let custom = serde_json::json!({ "domain": ["example.com"], "outbound": "block" });
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: custom.clone(),
+        },
+    )
+    .unwrap();
+
+    let err = persist_rule_disabled(
+        &state,
+        &SetRuleDisabledRequest {
+            fingerprint: fp,
+            disabled: true,
+        },
+    )
+    .expect_err("custom rules cannot be disabled");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("cannot be disabled"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn update_custom_rule_replaces_in_place() {
+    let state = temp_state_with_rules("rules-custom-update", sample_rules());
+    let original = serde_json::json!({ "domain": ["old.com"], "outbound": "block" });
+    let fingerprint =
+        persist_add_custom_rule(&state, &AddCustomRuleRequest { rule: original }).unwrap();
+
+    let updated = serde_json::json!({
+        "domain_suffix": ["new.com"],
+        "outbound": "direct",
+    });
+    let new_fingerprint = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint,
+            rule: updated.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(new_fingerprint, rule_fingerprint(&updated));
+
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert_eq!(overrides.custom, vec![updated.clone()]);
+
+    let err = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint: "missing".into(),
+            rule: updated,
+        },
+    )
+    .expect_err("unknown custom rule");
+    assert_eq!(err.code, "config.invalid");
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn update_custom_rule_rejects_duplicate_content() {
+    let state = temp_state_with_rules("rules-custom-duplicate", sample_rules());
+    let first = serde_json::json!({ "domain": ["a.com"], "outbound": "block" });
+    let second = serde_json::json!({ "domain": ["b.com"], "outbound": "block" });
+    let first_fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: first.clone(),
+        },
+    )
+    .unwrap();
+    persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: second.clone(),
+        },
+    )
+    .unwrap();
+
+    let err = persist_update_custom_rule(
+        &state,
+        &UpdateCustomRuleRequest {
+            fingerprint: first_fp,
+            rule: second,
+        },
+    )
+    .expect_err("editing into an existing rule must fail");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("already exists"));
     let _ = fs::remove_dir_all(state.paths.root());
 }
 

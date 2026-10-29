@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! HTTP fetch: direct (no system proxy), 20s timeout, 8 MiB cap.
+//! HTTP fetch: pinned direct or proxied, 20s timeout, 8 MiB cap.
 
 use std::io::Read;
 use std::time::Duration;
 
 use crate::error::SubscriptionError;
-use crate::tls_fetch::{tls_get_pinned, url_path_query};
+use crate::tls_fetch::{tls_client_config, tls_get_pinned, url_path_query};
 use crate::url::{
     addrs_are_fake_ip, pin_url_to_ip, resolve_allowed_fetch_addrs, validate_subscription_url,
+    validate_subscription_url_syntax,
 };
 use crate::userinfo::{parse_userinfo_header, SubscriptionUserInfo};
 
@@ -45,7 +46,9 @@ pub struct FetchResponse {
 }
 
 pub trait HttpFetcher: Send {
-    /// When true, client is configured to bypass OS / env proxies (G5.12).
+    /// True when this fetcher ignores OS / env proxies and connects directly
+    /// (G5.12). [`DefaultFetcher`] reports false while it routes through a
+    /// configured proxy.
     fn bypasses_system_proxy(&self) -> bool;
 
     fn get(
@@ -71,6 +74,170 @@ fn build_direct_agent() -> ureq::Agent {
                 .build()
         })
         .clone()
+}
+
+/// One agent per configured proxy endpoint, so the fetch follows the same
+/// proxy as browser traffic. TLS still uses the platform trust store.
+fn build_proxy_agent(proxy_url: &str) -> Result<ureq::Agent, SubscriptionError> {
+    let proxy = ureq::Proxy::new(proxy_url).map_err(|e| {
+        SubscriptionError::FetchFailed(format!("invalid subscription proxy endpoint: {e}"))
+    })?;
+    Ok(ureq::AgentBuilder::new()
+        .timeout_connect(FETCH_TIMEOUT)
+        .timeout_read(FETCH_TIMEOUT)
+        .timeout_write(FETCH_TIMEOUT)
+        .redirects(0)
+        .proxy(proxy)
+        .tls_config(tls_client_config()?)
+        .build())
+}
+
+/// Proxy endpoints a subscription fetch may use.
+///
+/// A request normally uses the endpoint matching its scheme, then falls back
+/// to the other scheme and finally SOCKS. The fallback keeps a secure-web-only
+/// setting useful for plain HTTP and an HTTP proxy useful for HTTPS via CONNECT.
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionProxy {
+    pub http: Option<String>,
+    pub https: Option<String>,
+    pub socks: Option<String>,
+}
+
+impl SubscriptionProxy {
+    fn normalized(mut self) -> Self {
+        self.http = normalize_proxy_endpoint(self.http);
+        self.https = normalize_proxy_endpoint(self.https);
+        self.socks = normalize_proxy_endpoint(self.socks);
+        self
+    }
+
+    fn is_empty(&self) -> bool {
+        self.http.is_none() && self.https.is_none() && self.socks.is_none()
+    }
+
+    /// Endpoint selected for a URL, preferring the matching scheme.
+    #[cfg(test)]
+    fn for_url(&self, url: &str) -> Option<&str> {
+        let (primary, secondary) = if url_is_https(url) {
+            (&self.https, &self.http)
+        } else {
+            (&self.http, &self.https)
+        };
+        primary
+            .as_deref()
+            .or(secondary.as_deref())
+            .or(self.socks.as_deref())
+    }
+}
+
+fn normalize_proxy_endpoint(value: Option<String>) -> Option<String> {
+    value
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+}
+
+/// Agents built from [`SubscriptionProxy`], plus the direct fallback.
+struct FetchAgents {
+    http: Option<ureq::Agent>,
+    https: Option<ureq::Agent>,
+    socks: Option<ureq::Agent>,
+    direct: ureq::Agent,
+}
+
+impl FetchAgents {
+    fn direct() -> Self {
+        Self {
+            http: None,
+            https: None,
+            socks: None,
+            direct: build_direct_agent(),
+        }
+    }
+
+    fn from_proxy(proxy: &SubscriptionProxy) -> Result<Self, SubscriptionError> {
+        Ok(Self {
+            http: proxy.http.as_deref().map(build_proxy_agent).transpose()?,
+            https: proxy.https.as_deref().map(build_proxy_agent).transpose()?,
+            socks: proxy.socks.as_deref().map(build_proxy_agent).transpose()?,
+            direct: build_direct_agent(),
+        })
+    }
+
+    fn any(&self) -> bool {
+        self.http.is_some() || self.https.is_some() || self.socks.is_some()
+    }
+
+    /// Agent for a URL, preferring the matching scheme.
+    fn for_url(&self, url: &str) -> (&ureq::Agent, bool) {
+        let (primary, secondary) = if url_is_https(url) {
+            (&self.https, &self.http)
+        } else {
+            (&self.http, &self.https)
+        };
+        let proxy = primary
+            .as_ref()
+            .or(secondary.as_ref())
+            .or(self.socks.as_ref());
+        match proxy {
+            Some(agent) => (agent, true),
+            None => (&self.direct, false),
+        }
+    }
+}
+
+/// Subscription fetcher that follows the host's default network path.
+///
+/// With proxy endpoints it forwards requests through the matching proxy (the
+/// app passes the OS system proxy, so behavior matches a browser). Without any
+/// endpoint it keeps the pinned direct connect used by [`DirectFetcher`].
+pub struct DefaultFetcher {
+    proxy: SubscriptionProxy,
+    agents: FetchAgents,
+}
+
+impl DefaultFetcher {
+    /// `proxy_url` is an HTTP proxy endpoint such as `http://127.0.0.1:17890`.
+    /// It is used for both URL schemes unless [`Self::with_proxy`] supplies
+    /// separate endpoints.
+    pub fn new(proxy_url: Option<String>) -> Result<Self, SubscriptionError> {
+        let proxy_url = normalize_proxy_endpoint(proxy_url);
+        Self::with_proxy(SubscriptionProxy {
+            http: proxy_url.clone(),
+            https: proxy_url,
+            socks: None,
+        })
+    }
+
+    /// Build a fetcher from per-scheme endpoints.
+    pub fn with_proxy(proxy: SubscriptionProxy) -> Result<Self, SubscriptionError> {
+        let proxy = proxy.normalized();
+        let agents = FetchAgents::from_proxy(&proxy)?;
+        Ok(Self { proxy, agents })
+    }
+
+    pub fn proxy_url(&self) -> Option<&str> {
+        self.proxy
+            .http
+            .as_deref()
+            .or(self.proxy.https.as_deref())
+            .or(self.proxy.socks.as_deref())
+    }
+}
+
+impl HttpFetcher for DefaultFetcher {
+    fn bypasses_system_proxy(&self) -> bool {
+        self.proxy.is_empty()
+    }
+
+    fn get(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<FetchResponse, SubscriptionError> {
+        fetch_response(&self.agents, url, etag, last_modified)
+    }
 }
 
 fn resolve_redirect_url(base: &str, location: &str) -> Result<String, SubscriptionError> {
@@ -162,6 +329,26 @@ fn try_request(attempt: FetchAttempt<'_>) -> Result<ureq::Response, Subscription
             SubscriptionError::FetchFailed(format!("GET {}: {e}", attempt.log_url))
         }
     })
+}
+
+/// Forward an absolute URL through the configured proxy. The proxy derives
+/// the `Host` header (including a non-default port) instead of being pinned to
+/// a pre-resolved IP.
+fn proxied_request(
+    agent: &ureq::Agent,
+    url: &str,
+    hop: u32,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+    log_url: &str,
+) -> Result<ureq::Response, SubscriptionError> {
+    let req = agent
+        .get(url)
+        .set("User-Agent", "ice-box/0.1")
+        .set("Accept", "*/*");
+    let req = apply_conditional_headers(req, hop, etag, last_modified)?;
+    req.call()
+        .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url}: {e}")))
 }
 
 fn conditional_header_pairs(
@@ -287,10 +474,15 @@ fn handle_hop(
     Ok(Ok(hop))
 }
 
-/// GET with manual redirect handling; re-validates URL (incl. DNS) before each hop.
-/// Both HTTP and HTTPS connect to pre-resolved IPs (TLS SNI uses the original hostname).
+/// GET with manual redirect handling. The direct path re-validates the URL
+/// (including DNS) before each hop; the proxy path re-checks its shape and lets
+/// the proxy resolve it.
+///
+/// Direct mode connects to pre-resolved IPs (TLS SNI uses the original
+/// hostname). Proxy mode forwards the URL through the configured proxy, which
+/// resolves and routes it like any other browser request.
 fn fetch_get(
-    agent: &ureq::Agent,
+    agents: &FetchAgents,
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
@@ -298,6 +490,26 @@ fn fetch_get(
     let mut current = url.to_string();
 
     for hop in 0..=MAX_REDIRECTS {
+        // Pick the proxy per hop: a redirect can change the scheme.
+        let (agent, proxied) = agents.for_url(&current);
+        if proxied {
+            // The proxy resolves the host. A local lookup here would make the
+            // fetch fail whenever the local resolver is the broken hop. This is
+            // a deliberate SSRF trade-off: direct mode keeps the full DNS guard;
+            // proxy mode still rejects literal private hosts, restricted names,
+            // and https->http downgrades on every hop (see docs/architecture.md).
+            validate_subscription_url_syntax(&current)?;
+            let response = proxied_request(agent, &current, hop, etag, last_modified, &current)?;
+            let hop_resp = hop_from_ureq(response)?;
+            match handle_hop(hop_resp, url, &current, hop)? {
+                Ok(final_hop) => return Ok(final_hop),
+                Err(next_url) => {
+                    current = next_url;
+                    continue;
+                }
+            }
+        }
+
         validate_subscription_url(&current)?;
         let (host_header, addrs) = resolve_allowed_fetch_addrs(&current)?;
 
@@ -307,19 +519,18 @@ fn fetch_get(
         refuse_fake_ip_connect(&addrs)?;
 
         let https = url_is_https(&current);
-        let _host_header = host_header;
 
         let mut hop_err: Option<SubscriptionError> = None;
 
         for addr in addrs {
             let result = if https {
-                hop_from_tls(&current, &_host_header, hop, etag, last_modified, addr.ip())
+                hop_from_tls(&current, &host_header, hop, etag, last_modified, addr.ip())
             } else {
                 let pinned = pin_url_to_ip(&current, addr.ip())?;
                 match try_request(FetchAttempt {
                     agent,
                     connect_url: &pinned,
-                    host_header: &_host_header,
+                    host_header: &host_header,
                     hop,
                     etag,
                     last_modified,
@@ -359,6 +570,50 @@ fn fetch_get(
     )))
 }
 
+fn fetch_response(
+    agents: &FetchAgents,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> Result<FetchResponse, SubscriptionError> {
+    let redacted = crate::redact_subscription_url_for_log(url);
+    tracing::debug!(url = %redacted, proxied = agents.any(), "subscription fetch: start");
+    let hop = fetch_get(agents, url, etag, last_modified).inspect_err(
+        |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "subscription fetch: failed"),
+    )?;
+    tracing::debug!(url = %redacted, status = hop.status, bytes = hop.body.len(), "subscription fetch: response");
+
+    if hop.status == 304 {
+        return Ok(FetchResponse {
+            body: String::new(),
+            not_modified: true,
+            etag: hop.etag,
+            last_modified: hop.last_modified,
+            userinfo: hop.userinfo,
+            content_disposition: hop.content_disposition,
+        });
+    }
+
+    if !(200..300).contains(&hop.status) {
+        return Err(SubscriptionError::FetchFailed(format!(
+            "GET {url}: HTTP {}",
+            hop.status
+        )));
+    }
+
+    let body = String::from_utf8(hop.body)
+        .map_err(|e| SubscriptionError::FetchFailed(format!("body not utf-8: {e}")))?;
+
+    Ok(FetchResponse {
+        body,
+        not_modified: false,
+        etag: hop.etag,
+        last_modified: hop.last_modified,
+        userinfo: hop.userinfo,
+        content_disposition: hop.content_disposition,
+    })
+}
+
 /// ureq client that does **not** use environment proxy settings.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DirectFetcher;
@@ -374,43 +629,7 @@ impl HttpFetcher for DirectFetcher {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<FetchResponse, SubscriptionError> {
-        let redacted = crate::redact_subscription_url_for_log(url);
-        tracing::debug!(url = %redacted, "subscription fetch: start");
-        let agent = build_direct_agent();
-        let hop = fetch_get(&agent, url, etag, last_modified).inspect_err(
-            |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "subscription fetch: failed"),
-        )?;
-        tracing::debug!(url = %redacted, status = hop.status, bytes = hop.body.len(), "subscription fetch: response");
-
-        if hop.status == 304 {
-            return Ok(FetchResponse {
-                body: String::new(),
-                not_modified: true,
-                etag: hop.etag,
-                last_modified: hop.last_modified,
-                userinfo: hop.userinfo,
-                content_disposition: hop.content_disposition,
-            });
-        }
-
-        if !(200..300).contains(&hop.status) {
-            return Err(SubscriptionError::FetchFailed(format!(
-                "GET {url}: HTTP {}",
-                hop.status
-            )));
-        }
-
-        let body = String::from_utf8(hop.body)
-            .map_err(|e| SubscriptionError::FetchFailed(format!("body not utf-8: {e}")))?;
-
-        Ok(FetchResponse {
-            body,
-            not_modified: false,
-            etag: hop.etag,
-            last_modified: hop.last_modified,
-            userinfo: hop.userinfo,
-            content_disposition: hop.content_disposition,
-        })
+        fetch_response(&FetchAgents::direct(), url, etag, last_modified)
     }
 }
 
@@ -584,6 +803,23 @@ pub fn download_direct(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    /// Read the request head up to the blank line. Closing a socket with
+    /// unread bytes makes Windows send an RST, which can discard the reply
+    /// the fake proxy just wrote, so tests must consume the whole head first.
+    fn read_request_head(tcp: &mut std::net::TcpStream) -> String {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && head.len() < 8192 {
+            match tcp.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => head.push(byte[0]),
+                Err(err) => panic!("proxy read: {err}"),
+            }
+        }
+        String::from_utf8_lossy(&head).into_owned()
+    }
 
     #[test]
     fn download_direct_rejects_a_disallowed_host_before_connecting() {
@@ -616,10 +852,21 @@ mod tests {
     #[test]
     #[ignore = "network: live HTTPS fetch after SSRF validation"]
     fn https_fetch_succeeds() {
-        let agent = build_direct_agent();
-        let hop = fetch_get(&agent, "https://example.com/", None, None)
+        let agents = FetchAgents::direct();
+        let hop = fetch_get(&agents, "https://example.com/", None, None)
             .expect("HTTPS subscription-style fetch");
         assert_eq!(hop.status, 200);
+    }
+
+    #[test]
+    #[ignore = "network: live HTTPS fetch through the app proxy (set ICE_BOX_TEST_PROXY)"]
+    fn proxied_https_fetch_succeeds() {
+        let proxy = std::env::var("ICE_BOX_TEST_PROXY").expect("ICE_BOX_TEST_PROXY");
+        let fetcher = DefaultFetcher::new(Some(proxy)).expect("proxy agent");
+        let response = fetcher
+            .get("https://example.com/", None, None)
+            .expect("proxied HTTPS subscription-style fetch");
+        assert!(!response.body.is_empty());
     }
 
     #[test]
@@ -685,5 +932,127 @@ mod tests {
     fn conditional_headers_reject_crlf_values() {
         let err = conditional_header_pairs(0, Some("bad\r\nHeader: x"), None).unwrap_err();
         assert!(err.to_string().contains("invalid characters"));
+    }
+
+    #[test]
+    fn default_fetcher_without_proxy_stays_direct() {
+        let fetcher = DefaultFetcher::new(None).unwrap();
+        assert!(fetcher.bypasses_system_proxy());
+        assert_eq!(fetcher.proxy_url(), None);
+    }
+
+    #[test]
+    fn proxy_endpoints_follow_the_url_scheme_with_fallbacks() {
+        let proxy = SubscriptionProxy {
+            http: Some("http://http.example:1".into()),
+            https: Some("http://https.example:2".into()),
+            socks: Some("socks5://socks.example:3".into()),
+        };
+        assert_eq!(
+            proxy.for_url("http://example.com/sub"),
+            Some("http://http.example:1")
+        );
+        assert_eq!(
+            proxy.for_url("https://example.com/sub"),
+            Some("http://https.example:2")
+        );
+
+        let https_only = SubscriptionProxy {
+            http: None,
+            https: Some("http://https.example:2".into()),
+            socks: None,
+        };
+        assert_eq!(
+            https_only.for_url("http://example.com/sub"),
+            Some("http://https.example:2"),
+            "a secure-web-only setting still serves plain HTTP"
+        );
+
+        let socks_only = SubscriptionProxy {
+            http: None,
+            https: None,
+            socks: Some("socks5://socks.example:3".into()),
+        };
+        assert_eq!(
+            socks_only.for_url("https://example.com/sub"),
+            Some("socks5://socks.example:3")
+        );
+        assert_eq!(
+            SubscriptionProxy::default().for_url("https://example.com"),
+            None
+        );
+    }
+
+    #[test]
+    fn default_fetcher_proxy_mode_skips_local_dns_and_routes_absolute_urls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let proxy = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("proxy accept");
+            tx.send(read_request_head(&mut tcp))
+                .expect("record request");
+            tcp.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .expect("proxy write");
+        });
+
+        let fetcher = DefaultFetcher::new(Some(format!("http://{addr}"))).unwrap();
+        assert!(!fetcher.bypasses_system_proxy());
+        // `.invalid` never resolves locally; reaching the proxy proves the
+        // proxy path does not depend on the local DNS resolver.
+        let response = fetcher
+            .get("http://does-not-resolve.invalid/sub?t=1", None, None)
+            .expect("proxied request");
+        assert_eq!(response.body, "ok");
+        assert!(!response.not_modified);
+
+        let head = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("proxy saw request");
+        assert!(
+            head.starts_with("GET http://does-not-resolve.invalid/sub?t=1 HTTP/1.1\r\n"),
+            "{head}"
+        );
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("\r\nhost: does-not-resolve.invalid\r\n"),
+            "{head}"
+        );
+        proxy.join().expect("proxy thread");
+    }
+
+    #[test]
+    fn default_fetcher_proxy_mode_still_rejects_private_hosts() {
+        let fetcher = DefaultFetcher::new(Some("http://127.0.0.1:1".into())).unwrap();
+        for url in [
+            "http://127.0.0.1/sub",
+            // The proxy would resolve this to loopback; normalize the root dot
+            // before applying the restricted-host guard.
+            "http://localhost./sub",
+        ] {
+            let err = fetcher.get(url, None, None).unwrap_err();
+            assert!(err.to_string().contains("not allowed"), "{url}: {err}");
+        }
+    }
+
+    #[test]
+    fn default_fetcher_proxy_mode_rejects_private_redirect_targets() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let proxy = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("proxy accept");
+            let _ = read_request_head(&mut tcp);
+            tcp.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .expect("proxy write");
+        });
+
+        let fetcher = DefaultFetcher::new(Some(format!("http://{addr}"))).unwrap();
+        let err = fetcher
+            .get("http://example.com/sub", None, None)
+            .expect_err("a redirect to a private host must be rejected");
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        proxy.join().expect("proxy thread");
     }
 }

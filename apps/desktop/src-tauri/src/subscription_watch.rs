@@ -5,9 +5,7 @@
 use crate::application;
 use crate::orchestrate::current_settings;
 use crate::AppState;
-use ice_engine::{
-    host_platform, AutoUpdateInterval, SubscriptionManager, SubscriptionMeta, SubscriptionPaths,
-};
+use ice_engine::{AutoUpdateInterval, SubscriptionMeta};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -65,14 +63,26 @@ pub(crate) fn due_auto_update_ids(
 /// `FETCH_TIMEOUT`) run without the orchestrate lock so the background pass never
 /// queues Start/Stop/Settings behind it; the lock is taken with `try_lock` for
 /// the disk phase + Apply so a busy user operation simply defers the refresh.
-/// Returns `false` when the pass was deferred (orchestrate busy); the caller
-/// may retry shortly.
+/// Returns `false` when the pass was deferred (orchestrate busy or the
+/// subscription manager could not be opened); the caller may retry shortly.
 pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     if state.workers.is_paused_or_stopping() {
         return true;
     }
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = match application::subscription_manager(state) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            // `subscription_manager` already falls back to a direct manager when
+            // the system proxy endpoint is malformed. This only fires when even
+            // the direct fallback fails (for example a broken TLS trust store);
+            // defer so the startup loop retries instead of skipping an hour.
+            tracing::warn!(
+                error = %err.message,
+                "auto-update: open subscription manager failed; deferring pass"
+            );
+            return false;
+        }
+    };
     let items = match mgr.list() {
         Ok(items) => items,
         Err(err) => {

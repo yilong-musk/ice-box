@@ -10,7 +10,7 @@ use ice_config::{HostPlatform, NormalizedProfile};
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
-use crate::fetch::{DirectFetcher, FetchResponse, HttpFetcher};
+use crate::fetch::{DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher, SubscriptionProxy};
 use crate::merge::load_active_profile;
 use crate::store::{
     apply_error_to_index, apply_success_to_index, commit_subscription_success, load_index,
@@ -18,7 +18,7 @@ use crate::store::{
     set_active, set_auto_update, write_subscription_error, write_subscription_success,
     SubscriptionPaths,
 };
-use crate::url::validate_subscription_url;
+use crate::url::{validate_subscription_url, validate_subscription_url_syntax};
 use crate::{
     meta_from_fetched_profile, meta_from_profile, normalize_raw_body, resolve_subscription_name,
     AutoUpdateInterval, SubscriptionFormat, SubscriptionIndex, SubscriptionMeta,
@@ -120,6 +120,36 @@ impl SubscriptionManager<DirectFetcher> {
     }
 }
 
+impl SubscriptionManager<DefaultFetcher> {
+    /// Open a manager whose fetches follow the app's default network path:
+    /// through the local mixed inbound when `proxy_url` is `Some`, direct
+    /// otherwise.
+    pub fn open_with_proxy(
+        paths: SubscriptionPaths,
+        platform: HostPlatform,
+        proxy_url: Option<String>,
+    ) -> Result<Self, SubscriptionError> {
+        Ok(Self::with_fetcher_on(
+            paths,
+            DefaultFetcher::new(proxy_url)?,
+            platform,
+        ))
+    }
+
+    /// Open a manager with per-scheme proxy endpoints.
+    pub fn open_with_proxy_config(
+        paths: SubscriptionPaths,
+        platform: HostPlatform,
+        proxy: SubscriptionProxy,
+    ) -> Result<Self, SubscriptionError> {
+        Ok(Self::with_fetcher_on(
+            paths,
+            DefaultFetcher::with_proxy(proxy)?,
+            platform,
+        ))
+    }
+}
+
 impl<F: HttpFetcher> SubscriptionManager<F> {
     pub fn with_fetcher(paths: SubscriptionPaths, fetcher: F) -> Self {
         Self::with_fetcher_on(paths, fetcher, HostPlatform::MacOs)
@@ -159,6 +189,19 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         self.apply_add(self.fetch_add(url, name, auto_update, auto_update_interval)?)
     }
 
+    /// Validate a fetch target before calling the fetcher.
+    ///
+    /// Direct fetchers resolve the host themselves and need the full SSRF
+    /// check. A proxied fetcher resolves through the proxy, so resolving here
+    /// would fail whenever the local resolver is the broken hop.
+    fn validate_fetch_url(&self, url: &str) -> Result<(), SubscriptionError> {
+        if self.fetcher.bypasses_system_proxy() {
+            validate_subscription_url(url)
+        } else {
+            validate_subscription_url_syntax(url)
+        }
+    }
+
     /// Network fetch phase of an add: validate URL, GET (no disk writes).
     pub fn fetch_add(
         &self,
@@ -167,12 +210,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         auto_update: bool,
         auto_update_interval: Option<AutoUpdateInterval>,
     ) -> Result<FetchedAdd, SubscriptionError> {
-        assert!(
-            self.fetcher.bypasses_system_proxy(),
-            "subscription fetch must bypass system proxy"
-        );
-
-        validate_subscription_url(url)?;
+        self.validate_fetch_url(url)?;
 
         let id = Uuid::new_v4();
         let fetched = self.fetcher.get(url, None, None)?;
@@ -303,8 +341,6 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
     /// Network fetch phase of an update: load meta, validate URL, GET (no disk writes).
     pub fn fetch_update(&self, id: Uuid) -> Result<FetchedUpdate, SubscriptionError> {
-        assert!(self.fetcher.bypasses_system_proxy());
-
         let index = load_index(&self.paths)?;
         let meta = index
             .items
@@ -321,7 +357,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             ));
         }
 
-        validate_subscription_url(&meta.url)?;
+        self.validate_fetch_url(&meta.url)?;
 
         let fetched = self.fetcher.get(
             &meta.url,

@@ -61,6 +61,7 @@ pub fn run() {
             commands::list_rules,
             commands::set_rule_disabled,
             commands::add_custom_rule,
+            commands::update_custom_rule,
             commands::remove_custom_rule,
             commands::check_app_update,
             commands::record_app_update_check,

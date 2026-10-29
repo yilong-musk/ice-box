@@ -57,7 +57,7 @@ fn ensure_crypto_provider() {
 }
 
 /// Process-wide rustls client config using the OS trust store (SUB-3).
-fn tls_client_config() -> Result<Arc<ClientConfig>, SubscriptionError> {
+pub(crate) fn tls_client_config() -> Result<Arc<ClientConfig>, SubscriptionError> {
     static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     if let Some(config) = CONFIG.get() {
         return Ok(Arc::clone(config));

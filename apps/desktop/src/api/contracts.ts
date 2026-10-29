@@ -458,6 +458,7 @@ export interface CoreApi {
   listRules(req: ListRulesRequest): Promise<ListRulesResponse>;
   setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean; apply_warning?: AppErrorPayload }>;
   addCustomRule(rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;
+  updateCustomRule(fingerprint: string, rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;
   removeCustomRule(fingerprint: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
 }
 

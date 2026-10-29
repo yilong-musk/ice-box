@@ -57,6 +57,16 @@ vi.mock("../api/client", () => ({
     if (m.key === "ui.raw") return m.params?.text ?? "";
     return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
   },
+  formatUiMessageTitle: (msg: unknown) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    const m = msg as { key?: string; params?: Record<string, string> };
+    if (!m.key) return String(msg);
+    if (m.key === "ui.raw") return m.params?.text ?? "";
+    const params = { ...(m.params ?? {}) };
+    delete params.detail;
+    return isMessageKey(m.key) ? t(m.key, params) : m.key;
+  },
 }));
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
@@ -255,6 +265,171 @@ describe("Subscriptions", () => {
     });
   });
 
+  it("shows the updating label only on the clicked subscription row", async () => {
+    const otherId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "sub-a", active: false }),
+      sampleMeta({ id: otherId, name: "sub-b", active: false }),
+    ]);
+    let resolveUpdate: () => void = () => {};
+    vi.mocked(api.updateSubscription).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = () => resolve(sampleMeta());
+        }),
+    );
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+      expect(view.getByText("sub-b")).toBeInTheDocument();
+    });
+    const rowA = view.getByText("sub-a").closest("[data-slot=item]") as HTMLElement;
+    const rowB = view.getByText("sub-b").closest("[data-slot=item]") as HTMLElement;
+
+    within(rowA).getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(
+        within(rowA).getByRole("button", { name: t("common.updating") }),
+      ).toBeDisabled();
+    });
+    expect(
+      within(rowB).getByRole("button", { name: t("common.update") }),
+    ).toBeInTheDocument();
+
+    resolveUpdate();
+    await waitFor(() => {
+      expect(
+        within(rowA).getByRole("button", { name: t("common.update") }),
+      ).toBeEnabled();
+    });
+  });
+
+  it("shows a capsule toast after a successful manual update", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockResolvedValue(sampleMeta());
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(view.getByTestId("success-toast")).toHaveTextContent(
+        t("subs.updated"),
+      );
+    });
+    expect(view.queryByTestId("error-toast")).toBeNull();
+  });
+
+  it("keeps the success capsule off when a manual update fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockRejectedValueOnce(
+      new Error("fetch failed"),
+    );
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent("fetch failed");
+    });
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("common.update") }),
+      ).toBeEnabled();
+    });
+    expect(view.queryByTestId("success-toast")).toBeNull();
+  });
+
+  it("keeps the success capsule off when an update reports an apply warning", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+    const updateResult = {
+      ...sampleMeta(),
+      apply_warning: {
+        code: "proxy.restore_failed",
+        message: "core reloaded but system proxy was not restored",
+      },
+    };
+    vi.mocked(api.updateSubscription).mockResolvedValue(updateResult);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(
+        view.getByText(t("error.proxy.restore_failed"), { exact: false }),
+      ).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("common.update") }),
+      ).toBeEnabled();
+    });
+    expect(view.queryByTestId("success-toast")).toBeNull();
+  });
+
+  it("keeps the success capsule off when the post-update reload fails", async () => {
+    listSubscriptions.mockResolvedValueOnce([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockResolvedValue(sampleMeta());
+    listSubscriptions.mockRejectedValue(new Error("list failed"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent("list failed");
+    });
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("common.update") }),
+      ).toBeEnabled();
+    });
+    expect(view.queryByTestId("success-toast")).toBeNull();
+  });
+
+  it("keeps the action error when the follow-up reload also fails", async () => {
+    listSubscriptions.mockResolvedValueOnce([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockRejectedValueOnce(
+      new Error("update failed"),
+    );
+    listSubscriptions.mockRejectedValue(new Error("list failed"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent("update failed");
+      expect(view.getByText("list failed")).toBeInTheDocument();
+    });
+    expect(view.queryByTestId("success-toast")).toBeNull();
+  });
+
   it("shows an apply warning from a remove response", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({
@@ -314,6 +489,105 @@ describe("Subscriptions", () => {
         exact: false,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a capsule toast when listing fails", async () => {
+    listSubscriptions.mockRejectedValue(new Error("boom"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(listSubscriptions).toHaveBeenCalled();
+    });
+    expect(view.getByTestId("error-toast")).toHaveTextContent("boom");
+  });
+
+  it("keeps a persistent load error with a retry action", async () => {
+    listSubscriptions.mockRejectedValueOnce(new Error("boom"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(t("subs.loadFailedTitle"))).toBeInTheDocument();
+    });
+    expect(view.getAllByText("boom").length).toBeGreaterThan(0);
+    expect(view.queryByText(t("subs.emptyTitle"))).not.toBeInTheDocument();
+
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    fireEvent.click(view.getByRole("button", { name: t("common.retry") }));
+
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    expect(view.queryByText(t("subs.loadFailedTitle"))).not.toBeInTheDocument();
+  });
+
+  it("shows a capsule toast when toggling a subscription fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    vi.mocked(api.setSubscriptionActive).mockRejectedValueOnce(
+      new Error("activate failed"),
+    );
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    const row = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(
+      within(row).getByRole("switch", { name: t("common.activate") }),
+    );
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent(
+        "activate failed",
+      );
+    });
+  });
+
+  it("shows a capsule toast when removing a subscription fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+    removeSubscription.mockRejectedValueOnce(new Error("delete failed"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    fireEvent.click(view.getByRole("button", { name: t("common.delete") }));
+    await waitFor(() => {
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    });
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: t("common.delete"),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(removeSubscription).toHaveBeenCalled();
+      expect(view.getByTestId("error-toast")).toHaveTextContent("delete failed");
+    });
+  });
+
+  it("shows only the subscription error title in the list", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({
+        name: "failed",
+        last_error: {
+          key: "error.sub.fetch_failed",
+          params: { detail: "fetch failed: certificate unknown issuer" },
+        },
+      }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("failed")).toBeInTheDocument();
+    });
+    expect(view.getByText(t("error.sub.fetch_failed"))).toBeInTheDocument();
+    expect(view.queryByText(/certificate unknown issuer/)).not.toBeInTheDocument();
   });
 
   it("shows the parsed usage and expiry for an embedded entry, not the raw text", async () => {

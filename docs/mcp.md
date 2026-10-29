@@ -101,7 +101,7 @@ instead of losing the control surface while the runtime is still active.
 
 ## Tools
 
-The MCP server currently exposes 34 tools through the application services:
+The MCP server currently exposes 35 tools through the application services:
 
 - Status and settings: `get_status`, `get_settings`, `update_settings`.
 - Core and capture: `start_proxy_service`, `stop_proxy_service`, `start_core`,
@@ -114,11 +114,18 @@ The MCP server currently exposes 34 tools through the application services:
 - Nodes and groups: `list_nodes`, `select_node`, `select_group_member`, and
   `test_node_delay`.
 - Rules: `get_rule_overview`, `list_rules`, `set_rule_disabled`,
-  `add_custom_rule`, and `remove_custom_rule`.
+  `add_custom_rule`, `update_custom_rule`, and `remove_custom_rule`.
 - Diagnostics: `get_logs` and `get_runtime_config`.
 - Protected capture recovery: `recover_tun`, `install_tun_helper`,
   `uninstall_tun_helper`, `ensure_tun_elevation`, and
   `remove_tun_elevation`.
+
+`set_rule_disabled` applies to subscription rules only. Custom rules are always
+active: change one with `update_custom_rule` (which replaces the rule in place
+and keeps its position) or delete it with `remove_custom_rule`.
+`update_custom_rule` validates the new rule exactly like `add_custom_rule`:
+removed `geoip`/`geosite` matchers, unknown `rule_set` references, and
+non-numeric or out-of-range `port`/`source_port` values are rejected.
 
 Results use MCP text content plus structured content when the result is an
 object. Tool failures set `isError` and return the application error code and

@@ -451,6 +451,7 @@ pub fn run() {
             commands::list_rules,
             commands::set_rule_disabled,
             commands::add_custom_rule,
+            commands::update_custom_rule,
             commands::remove_custom_rule,
             commands::get_traffic_snapshot,
             commands::get_traffic_since,

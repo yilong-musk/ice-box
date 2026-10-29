@@ -7,6 +7,8 @@ import {
   MATCH_KEY_ORDER,
   RULE_TYPE_LABELS,
   buildCustomRule,
+  customRuleEditable,
+  customRuleFormValues,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
@@ -93,6 +95,20 @@ describe("rule helpers", () => {
     });
   });
 
+  it("builds numeric matcher rules as numbers", () => {
+    expect(buildCustomRule("port", "443, 8443", "direct")).toEqual({
+      port: [443, 8443],
+      outbound: "direct",
+    });
+    expect(buildCustomRule("source_port", " 53 ", "direct")).toEqual({
+      source_port: [53],
+      outbound: "direct",
+    });
+    // sing-box decodes ports as uint16; reject non-numeric or out-of-range input.
+    expect(buildCustomRule("port", "443, abc", "direct")).toBeNull();
+    expect(buildCustomRule("port", "70000", "direct")).toBeNull();
+  });
+
   it("builds boolean matcher rules", () => {
     expect(buildCustomRule("ip_is_private", true, "direct")).toEqual({
       ip_is_private: true,
@@ -102,6 +118,95 @@ describe("rule helpers", () => {
       source_ip_is_private: false,
       outbound: "direct",
     });
+  });
+
+  it("preserves fields the editor does not expose when editing", () => {
+    const base = {
+      domain_suffix: ["old.com"],
+      port: [443],
+      invert: true,
+      outbound: "direct",
+    };
+    expect(
+      buildCustomRule("domain_suffix", "new.com", "n1", base, "domain_suffix"),
+    ).toEqual({
+      domain_suffix: ["new.com"],
+      port: [443],
+      invert: true,
+      outbound: "n1",
+    });
+    expect(buildCustomRule("domain", "new.com", "n1", base, "domain_suffix")).toEqual({
+      domain: ["new.com"],
+      port: [443],
+      invert: true,
+      outbound: "n1",
+    });
+  });
+
+  it("keeps numeric matchers numeric when editing", () => {
+    expect(
+      buildCustomRule(
+        "port",
+        "8443",
+        "n1",
+        { port: [443], invert: true, outbound: "direct" },
+        "port",
+      ),
+    ).toEqual({ port: [8443], invert: true, outbound: "n1" });
+  });
+
+  it("maps a stored custom rule back into the editor fields", () => {
+    expect(
+      customRuleFormValues({
+        domain_suffix: ["Example.com", "b.com"],
+        outbound: "n1",
+      }),
+    ).toEqual({
+      matcherKey: "domain_suffix",
+      text: "example.com, b.com",
+      bool: false,
+      outbound: "n1",
+    });
+    expect(
+      customRuleFormValues({ ip_is_private: true, outbound: "block" }),
+    ).toEqual({
+      matcherKey: "ip_is_private",
+      text: "true",
+      bool: true,
+      outbound: "block",
+    });
+    expect(
+      customRuleFormValues({ port: [443, 8443], outbound: "direct" }),
+    ).toEqual({
+      matcherKey: "port",
+      text: "443, 8443",
+      bool: false,
+      outbound: "direct",
+    });
+    expect(customRuleFormValues({ outbound: "direct" }).matcherKey).toBe(
+      "domain",
+    );
+  });
+
+  it("marks rules with an editable matcher as form-editable", () => {
+    expect(customRuleEditable({ domain: ["a.com"], outbound: "direct" })).toBe(
+      true,
+    );
+    expect(
+      customRuleEditable({ rule_set: ["cn"], outbound: "direct" }),
+    ).toBe(true);
+    expect(
+      customRuleEditable({ clash_mode: "global", outbound: "direct" }),
+    ).toBe(false);
+    expect(
+      customRuleEditable({
+        type: "logical",
+        mode: "and",
+        rules: [{ domain: ["a.com"] }],
+        outbound: "direct",
+      }),
+    ).toBe(false);
+    expect(customRuleEditable({ outbound: "direct" })).toBe(false);
   });
 
   it("rejects empty or unknown matchers", () => {

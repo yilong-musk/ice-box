@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { api, type NodeInfo } from "../api/client";
+import { api, type NodeInfo, type RuleRow } from "../api/client";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/native-select";
 import {
   buildCustomRule,
+  customRuleFormValues,
   RULE_MATCHER_DEFS,
   STRATEGY_GROUP_TYPES,
 } from "../lib/rules";
@@ -29,16 +30,22 @@ type RuleFormDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy: boolean;
+  /** Custom rule being edited; null when adding a new one. */
+  editing?: RuleRow | null;
   /** Throws with a user-facing message when the add fails. */
   onAdd: (rule: Record<string, unknown>) => Promise<void>;
+  /** Throws with a user-facing message when the update fails. */
+  onUpdate: (fingerprint: string, rule: Record<string, unknown>) => Promise<void>;
 };
 
-/** In-app modal for adding a custom rule (radix Dialog). */
+/** In-app modal for adding or editing a custom rule (radix Dialog). */
 function RuleFormDialog({
   open,
   onOpenChange,
   busy,
+  editing = null,
   onAdd,
+  onUpdate,
 }: RuleFormDialogProps) {
   useLanguagePreference();
   const [matcherKey, setMatcherKey] = useState("domain_suffix");
@@ -49,9 +56,25 @@ function RuleFormDialog({
   const [customError, setCustomError] = useState<string | null>(null);
   const composingRef = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     setCustomError(null);
+    if (editing) {
+      const values = customRuleFormValues(editing.rule);
+      setMatcherKey(values.matcherKey);
+      setMatcherValue(values.text);
+      setMatcherBool(values.bool);
+      setOutbound(values.outbound);
+    } else {
+      setMatcherKey("domain_suffix");
+      setMatcherValue("");
+      setMatcherBool(true);
+      setOutbound("direct");
+    }
+  }, [open, editing]);
+
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     api
       .listNodes()
@@ -72,19 +95,34 @@ function RuleFormDialog({
   // lowercased as it is typed, and keep the rule itself lowercase too.
   const lowercaseInput = previewDef?.lowercase === true;
   const matcherText = lowercaseInput ? matcherValue.toLowerCase() : matcherValue;
+  const editingMatcherKey = editing
+    ? customRuleFormValues(editing.rule).matcherKey
+    : undefined;
   const previewRule = buildCustomRule(
     matcherKey,
     previewDef?.kind === "boolean" ? matcherBool : matcherText,
     outbound,
+    editing?.rule,
+    editingMatcherKey,
   );
 
-  async function handleAdd() {
+  const isEditing = editing !== null;
+  const outboundListed =
+    outbound === "direct" ||
+    outbound === "block" ||
+    nodeOptions.some((node) => node.tag === outbound);
+
+  async function handleSubmit() {
     if (!previewRule) return;
     setCustomError(null);
     try {
-      await onAdd(previewRule);
-      setMatcherValue("");
-      setMatcherBool(true);
+      if (editing) {
+        await onUpdate(editing.fingerprint, previewRule);
+      } else {
+        await onAdd(previewRule);
+        setMatcherValue("");
+        setMatcherBool(true);
+      }
       onOpenChange(false);
     } catch (e) {
       setCustomError(e instanceof Error ? e.message : String(e));
@@ -107,7 +145,7 @@ function RuleFormDialog({
               data-slot="dialog-title"
               className="font-heading text-sm font-medium"
             >
-              {t("ruleForm.title")}
+              {isEditing ? t("ruleForm.editTitle") : t("ruleForm.title")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description
               data-slot="dialog-description"
@@ -219,6 +257,11 @@ function RuleFormDialog({
                       : ""}
                   </NativeSelectOption>
                 ))}
+                {!outboundListed ? (
+                  <NativeSelectOption value={outbound}>
+                    {outbound}
+                  </NativeSelectOption>
+                ) : null}
               </NativeSelect>
             </Field>
           </FieldGroup>
@@ -243,9 +286,9 @@ function RuleFormDialog({
               type="button"
               size="sm"
               disabled={busy || !previewRule}
-              onClick={() => void handleAdd()}
+              onClick={() => void handleSubmit()}
             >
-              {t("ruleForm.add")}
+              {isEditing ? t("ruleForm.save") : t("ruleForm.add")}
             </Button>
           </div>
         </DialogPrimitive.Content>

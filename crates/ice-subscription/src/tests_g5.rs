@@ -4,9 +4,9 @@ use super::{
     detect_format, load_active_profile, load_active_profile_with_default_rules, load_index,
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
     parse_uri_list_profile, read_profile, resolve_selected_tag, set_active, set_auto_update,
-    subscription_share_text, write_subscription_error, AutoUpdateInterval, DirectFetcher,
-    FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode,
-    SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
+    subscription_share_text, write_subscription_error, AutoUpdateInterval, DefaultFetcher,
+    DirectFetcher, FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher,
+    PanicOnceMode, SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
     SubscriptionPaths, SubscriptionShareKind, SubscriptionSource, SubscriptionUserInfo,
     CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
@@ -973,6 +973,10 @@ fn g5_11_disk_layout_order() {
 #[test]
 fn g5_12_fetcher_bypasses_system_proxy() {
     assert!(DirectFetcher.bypasses_system_proxy());
+    assert!(DefaultFetcher::new(None).unwrap().bypasses_system_proxy());
+    assert!(!DefaultFetcher::new(Some("http://127.0.0.1:17890".into()))
+        .unwrap()
+        .bypasses_system_proxy());
     let paths = temp_subs("proxy");
     let fetcher = MockFetcher {
         bypasses_proxy: true,
@@ -981,6 +985,32 @@ fn g5_12_fetcher_bypasses_system_proxy() {
     assert!(fetcher.bypasses_system_proxy());
     let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
     let _ = mgr.add("https://example.com", None, false, None);
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn g5_12b_update_fetch_works_when_the_fetcher_uses_a_proxy() {
+    let paths = temp_subs("proxy-update");
+    let fetcher = MockFetcher {
+        bypasses_proxy: false,
+        mode: MockFetchMode::Ok(FetchResponse {
+            body: r#"{"outbounds":[{"type":"socks","tag":"node","server":"1.1.1.1","server_port":1}]}"#.into(),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            userinfo: None,
+            content_disposition: None,
+        }),
+    };
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    // `.invalid` would fail a local DNS check; a proxied fetcher resolves it.
+    let meta = mgr
+        .add("https://does-not-resolve.invalid/sub", None, false, None)
+        .unwrap();
+    let fetched = mgr
+        .fetch_update(meta.id)
+        .expect("a proxied update fetch must not be treated as misuse");
+    assert_eq!(fetched.meta.id, meta.id);
     let _ = fs::remove_dir_all(paths.root());
 }
 

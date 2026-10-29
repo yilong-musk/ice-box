@@ -37,6 +37,94 @@ pub struct SetAutoUpdateRequest {
     pub auto_update_interval: Option<ice_engine::AutoUpdateInterval>,
 }
 
+/// Manager whose subscription fetches follow the system proxy, like a browser.
+pub(crate) fn subscription_manager(
+    state: &AppState,
+) -> Result<SubscriptionManager<DefaultFetcher>, AppError> {
+    let proxy = subscription_fetch_proxy(state);
+    match SubscriptionManager::open_with_proxy_config(
+        SubscriptionPaths::from_app(&state.paths),
+        host_platform(),
+        proxy,
+    ) {
+        Ok(mgr) => Ok(mgr),
+        Err(err) => {
+            // A malformed system proxy must not disable subscription updates
+            // entirely. Retry directly; the fetch will still validate its URL.
+            tracing::warn!(
+                error = %err.redacted_display(),
+                "subscription fetch: proxy setup failed; connecting directly"
+            );
+            SubscriptionManager::open_with_proxy_config(
+                SubscriptionPaths::from_app(&state.paths),
+                host_platform(),
+                SubscriptionProxy::default(),
+            )
+            .map_err(AppError::from)
+        }
+    }
+}
+
+/// System proxy endpoints for subscription fetches.
+///
+/// The app applies its local mixed inbound as the OS system proxy while the
+/// proxy service runs, so reading the OS settings is what a browser does: the
+/// fetch follows the same proxy when one is on and goes direct when none is.
+fn subscription_fetch_proxy(state: &AppState) -> SubscriptionProxy {
+    let backend = match state.proxy.lock() {
+        Ok(backend) => backend,
+        Err(_) => {
+            tracing::warn!("subscription fetch: proxy state lock poisoned; connecting directly");
+            return SubscriptionProxy::default();
+        }
+    };
+    match backend.backup() {
+        Ok(backup) => proxy_url_from_backup(&backup),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "subscription fetch: reading the system proxy failed; connecting directly"
+            );
+            SubscriptionProxy::default()
+        }
+    }
+}
+
+/// Pick the endpoints a browser would use. The fetcher prefers the endpoint
+/// matching each URL scheme and falls back to the other scheme, then SOCKS.
+///
+/// Only explicit endpoints are used: PAC/WPAD scripts and the OS bypass list
+/// are not evaluated.
+fn proxy_url_from_backup(backup: &ProxyBackup) -> SubscriptionProxy {
+    if !backup.enabled {
+        return SubscriptionProxy::default();
+    }
+    SubscriptionProxy {
+        http: first_non_empty([backup.http.as_deref()])
+            .map(|endpoint| with_proxy_scheme("http", endpoint)),
+        https: first_non_empty([backup.https.as_deref()])
+            .map(|endpoint| with_proxy_scheme("http", endpoint)),
+        socks: first_non_empty([backup.socks.as_deref()])
+            .map(|endpoint| with_proxy_scheme("socks5", endpoint)),
+    }
+}
+
+fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    values
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+}
+
+fn with_proxy_scheme(default_scheme: &str, endpoint: &str) -> String {
+    if endpoint.contains("://") {
+        endpoint.to_string()
+    } else {
+        format!("{default_scheme}://{endpoint}")
+    }
+}
+
 pub(crate) fn list_subscriptions_use_case(state: &AppState) -> Result<serde_json::Value, AppError> {
     let paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::load_index(&paths).map_err(AppError::from)?;
@@ -76,8 +164,7 @@ pub(crate) fn add_subscription_use_case(
     tracing::info!(url = %redacted, name = ?req.name, auto_update = req.auto_update, interval = ?req.auto_update_interval, "add_subscription: start");
     // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
     // save_settings are not queued behind it; the lock is taken for the disk write + Apply.
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = subscription_manager(state)?;
     let fetched = mgr
         .fetch_add(
             &req.url,
@@ -178,8 +265,7 @@ pub(crate) fn update_subscription_use_case(
 ) -> Result<serde_json::Value, AppError> {
     // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock; the lock is taken
     // for the disk write + Apply step.
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    let mgr = SubscriptionManager::open(paths, host_platform());
+    let mgr = subscription_manager(state)?;
     let fetched = match mgr.fetch_update(req.id) {
         Ok(upd) => upd,
         Err(err) => {
@@ -322,7 +408,103 @@ pub(crate) fn set_auto_update_subscription_use_case(
 
 #[cfg(test)]
 mod tests {
-    use super::singbox_export_filename;
+    use super::{proxy_url_from_backup, singbox_export_filename};
+    use crate::application::{ProxyBackup, SubscriptionProxy};
+
+    fn assert_proxy(
+        proxy: &SubscriptionProxy,
+        http: Option<&str>,
+        https: Option<&str>,
+        socks: Option<&str>,
+    ) {
+        assert_eq!(proxy.http.as_deref(), http);
+        assert_eq!(proxy.https.as_deref(), https);
+        assert_eq!(proxy.socks.as_deref(), socks);
+    }
+
+    #[test]
+    fn subscription_proxy_follows_the_system_browser_proxy() {
+        let disabled = ProxyBackup::default();
+        assert_proxy(&proxy_url_from_backup(&disabled), None, None, None);
+
+        let backup = ProxyBackup {
+            enabled: true,
+            http: Some("10.0.0.2:8080".into()),
+            https: Some("127.0.0.1:17890".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&backup),
+            Some("http://10.0.0.2:8080"),
+            Some("http://127.0.0.1:17890"),
+            None,
+        );
+
+        let https_only = ProxyBackup {
+            enabled: true,
+            https: Some("127.0.0.1:17890".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&https_only),
+            None,
+            Some("http://127.0.0.1:17890"),
+            None,
+        );
+
+        let http_only = ProxyBackup {
+            enabled: true,
+            http: Some("10.0.0.2:8080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&http_only),
+            Some("http://10.0.0.2:8080"),
+            None,
+            None,
+        );
+
+        let socks = ProxyBackup {
+            enabled: true,
+            socks: Some("127.0.0.1:1080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&socks),
+            None,
+            None,
+            Some("socks5://127.0.0.1:1080"),
+        );
+
+        let socks_with_scheme = ProxyBackup {
+            enabled: true,
+            socks: Some("socks5://127.0.0.1:1080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&socks_with_scheme),
+            None,
+            None,
+            Some("socks5://127.0.0.1:1080"),
+        );
+    }
+
+    #[test]
+    fn enabled_proxy_without_an_endpoint_connects_directly() {
+        let proxy_enabled = ProxyBackup {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_proxy(&proxy_url_from_backup(&proxy_enabled), None, None, None);
+
+        // PAC/WPAD-only settings are not evaluated; the fetch goes direct.
+        let pac_only = ProxyBackup {
+            enabled: true,
+            extra: serde_json::json!({ "autoconfig_url": "http://wpad/wpad.dat" }),
+            ..Default::default()
+        };
+        assert_proxy(&proxy_url_from_backup(&pac_only), None, None, None);
+    }
 
     #[test]
     fn export_filename_is_a_json_basename() {
