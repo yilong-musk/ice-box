@@ -127,14 +127,19 @@ fn tls_get_pinned_with_config(
     }
     req.push_str("\r\n");
 
-    // Bound the TLS handshake and request write by the overall fetch deadline.
+    // Bound the TLS handshake and request write by the overall fetch deadline,
+    // keeping the documented 20s per-operation cap.
     let time_left = fetch_time_left(log_url, deadline)?;
-    tls.sock.set_read_timeout(Some(time_left)).map_err(|e| {
-        SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
-    })?;
-    tls.sock.set_write_timeout(Some(time_left)).map_err(|e| {
-        SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
-    })?;
+    tls.sock
+        .set_read_timeout(Some(time_left.min(FETCH_TIMEOUT)))
+        .map_err(|e| {
+            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+        })?;
+    tls.sock
+        .set_write_timeout(Some(time_left.min(FETCH_TIMEOUT)))
+        .map_err(|e| {
+            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+        })?;
     tls.write_all(req.as_bytes()).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: write: {e}"))
     })?;
@@ -163,6 +168,21 @@ fn tls_get_pinned_with_config(
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                // The read timeout is clamped to the overall deadline, so a
+                // socket timeout is a fetch timeout. Report the deadline cause
+                // when it is already past, otherwise the per-read cause.
+                return Err(fetch_time_left(log_url, deadline).err().unwrap_or_else(|| {
+                    SubscriptionError::FetchFailed(format!(
+                        "GET {log_url} via {ip}: read timed out"
+                    ))
+                }));
+            }
             Err(e) => {
                 return Err(SubscriptionError::FetchFailed(format!(
                     "GET {log_url} via {ip}: read: {e}"
@@ -645,6 +665,78 @@ mod tests {
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, br#"{"outbounds":[]}"#);
         server.join().expect("server");
+    }
+
+    #[test]
+    fn fetch_deadline_cuts_off_a_slow_tls_body() {
+        ensure_crypto_provider();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_der = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+        );
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], key_der)
+            .expect("server cert");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("accept");
+            let mut conn =
+                rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
+            {
+                let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+                let mut req = [0u8; 1024];
+                let _ = tls.read(&mut req);
+                tls.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
+                )
+                .expect("headers");
+                // Drip one byte at a time: every read succeeds inside the
+                // per-read timeout, so only the overall deadline can stop it.
+                while !server_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    if tls.write_all(b"x").is_err() {
+                        break;
+                    }
+                    let _ = tls.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            conn.send_close_notify();
+            while conn.wants_write() {
+                let _ = conn.write_tls(&mut tcp);
+            }
+        });
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert_der).expect("trust test CA");
+        let client = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let started = Instant::now();
+        let err = tls_get_pinned_with_config(
+            "localhost",
+            addr.port(),
+            addr.ip(),
+            "/",
+            &[],
+            "https://localhost/",
+            Instant::now() + std::time::Duration::from_millis(500),
+            Arc::new(client),
+        )
+        .expect_err("a dripping TLS body must not outlive the overall fetch deadline");
+        let elapsed = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.join().expect("server");
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "took {elapsed:?}"
+        );
+        assert!(err.to_string().contains("timed out"), "{err}");
     }
 
     #[test]

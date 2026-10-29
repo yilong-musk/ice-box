@@ -104,6 +104,9 @@ export type StatusResponse = {
   /** True when the platform must not surface TUN controls at all (Windows:
    * TUN gate blocked upstream); the frontend hides the TUN card/switches. */
   tun_ui_hidden: boolean;
+  /** True when TUN capture keeps IPv6 disabled on this platform (Windows,
+   * #4178); the IPv6 switches only affect the system proxy there. */
+  tun_ipv6_disabled: boolean;
   /** Privileged helper installed + authorized (read-only probe); drives the
    * helper installation and removal actions. */
   helper_installed: boolean;

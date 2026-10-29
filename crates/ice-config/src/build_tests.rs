@@ -589,7 +589,7 @@ fn ipv6_switches_choose_the_dns_strategy() {
     );
     // Mobile TUN is not the Windows TUN path and keeps the preference.
     assert_eq!(
-        build(HostPlatform::Android, CaptureIntent::Diagnostic, true, true)["dns"]["strategy"],
+        build(HostPlatform::Android, CaptureIntent::Tun, true, true)["dns"]["strategy"],
         "prefer_ipv6"
     );
 }
@@ -678,6 +678,53 @@ fn fakeip_aaaa_falls_through_when_ipv6_is_enabled() {
     assert_eq!(rules.len(), 2, "IPv4-only builds keep the fake-ip rules");
     assert_eq!(rules[0]["query_type"], json!(["A", "AAAA"]));
     assert_eq!(without_ipv6["dns"]["strategy"], "ipv4_only");
+}
+
+#[test]
+fn fakeip_with_inet6_range_keeps_aaaa_when_ipv6_is_enabled() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip4", "inet4_range": "198.18.0.0/15" },
+            {
+                "type": "fakeip",
+                "tag": "fakeip6",
+                "inet4_range": "198.19.0.0/16",
+                "inet6_range": "2001:db8::/32",
+            },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip4" },
+            { "query_type": ["A", "AAAA"], "server": "fakeip6" },
+        ],
+        "final": "local",
+    }));
+    let input = BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    };
+    let cfg = build_runtime_json(&input).expect("build");
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "both fake-ip rules stay");
+    assert_eq!(
+        rules[0]["query_type"],
+        json!(["A"]),
+        "the IPv4-only fake-ip server drops AAAA"
+    );
+    assert_eq!(
+        rules[1]["query_type"],
+        json!(["A", "AAAA"]),
+        "an IPv6-capable fake-ip server keeps AAAA"
+    );
 }
 
 #[test]

@@ -705,6 +705,7 @@ export function Settings({
             setForm={setForm}
             busy={busy}
             loaded={loaded}
+            tunIpv6Disabled={status?.tun_ipv6_disabled === true}
           />
 
           {tunUiHidden ? null : (

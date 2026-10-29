@@ -346,6 +346,8 @@ const zh = {
   "settings.ipv6": "IPv6",
   "settings.ipv6Enable": "启用 IPv6 支持",
   "settings.preferIpv6": "首选 IPv6",
+  "settings.ipv6TunIpv4Only":
+    "Windows 的 TUN 模式仍固定使用 IPv4；这两个开关仅影响系统代理。",
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.probeExitIp": "探测出口公网 IP",
   "settings.data": "数据",
@@ -851,6 +853,8 @@ const en: Record<MessageKey, string> = {
   "settings.ipv6": "IPv6",
   "settings.ipv6Enable": "Enable IPv6 support",
   "settings.preferIpv6": "Prefer IPv6",
+  "settings.ipv6TunIpv4Only":
+    "Windows TUN stays IPv4-only; these switches only affect the system proxy.",
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.probeExitIp": "Probe public exit IP",
   "settings.data": "Data",

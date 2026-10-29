@@ -11,10 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   support** (query AAAA, prefer IPv4) and **Prefer IPv6** (prefer AAAA when both
   families exist). They control the generated DNS strategy for the system proxy
   and for TUN on macOS/Android; Windows TUN stays `ipv4_only` until the pinned
-  core's IPv6 path is fixed (#4178).
+  core's IPv6 path is fixed (#4178). IPv6 support defaults to on; prefer-IPv6
+  defaults to off.
 
 ### Changed
 
+- IPv6 support is on by default for both new and existing settings files
+  (`ipv6: true`, `prefer_ipv6: false`), so a profile that previously inherited
+  the generated `ipv4_only` DNS strategy now resolves AAAA while still
+  preferring IPv4. Turn the switch off to restore the IPv4-only behavior.
 - Subscription action failures now show only the localized error title in the
   capsule notice, and subscription rows no longer render `last_error`.
   Technical details for those failures are written to the log files.

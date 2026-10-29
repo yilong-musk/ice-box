@@ -6,10 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Field,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { t } from "../../lib/i18n";
 import type { AppSettings } from "../../api/client";
@@ -22,11 +19,13 @@ export function Ipv6Card({
   setForm,
   busy,
   loaded,
+  tunIpv6Disabled,
 }: {
   form: AppSettings;
   setForm: (next: AppSettings) => void;
   busy: boolean;
   loaded: boolean;
+  tunIpv6Disabled: boolean;
 }) {
   return (
     <Card
@@ -78,6 +77,9 @@ export function Ipv6Card({
               {t("settings.preferIpv6")}
             </FieldLabel>
           </Field>
+          {tunIpv6Disabled ? (
+            <FieldDescription>{t("settings.ipv6TunIpv4Only")}</FieldDescription>
+          ) : null}
         </div>
       </CardContent>
     </Card>

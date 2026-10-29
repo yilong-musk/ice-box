@@ -259,38 +259,45 @@ fn apply_dns_strategy(
     );
 }
 
-/// Drop `AAAA` from fake-ip DNS rules when IPv6 is enabled.
+/// Drop `AAAA` from fake-ip DNS rules that target an IPv4-only fake-ip server.
 ///
 /// The pinned core's fake-ip transport answers AAAA with an empty success when
 /// `inet6_range` is absent, and an IPv6 fake range inside `fc00::/7` would be
 /// excluded from the TUN. Letting AAAA fall through to a real resolver keeps
 /// `prefer_ipv6` meaningful for fake-ip profiles; A still gets the fake IPv4
-/// address. Rules without an explicit `query_type` are left untouched.
+/// address. A fake-ip server that declares a non-empty `inet6_range` keeps its
+/// AAAA rule. Rules without an explicit `query_type` are left untouched.
 fn strip_fakeip_aaaa(dns: &mut Value) {
-    let fakeip_tags: std::collections::HashSet<String> = dns
+    let v4_only_fakeip_tags: std::collections::HashSet<String> = dns
         .get("servers")
         .and_then(Value::as_array)
         .map(|servers| {
             servers
                 .iter()
                 .filter(|server| server.get("type").and_then(Value::as_str) == Some("fakeip"))
+                .filter(|server| {
+                    server
+                        .get("inet6_range")
+                        .and_then(Value::as_str)
+                        .is_none_or(|range| range.trim().is_empty())
+                })
                 .filter_map(|server| server.get("tag").and_then(Value::as_str))
                 .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default();
-    if fakeip_tags.is_empty() {
+    if v4_only_fakeip_tags.is_empty() {
         return;
     }
     let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
         return;
     };
     rules.retain_mut(|rule| {
-        let targets_fakeip = rule
+        let targets_v4_only_fakeip = rule
             .get("server")
             .and_then(Value::as_str)
-            .is_some_and(|tag| fakeip_tags.contains(tag));
-        if !targets_fakeip {
+            .is_some_and(|tag| v4_only_fakeip_tags.contains(tag));
+        if !targets_v4_only_fakeip {
             return true;
         }
         let Some(query_type) = rule.get_mut("query_type").and_then(Value::as_array_mut) else {

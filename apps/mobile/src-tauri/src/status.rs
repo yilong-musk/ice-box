@@ -157,6 +157,7 @@ pub struct StatusResponse {
     tun_available: bool,
     tun_unavailable_reason: Option<UiMessage>,
     tun_ui_hidden: bool,
+    tun_ipv6_disabled: bool,
     helper_installed: bool,
     helper_supported: bool,
     launch_at_login_supported: bool,
@@ -234,6 +235,7 @@ pub fn status_response(
         tun_available: false,
         tun_unavailable_reason: None,
         tun_ui_hidden: true,
+        tun_ipv6_disabled: false,
         helper_installed: false,
         helper_supported: false,
         launch_at_login_supported: false,
@@ -302,6 +304,7 @@ mod tests {
         assert_eq!(json["memory"]["core_bytes"], 4096);
         assert_eq!(json["system_proxy_available"], false);
         assert_eq!(json["tun_ui_hidden"], true);
+        assert_eq!(json["tun_ipv6_disabled"], false);
         assert_eq!(json["tun_available"], false);
         assert_eq!(json["helper_supported"], false);
         assert_eq!(json["launch_at_login_supported"], false);

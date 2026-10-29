@@ -113,6 +113,7 @@ const defaultStatus = {
   tun_available: true,
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
+  tun_ipv6_disabled: false,
   helper_installed: false,
   helper_supported: true,
   launch_at_login_supported: true,
@@ -300,6 +301,18 @@ describe("Settings", () => {
     });
     expect(prefer).not.toBeChecked();
     expect(prefer).toBeDisabled();
+  });
+
+  it("explains that Windows TUN ignores the IPv6 switches", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(t("settings.ipv6TunIpv4Only"))).toBeInTheDocument();
+    });
   });
 
   it("persists turning on debug logs", async () => {
