@@ -8,7 +8,7 @@ export type * from "./contracts";
 export {
   formatDiagnostic,
   formatInvokeError,
+  formatInvokeErrorTitle,
   formatUiMessage,
-  formatUiMessageTitle,
 } from "./format";
 export const api: ApiContract = platformApi;

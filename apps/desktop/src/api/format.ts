@@ -63,21 +63,6 @@ export function formatUiMessage(
 }
 
 /**
- * Localized title of a structured message, without its `detail` suffix.
- * Compact rows use this so a long fetch error does not dominate the line.
- */
-export function formatUiMessageTitle(
-  msg: UiMessage | string | null | undefined,
-): string {
-  if (!msg) return "";
-  if (typeof msg === "string") return msg;
-  if (msg.key === "ui.raw") return msg.params?.text ?? "";
-  const params = { ...(msg.params ?? {}) };
-  delete params.detail;
-  return isMessageKey(msg.key) ? t(msg.key, params) : msg.key;
-}
-
-/**
  * Known IPC codes are translated via `t()`. Unknown payloads keep
  * `code: message` so a new backend code still surfaces.
  */
@@ -98,6 +83,22 @@ export function formatInvokeError(err: unknown): string {
     if (typeof o.message === "string") return o.message;
   }
   return String(err);
+}
+
+/**
+ * Compact title for an IPC error: known codes keep their localized label but
+ * drop the stable code and backend `message` detail so a long fetch error does
+ * not dominate a transient notice. Unknown payloads fall back to the full
+ * message so a new backend code still surfaces.
+ */
+export function formatInvokeErrorTitle(err: unknown): string {
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    if (typeof o.code === "string" && isErrorCode(o.code)) {
+      return t(ERROR_MESSAGE_KEYS[o.code]);
+    }
+  }
+  return formatInvokeError(err);
 }
 
 /** Translate a recovery-banner fragment that starts with a known error code. */

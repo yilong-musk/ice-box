@@ -49,6 +49,18 @@ vi.mock("../api/client", () => ({
     }
     return String(err);
   },
+  formatInvokeErrorTitle: (err: unknown) => {
+    if (err && typeof err === "object") {
+      const o = err as { code?: string; message?: string };
+      if (typeof o.code === "string") {
+        const key = `error.${o.code}`;
+        if (isMessageKey(key)) return t(key);
+        if (typeof o.message === "string") return `${o.code}: ${o.message}`;
+      }
+      if (typeof o.message === "string") return o.message;
+    }
+    return String(err);
+  },
   formatUiMessage: (msg: unknown) => {
     if (!msg) return "";
     if (typeof msg === "string") return msg;
@@ -56,16 +68,6 @@ vi.mock("../api/client", () => ({
     if (!m.key) return String(msg);
     if (m.key === "ui.raw") return m.params?.text ?? "";
     return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
-  },
-  formatUiMessageTitle: (msg: unknown) => {
-    if (!msg) return "";
-    if (typeof msg === "string") return msg;
-    const m = msg as { key?: string; params?: Record<string, string> };
-    if (!m.key) return String(msg);
-    if (m.key === "ui.raw") return m.params?.text ?? "";
-    const params = { ...(m.params ?? {}) };
-    delete params.detail;
-    return isMessageKey(m.key) ? t(m.key, params) : m.key;
   },
 }));
 
@@ -352,6 +354,29 @@ describe("Subscriptions", () => {
     expect(view.queryByTestId("success-toast")).toBeNull();
   });
 
+  it("shows only the error title when a manual update fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockRejectedValueOnce({
+      code: "sub.fetch_failed",
+      message: "fetch failed: certificate unknown issuer",
+    });
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      const toast = view.getByTestId("error-toast");
+      expect(toast).toHaveTextContent(t("error.sub.fetch_failed"));
+      expect(toast).not.toHaveTextContent("(sub.fetch_failed)");
+      expect(toast).not.toHaveTextContent("certificate unknown issuer");
+    });
+  });
+
   it("keeps the success capsule off when an update reports an apply warning", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta()]);
     const updateResult = {
@@ -570,7 +595,7 @@ describe("Subscriptions", () => {
     });
   });
 
-  it("shows only the subscription error title in the list", async () => {
+  it("does not show the subscription last error in the list", async () => {
     listSubscriptions.mockResolvedValue([
       sampleMeta({
         name: "failed",
@@ -586,7 +611,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("failed")).toBeInTheDocument();
     });
-    expect(view.getByText(t("error.sub.fetch_failed"))).toBeInTheDocument();
+    expect(view.queryByText(t("error.sub.fetch_failed"))).not.toBeInTheDocument();
     expect(view.queryByText(/certificate unknown issuer/)).not.toBeInTheDocument();
   });
 
