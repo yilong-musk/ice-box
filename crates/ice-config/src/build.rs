@@ -262,11 +262,13 @@ fn apply_dns_strategy(
 /// Drop `AAAA` from fake-ip DNS rules that target an IPv4-only fake-ip server.
 ///
 /// The pinned core's fake-ip transport answers AAAA with an empty success when
-/// `inet6_range` is absent, and an IPv6 fake range inside `fc00::/7` would be
-/// excluded from the TUN. Letting AAAA fall through to a real resolver keeps
+/// `inet6_range` is absent, and an IPv6 fake range inside `fc00::/7` never
+/// enters the TUN (both TUN shapes exclude that prefix), so those answers are
+/// unreachable. Letting AAAA fall through to a real resolver keeps
 /// `prefer_ipv6` meaningful for fake-ip profiles; A still gets the fake IPv4
-/// address. A fake-ip server that declares a non-empty `inet6_range` keeps its
-/// AAAA rule. Rules without an explicit `query_type` are left untouched.
+/// address. A fake-ip server whose `inet6_range` lies outside the exclusion
+/// keeps its AAAA rule. Rules without an explicit `query_type` are left
+/// untouched.
 fn strip_fakeip_aaaa(dns: &mut Value) {
     let v4_only_fakeip_tags: std::collections::HashSet<String> = dns
         .get("servers")
@@ -279,7 +281,9 @@ fn strip_fakeip_aaaa(dns: &mut Value) {
                     server
                         .get("inet6_range")
                         .and_then(Value::as_str)
-                        .is_none_or(|range| range.trim().is_empty())
+                        .map(str::trim)
+                        .filter(|range| !range.is_empty())
+                        .is_none_or(fakeip_range_is_tun_excluded)
                 })
                 .filter_map(|server| server.get("tag").and_then(Value::as_str))
                 .map(str::to_string)
@@ -306,6 +310,23 @@ fn strip_fakeip_aaaa(dns: &mut Value) {
         query_type.retain(|kind| kind.as_str() != Some("AAAA"));
         !query_type.is_empty()
     });
+}
+
+/// Whether an IPv6 CIDR lies inside `fc00::/7`, the ULA prefix both TUN shapes
+/// exclude from capture via `route_exclude_address` (desktop and mobile).
+fn fakeip_range_is_tun_excluded(range: &str) -> bool {
+    let Some((addr, prefix)) = range.split_once('/') else {
+        return false;
+    };
+    let (Ok(addr), Ok(prefix)) = (
+        addr.trim().parse::<std::net::Ipv6Addr>(),
+        prefix.trim().parse::<u8>(),
+    ) else {
+        return false;
+    };
+    // `fc00::/7` is the first seven bits `1111110`; only a range at least that
+    // specific can be fully inside it.
+    (7..=128).contains(&prefix) && (u128::from(addr) >> 121) == 0b111_1110
 }
 
 /// Whether the DNS block contains a `local`-tagged server (required for

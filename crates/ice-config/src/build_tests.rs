@@ -728,6 +728,59 @@ fn fakeip_with_inet6_range_keeps_aaaa_when_ipv6_is_enabled() {
 }
 
 #[test]
+fn fakeip_inet6_range_inside_fc00_7_strips_aaaa() {
+    // Both TUN shapes exclude fc00::/7 from capture, so a fake-ip range there
+    // answers AAAA with addresses the tunnel never sees; treat it as IPv4-only.
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            {
+                "type": "fakeip",
+                "tag": "fakeip-ula",
+                "inet4_range": "198.18.0.0/15",
+                "inet6_range": "fc00::/18",
+            },
+            {
+                "type": "fakeip",
+                "tag": "fakeip-global",
+                "inet4_range": "198.19.0.0/16",
+                "inet6_range": "2001:db8::/32",
+            },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip-ula" },
+            { "query_type": ["A", "AAAA"], "server": "fakeip-global" },
+        ],
+        "final": "local",
+    }));
+    let input = BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    };
+    let cfg = build_runtime_json(&input).expect("build");
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules[0]["query_type"],
+        json!(["A"]),
+        "an inet6_range inside the TUN exclusion must drop AAAA"
+    );
+    assert_eq!(
+        rules[1]["query_type"],
+        json!(["A", "AAAA"]),
+        "a routable inet6_range keeps AAAA"
+    );
+}
+
+#[test]
 fn windows_resolver_keeps_a_direct_final_tag() {
     // The minimal block: the `final` server is an IP-hosted DoT anchor.
     let dns = json!({
