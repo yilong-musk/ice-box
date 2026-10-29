@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! HTTP fetch: pinned direct or proxied, 60s total timeout, 20s per I/O
-//! operation, 8 MiB cap.
+//! HTTP fetch: pinned direct or proxied, 60s overall deadline, 20s connect
+//! cap, 8 MiB cap.
 
 use std::io::Read;
 use std::time::{Duration, Instant};
@@ -27,13 +27,18 @@ pub(crate) fn sanitize_http_header_value(value: &str) -> Result<String, Subscrip
     Ok(value.to_string())
 }
 
-/// Per-operation fetch timeout (connect, read, write).
+/// Per-operation timeout: every connect, plus the pinned TLS path's read and
+/// write calls. ureq response reads are governed by the overall request
+/// deadline ([`FETCH_TOTAL_TIMEOUT`]) instead.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Hard wall-clock limit for one subscription fetch across every redirect hop
-/// and the response body. Without it a provider that drips the body slowly
-/// keeps resetting [`FETCH_TIMEOUT`] and the update never ends. DNS resolution
-/// is left to the OS resolver; the hostname is normally cached and fast.
+/// Overall wall-clock limit for one subscription fetch across every redirect
+/// hop and the response body. Without it a provider that drips the body slowly
+/// keeps resetting the per-read timeout and the update never ends. The limit is
+/// checked between I/O operations, so a connect already in flight when it
+/// passes keeps its own [`FETCH_TIMEOUT`] cap, and DNS resolution is left to
+/// the OS resolver (the hostname is normally cached and fast): a fetch can
+/// overshoot by up to one connect plus that lookup.
 pub const FETCH_TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Max redirect hops; each target is SSRF-validated before follow.

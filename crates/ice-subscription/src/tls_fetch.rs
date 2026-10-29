@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use rustls::pki_types::ServerName;
@@ -19,6 +19,36 @@ use crate::fetch::{fetch_time_left, sanitize_http_header_value, FETCH_TIMEOUT, M
 const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
 
 const MAX_RAW_RESPONSE_BYTES: usize = MAX_BODY_BYTES.saturating_add(MAX_HTTP_HEADER_BYTES);
+
+/// Socket timeout kinds (Unix reports `WouldBlock` for `set_read_timeout`).
+fn is_socket_timeout(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+/// Apply one read/write timeout to the pinned socket.
+fn set_io_timeout(
+    sock: &TcpStream,
+    timeout: Duration,
+    log_url: &str,
+    ip: IpAddr,
+) -> Result<(), SubscriptionError> {
+    sock.set_read_timeout(Some(timeout))
+        .and_then(|()| sock.set_write_timeout(Some(timeout)))
+        .map_err(|e| {
+            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+        })
+}
+
+/// Handshake exceeded [`FETCH_TIMEOUT`] without making progress.
+fn handshake_timeout_error(log_url: &str, ip: IpAddr) -> SubscriptionError {
+    SubscriptionError::FetchFailed(format!(
+        "GET {log_url} via {ip}: handshake timed out after {}s",
+        FETCH_TIMEOUT.as_secs()
+    ))
+}
 
 #[derive(Debug)]
 pub(crate) struct RawHttpResponse {
@@ -114,6 +144,64 @@ fn tls_get_pinned_with_config(
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: tls: {e}")))?;
     let mut tls = rustls::StreamOwned::new(conn, stream);
 
+    // Drive the TLS handshake one TLS record at a time. rustls' `complete_io`
+    // loops internally while the peer keeps sending bytes, so a server that
+    // drips its handshake flight could otherwise keep the fetch alive past the
+    // deadline. Each `read_tls` is one socket read, so the overall deadline and
+    // the 20s no-progress cap are re-checked between records.
+    let mut handshake_progress = Instant::now();
+    while tls.conn.is_handshaking() || tls.conn.wants_write() {
+        while tls.conn.wants_write() {
+            let time_left = fetch_time_left(log_url, deadline)?;
+            set_io_timeout(&tls.sock, time_left.min(FETCH_TIMEOUT), log_url, ip)?;
+            match tls.conn.write_tls(&mut tls.sock) {
+                Ok(0) => break,
+                Ok(_) => handshake_progress = Instant::now(),
+                Err(err) if is_socket_timeout(&err) => {
+                    if handshake_progress.elapsed() >= FETCH_TIMEOUT {
+                        return Err(handshake_timeout_error(log_url, ip));
+                    }
+                    break;
+                }
+                Err(err) => {
+                    return Err(SubscriptionError::FetchFailed(format!(
+                        "GET {log_url} via {ip}: tls handshake: {err}"
+                    )))
+                }
+            }
+        }
+        if !tls.conn.is_handshaking() {
+            break;
+        }
+        let time_left = fetch_time_left(log_url, deadline)?;
+        set_io_timeout(&tls.sock, time_left.min(FETCH_TIMEOUT), log_url, ip)?;
+        match tls.conn.read_tls(&mut tls.sock) {
+            Ok(0) => {
+                return Err(SubscriptionError::FetchFailed(format!(
+                    "GET {log_url} via {ip}: tls handshake: unexpected EOF"
+                )))
+            }
+            Ok(_) => {
+                handshake_progress = Instant::now();
+                if let Err(err) = tls.conn.process_new_packets() {
+                    return Err(SubscriptionError::FetchFailed(format!(
+                        "GET {log_url} via {ip}: tls handshake: {err}"
+                    )));
+                }
+            }
+            Err(err) if is_socket_timeout(&err) => {
+                if handshake_progress.elapsed() >= FETCH_TIMEOUT {
+                    return Err(handshake_timeout_error(log_url, ip));
+                }
+            }
+            Err(err) => {
+                return Err(SubscriptionError::FetchFailed(format!(
+                    "GET {log_url} via {ip}: tls handshake: {err}"
+                )))
+            }
+        }
+    }
+
     // `Accept` must be present: some subscription frontends WAF-reject requests
     // without it (HTTP 403) regardless of TLS/HTTP version.
     // `Accept-Encoding: gzip, identity` plus gzip decode (below) covers
@@ -127,19 +215,10 @@ fn tls_get_pinned_with_config(
     }
     req.push_str("\r\n");
 
-    // Bound the TLS handshake and request write by the overall fetch deadline,
-    // keeping the documented 20s per-operation cap.
+    // Re-check the deadline before sending the request: the handshake may have
+    // consumed the remaining budget.
     let time_left = fetch_time_left(log_url, deadline)?;
-    tls.sock
-        .set_read_timeout(Some(time_left.min(FETCH_TIMEOUT)))
-        .map_err(|e| {
-            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
-        })?;
-    tls.sock
-        .set_write_timeout(Some(time_left.min(FETCH_TIMEOUT)))
-        .map_err(|e| {
-            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
-        })?;
+    set_io_timeout(&tls.sock, time_left.min(FETCH_TIMEOUT), log_url, ip)?;
     tls.write_all(req.as_bytes()).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: write: {e}"))
     })?;
@@ -152,11 +231,7 @@ fn tls_get_pinned_with_config(
     let mut buf = [0u8; 16 * 1024];
     loop {
         let time_left = fetch_time_left(log_url, deadline)?;
-        tls.sock
-            .set_read_timeout(Some(time_left.min(FETCH_TIMEOUT)))
-            .map_err(|e| {
-                SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
-            })?;
+        set_io_timeout(&tls.sock, time_left.min(FETCH_TIMEOUT), log_url, ip)?;
         match tls.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -168,12 +243,7 @@ fn tls_get_pinned_with_config(
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
+            Err(err) if is_socket_timeout(&err) => {
                 // The read timeout is clamped to the overall deadline, so a
                 // socket timeout is a fetch timeout. Report the deadline cause
                 // when it is already past, otherwise the per-read cause.
@@ -728,6 +798,82 @@ mod tests {
             Arc::new(client),
         )
         .expect_err("a dripping TLS body must not outlive the overall fetch deadline");
+        let elapsed = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.join().expect("server");
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "took {elapsed:?}"
+        );
+        assert!(err.to_string().contains("timed out"), "{err}");
+    }
+
+    #[test]
+    fn fetch_deadline_cuts_off_a_slow_tls_handshake() {
+        ensure_crypto_provider();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_der = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+        );
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], key_der)
+            .expect("server cert");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            let (mut tcp, _) = listener.accept().expect("accept");
+            let mut conn =
+                rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
+            // Read the ClientHello, then stage the server flight.
+            let mut buf = [0u8; 4096];
+            while !conn.wants_write() {
+                let n = tcp.read(&mut buf).expect("read client hello");
+                if n == 0 {
+                    return;
+                }
+                conn.read_tls(&mut &buf[..n]).expect("read_tls");
+                conn.process_new_packets().expect("process client hello");
+            }
+            let mut flight = Vec::new();
+            while conn.wants_write() {
+                conn.write_tls(&mut flight).expect("write_tls");
+            }
+            // Drip the handshake one byte at a time: every read succeeds inside
+            // the per-read timeout, so only the overall deadline can stop it.
+            for byte in flight {
+                if server_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                if tcp.write_all(&[byte]).is_err() {
+                    return;
+                }
+                let _ = tcp.flush();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert_der).expect("trust test CA");
+        let client = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let started = Instant::now();
+        let err = tls_get_pinned_with_config(
+            "localhost",
+            addr.port(),
+            addr.ip(),
+            "/",
+            &[],
+            "https://localhost/",
+            Instant::now() + std::time::Duration::from_millis(500),
+            Arc::new(client),
+        )
+        .expect_err("a dripping TLS handshake must not outlive the overall fetch deadline");
         let elapsed = started.elapsed();
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         server.join().expect("server");
