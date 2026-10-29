@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { persistLanguagePreference } from "../lib/i18n";
-import { formatInvokeError, formatUiMessageTitle } from "./format";
+import { formatInvokeError, formatInvokeErrorTitle } from "./format";
 
 describe("formatInvokeError", () => {
   beforeEach(() => {
@@ -61,23 +61,27 @@ describe("formatInvokeError", () => {
   });
 });
 
-describe("formatUiMessageTitle", () => {
+describe("formatInvokeErrorTitle", () => {
   beforeEach(() => {
     persistLanguagePreference("en");
   });
 
-  it("keeps the localized title and drops the detail", () => {
+  it("keeps the localized title and drops the code and detail", () => {
     expect(
-      formatUiMessageTitle({
-        key: "error.sub.fetch_failed",
-        params: { detail: "fetch failed: GET https://example.com" },
+      formatInvokeErrorTitle({
+        code: "sub.fetch_failed",
+        message: "fetch failed: GET https://example.com",
       }),
     ).toBe("Failed to download the subscription");
   });
 
-  it("keeps raw text", () => {
-    expect(
-      formatUiMessageTitle({ key: "ui.raw", params: { text: "boom" } }),
-    ).toBe("boom");
+  it("falls back to the full message for unknown codes and payloads", () => {
+    expect(formatInvokeErrorTitle({ code: "new.code", message: "boom" })).toBe(
+      "new.code: boom",
+    );
+    expect(formatInvokeErrorTitle({ message: "network down" })).toBe(
+      "network down",
+    );
+    expect(formatInvokeErrorTitle("boom")).toBe("boom");
   });
 });

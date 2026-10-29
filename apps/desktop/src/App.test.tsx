@@ -150,6 +150,7 @@ vi.mock("./api/client", () => ({
     restartMcp: (...args: unknown[]) => restartMcp(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
+  formatInvokeErrorTitle: (err: unknown) => String(err),
 }));
 
 describe("App", () => {

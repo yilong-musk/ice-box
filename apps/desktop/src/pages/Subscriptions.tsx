@@ -5,8 +5,8 @@ import { Plus, Share } from "lucide-react";
 import {
   api,
   formatInvokeError,
+  formatInvokeErrorTitle,
   formatUiMessage,
-  formatUiMessageTitle,
   type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/client";
@@ -113,7 +113,7 @@ export function Subscriptions({ active = true }: Props) {
       if (!isStale(gen)) {
         const message = formatInvokeError(e);
         setLoadError(message);
-        if (notifyError) showToast(message);
+        if (notifyError) showToast(formatInvokeErrorTitle(e));
       }
       return false;
     }
@@ -179,9 +179,8 @@ export function Subscriptions({ active = true }: Props) {
       }
       return true;
     } catch (e) {
-      const message = formatInvokeError(e);
-      if (errorSurface === "dialog") setError(message);
-      else showToast(message);
+      if (errorSurface === "dialog") setError(formatInvokeError(e));
+      else showToast(formatInvokeErrorTitle(e));
       // Keep the action failure visible. If the refresh also fails, its
       // persistent inline error is enough; replacing the toast would hide the
       // error the user just triggered.
@@ -368,14 +367,6 @@ export function Subscriptions({ active = true }: Props) {
                                 {traffic.expiry}
                               </span>
                             ) : null}
-                          </ItemDescription>
-                        ) : null}
-                        {s.last_error ? (
-                          <ItemDescription
-                            className="text-destructive"
-                            title={formatUiMessage(s.last_error)}
-                          >
-                            {formatUiMessageTitle(s.last_error)}
                           </ItemDescription>
                         ) : null}
                         {warnings.length > 0 ? (
