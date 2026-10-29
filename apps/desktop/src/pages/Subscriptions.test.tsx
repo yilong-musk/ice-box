@@ -408,6 +408,28 @@ describe("Subscriptions", () => {
     expect(view.queryByTestId("success-toast")).toBeNull();
   });
 
+  it("keeps the action error when the follow-up reload also fails", async () => {
+    listSubscriptions.mockResolvedValueOnce([sampleMeta()]);
+    vi.mocked(api.updateSubscription).mockRejectedValueOnce(
+      new Error("update failed"),
+    );
+    listSubscriptions.mockRejectedValue(new Error("list failed"));
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    view.getByRole("button", { name: t("common.update") }).click();
+
+    await waitFor(() => {
+      expect(view.getByTestId("error-toast")).toHaveTextContent("update failed");
+      expect(view.getByText("list failed")).toBeInTheDocument();
+    });
+    expect(view.queryByTestId("success-toast")).toBeNull();
+  });
+
   it("shows an apply warning from a remove response", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta({ name: "only-one" })]);
     removeSubscription.mockResolvedValue({

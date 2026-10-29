@@ -5,7 +5,12 @@
 use std::net::IpAddr;
 
 fn normalize_host(host: &str) -> &str {
-    host.trim().trim_matches(|c| c == '[' || c == ']')
+    // A trailing dot is the DNS root and does not change where the name
+    // resolves. Strip it before matching restricted hosts so `localhost.` and
+    // `metadata.google.internal.` cannot slip past the fetch guard.
+    host.trim()
+        .trim_end_matches('.')
+        .trim_matches(|c| c == '[' || c == ']')
 }
 
 /// Clash / sing-box fake-ip pool (RFC 2544 benchmarking range).
@@ -54,11 +59,11 @@ fn ip_is_loopback(ip: IpAddr) -> bool {
 
 /// Whether `host` is an allowed loopback bind/listen target for Clash API.
 pub fn is_loopback_host(host: &str) -> bool {
-    let host = host.trim();
-    if matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
+    let host = normalize_host(host);
+    if host.eq_ignore_ascii_case("localhost") || host == "::1" {
         return true;
     }
-    if let Ok(ip) = normalize_host(host).parse::<IpAddr>() {
+    if let Ok(ip) = host.parse::<IpAddr>() {
         return ip_is_loopback(ip);
     }
     false
@@ -96,7 +101,7 @@ mod tests {
 
     #[test]
     fn loopback_hosts_accepted() {
-        for h in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+        for h in ["127.0.0.1", "localhost", "LOCALHOST", "localhost.", "[::1]"] {
             assert!(is_loopback_host(h), "{h}");
         }
     }
@@ -118,9 +123,15 @@ mod tests {
             "172.16.0.1",
             "169.254.169.254",
             "metadata.google.internal",
+            "metadata.google.internal.",
+            "metadata.goog.",
             "[::1]",
             "::ffff:127.0.0.1",
             "[::ffff:127.0.0.1]",
+            // A trailing DNS root dot must not bypass the restricted-name list.
+            "localhost.",
+            "LOCALHOST.",
+            "127.0.0.1.",
         ] {
             assert!(is_restricted_fetch_host(h), "{h}");
         }

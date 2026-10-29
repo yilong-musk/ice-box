@@ -41,22 +41,41 @@ pub struct SetAutoUpdateRequest {
 pub(crate) fn subscription_manager(
     state: &AppState,
 ) -> Result<SubscriptionManager<DefaultFetcher>, AppError> {
-    let paths = SubscriptionPaths::from_app(&state.paths);
-    SubscriptionManager::open_with_proxy(paths, host_platform(), subscription_fetch_proxy(state))
-        .map_err(AppError::from)
+    let proxy = subscription_fetch_proxy(state);
+    match SubscriptionManager::open_with_proxy_config(
+        SubscriptionPaths::from_app(&state.paths),
+        host_platform(),
+        proxy,
+    ) {
+        Ok(mgr) => Ok(mgr),
+        Err(err) => {
+            // A malformed system proxy must not disable subscription updates
+            // entirely. Retry directly; the fetch will still validate its URL.
+            tracing::warn!(
+                error = %err.redacted_display(),
+                "subscription fetch: proxy setup failed; connecting directly"
+            );
+            SubscriptionManager::open_with_proxy_config(
+                SubscriptionPaths::from_app(&state.paths),
+                host_platform(),
+                SubscriptionProxy::default(),
+            )
+            .map_err(AppError::from)
+        }
+    }
 }
 
-/// System proxy for subscription fetches, or `None` for a direct connect.
+/// System proxy endpoints for subscription fetches.
 ///
 /// The app applies its local mixed inbound as the OS system proxy while the
 /// proxy service runs, so reading the OS settings is what a browser does: the
 /// fetch follows the same proxy when one is on and goes direct when none is.
-fn subscription_fetch_proxy(state: &AppState) -> Option<String> {
+fn subscription_fetch_proxy(state: &AppState) -> SubscriptionProxy {
     let backend = match state.proxy.lock() {
         Ok(backend) => backend,
         Err(_) => {
             tracing::warn!("subscription fetch: proxy state lock poisoned; connecting directly");
-            return None;
+            return SubscriptionProxy::default();
         }
     };
     match backend.backup() {
@@ -66,28 +85,28 @@ fn subscription_fetch_proxy(state: &AppState) -> Option<String> {
                 error = %err,
                 "subscription fetch: reading the system proxy failed; connecting directly"
             );
-            None
+            SubscriptionProxy::default()
         }
     }
 }
 
-/// Pick the endpoint a browser would use. HTTP and HTTPS share the local mixed
-/// inbound; SOCKS is the fallback when no HTTP proxy is configured.
+/// Pick the endpoints a browser would use. The fetcher prefers the endpoint
+/// matching each URL scheme and falls back to the other scheme, then SOCKS.
 ///
 /// Only explicit endpoints are used: PAC/WPAD scripts and the OS bypass list
-/// are not evaluated, and a single endpoint serves both http and https URLs.
-fn proxy_url_from_backup(backup: &ProxyBackup) -> Option<String> {
+/// are not evaluated.
+fn proxy_url_from_backup(backup: &ProxyBackup) -> SubscriptionProxy {
     if !backup.enabled {
-        return None;
+        return SubscriptionProxy::default();
     }
-    // Prefer the HTTP endpoint when both are set: an HTTP proxy handles https
-    // via CONNECT, while a secure-web-only endpoint may not accept plain http.
-    let http = first_non_empty([backup.http.as_deref(), backup.https.as_deref()]);
-    if let Some(endpoint) = http {
-        return Some(with_proxy_scheme("http", endpoint));
+    SubscriptionProxy {
+        http: first_non_empty([backup.http.as_deref()])
+            .map(|endpoint| with_proxy_scheme("http", endpoint)),
+        https: first_non_empty([backup.https.as_deref()])
+            .map(|endpoint| with_proxy_scheme("http", endpoint)),
+        socks: first_non_empty([backup.socks.as_deref()])
+            .map(|endpoint| with_proxy_scheme("socks5", endpoint)),
     }
-    let socks = first_non_empty([backup.socks.as_deref()])?;
-    Some(with_proxy_scheme("socks5", socks))
 }
 
 fn first_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
@@ -390,50 +409,83 @@ pub(crate) fn set_auto_update_subscription_use_case(
 #[cfg(test)]
 mod tests {
     use super::{proxy_url_from_backup, singbox_export_filename};
-    use crate::application::ProxyBackup;
+    use crate::application::{ProxyBackup, SubscriptionProxy};
+
+    fn assert_proxy(
+        proxy: &SubscriptionProxy,
+        http: Option<&str>,
+        https: Option<&str>,
+        socks: Option<&str>,
+    ) {
+        assert_eq!(proxy.http.as_deref(), http);
+        assert_eq!(proxy.https.as_deref(), https);
+        assert_eq!(proxy.socks.as_deref(), socks);
+    }
 
     #[test]
     fn subscription_proxy_follows_the_system_browser_proxy() {
         let disabled = ProxyBackup::default();
-        assert_eq!(proxy_url_from_backup(&disabled), None);
+        assert_proxy(&proxy_url_from_backup(&disabled), None, None, None);
 
-        let mut backup = ProxyBackup {
+        let backup = ProxyBackup {
             enabled: true,
             http: Some("10.0.0.2:8080".into()),
             https: Some("127.0.0.1:17890".into()),
             ..Default::default()
         };
-        assert_eq!(
-            proxy_url_from_backup(&backup).as_deref(),
+        assert_proxy(
+            &proxy_url_from_backup(&backup),
             Some("http://10.0.0.2:8080"),
-            "the general HTTP endpoint is preferred when both are set"
-        );
-
-        backup.http = None;
-        assert_eq!(
-            proxy_url_from_backup(&backup).as_deref(),
             Some("http://127.0.0.1:17890"),
-            "an https-only setting still works for both URL schemes"
+            None,
         );
 
-        backup.https = None;
-        backup.http = Some("10.0.0.2:8080".into());
-        assert_eq!(
-            proxy_url_from_backup(&backup).as_deref(),
-            Some("http://10.0.0.2:8080")
+        let https_only = ProxyBackup {
+            enabled: true,
+            https: Some("127.0.0.1:17890".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&https_only),
+            None,
+            Some("http://127.0.0.1:17890"),
+            None,
         );
 
-        backup.http = None;
-        backup.socks = Some("127.0.0.1:1080".into());
-        assert_eq!(
-            proxy_url_from_backup(&backup).as_deref(),
-            Some("socks5://127.0.0.1:1080")
+        let http_only = ProxyBackup {
+            enabled: true,
+            http: Some("10.0.0.2:8080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&http_only),
+            Some("http://10.0.0.2:8080"),
+            None,
+            None,
         );
 
-        backup.socks = Some("socks5://127.0.0.1:1080".into());
-        assert_eq!(
-            proxy_url_from_backup(&backup).as_deref(),
-            Some("socks5://127.0.0.1:1080")
+        let socks = ProxyBackup {
+            enabled: true,
+            socks: Some("127.0.0.1:1080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&socks),
+            None,
+            None,
+            Some("socks5://127.0.0.1:1080"),
+        );
+
+        let socks_with_scheme = ProxyBackup {
+            enabled: true,
+            socks: Some("socks5://127.0.0.1:1080".into()),
+            ..Default::default()
+        };
+        assert_proxy(
+            &proxy_url_from_backup(&socks_with_scheme),
+            None,
+            None,
+            Some("socks5://127.0.0.1:1080"),
         );
     }
 
@@ -443,7 +495,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        assert_eq!(proxy_url_from_backup(&proxy_enabled), None);
+        assert_proxy(&proxy_url_from_backup(&proxy_enabled), None, None, None);
 
         // PAC/WPAD-only settings are not evaluated; the fetch goes direct.
         let pac_only = ProxyBackup {
@@ -451,7 +503,7 @@ mod tests {
             extra: serde_json::json!({ "autoconfig_url": "http://wpad/wpad.dat" }),
             ..Default::default()
         };
-        assert_eq!(proxy_url_from_backup(&pac_only), None);
+        assert_proxy(&proxy_url_from_backup(&pac_only), None, None, None);
     }
 
     #[test]

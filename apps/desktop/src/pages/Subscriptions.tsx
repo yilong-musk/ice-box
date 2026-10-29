@@ -94,7 +94,7 @@ export function Subscriptions({ active = true }: Props) {
     dismiss: dismissToast,
   } = useCapsuleToast();
 
-  const refresh = useCallback(async (): Promise<boolean> => {
+  const refresh = useCallback(async (notifyError = true): Promise<boolean> => {
     const gen = nextGeneration();
     try {
       const next = await api.listSubscriptions();
@@ -113,7 +113,7 @@ export function Subscriptions({ active = true }: Props) {
       if (!isStale(gen)) {
         const message = formatInvokeError(e);
         setLoadError(message);
-        showToast(message);
+        if (notifyError) showToast(message);
       }
       return false;
     }
@@ -172,7 +172,7 @@ export function Subscriptions({ active = true }: Props) {
         setWarning(formatApplyWarning(applyWarning));
       }
       // Only confirm once the reloaded list has landed; a failed refresh
-      // already replaced the notice with its own error toast.
+      // shows its own error and suppresses the success notice.
       const refreshed = await refresh();
       if (successToast && refreshed && !applyWarning) {
         showToast(successToast, "success");
@@ -182,7 +182,10 @@ export function Subscriptions({ active = true }: Props) {
       const message = formatInvokeError(e);
       if (errorSurface === "dialog") setError(message);
       else showToast(message);
-      await refresh();
+      // Keep the action failure visible. If the refresh also fails, its
+      // persistent inline error is enough; replacing the toast would hide the
+      // error the user just triggered.
+      await refresh(false);
       return false;
     } finally {
       setUpdatingId(null);

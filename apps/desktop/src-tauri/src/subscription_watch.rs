@@ -72,9 +72,10 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     let mgr = match application::subscription_manager(state) {
         Ok(mgr) => mgr,
         Err(err) => {
-            // Manager construction can fail on an unreadable or malformed system
-            // proxy. Treat it as a deferred pass so the startup loop retries
-            // instead of waiting for the next hourly tick.
+            // `subscription_manager` already falls back to a direct manager when
+            // the system proxy endpoint is malformed. This only fires when even
+            // the direct fallback fails (for example a broken TLS trust store);
+            // defer so the startup loop retries instead of skipping an hour.
             tracing::warn!(
                 error = %err.message,
                 "auto-update: open subscription manager failed; deferring pass"

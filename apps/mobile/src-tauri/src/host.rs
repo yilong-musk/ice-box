@@ -541,6 +541,16 @@ impl MobileHost {
             .map_err(|message| AppError::new(ErrorCode::ConfigInvalid, message))?;
         let mut overrides = load_overrides(&paths, &profile);
         let fingerprint = rule_fingerprint(&rule);
+        if overrides
+            .custom
+            .iter()
+            .any(|candidate| rule_fingerprint(candidate) == fingerprint)
+        {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "custom rule already exists",
+            ));
+        }
         overrides.custom.push(rule);
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(fingerprint)
@@ -578,8 +588,7 @@ impl MobileHost {
                 "custom rule already exists",
             ));
         }
-        let previous = std::mem::replace(&mut overrides.custom[index], rule);
-        overrides.set_rule_disabled(&previous, false);
+        overrides.custom[index] = rule;
         save_rule_overrides(&paths.rule_overrides(), &overrides)?;
         Ok(new_fingerprint)
     }
@@ -1310,9 +1319,11 @@ mod favorite_tests {
             err.message
         );
 
-        let fingerprint = host
-            .add_custom_rule(serde_json::json!({ "domain": ["a.com"], "outbound": "direct" }))
-            .unwrap();
+        let custom = serde_json::json!({ "domain": ["a.com"], "outbound": "direct" });
+        let fingerprint = host.add_custom_rule(custom.clone()).unwrap();
+        let err = host.add_custom_rule(custom).unwrap_err();
+        assert!(err.message.contains("already exists"), "{}", err.message);
+
         let err = host
             .update_custom_rule(
                 &fingerprint,

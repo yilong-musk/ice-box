@@ -28,7 +28,7 @@ pub(crate) use ice_core::{
 pub(crate) use ice_engine::{
     active_subscription, host_platform, redact_subscription_url_for_log,
     redact_subscription_url_for_ui, subscription_share_text, write_subscription_error,
-    DefaultFetcher, SubscriptionError, SubscriptionManager, SubscriptionPaths,
+    DefaultFetcher, SubscriptionError, SubscriptionManager, SubscriptionPaths, SubscriptionProxy,
     SubscriptionShareKind,
 };
 pub(crate) use ice_proxy_sys::{

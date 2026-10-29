@@ -5,11 +5,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- A successful manual subscription update now shows a floating capsule
-  confirmation on the Subscriptions page.
-
 ## [0.2.4] - 2026-10-28
 
 ### Added
@@ -25,23 +20,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   updates working when direct DNS or the direct route is intercepted, without
   routing traffic through a proxy that is off. Proxy mode leaves DNS to the
   proxy, so only literal private hosts and restricted names are rejected
-  locally; the direct path keeps the full DNS SSRF check. PAC/WPAD scripts and
-  the OS bypass list are not evaluated.
+  locally; the direct path keeps the full DNS SSRF check. When both HTTP and
+  HTTPS endpoints are set, each scheme uses its matching endpoint and falls
+  back to the other scheme, then SOCKS. PAC/WPAD scripts and the OS bypass list
+  are not evaluated. The proxy sees plain-HTTP subscription URLs in full, so
+  only enable a system proxy you trust with subscription credentials.
 - Custom rules on the Rules page can no longer be disabled. Their action button
   now opens the rule editor with the match type, value, and outbound prefilled;
   saving replaces the rule in place and applies the new config. Rules whose
   matchers the form cannot represent open a raw JSON editor instead. Custom
-  rules are always active, and legacy disabled marks on them are ignored.
+  rules are always active; custom rules disabled by an older version are
+  deleted when the overrides load instead of being silently re-enabled.
 - Subscription list loads and row actions now report failures as a floating
   capsule notice instead of a page-wide banner. A failed list load also keeps a
   persistent inline error with a Retry action, import dialogs keep their inline
   error, and row-level subscription errors show only the localized title.
+- A successful manual subscription update shows a floating capsule
+  confirmation on the Subscriptions page.
 
 ### Fixed
 
-- Subscription updates no longer panic when the system proxy is active.
+- Removed the direct-only fetch assertion so subscription updates can run
+  through the system proxy.
 - Subscription refreshes through a system proxy no longer depend on the local
   DNS resolver and support SOCKS-only proxy settings.
+- Proxy-mode fetches normalize trailing DNS root dots, so restricted names
+  such as `localhost.` and `metadata.google.internal.` cannot bypass the guard.
+- Custom rule validation rejects string, fractional, negative, and out-of-range
+  `port` / `source_port` values, including rules added through MCP or the raw
+  JSON editor.
+- A malformed system proxy endpoint falls back to a direct subscription fetch
+  instead of failing the operation or skipping auto-update indefinitely.
+- A failed subscription action keeps its own error toast when the follow-up
+  list refresh also fails.
 - Custom rule validation is shared by the desktop and mobile hosts, so both
   reject the same matchers and rule-set references.
 - Editing a custom rule preserves fields the form does not expose, such as

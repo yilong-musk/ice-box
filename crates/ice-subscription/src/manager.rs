@@ -10,7 +10,7 @@ use ice_config::{HostPlatform, NormalizedProfile};
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
-use crate::fetch::{DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher};
+use crate::fetch::{DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher, SubscriptionProxy};
 use crate::merge::load_active_profile;
 use crate::store::{
     apply_error_to_index, apply_success_to_index, commit_subscription_success, load_index,
@@ -132,6 +132,19 @@ impl SubscriptionManager<DefaultFetcher> {
         Ok(Self::with_fetcher_on(
             paths,
             DefaultFetcher::new(proxy_url)?,
+            platform,
+        ))
+    }
+
+    /// Open a manager with per-scheme proxy endpoints.
+    pub fn open_with_proxy_config(
+        paths: SubscriptionPaths,
+        platform: HostPlatform,
+        proxy: SubscriptionProxy,
+    ) -> Result<Self, SubscriptionError> {
+        Ok(Self::with_fetcher_on(
+            paths,
+            DefaultFetcher::with_proxy(proxy)?,
             platform,
         ))
     }

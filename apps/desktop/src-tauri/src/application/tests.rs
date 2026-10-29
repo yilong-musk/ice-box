@@ -1368,6 +1368,30 @@ fn add_custom_rule_rejects_geoip_and_geosite_matchers() {
 }
 
 #[test]
+fn add_custom_rule_rejects_string_port_matchers() {
+    let state = temp_state_with_rules("rules-custom-port", sample_rules());
+    let err = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": ["443"], "outbound": "direct" }),
+        },
+    )
+    .expect_err("string port must be rejected");
+    assert_eq!(err.code, "config.invalid");
+    assert!(err.message.contains("port"), "{}", err.message);
+
+    let fp = persist_add_custom_rule(
+        &state,
+        &AddCustomRuleRequest {
+            rule: serde_json::json!({ "port": [443, 8443], "outbound": "direct" }),
+        },
+    )
+    .expect("numeric ports accepted");
+    assert!(!fp.is_empty());
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
 fn add_custom_rule_validates_rule_set_references() {
     let state = temp_state_with_rules("rules-custom-set", vec![]);
     let sub = SubscriptionPaths::from_app(&state.paths);
@@ -1403,12 +1427,12 @@ fn add_custom_rule_validates_rule_set_references() {
 }
 
 #[test]
-fn custom_rule_legacy_disabled_mark_is_ignored() {
+fn custom_rule_legacy_disabled_mark_is_deleted() {
     let state = temp_state_with_rules("rules-custom-off", sample_rules());
     let custom = serde_json::json!({ "domain": ["blockme.com"], "outbound": "block" });
     let fp = rule_fingerprint(&custom);
     let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
-    overrides.custom.push(custom);
+    overrides.custom.push(custom.clone());
     overrides.set_disabled(fp, true);
     save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
 
@@ -1422,9 +1446,17 @@ fn custom_rule_legacy_disabled_mark_is_ignored() {
     let config: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(state.paths.config()).unwrap()).unwrap();
     let rules = config["route"]["rules"].as_array().unwrap();
-    assert!(serde_json::to_string(rules)
-        .unwrap()
-        .contains("blockme.com"));
+    assert!(
+        !serde_json::to_string(rules)
+            .unwrap()
+            .contains("blockme.com"),
+        "a custom rule disabled by an older version must not be re-enabled"
+    );
+
+    let overrides = load_rule_overrides(&state.paths.rule_overrides());
+    assert!(overrides.custom.is_empty());
+    assert!(!overrides.is_rule_disabled(&custom));
+    assert!(overrides.disabled.is_empty());
 
     let listed = query_rules(
         &state,
@@ -1438,8 +1470,7 @@ fn custom_rule_legacy_disabled_mark_is_ignored() {
         },
     )
     .unwrap();
-    assert_eq!(listed.total, 1);
-    assert!(!listed.items[0].disabled);
+    assert_eq!(listed.total, 0);
     assert_eq!(rule_overview(&state).unwrap().disabled, 0);
     let _ = fs::remove_dir_all(state.paths.root());
 }
@@ -1470,19 +1501,11 @@ fn set_rule_disabled_rejects_custom_rules() {
 }
 
 #[test]
-fn update_custom_rule_replaces_and_clears_disabled_mark() {
+fn update_custom_rule_replaces_in_place() {
     let state = temp_state_with_rules("rules-custom-update", sample_rules());
     let original = serde_json::json!({ "domain": ["old.com"], "outbound": "block" });
-    let fingerprint = persist_add_custom_rule(
-        &state,
-        &AddCustomRuleRequest {
-            rule: original.clone(),
-        },
-    )
-    .unwrap();
-    let mut overrides = load_rule_overrides(&state.paths.rule_overrides());
-    overrides.set_rule_disabled(&original, true);
-    save_rule_overrides(&state.paths.rule_overrides(), &overrides).unwrap();
+    let fingerprint =
+        persist_add_custom_rule(&state, &AddCustomRuleRequest { rule: original }).unwrap();
 
     let updated = serde_json::json!({
         "domain_suffix": ["new.com"],
@@ -1500,10 +1523,6 @@ fn update_custom_rule_replaces_and_clears_disabled_mark() {
 
     let overrides = load_rule_overrides(&state.paths.rule_overrides());
     assert_eq!(overrides.custom, vec![updated.clone()]);
-    assert!(
-        !overrides.is_rule_disabled(&original),
-        "the old disabled mark is cleared"
-    );
 
     let err = persist_update_custom_rule(
         &state,

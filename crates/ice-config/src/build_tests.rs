@@ -736,13 +736,13 @@ fn disabled_subscription_rules_dropped_and_custom_rules_prepended() {
         .collect();
     assert_eq!(
         tags,
-        ["custom.com", "off.com", "keep.com"],
-        "clash_mode rules first, then every custom rule; disabled subscription rules dropped"
+        ["custom.com", "keep.com"],
+        "clash_mode rules first, then active custom rules; disabled rules dropped"
     );
     assert!(!tags.iter().any(|t| t == "drop.com"));
     assert!(
-        tags.iter().any(|t| t == "off.com"),
-        "legacy disabled marks on custom rules are ignored"
+        !tags.iter().any(|t| t == "off.com"),
+        "custom rules disabled by an older version are dropped"
     );
 }
 

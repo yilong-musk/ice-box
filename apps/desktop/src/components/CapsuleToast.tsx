@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, CircleAlert } from "lucide-react";
 
+import { t } from "../lib/i18n";
 import { cn } from "@/lib/utils";
 
 const ERROR_DURATION_MS = 5000;
@@ -108,6 +109,8 @@ export function CapsuleToast({ toast, onDismiss, className }: Props) {
         <div
           key={toast.id}
           data-testid="capsule-toast"
+          role="button"
+          aria-label={t("common.dismiss")}
           title={toast.message}
           tabIndex={0}
           onClick={onDismiss}

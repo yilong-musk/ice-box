@@ -37,6 +37,12 @@ pub fn validate_custom_rule_value(
             ));
         }
     }
+    // sing-box decodes port matchers as `uint16`. String, fractional, negative,
+    // or out-of-range values make the runtime config invalid, so reject them
+    // before they are persisted and emitted verbatim.
+    for key in ["port", "source_port"] {
+        validate_port_matcher(rule, key)?;
+    }
     // Validate `rule_set` references against the active profile's rule-sets so
     // a bad reference is caught here instead of failing every config build.
     if let Some(profile) = profile {
@@ -55,6 +61,32 @@ pub fn validate_custom_rule_value(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Validate a `port` / `source_port` matcher.
+///
+/// sing-box accepts a single integer or an array of integers (`Listable[uint16]`).
+fn validate_port_matcher(rule: &Value, key: &str) -> Result<(), String> {
+    let Some(value) = rule.get(key) else {
+        return Ok(());
+    };
+    if let Some(values) = value.as_array() {
+        for value in values {
+            validate_port_value(value, key)?;
+        }
+        return Ok(());
+    }
+    validate_port_value(value, key)
+}
+
+fn validate_port_value(value: &Value, key: &str) -> Result<(), String> {
+    let valid = value.as_u64().is_some_and(|port| port <= u16::MAX as u64);
+    if !valid {
+        return Err(format!(
+            "custom rule `{key}` values must be integers between 0 and 65535"
+        ));
     }
     Ok(())
 }
@@ -84,6 +116,30 @@ mod tests {
             None
         )
         .is_ok());
+    }
+
+    #[test]
+    fn validates_port_matchers_as_numbers() {
+        for rule in [
+            json!({ "port": 443, "outbound": "direct" }),
+            json!({ "port": [443, 8443], "outbound": "direct" }),
+            json!({ "source_port": [53], "outbound": "direct" }),
+        ] {
+            assert!(validate_custom_rule_value(&rule, None).is_ok(), "{rule}");
+        }
+
+        for rule in [
+            json!({ "port": "443", "outbound": "direct" }),
+            json!({ "port": ["443"], "outbound": "direct" }),
+            json!({ "port": [443, "8443"], "outbound": "direct" }),
+            json!({ "port": -1, "outbound": "direct" }),
+            json!({ "port": 443.5, "outbound": "direct" }),
+            json!({ "port": 70000, "outbound": "direct" }),
+            json!({ "source_port": [65536], "outbound": "direct" }),
+        ] {
+            let err = validate_custom_rule_value(&rule, None).unwrap_err();
+            assert!(err.contains("integers between 0 and 65535"), "{err}");
+        }
     }
 
     #[test]

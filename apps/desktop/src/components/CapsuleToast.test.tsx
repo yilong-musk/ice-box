@@ -2,6 +2,7 @@
 
 import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { t } from "../lib/i18n";
 import { CapsuleToast } from "./CapsuleToast";
 
 describe("CapsuleToast", () => {
@@ -44,7 +45,7 @@ describe("CapsuleToast", () => {
     expect(getByTestId("capsule-toast")).toHaveTextContent("updated");
   });
 
-  it("dismisses on click and keyboard", () => {
+  it("is keyboard dismissable and labelled", () => {
     const onDismiss = vi.fn();
     const { getByTestId } = render(
       <CapsuleToast
@@ -53,6 +54,8 @@ describe("CapsuleToast", () => {
       />,
     );
     const toast = getByTestId("capsule-toast");
+    expect(toast).toHaveAttribute("role", "button");
+    expect(toast).toHaveAttribute("aria-label", t("common.dismiss"));
 
     fireEvent.click(toast);
     fireEvent.keyDown(toast, { key: "Enter" });

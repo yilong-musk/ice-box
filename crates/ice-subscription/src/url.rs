@@ -248,6 +248,14 @@ mod tests {
         );
         let err = validate_subscription_url_syntax("http://127.0.0.1/sub").unwrap_err();
         assert!(err.to_string().contains("not allowed"), "{err}");
+        // URL parsers keep a trailing root dot on domain names. The proxy
+        // resolves it to the same loopback/link-local target, so the syntax
+        // guard must normalize it before matching.
+        let err = validate_subscription_url_syntax("http://localhost./sub").unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+        let err =
+            validate_subscription_url_syntax("http://metadata.google.internal./sub").unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
         let err = validate_subscription_url_syntax("file:///etc/passwd").unwrap_err();
         assert!(err.to_string().contains("scheme"), "{err}");
     }

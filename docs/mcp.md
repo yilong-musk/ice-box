@@ -123,7 +123,9 @@ The MCP server currently exposes 35 tools through the application services:
 `set_rule_disabled` applies to subscription rules only. Custom rules are always
 active: change one with `update_custom_rule` (which replaces the rule in place
 and keeps its position) or delete it with `remove_custom_rule`.
-`update_custom_rule` validates the new rule exactly like `add_custom_rule`.
+`update_custom_rule` validates the new rule exactly like `add_custom_rule`:
+removed `geoip`/`geosite` matchers, unknown `rule_set` references, and
+non-numeric or out-of-range `port`/`source_port` values are rejected.
 
 Results use MCP text content plus structured content when the result is an
 object. Tool failures set `isError` and return the application error code and

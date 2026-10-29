@@ -425,7 +425,7 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
         }
         *counts.entry(rule_type_of(rule)).or_default() += 1;
     }
-    // Custom rules are always active; their legacy disabled marks are ignored.
+    // Custom rules are always active; legacy disabled ones are deleted on load.
     let mut types: Vec<RuleTypeCount> = counts
         .into_iter()
         .map(|(rule_type, count)| RuleTypeCount {
@@ -495,7 +495,7 @@ pub(crate) fn query_rules(
         if req.custom == Some(false) {
             continue;
         }
-        // Custom rules are always active; their legacy disabled marks are ignored.
+        // Custom rules are always active; legacy disabled ones are deleted on load.
         if !matches_filter(
             rule_type_of(rule),
             false,
@@ -734,8 +734,7 @@ pub(crate) fn persist_update_custom_rule(
             "custom rule already exists",
         ));
     }
-    let previous = std::mem::replace(&mut overrides.custom[index], req.rule.clone());
-    overrides.set_rule_disabled(&previous, false);
+    overrides.custom[index] = req.rule.clone();
     save_rule_overrides(&state.paths.rule_overrides(), &overrides)?;
     Ok(new_fp)
 }

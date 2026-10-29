@@ -30,8 +30,8 @@ pub use ice_subscription::{
     write_subscription_error, write_subscription_success, AutoUpdateInterval, DefaultFetcher,
     DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager, MockFetchMode,
     MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat, SubscriptionIndex,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionShareKind,
-    SubscriptionSource,
+    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionProxy,
+    SubscriptionShareKind, SubscriptionSource,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 
