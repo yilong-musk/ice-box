@@ -2,7 +2,6 @@
 
 import {
   Field,
-  FieldDescription,
   FieldLabel,
 } from "@/components/ui/field";
 import {
@@ -12,7 +11,6 @@ import {
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -72,7 +70,6 @@ export function AppearanceCard({
     >
       <CardHeader>
         <CardTitle>{t("settings.appearance")}</CardTitle>
-        <CardDescription>{t("settings.appearanceDesc")}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
@@ -152,7 +149,6 @@ export function AppearanceCard({
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <FieldDescription>{t("settings.trayDesc")}</FieldDescription>
             </Field>
           )}
         </div>

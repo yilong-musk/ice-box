@@ -3,13 +3,11 @@
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import {
   Field,
-  FieldDescription,
   FieldLabel,
 } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
@@ -37,7 +35,6 @@ export function Ipv6Card({
     >
       <CardHeader>
         <CardTitle>{t("settings.ipv6")}</CardTitle>
-        <CardDescription>{t("settings.ipv6Desc")}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
@@ -61,7 +58,6 @@ export function Ipv6Card({
               {t("settings.ipv6Enable")}
             </FieldLabel>
           </Field>
-          <FieldDescription>{t("settings.ipv6EnableDesc")}</FieldDescription>
           <Field orientation="horizontal" className="w-auto gap-2">
             <Switch
               id="settings-prefer-ipv6"
@@ -82,8 +78,6 @@ export function Ipv6Card({
               {t("settings.preferIpv6")}
             </FieldLabel>
           </Field>
-          <FieldDescription>{t("settings.preferIpv6Desc")}</FieldDescription>
-          <FieldDescription>{t("settings.ipv6CaptureNote")}</FieldDescription>
         </div>
       </CardContent>
     </Card>

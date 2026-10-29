@@ -4,13 +4,11 @@ import { type Dispatch, type SetStateAction } from "react";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -44,7 +42,6 @@ export function PortsCard({
     <Card size="sm" className="w-full">
       <CardHeader className="shrink-0">
         <CardTitle>{t("settings.inbound")}</CardTitle>
-        <CardDescription>{t("settings.inboundDesc")}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
@@ -174,9 +171,6 @@ export function PortsCard({
               {t("settings.allowLan")}
             </FieldLabel>
           </Field>
-          {form.allow_lan ? (
-            <FieldDescription>{t("settings.allowLanDesc")}</FieldDescription>
-          ) : null}
           <Field orientation="horizontal" className="w-auto gap-2">
             <Switch
               id="settings-auto-default-rules"
@@ -195,11 +189,6 @@ export function PortsCard({
               {t("settings.autoDefaultRules")}
             </FieldLabel>
           </Field>
-          {form.auto_default_rules ? (
-            <FieldDescription>
-              {t("settings.autoDefaultRulesDesc")}
-            </FieldDescription>
-          ) : null}
           <Field orientation="horizontal" className="w-auto gap-2">
             <Switch
               id="settings-probe-exit-ip"
@@ -218,7 +207,6 @@ export function PortsCard({
               {t("settings.probeExitIp")}
             </FieldLabel>
           </Field>
-          <FieldDescription>{t("settings.probeExitIpDesc")}</FieldDescription>
         </div>
       </CardContent>
     </Card>

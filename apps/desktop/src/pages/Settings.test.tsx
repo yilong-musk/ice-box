@@ -566,7 +566,6 @@ describe("Settings", () => {
     });
     expect(view.queryByText(t("settings.inbound"))).not.toBeInTheDocument();
     expect(view.getByText(t("settings.update"))).toBeInTheDocument();
-    expect(view.getByText(t("settings.updatePhoneDesc"))).toBeInTheDocument();
     expect(
       view.queryByRole("button", { name: t("settings.updateInstall") }),
     ).not.toBeInTheDocument();
@@ -576,7 +575,7 @@ describe("Settings", () => {
     expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
   });
 
-  it("explains battery optimization and private DNS, and installs the APK", async () => {
+  it("offers battery optimization and private DNS actions, and installs the APK", async () => {
     phoneShell.value = true;
     getStatus.mockResolvedValue({
       ...defaultStatus,
@@ -1442,12 +1441,13 @@ describe("Settings", () => {
     const view = within(container);
 
     // The install button is also disabled before the first status arrives
-    // (`!loaded`); wait for the installed-state text first.
+    // (`!loaded`); wait for the installed state to enable uninstall.
     await waitFor(() => {
-      expect(container.textContent).toContain(t("settings.helperReady"));
+      expect(
+        view.getByRole("button", { name: t("settings.uninstallHelper") }),
+      ).not.toBeDisabled();
     });
     expect(view.getByRole("button", { name: t("settings.installHelper") })).toBeDisabled();
-    expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).not.toBeDisabled();
   });
 
   it("enables install and disables uninstall when the helper is missing", async () => {

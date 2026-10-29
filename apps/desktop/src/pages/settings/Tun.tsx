@@ -3,7 +3,6 @@
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -53,7 +52,6 @@ export function TunCard({
     >
       <CardHeader>
         <CardTitle>{t("settings.tun")}</CardTitle>
-        <CardDescription>{t("settings.tunDesc")}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
@@ -134,15 +132,10 @@ export function TunCard({
             </FieldDescription>
           ) : status?.helper_stale === true ? (
             <FieldDescription>{t("settings.helperStale")}</FieldDescription>
-          ) : status?.helper_supported === true ? (
-            <FieldDescription>
-              {status?.helper_installed
-                ? t("settings.helperReady")
-                : t("settings.helperNeeded")}
-            </FieldDescription>
-          ) : (
-            <FieldDescription>{t("settings.tunElevationDesc")}</FieldDescription>
-          )}
+          ) : status?.helper_supported === true &&
+            status?.helper_installed !== true ? (
+            <FieldDescription>{t("settings.helperNeeded")}</FieldDescription>
+          ) : null}
           <HelperActions
             status={status}
             busy={busy}

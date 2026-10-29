@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   provider or redirect chain cannot keep an add, manual refresh, or background
   update waiting for minutes. The 20-second per connect/read/write limit and
   the 8 MiB body cap are unchanged.
+- Settings item descriptions are removed; only live status and errors remain.
 
 ## [0.2.4] - 2026-10-29
 
