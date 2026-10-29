@@ -5,6 +5,7 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use flate2::read::GzDecoder;
 use rustls::pki_types::ServerName;
@@ -12,7 +13,7 @@ use rustls::ClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
 
 use crate::error::SubscriptionError;
-use crate::fetch::{sanitize_http_header_value, FETCH_TIMEOUT, MAX_BODY_BYTES};
+use crate::fetch::{fetch_time_left, sanitize_http_header_value, FETCH_TIMEOUT, MAX_BODY_BYTES};
 
 /// Upper bound for status + headers when sizing the raw read buffer.
 const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
@@ -75,6 +76,7 @@ pub(crate) fn tls_get_pinned(
     path_query: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
+    deadline: Instant,
 ) -> Result<RawHttpResponse, SubscriptionError> {
     tls_get_pinned_with_config(
         host,
@@ -83,10 +85,12 @@ pub(crate) fn tls_get_pinned(
         path_query,
         conditional,
         log_url,
+        deadline,
         tls_client_config()?,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tls_get_pinned_with_config(
     host: &str,
     port: u16,
@@ -94,21 +98,21 @@ fn tls_get_pinned_with_config(
     path_query: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
+    deadline: Instant,
     config: Arc<ClientConfig>,
 ) -> Result<RawHttpResponse, SubscriptionError> {
+    let time_left = fetch_time_left(log_url, deadline)?;
     let addr = SocketAddr::new(ip, port);
-    let mut stream = TcpStream::connect_timeout(&addr, FETCH_TIMEOUT).map_err(|e| {
+    let stream = TcpStream::connect_timeout(&addr, time_left.min(FETCH_TIMEOUT)).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: connect: {e}"))
     })?;
-    let _ = stream.set_read_timeout(Some(FETCH_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(FETCH_TIMEOUT));
 
     let server_name = ServerName::try_from(host.to_string()).map_err(|_| {
         SubscriptionError::FetchFailed(format!("GET {log_url}: invalid TLS server name"))
     })?;
-    let mut conn = rustls::ClientConnection::new(config, server_name)
+    let conn = rustls::ClientConnection::new(config, server_name)
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: tls: {e}")))?;
-    let mut tls = rustls::Stream::new(&mut conn, &mut stream);
+    let mut tls = rustls::StreamOwned::new(conn, stream);
 
     // `Accept` must be present: some subscription frontends WAF-reject requests
     // without it (HTTP 403) regardless of TLS/HTTP version.
@@ -122,20 +126,49 @@ fn tls_get_pinned_with_config(
         req.push_str(&format!("{k}: {safe}\r\n"));
     }
     req.push_str("\r\n");
+
+    // Bound the TLS handshake and request write by the overall fetch deadline.
+    let time_left = fetch_time_left(log_url, deadline)?;
+    tls.sock.set_read_timeout(Some(time_left)).map_err(|e| {
+        SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+    })?;
+    tls.sock.set_write_timeout(Some(time_left)).map_err(|e| {
+        SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+    })?;
     tls.write_all(req.as_bytes()).map_err(|e| {
         SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: write: {e}"))
     })?;
 
+    // Read the response with a per-read timeout plus a hard overall deadline:
+    // a server that drips one byte at a time can otherwise reset the read
+    // timeout forever. `StreamOwned` exposes the socket so the timeout can be
+    // lowered as the budget shrinks.
     let mut raw = Vec::new();
-    tls.take((MAX_RAW_RESPONSE_BYTES as u64).saturating_add(1))
-        .read_to_end(&mut raw)
-        .map_err(|e| {
-            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: read: {e}"))
-        })?;
-    if raw.len() > MAX_RAW_RESPONSE_BYTES {
-        return Err(SubscriptionError::FetchFailed(format!(
-            "body exceeds {MAX_BODY_BYTES} bytes"
-        )));
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let time_left = fetch_time_left(log_url, deadline)?;
+        tls.sock
+            .set_read_timeout(Some(time_left.min(FETCH_TIMEOUT)))
+            .map_err(|e| {
+                SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: timeout: {e}"))
+            })?;
+        match tls.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                if raw.len() > MAX_RAW_RESPONSE_BYTES {
+                    return Err(SubscriptionError::FetchFailed(format!(
+                        "body exceeds {MAX_BODY_BYTES} bytes"
+                    )));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                return Err(SubscriptionError::FetchFailed(format!(
+                    "GET {log_url} via {ip}: read: {e}"
+                )))
+            }
+        }
     }
     parse_http_response(&raw)
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {e}")))
@@ -467,6 +500,7 @@ fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fetch::FETCH_TOTAL_TIMEOUT;
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;
@@ -604,6 +638,7 @@ mod tests {
             "/",
             &[],
             "https://localhost/",
+            Instant::now() + FETCH_TOTAL_TIMEOUT,
             Arc::new(client),
         )
         .expect("pinned GET");

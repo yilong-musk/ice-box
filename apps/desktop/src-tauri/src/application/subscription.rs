@@ -162,7 +162,7 @@ pub(crate) fn add_subscription_use_case(
 ) -> Result<serde_json::Value, AppError> {
     let redacted = redact_subscription_url_for_log(&req.url);
     tracing::info!(url = %redacted, name = ?req.name, auto_update = req.auto_update, interval = ?req.auto_update_interval, "add_subscription: start");
-    // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
+    // Fetch (up to FETCH_TOTAL_TIMEOUT) runs without the orchestrate lock so Start/Stop/Apply/
     // save_settings are not queued behind it; the lock is taken for the disk write + Apply.
     let mgr = subscription_manager(state)?;
     let fetched = mgr
@@ -271,7 +271,7 @@ pub(crate) fn update_subscription_use_case(
     state: &AppState,
     req: IdRequest,
 ) -> Result<serde_json::Value, AppError> {
-    // Fetch (up to FETCH_TIMEOUT) runs without the orchestrate lock; the lock is taken
+    // Fetch (up to FETCH_TOTAL_TIMEOUT) runs without the orchestrate lock; the lock is taken
     // for the disk write + Apply step.
     let mgr = subscription_manager(state)?;
     let fetched = match mgr.fetch_update(req.id) {
