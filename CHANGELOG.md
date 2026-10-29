@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Settings → IPv6 adds the two Shadowrocket-style DNS switches: **Enable IPv6
+  support** (query AAAA, prefer IPv4) and **Prefer IPv6** (prefer AAAA when both
+  families exist). They control the generated DNS strategy for the system proxy
+  and for TUN on macOS/Android; Windows TUN stays `ipv4_only` until the pinned
+  core's IPv6 path is fixed (#4178).
+
 ### Changed
 
 - Subscription action failures now show only the localized error title in the

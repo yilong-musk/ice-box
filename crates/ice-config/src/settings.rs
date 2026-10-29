@@ -210,6 +210,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_settings_enable_ipv6_without_preference() {
+        let path = temp_settings_path("legacy-ipv6");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 17890,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let s = load_settings(&path).expect("legacy json without ipv6 settings");
+        assert!(s.ipv6);
+        assert!(!s.prefer_ipv6);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn legacy_settings_without_proxy_mode_loads_as_rule() {
         let path = temp_settings_path("legacy-mode");
         let json = r#"{
@@ -266,6 +284,27 @@ mod tests {
         .expect("save direct");
         assert_eq!(load_settings(&path).unwrap().proxy_mode, ProxyMode::Direct);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn local_template_carries_ipv6_switches_from_settings() {
+        let settings = AppSettings {
+            ipv6: false,
+            prefer_ipv6: false,
+            ..AppSettings::default()
+        };
+        let template = crate::LocalTemplate::from(&settings);
+        assert!(!template.ipv6);
+        assert!(!template.prefer_ipv6);
+
+        let settings = AppSettings {
+            ipv6: true,
+            prefer_ipv6: true,
+            ..AppSettings::default()
+        };
+        let template = crate::LocalTemplate::from(&settings);
+        assert!(template.ipv6);
+        assert!(template.prefer_ipv6);
     }
 
     #[test]

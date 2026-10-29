@@ -358,6 +358,16 @@ const zh = {
   "settings.allowLan": "允许局域网共享（Allow LAN）",
   "settings.allowLanDesc":
     "局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP 连接；Clash API 仍仅限本机",
+  "settings.ipv6": "IPv6",
+  "settings.ipv6Desc": "控制 DNS 的 AAAA 解析与地址族优先级",
+  "settings.ipv6Enable": "启用 IPv6 支持",
+  "settings.ipv6EnableDesc":
+    "同时查询 A 与 AAAA 记录，优先使用 IPv4；关闭后只解析 IPv4",
+  "settings.preferIpv6": "首选 IPv6",
+  "settings.preferIpv6Desc":
+    "A 与 AAAA 都存在时优先使用 IPv6；需要先启用 IPv6 支持，且本机网络有 IPv6 才能生效",
+  "settings.ipv6CaptureNote":
+    "系统代理模式会遵循以上设置；Windows TUN 仍固定为 IPv4，其他平台的 TUN 会一并生效",
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
   "settings.autoDefaultRulesDesc":
     "订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP / 国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS 分流",
@@ -892,6 +902,16 @@ const en: Record<MessageKey, string> = {
   "settings.allowLan": "Allow LAN Sharing (Allow LAN)",
   "settings.allowLanDesc":
     "With LAN sharing, the Mixed inbound listens on 0.0.0.0 and other devices can connect via this machine's LAN IP; the Clash API stays local-only",
+  "settings.ipv6": "IPv6",
+  "settings.ipv6Desc": "Control AAAA lookups and the address-family preference",
+  "settings.ipv6Enable": "Enable IPv6 support",
+  "settings.ipv6EnableDesc":
+    "Query both A and AAAA records and prefer IPv4; off resolves IPv4 only",
+  "settings.preferIpv6": "Prefer IPv6",
+  "settings.preferIpv6Desc":
+    "Prefer AAAA when both A and AAAA exist; requires IPv6 support and an IPv6-capable network",
+  "settings.ipv6CaptureNote":
+    "The system proxy follows these switches; Windows TUN stays IPv4-only, while TUN on other platforms follows them",
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
   "settings.autoDefaultRulesDesc":
     "When a subscription carries no rules (e.g. share-link subscriptions), built-in split routing is attached automatically: private IPs / China IPs / China domains go direct and the rest goes through the selected node, with matching China / remote DNS split",

@@ -237,12 +237,14 @@ pub fn default_uri_list_rules() -> Vec<Value> {
 ///
 /// Windows (`docs/tun.md`): no `local` server (it re-enters
 /// the TUN via the adapter DNS), UDP upstreams rewritten to DoT (the core's
-/// UDP outbound is captured by its own TUN), and `ipv4_only` (the IPv6 path
-/// is broken, #4178). `final` stays `remote-dns` for anti-pollution lookups,
-/// but `route.default_domain_resolver` must not use it — a proxy-detoured
-/// resolver loops (the proxy dial needs the node's server domain resolved
-/// first) — so ice-config wires the route default to `cn-dns`, the first
-/// directly-dialable tagged server.
+/// UDP outbound is captured by its own TUN), and `ipv4_only` as the safe
+/// parse-time default. The build applies the user's IPv6 switches on top, so
+/// system-proxy builds can use `prefer_ipv4` / `prefer_ipv6`; Windows TUN is
+/// clamped back to `ipv4_only` (#4178). `final` stays `remote-dns` for
+/// anti-pollution lookups, but `route.default_domain_resolver` must not use it
+/// — a proxy-detoured resolver loops (the proxy dial needs the node's server
+/// domain resolved first) — so ice-config wires the route default to
+/// `cn-dns`, the first directly-dialable tagged server.
 pub fn default_uri_list_dns(detour: &str, windows: bool) -> Value {
     if windows {
         json!({

@@ -190,6 +190,11 @@ export type AppSettings = {
   /** Last Home power-button state; launch restores capture when true. */
   proxy_service_enabled: boolean;
   allow_lan: boolean;
+  /** Query AAAA records. Off pins DNS to IPv4-only; on prefers IPv4 unless
+   * `prefer_ipv6` is also set. Windows TUN stays IPv4-only. */
+  ipv6: boolean;
+  /** Prefer AAAA over A when both exist. Requires `ipv6`. */
+  prefer_ipv6: boolean;
   proxy_mode: ProxyMode;
   /** Android per-app routing overrides keyed by application id. */
   app_proxies?: Record<string, AppProxyMode>;
@@ -316,6 +321,8 @@ export type SettingsPatch = {
   /** Home start/stop owns this; Settings omits it. */
   proxy_service_enabled?: boolean;
   allow_lan?: boolean;
+  ipv6?: boolean;
+  prefer_ipv6?: boolean;
   proxy_mode?: ProxyMode;
   /** Replaces the whole Android per-app map; `{}` clears every override. */
   app_proxies?: Record<string, AppProxyMode>;

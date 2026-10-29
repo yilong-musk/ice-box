@@ -123,9 +123,12 @@ fn build_direct_only_config_with(
     });
     apply_shared_root(&mut log, &mut experimental, platform, shared_root);
 
+    let mut dns = minimal_dns_block(platform);
+    apply_dns_strategy(&mut dns, template, capture_intent, platform);
+
     let config = json!({
         "log": log,
-        "dns": minimal_dns_block(platform),
+        "dns": dns,
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": route,
@@ -194,7 +197,9 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
 /// Windows (`docs/tun.md`): the OS-resolver-backed `local` server must not
 /// be used — its queries dial the TUN peer and re-enter the engine — and UDP
 /// upstreams are captured by the core's own TUN. The minimal block instead
-/// ships two DoT resolvers and `ipv4_only` (the IPv6 path is broken, #4178).
+/// ships two DoT resolvers. The builder applies the user's IPv6 switches
+/// afterwards; Windows TUN forces `ipv4_only` (the pinned core's IPv6 path is
+/// broken, #4178).
 pub fn minimal_dns_block(platform: HostPlatform) -> Value {
     if platform.is_windows() {
         json!({
@@ -216,6 +221,84 @@ pub fn minimal_dns_block(platform: HostPlatform) -> Value {
             "final": "local"
         })
     }
+}
+
+/// The DNS strategy for this build.
+///
+/// The user's IPv6 switches win over a profile's own `dns.strategy`: off
+/// pins `ipv4_only`; on uses `prefer_ipv4` unless "prefer IPv6" is also on.
+/// Windows TUN stays `ipv4_only` — the pinned core's IPv6 DNS/hijack path is
+/// broken (#4178) and the Windows hijack rule is IPv4-only by design.
+pub(crate) fn effective_dns_strategy(
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+    platform: HostPlatform,
+) -> &'static str {
+    if !template.ipv6 || (platform.is_windows() && capture_intent == CaptureIntent::Tun) {
+        "ipv4_only"
+    } else if template.prefer_ipv6 {
+        "prefer_ipv6"
+    } else {
+        "prefer_ipv4"
+    }
+}
+
+/// Apply [`effective_dns_strategy`] to a DNS block.
+fn apply_dns_strategy(
+    dns: &mut Value,
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+    platform: HostPlatform,
+) {
+    let Some(obj) = dns.as_object_mut() else {
+        return;
+    };
+    obj.insert(
+        "strategy".into(),
+        json!(effective_dns_strategy(template, capture_intent, platform)),
+    );
+}
+
+/// Drop `AAAA` from fake-ip DNS rules when IPv6 is enabled.
+///
+/// The pinned core's fake-ip transport answers AAAA with an empty success when
+/// `inet6_range` is absent, and an IPv6 fake range inside `fc00::/7` would be
+/// excluded from the TUN. Letting AAAA fall through to a real resolver keeps
+/// `prefer_ipv6` meaningful for fake-ip profiles; A still gets the fake IPv4
+/// address. Rules without an explicit `query_type` are left untouched.
+fn strip_fakeip_aaaa(dns: &mut Value) {
+    let fakeip_tags: std::collections::HashSet<String> = dns
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(|servers| {
+            servers
+                .iter()
+                .filter(|server| server.get("type").and_then(Value::as_str) == Some("fakeip"))
+                .filter_map(|server| server.get("tag").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if fakeip_tags.is_empty() {
+        return;
+    }
+    let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
+        return;
+    };
+    rules.retain_mut(|rule| {
+        let targets_fakeip = rule
+            .get("server")
+            .and_then(Value::as_str)
+            .is_some_and(|tag| fakeip_tags.contains(tag));
+        if !targets_fakeip {
+            return true;
+        }
+        let Some(query_type) = rule.get_mut("query_type").and_then(Value::as_array_mut) else {
+            return true;
+        };
+        query_type.retain(|kind| kind.as_str() != Some("AAAA"));
+        !query_type.is_empty()
+    });
 }
 
 /// Whether the DNS block contains a `local`-tagged server (required for
@@ -572,6 +655,10 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     ice_config_guard::retain_allowed_dns_servers(&mut dns);
     if !dns_block_is_usable(&dns) {
         dns = minimal_dns_block(input.platform);
+    }
+    apply_dns_strategy(&mut dns, &input.template, capture_intent, input.platform);
+    if input.template.ipv6 {
+        strip_fakeip_aaaa(&mut dns);
     }
 
     // sing-box 1.12+: domain addresses must be resolved via a domain resolver.

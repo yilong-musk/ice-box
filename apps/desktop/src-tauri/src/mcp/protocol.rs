@@ -366,6 +366,14 @@ fn settings_patch_schema() -> Value {
             "selected_tag": {"type": ["string", "null"]},
             "auto_set_system_proxy": {"type": "boolean"},
             "allow_lan": {"type": "boolean"},
+            "ipv6": {
+                "type": "boolean",
+                "description": "Query AAAA records; false resolves IPv4 only. Windows TUN stays IPv4-only."
+            },
+            "prefer_ipv6": {
+                "type": "boolean",
+                "description": "Prefer AAAA over A when both exist; implies ipv6=true."
+            },
             "proxy_mode": {"type": "string", "enum": ["rule", "global", "direct"]},
             "tun": {
                 "type": "object",
@@ -1067,6 +1075,8 @@ mod tests {
         let patch = &tool["inputSchema"]["properties"]["patch"];
         assert_eq!(patch["additionalProperties"], false);
         assert!(patch["properties"]["mixed_port"].is_object());
+        assert!(patch["properties"]["ipv6"].is_object());
+        assert!(patch["properties"]["prefer_ipv6"].is_object());
         assert!(patch["properties"]["tun"]["properties"]["enabled"].is_object());
         assert!(patch["properties"].get("proxy_service_enabled").is_none());
     }

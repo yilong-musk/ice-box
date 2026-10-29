@@ -69,6 +69,8 @@ const settings: AppSettings = {
   tray_display_mode: "icon_and_speed",
   launch_at_login: false,
   allow_lan: false,
+  ipv6: true,
+  prefer_ipv6: false,
   proxy_mode: "rule",
   app_proxies: {},
   auto_default_rules: true,
@@ -399,6 +401,8 @@ export const api = {
     if (patch.tun) {
       settings.tun = { ...settings.tun, ...structuredClone(patch.tun) };
     }
+    if (settings.prefer_ipv6) settings.ipv6 = true;
+    if (!settings.ipv6) settings.prefer_ipv6 = false;
   },
   async checkAppUpdate(): Promise<CheckAppUpdateResponse> {
     await delay();

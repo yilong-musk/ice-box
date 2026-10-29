@@ -46,6 +46,8 @@ const defaultSettings = {
   auto_set_system_proxy: false,
   proxy_service_enabled: false,
   allow_lan: false,
+  ipv6: true,
+  prefer_ipv6: false,
   proxy_mode: "rule",
   auto_default_rules: true,
   tun: {

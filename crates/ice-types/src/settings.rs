@@ -378,6 +378,16 @@ pub struct AppSettings {
     /// Defaults to false for existing `settings.json` files (`#[serde(default)]`).
     #[serde(default)]
     pub allow_lan: bool,
+    /// Query AAAA records when resolving domains. Off pins the generated DNS
+    /// block to `ipv4_only`; on uses `prefer_ipv4` unless
+    /// [`Self::prefer_ipv6`] is also set. Windows TUN remains IPv4-only
+    /// regardless (pinned core #4178).
+    #[serde(default = "default_ipv6")]
+    pub ipv6: bool,
+    /// Prefer AAAA answers over A when both exist (`prefer_ipv6`). Requires
+    /// [`Self::ipv6`]; enabling this implies IPv6 support.
+    #[serde(default)]
+    pub prefer_ipv6: bool,
     /// Routing mode; defaults to `rule` for existing `settings.json` files.
     #[serde(default)]
     pub proxy_mode: ProxyMode,
@@ -442,6 +452,10 @@ fn default_probe_exit_ip() -> bool {
     true
 }
 
+fn default_ipv6() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -453,6 +467,8 @@ impl Default for AppSettings {
             auto_set_system_proxy: default_auto_set_system_proxy(),
             proxy_service_enabled: false,
             allow_lan: false,
+            ipv6: true,
+            prefer_ipv6: false,
             proxy_mode: ProxyMode::Rule,
             app_proxies: BTreeMap::new(),
             tun: TunSettings::default(),
@@ -518,6 +534,12 @@ impl AppSettings {
                 ));
             }
         }
+        if self.prefer_ipv6 && !self.ipv6 {
+            return Err(AppError::new(
+                ErrorCode::ConfigInvalid,
+                "prefer_ipv6 requires ipv6 to be enabled",
+            ));
+        }
         self.tun.validate_for(platform)?;
         Ok(())
     }
@@ -551,6 +573,21 @@ impl AppSettings {
         }
         if let Some(v) = patch.allow_lan {
             next.allow_lan = v;
+        }
+        if let Some(v) = patch.ipv6 {
+            next.ipv6 = v;
+        }
+        if let Some(v) = patch.prefer_ipv6 {
+            next.prefer_ipv6 = v;
+        }
+        // Keep the pair coherent for callers that patch only one side:
+        // preferring IPv6 implies support, and disabling support clears it.
+        if next.prefer_ipv6 && !next.ipv6 {
+            if patch.prefer_ipv6 == Some(true) {
+                next.ipv6 = true;
+            } else {
+                next.prefer_ipv6 = false;
+            }
         }
         if let Some(v) = patch.proxy_mode {
             next.proxy_mode = v;
@@ -612,6 +649,10 @@ pub struct SettingsPatch {
     pub proxy_service_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_lan: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefer_ipv6: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_mode: Option<ProxyMode>,
     /// Replaces the whole Android per-app map. `None` keeps the current map;
@@ -726,5 +767,62 @@ mod tests {
             "Bearer token-with-dashes-xxx"
         ));
         assert!(!is_plausible_clash_api_secret(""));
+    }
+
+    #[test]
+    fn ipv6_defaults_are_enabled_without_preference() {
+        let settings = AppSettings::default();
+        assert!(settings.ipv6);
+        assert!(!settings.prefer_ipv6);
+    }
+
+    #[test]
+    fn ipv6_patch_keeps_the_pair_coherent() {
+        let base = AppSettings::default();
+
+        let off = base.apply_patch(&SettingsPatch {
+            ipv6: Some(false),
+            ..SettingsPatch::default()
+        });
+        assert!(!off.ipv6);
+        assert!(!off.prefer_ipv6);
+
+        let prefer = base.apply_patch(&SettingsPatch {
+            prefer_ipv6: Some(true),
+            ..SettingsPatch::default()
+        });
+        assert!(prefer.ipv6);
+        assert!(prefer.prefer_ipv6);
+
+        let disabled_prefer = AppSettings {
+            ipv6: false,
+            prefer_ipv6: false,
+            ..AppSettings::default()
+        };
+        let turned_on = disabled_prefer.apply_patch(&SettingsPatch {
+            prefer_ipv6: Some(true),
+            ..SettingsPatch::default()
+        });
+        assert!(turned_on.ipv6);
+        assert!(turned_on.prefer_ipv6);
+
+        let was_preferring = AppSettings {
+            ipv6: true,
+            prefer_ipv6: true,
+            ..AppSettings::default()
+        };
+        let turned_off = was_preferring.apply_patch(&SettingsPatch {
+            ipv6: Some(false),
+            ..SettingsPatch::default()
+        });
+        assert!(!turned_off.ipv6);
+        assert!(!turned_off.prefer_ipv6);
+
+        let invalid = AppSettings {
+            ipv6: false,
+            prefer_ipv6: true,
+            ..AppSettings::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 }

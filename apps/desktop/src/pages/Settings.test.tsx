@@ -141,6 +141,8 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       proxy_service_enabled: false,
       allow_lan: false,
+      ipv6: true,
+      prefer_ipv6: false,
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "system",
@@ -269,6 +271,35 @@ describe("Settings", () => {
       { timeout: 2000 },
     );
     expect(toggle).not.toBeChecked();
+  });
+
+  it("saves the IPv6 support and preference switches", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+
+    const enable = view.getByLabelText(t("settings.ipv6Enable"));
+    const prefer = view.getByLabelText(t("settings.preferIpv6"));
+    expect(enable).toBeChecked();
+    expect(prefer).not.toBeChecked();
+
+    fireEvent.click(prefer);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ prefer_ipv6: true }),
+      );
+    });
+
+    fireEvent.click(enable);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ ipv6: false, prefer_ipv6: false }),
+      );
+    });
+    expect(prefer).not.toBeChecked();
+    expect(prefer).toBeDisabled();
   });
 
   it("persists turning on debug logs", async () => {
@@ -517,6 +548,7 @@ describe("Settings", () => {
     expect(titles).toEqual([
       t("settings.appearance"),
       t("settings.inbound"),
+      t("settings.ipv6"),
       t("settings.tun"),
       t("settings.startup"),
       t("settings.update"),

@@ -146,6 +146,12 @@ pub struct LocalTemplate {
     pub clash_api_secret: String,
     /// When true the mixed inbound binds `0.0.0.0` (LAN sharing).
     pub allow_lan: bool,
+    /// Query AAAA records in the generated DNS block. Off pins `ipv4_only`.
+    #[serde(default = "default_ipv6_enabled")]
+    pub ipv6: bool,
+    /// Prefer AAAA over A when both exist. Requires [`Self::ipv6`].
+    #[serde(default)]
+    pub prefer_ipv6: bool,
     /// Routing mode applied at build time (rule / global / direct).
     #[serde(default)]
     pub proxy_mode: ProxyMode,
@@ -164,6 +170,10 @@ fn default_clash_api_secret() -> String {
     EXAMPLE_CLASH_API_SECRET.to_string()
 }
 
+fn default_ipv6_enabled() -> bool {
+    true
+}
+
 impl Default for LocalTemplate {
     fn default() -> Self {
         Self {
@@ -173,6 +183,8 @@ impl Default for LocalTemplate {
             clash_api_port: 19090,
             clash_api_secret: default_clash_api_secret(),
             allow_lan: false,
+            ipv6: true,
+            prefer_ipv6: false,
             proxy_mode: ProxyMode::Rule,
             app_proxies: BTreeMap::new(),
             tun: TunSettings::default(),
@@ -189,6 +201,8 @@ impl From<&AppSettings> for LocalTemplate {
             clash_api_port: settings.clash_api_port,
             clash_api_secret: String::new(),
             allow_lan: settings.allow_lan,
+            ipv6: settings.ipv6,
+            prefer_ipv6: settings.prefer_ipv6,
             proxy_mode: settings.proxy_mode,
             app_proxies: settings.app_proxies.clone(),
             tun: settings.tun.clone(),
