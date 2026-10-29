@@ -219,7 +219,7 @@ pub fn get_mode(endpoints: &HealthEndpoints) -> Result<String, CoreError> {
 }
 
 /// Switch the Clash runtime mode (`PATCH /configs` with `{"mode": ...}`). sing-box
-/// validates the mode against its runtime `mode-list`, which under the pinned 1.13.19 is
+/// validates the mode against its runtime `mode-list`, which under the pinned 1.13.21 is
 /// always `[<default_mode>]` (an emitted `mode_list` is rejected; the built-in list is just
 /// `default_mode` prepended onto an empty list). A `PATCH` targeting a different mode is
 /// therefore silently ignored — `GET /configs` keeps returning the old mode — so callers
@@ -640,7 +640,7 @@ impl MockClashApi {
                                 )
                             }
                             ("GET", "/version") if is_2xx => {
-                                let body = r#"{"version":"1.13.19"}"#;
+                                let body = r#"{"version":"1.13.21"}"#;
                                 format!(
                                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                     body.len(),

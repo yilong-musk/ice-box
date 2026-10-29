@@ -1,7 +1,7 @@
 # TUN capture
 
 This document is the desktop TUN path on macOS and Windows, with the bundled
-sing-box **1.13.19**. Android captures traffic through the system VPN service;
+sing-box **1.13.21**. Android captures traffic through the system VPN service;
 see [architecture.md](architecture.md#clients). Desktop capture behavior,
 platform constraints, and recovery rules follow.
 

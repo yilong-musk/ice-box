@@ -1275,7 +1275,7 @@ fn clash_api_block_carries_default_mode_in_all_modes() {
         assert_eq!(api["secret"], ice_types::EXAMPLE_CLASH_API_SECRET);
         assert!(
             api.get("mode_list").is_none(),
-            "mode_list must not be emitted (rejected by pinned sing-box 1.13.19)"
+            "mode_list must not be emitted (rejected by pinned sing-box 1.13.21)"
         );
         assert!(
             cfg["experimental"].get("cache_file").is_none(),

@@ -29,7 +29,7 @@ linked into the ice-box process):
   additional naming restriction (see third_party/sing-box/LICENSE)
 - Bundled pin: see third_party/sing-box/VERSION
 - Source corresponding to the pinned release (see third_party/sing-box/VERSION):
-  https://github.com/SagerNet/sing-box/releases/tag/v1.13.19
+  https://github.com/SagerNet/sing-box/releases/tag/v1.13.21
 
 When redistributing a binary build of ice-box that includes sing-box:
 

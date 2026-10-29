@@ -22,7 +22,7 @@ use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 const GENERATED_LOG_LEVEL: &str = "info";
 
 /// Clash API listen + Bearer secret. `mode_list` must not be emitted — the
-/// pinned sing-box 1.13.19 rejects it ("unknown field").
+/// pinned sing-box 1.13.21 rejects it ("unknown field").
 fn clash_api_block(template: &LocalTemplate) -> Value {
     json!({
         "external_controller": format!(
@@ -1123,7 +1123,7 @@ fn android_exclude_package(
 /// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver.
 ///
 /// This replaces the TUN inbound `dns_hijack` field, which the pinned
-/// sing-box 1.13.19 rejects as an unknown field (the feature moved to route
+/// sing-box 1.13.21 rejects as an unknown field (the feature moved to route
 /// rule actions in sing-box 1.9).
 pub fn tun_dns_hijack_rule() -> Value {
     json!({ "port": [53], "action": "hijack-dns" })
@@ -1262,7 +1262,7 @@ fn tun_network_cidr(address: &str) -> Option<String> {
     }
 }
 
-/// The locked TUN inbound shape for the bundled sing-box 1.13.19 (`docs/tun.md`):
+/// The locked TUN inbound shape for the bundled sing-box 1.13.21 (`docs/tun.md`):
 /// dual-stack `address` list, sub-range auto_route, and the fixed
 /// `route_exclude_address` / `loopback_address` sets. `interface_name` is
 /// required at build time (validated by [`validate_tun_capture`]).
