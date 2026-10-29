@@ -109,6 +109,16 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
     let results = mgr.apply_all(fetched);
     let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
     let failed = results.len() - updated;
+    for (id, result) in &results {
+        if let Err(err) = result {
+            tracing::warn!(
+                id = %id,
+                error = %err.redacted_display(),
+                code = %err.code().as_str(),
+                "auto-update: subscription failed"
+            );
+        }
+    }
     tracing::info!(updated, failed, "auto-update subscriptions");
     let settings = current_settings(&state.paths).unwrap_or_default();
     if let Some(warning) = application::apply_after_subscription_change(app, state, &settings) {

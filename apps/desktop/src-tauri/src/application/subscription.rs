@@ -244,7 +244,15 @@ pub(crate) fn remove_subscription_use_case(
 ) -> Result<serde_json::Value, AppError> {
     let _orch = lock_orchestrate(state)?;
     let paths = SubscriptionPaths::from_app(&state.paths);
-    ice_engine::remove_subscription(&paths, req.id).map_err(AppError::from)?;
+    ice_engine::remove_subscription(&paths, req.id).map_err(|err| {
+        tracing::warn!(
+            id = %req.id,
+            error = %err.redacted_display(),
+            code = %err.code().as_str(),
+            "remove_subscription: failed"
+        );
+        AppError::from(err)
+    })?;
     if let Err(err) = remove_subscription_favorites(&state.paths.node_favorites(), req.id) {
         tracing::warn!(id = %req.id, error = %err.message, "remove_subscription: purge favorites failed");
     }
@@ -269,6 +277,12 @@ pub(crate) fn update_subscription_use_case(
     let fetched = match mgr.fetch_update(req.id) {
         Ok(upd) => upd,
         Err(err) => {
+            tracing::warn!(
+                id = %req.id,
+                error = %err.redacted_display(),
+                code = %err.code().as_str(),
+                "update_subscription: fetch failed"
+            );
             // Keep the pre-split behavior: record `last_error` on a failed fetch.
             let recorded = {
                 let _orch = lock_orchestrate(state)?;
@@ -284,7 +298,15 @@ pub(crate) fn update_subscription_use_case(
     };
 
     let _orch = lock_orchestrate(state)?;
-    let meta = mgr.apply_update(fetched).map_err(AppError::from)?;
+    let meta = mgr.apply_update(fetched).map_err(|err| {
+        tracing::warn!(
+            id = %req.id,
+            error = %err.redacted_display(),
+            code = %err.code().as_str(),
+            "update_subscription: apply failed"
+        );
+        AppError::from(err)
+    })?;
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
@@ -303,7 +325,16 @@ pub(crate) fn set_active_subscription_use_case(
 ) -> Result<serde_json::Value, AppError> {
     let _orch = lock_orchestrate(state)?;
     let paths = SubscriptionPaths::from_app(&state.paths);
-    let meta = ice_engine::set_active(&paths, req.id, req.active).map_err(AppError::from)?;
+    let meta = ice_engine::set_active(&paths, req.id, req.active).map_err(|err| {
+        tracing::warn!(
+            id = %req.id,
+            active = req.active,
+            error = %err.redacted_display(),
+            code = %err.code().as_str(),
+            "set_active_subscription: failed"
+        );
+        AppError::from(err)
+    })?;
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
@@ -392,7 +423,17 @@ pub(crate) fn set_auto_update_subscription_use_case(
         let paths = SubscriptionPaths::from_app(&state.paths);
         let meta =
             ice_engine::set_auto_update(&paths, req.id, req.auto_update, req.auto_update_interval)
-                .map_err(AppError::from)?;
+                .map_err(|err| {
+                    tracing::warn!(
+                        id = %req.id,
+                        auto_update = req.auto_update,
+                        interval = ?req.auto_update_interval,
+                        error = %err.redacted_display(),
+                        code = %err.code().as_str(),
+                        "set_auto_update_subscription: failed"
+                    );
+                    AppError::from(err)
+                })?;
         tracing::info!(
             id = %req.id,
             auto_update = req.auto_update,

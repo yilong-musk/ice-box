@@ -179,8 +179,7 @@ export function Subscriptions({ active = true }: Props) {
       }
       return true;
     } catch (e) {
-      const message = formatInvokeError(e);
-      if (errorSurface === "dialog") setError(message);
+      if (errorSurface === "dialog") setError(formatInvokeError(e));
       else showToast(formatInvokeErrorTitle(e));
       // Keep the action failure visible. If the refresh also fails, its
       // persistent inline error is enough; replacing the toast would hide the

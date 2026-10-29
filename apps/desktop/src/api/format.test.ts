@@ -75,7 +75,10 @@ describe("formatInvokeErrorTitle", () => {
     ).toBe("Failed to download the subscription");
   });
 
-  it("falls back to the full message for unknown payloads", () => {
+  it("falls back to the full message for unknown codes and payloads", () => {
+    expect(formatInvokeErrorTitle({ code: "new.code", message: "boom" })).toBe(
+      "new.code: boom",
+    );
     expect(formatInvokeErrorTitle({ message: "network down" })).toBe(
       "network down",
     );

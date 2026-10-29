@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Subscription action failures now show only the localized error title in the
+  capsule notice, and subscription rows no longer render `last_error`.
+  Technical details for those failures are written to the log files.
+
 ## [0.2.4] - 2026-10-29
 
 ### Added

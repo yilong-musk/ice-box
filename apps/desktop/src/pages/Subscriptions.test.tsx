@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { t, isMessageKey } from "../lib/i18n";
+import { t } from "../lib/i18n";
 import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
@@ -23,53 +23,26 @@ vi.mock("../lib/nodes", () => ({
   clearNodesSnapshot: vi.fn(),
 }));
 
-vi.mock("../api/client", () => ({
-  api: {
-    listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
-    addSubscription: vi.fn(),
-    importSubscriptionFile: vi.fn(),
-    updateSubscription: vi.fn(),
-    setSubscriptionActive: vi.fn(),
-    setSubscriptionAutoUpdate: vi.fn(),
-    removeSubscription: (...args: unknown[]) => removeSubscription(...args),
-    listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
-    copySubscriptionShare: (...args: unknown[]) => copySubscriptionShare(...args),
-    exportSubscriptionSingbox: (...args: unknown[]) =>
-      exportSubscriptionSingbox(...args),
-  },
-  formatInvokeError: (err: unknown) => {
-    if (err && typeof err === "object") {
-      const o = err as { code?: string; message?: string };
-      if (typeof o.code === "string") {
-        const key = `error.${o.code}`;
-        if (isMessageKey(key)) return `${t(key)} (${o.code})`;
-        if (typeof o.message === "string") return `${o.code}: ${o.message}`;
-      }
-      if (typeof o.message === "string") return o.message;
-    }
-    return String(err);
-  },
-  formatInvokeErrorTitle: (err: unknown) => {
-    if (err && typeof err === "object") {
-      const o = err as { code?: string; message?: string };
-      if (typeof o.code === "string") {
-        const key = `error.${o.code}`;
-        if (isMessageKey(key)) return t(key);
-        if (typeof o.message === "string") return `${o.code}: ${o.message}`;
-      }
-      if (typeof o.message === "string") return o.message;
-    }
-    return String(err);
-  },
-  formatUiMessage: (msg: unknown) => {
-    if (!msg) return "";
-    if (typeof msg === "string") return msg;
-    const m = msg as { key?: string; params?: Record<string, string> };
-    if (!m.key) return String(msg);
-    if (m.key === "ui.raw") return m.params?.text ?? "";
-    return isMessageKey(m.key) ? t(m.key, m.params) : m.key;
-  },
-}));
+vi.mock("../api/client", async () => {
+  const format = await import("../api/format");
+  return {
+    ...format,
+    api: {
+      listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
+      addSubscription: vi.fn(),
+      importSubscriptionFile: vi.fn(),
+      updateSubscription: vi.fn(),
+      setSubscriptionActive: vi.fn(),
+      setSubscriptionAutoUpdate: vi.fn(),
+      removeSubscription: (...args: unknown[]) => removeSubscription(...args),
+      listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
+      copySubscriptionShare: (...args: unknown[]) =>
+        copySubscriptionShare(...args),
+      exportSubscriptionSingbox: (...args: unknown[]) =>
+        exportSubscriptionSingbox(...args),
+    },
+  };
+});
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
