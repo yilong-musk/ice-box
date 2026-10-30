@@ -111,11 +111,6 @@ export function UpdateCard({
               {t("settings.updateAutoCheck")}
             </FieldLabel>
           </Field>
-          {isPhoneShell() ? (
-            <p className="text-xs text-muted-foreground">
-              {t("settings.updatePhoneDesc")}
-            </p>
-          ) : null}
           <p className="text-xs text-muted-foreground">
             {t("settings.updateCurrent", { version: APP_VERSION })}
           </p>
@@ -156,7 +151,11 @@ export function UpdateCard({
                 disabled={busy || updateBusy || !loaded}
                 onClick={download ? onDownload : onInstall}
               >
-                {t(download ? "settings.updateDownload" : "settings.updateInstall")}
+                {t(
+                  download
+                    ? "settings.updateDownload"
+                    : "settings.updateInstall",
+                )}
               </Button>
             ) : null}
           </div>

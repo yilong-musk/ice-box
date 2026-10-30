@@ -60,7 +60,7 @@ pub(crate) fn due_auto_update_ids(
 }
 
 /// Refresh every due auto-update subscription. Fetches (parallel, up to one
-/// `FETCH_TIMEOUT`) run without the orchestrate lock so the background pass never
+/// `FETCH_TOTAL_TIMEOUT`) run without the orchestrate lock so the background pass never
 /// queues Start/Stop/Settings behind it; the lock is taken with `try_lock` for
 /// the disk phase + Apply so a busy user operation simply defers the refresh.
 /// Returns `false` when the pass was deferred (orchestrate busy or the

@@ -4,15 +4,10 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Field,
-  FieldDescription,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { isPhoneShell } from "@platform/shell";
 import { t } from "../../lib/i18n";
@@ -38,7 +33,6 @@ export function DataCard({
     >
       <CardHeader>
         <CardTitle>{t("settings.data")}</CardTitle>
-        <CardDescription>{t("settings.dataDesc")}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-3">
@@ -60,23 +54,22 @@ export function DataCard({
               {t("settings.logDebug")}
             </FieldLabel>
           </Field>
-          <FieldDescription>{t("settings.logDebugDesc")}</FieldDescription>
           {isPhoneShell() ? null : (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || !loaded}
-              onClick={() =>
-                void api
-                  .revealDataDir()
-                  .catch((err) => setError(formatInvokeError(err)))
-              }
-            >
-              {t("settings.openDataDir")}
-            </Button>
-          </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || !loaded}
+                onClick={() =>
+                  void api
+                    .revealDataDir()
+                    .catch((err) => setError(formatInvokeError(err)))
+                }
+              >
+                {t("settings.openDataDir")}
+              </Button>
+            </div>
           )}
         </div>
       </CardContent>

@@ -5,11 +5,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Settings → IPv6 adds the two Shadowrocket-style DNS switches: **Enable IPv6
+  support** (query AAAA, prefer IPv4) and **Prefer IPv6** (prefer AAAA when both
+  families exist). They control the generated DNS strategy for the system proxy
+  and for TUN on macOS/Android; Windows TUN stays `ipv4_only` until the pinned
+  core's IPv6 path is fixed (#4178). IPv6 support defaults to on; prefer-IPv6
+  defaults to off.
+
 ### Changed
 
+- IPv6 support is on by default for both new and existing settings files
+  (`ipv6: true`, `prefer_ipv6: false`), so a profile that previously inherited
+  the generated `ipv4_only` DNS strategy now resolves AAAA while still
+  preferring IPv4. Turn the switch off to restore the IPv4-only behavior.
 - Subscription action failures now show only the localized error title in the
   capsule notice, and subscription rows no longer render `last_error`.
   Technical details for those failures are written to the log files.
+- Bundle sing-box 1.13.21 instead of 1.13.19. The patch release fixes a system
+  stack panic on TCP packets of an unconfigured address family, TCP NAT port
+  reuse across address families, excessive gVisor keepalive traffic, URLTest
+  hangs on unresponsive outbounds, and TUN loopback protection.
+- Subscription fetches now stop after a 60-second network-I/O budget (connect,
+  TLS and body) shared across redirect hops, so a stalled provider or redirect
+  chain cannot keep an add, manual refresh, or background update waiting for
+  minutes. Hostname lookups still use the OS resolver and are not counted in
+  that budget. The 20-second connect limit and the 8 MiB body cap are unchanged.
+- Settings item descriptions are removed; only live status and errors remain.
 
 ## [0.2.4] - 2026-10-29
 

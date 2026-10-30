@@ -113,6 +113,7 @@ const defaultStatus = {
   tun_available: true,
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
+  tun_ipv6_disabled: false,
   helper_installed: false,
   helper_supported: true,
   launch_at_login_supported: true,
@@ -141,6 +142,8 @@ describe("Settings", () => {
       auto_set_system_proxy: false,
       proxy_service_enabled: false,
       allow_lan: false,
+      ipv6: true,
+      prefer_ipv6: false,
       proxy_mode: "rule",
       auto_default_rules: true,
       language: "system",
@@ -269,6 +272,79 @@ describe("Settings", () => {
       { timeout: 2000 },
     );
     expect(toggle).not.toBeChecked();
+  });
+
+  it("saves the IPv6 support and preference switches", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+
+    const enable = view.getByLabelText(t("settings.ipv6Enable"));
+    const prefer = view.getByLabelText(t("settings.preferIpv6"));
+    expect(enable).toBeChecked();
+    expect(prefer).not.toBeChecked();
+
+    fireEvent.click(prefer);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ prefer_ipv6: true }),
+      );
+    });
+
+    fireEvent.click(enable);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ ipv6: false, prefer_ipv6: false }),
+      );
+    });
+    expect(prefer).not.toBeChecked();
+    expect(prefer).toBeDisabled();
+  });
+
+  it("explains that Windows TUN ignores the IPv6 switches", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(t("settings.ipv6TunIpv4Only"))).toBeInTheDocument();
+    });
+  });
+
+  it("hides the Windows TUN IPv6 note when TUN is not usable", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+      tun_ui_hidden: true,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+    expect(
+      view.queryByText(t("settings.ipv6TunIpv4Only")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the Windows TUN IPv6 note when TUN is unavailable", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+      tun_available: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+    expect(
+      view.queryByText(t("settings.ipv6TunIpv4Only")),
+    ).not.toBeInTheDocument();
   });
 
   it("persists turning on debug logs", async () => {
@@ -517,6 +593,7 @@ describe("Settings", () => {
     expect(titles).toEqual([
       t("settings.appearance"),
       t("settings.inbound"),
+      t("settings.ipv6"),
       t("settings.tun"),
       t("settings.startup"),
       t("settings.update"),
@@ -534,7 +611,6 @@ describe("Settings", () => {
     });
     expect(view.queryByText(t("settings.inbound"))).not.toBeInTheDocument();
     expect(view.getByText(t("settings.update"))).toBeInTheDocument();
-    expect(view.getByText(t("settings.updatePhoneDesc"))).toBeInTheDocument();
     expect(
       view.queryByRole("button", { name: t("settings.updateInstall") }),
     ).not.toBeInTheDocument();
@@ -544,7 +620,7 @@ describe("Settings", () => {
     expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
   });
 
-  it("explains battery optimization and private DNS, and installs the APK", async () => {
+  it("offers battery optimization and private DNS actions, and installs the APK", async () => {
     phoneShell.value = true;
     getStatus.mockResolvedValue({
       ...defaultStatus,
@@ -1410,12 +1486,13 @@ describe("Settings", () => {
     const view = within(container);
 
     // The install button is also disabled before the first status arrives
-    // (`!loaded`); wait for the installed-state text first.
+    // (`!loaded`); wait for the installed state to enable uninstall.
     await waitFor(() => {
-      expect(container.textContent).toContain(t("settings.helperReady"));
+      expect(
+        view.getByRole("button", { name: t("settings.uninstallHelper") }),
+      ).not.toBeDisabled();
     });
     expect(view.getByRole("button", { name: t("settings.installHelper") })).toBeDisabled();
-    expect(view.getByRole("button", { name: t("settings.uninstallHelper") })).not.toBeDisabled();
   });
 
   it("enables install and disables uninstall when the helper is missing", async () => {

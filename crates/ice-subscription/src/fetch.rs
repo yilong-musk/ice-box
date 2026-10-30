@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! HTTP fetch: pinned direct or proxied, 20s timeout, 8 MiB cap.
+//! HTTP fetch: pinned direct or proxied, 60s overall deadline, 20s connect
+//! cap, 8 MiB cap.
 
 use std::io::Read;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::SubscriptionError;
 use crate::tls_fetch::{tls_client_config, tls_get_pinned, url_path_query};
@@ -26,11 +27,42 @@ pub(crate) fn sanitize_http_header_value(value: &str) -> Result<String, Subscrip
     Ok(value.to_string())
 }
 
-/// Fetch timeout.
+/// Per-operation timeout: every connect, plus the pinned TLS path's read and
+/// write calls. ureq response reads are governed by the overall request
+/// deadline ([`FETCH_TOTAL_TIMEOUT`]) instead.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Overall network-I/O budget for one subscription fetch across every redirect
+/// hop and the response body. Without it a provider that drips the body slowly
+/// keeps resetting the per-read timeout and the update never ends. The limit is
+/// checked between I/O operations, so a connect already in flight when it
+/// passes keeps its own [`FETCH_TIMEOUT`] cap, and DNS resolution is left to
+/// the OS resolver (the hostname is normally cached and fast): each hop's
+/// lookup and any in-flight connect can overshoot by one resolver or connect
+/// timeout.
+pub const FETCH_TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Max redirect hops; each target is SSRF-validated before follow.
 const MAX_REDIRECTS: u32 = 5;
+
+/// Error returned once the overall fetch deadline has passed.
+fn fetch_timeout_error(log_url: &str) -> SubscriptionError {
+    SubscriptionError::FetchFailed(format!(
+        "GET {log_url}: timed out after {}s",
+        FETCH_TOTAL_TIMEOUT.as_secs()
+    ))
+}
+
+/// Time left before `deadline`, or a timeout error when it has passed.
+pub(crate) fn fetch_time_left(
+    log_url: &str,
+    deadline: Instant,
+) -> Result<Duration, SubscriptionError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| fetch_timeout_error(log_url))
+}
 
 #[derive(Debug, Clone)]
 pub struct FetchResponse {
@@ -314,12 +346,15 @@ struct FetchAttempt<'a> {
     last_modified: Option<&'a str>,
     log_url: &'a str,
     via_ip: Option<std::net::IpAddr>,
+    /// Time left before the overall fetch deadline.
+    timeout: Duration,
 }
 
 fn try_request(attempt: FetchAttempt<'_>) -> Result<ureq::Response, SubscriptionError> {
     let req = attempt
         .agent
         .get(attempt.connect_url)
+        .timeout(attempt.timeout)
         .set("Host", attempt.host_header);
     let req = apply_conditional_headers(req, attempt.hop, attempt.etag, attempt.last_modified)?;
     req.call().map_err(|e| {
@@ -341,9 +376,11 @@ fn proxied_request(
     etag: Option<&str>,
     last_modified: Option<&str>,
     log_url: &str,
+    timeout: Duration,
 ) -> Result<ureq::Response, SubscriptionError> {
     let req = agent
         .get(url)
+        .timeout(timeout)
         .set("User-Agent", "ice-box/0.1")
         .set("Accept", "*/*");
     let req = apply_conditional_headers(req, hop, etag, last_modified)?;
@@ -419,12 +456,21 @@ fn hop_from_tls(
     etag: Option<&str>,
     last_modified: Option<&str>,
     ip: std::net::IpAddr,
+    deadline: Instant,
 ) -> Result<HopResponse, SubscriptionError> {
     let port = url_port(url)?;
     let path_query = url_path_query(url)?;
     let headers = conditional_header_pairs(hop, etag, last_modified)?;
     let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let resp = tls_get_pinned(host_header, port, ip, &path_query, &header_refs, url)?;
+    let resp = tls_get_pinned(
+        host_header,
+        port,
+        ip,
+        &path_query,
+        &header_refs,
+        url,
+        deadline,
+    )?;
     let status = resp.status;
     Ok(HopResponse {
         status,
@@ -486,10 +532,14 @@ fn fetch_get(
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
+    deadline: Instant,
 ) -> Result<HopResponse, SubscriptionError> {
     let mut current = url.to_string();
 
     for hop in 0..=MAX_REDIRECTS {
+        // Every hop shares the one overall deadline, so a redirect chain cannot
+        // multiply the wait budget.
+        let time_left = fetch_time_left(&current, deadline)?;
         // Pick the proxy per hop: a redirect can change the scheme.
         let (agent, proxied) = agents.for_url(&current);
         if proxied {
@@ -499,7 +549,15 @@ fn fetch_get(
             // proxy mode still rejects literal private hosts, restricted names,
             // and https->http downgrades on every hop (see docs/architecture.md).
             validate_subscription_url_syntax(&current)?;
-            let response = proxied_request(agent, &current, hop, etag, last_modified, &current)?;
+            let response = proxied_request(
+                agent,
+                &current,
+                hop,
+                etag,
+                last_modified,
+                &current,
+                time_left,
+            )?;
             let hop_resp = hop_from_ureq(response)?;
             match handle_hop(hop_resp, url, &current, hop)? {
                 Ok(final_hop) => return Ok(final_hop),
@@ -523,8 +581,17 @@ fn fetch_get(
         let mut hop_err: Option<SubscriptionError> = None;
 
         for addr in addrs {
+            let time_left = fetch_time_left(&current, deadline)?;
             let result = if https {
-                hop_from_tls(&current, &host_header, hop, etag, last_modified, addr.ip())
+                hop_from_tls(
+                    &current,
+                    &host_header,
+                    hop,
+                    etag,
+                    last_modified,
+                    addr.ip(),
+                    deadline,
+                )
             } else {
                 let pinned = pin_url_to_ip(&current, addr.ip())?;
                 match try_request(FetchAttempt {
@@ -536,6 +603,7 @@ fn fetch_get(
                     last_modified,
                     log_url: &current,
                     via_ip: Some(addr.ip()),
+                    timeout: time_left,
                 }) {
                     Ok(response) => hop_from_ureq(response),
                     Err(err) => Err(err),
@@ -576,9 +644,26 @@ fn fetch_response(
     etag: Option<&str>,
     last_modified: Option<&str>,
 ) -> Result<FetchResponse, SubscriptionError> {
+    fetch_response_with_deadline(
+        agents,
+        url,
+        etag,
+        last_modified,
+        Instant::now() + FETCH_TOTAL_TIMEOUT,
+    )
+}
+
+/// [`fetch_response`] with an explicit deadline so tests can use short budgets.
+fn fetch_response_with_deadline(
+    agents: &FetchAgents,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+    deadline: Instant,
+) -> Result<FetchResponse, SubscriptionError> {
     let redacted = crate::redact_subscription_url_for_log(url);
     tracing::debug!(url = %redacted, proxied = agents.any(), "subscription fetch: start");
-    let hop = fetch_get(agents, url, etag, last_modified).inspect_err(
+    let hop = fetch_get(agents, url, etag, last_modified, deadline).inspect_err(
         |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "subscription fetch: failed"),
     )?;
     tracing::debug!(url = %redacted, status = hop.status, bytes = hop.body.len(), "subscription fetch: response");
@@ -853,7 +938,8 @@ mod tests {
     #[ignore = "network: live HTTPS fetch after SSRF validation"]
     fn https_fetch_succeeds() {
         let agents = FetchAgents::direct();
-        let hop = fetch_get(&agents, "https://example.com/", None, None)
+        let deadline = Instant::now() + FETCH_TOTAL_TIMEOUT;
+        let hop = fetch_get(&agents, "https://example.com/", None, None, deadline)
             .expect("HTTPS subscription-style fetch");
         assert_eq!(hop.status, 200);
     }
@@ -1054,5 +1140,67 @@ mod tests {
             .expect_err("a redirect to a private host must be rejected");
         assert!(err.to_string().contains("not allowed"), "{err}");
         proxy.join().expect("proxy thread");
+    }
+
+    #[test]
+    fn fetch_deadline_cuts_off_a_slow_proxy_body() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_stop = std::sync::Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            let Ok((mut tcp, _)) = listener.accept() else {
+                return;
+            };
+            let _ = read_request_head(&mut tcp);
+            // The client may already have hit its deadline under load.
+            if tcp
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
+                )
+                .is_err()
+            {
+                return;
+            }
+            // Drip one byte at a time: every read succeeds inside the
+            // per-operation timeout, so only the overall deadline can stop it.
+            while !server_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                if tcp.write_all(b"x").is_err() {
+                    break;
+                }
+                let _ = tcp.flush();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+
+        let agents = FetchAgents::from_proxy(&SubscriptionProxy {
+            http: Some(format!("http://{addr}")),
+            ..SubscriptionProxy::default()
+        })
+        .unwrap();
+        let started = Instant::now();
+        let err = fetch_response_with_deadline(
+            &agents,
+            "http://example.com/sub",
+            None,
+            None,
+            Instant::now() + Duration::from_millis(500),
+        )
+        .expect_err("a dripping body must not outlive the overall fetch deadline");
+        let elapsed = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.join().expect("proxy thread");
+
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        assert!(err.to_string().contains("timed out"), "{err}");
+    }
+
+    #[test]
+    fn fetch_time_left_reports_a_timeout_after_the_deadline() {
+        let deadline = Instant::now() + Duration::from_millis(20);
+        fetch_time_left("http://example.com/sub", deadline).expect("before the deadline");
+        std::thread::sleep(Duration::from_millis(50));
+        let err = fetch_time_left("http://example.com/sub", deadline).unwrap_err();
+        assert!(err.to_string().contains("timed out after 60s"), "{err}");
     }
 }

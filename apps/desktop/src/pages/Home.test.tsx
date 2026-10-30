@@ -93,6 +93,7 @@ const tunStatus = {
   tun_available: true,
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
+  tun_ipv6_disabled: false,
   helper_installed: false,
   helper_supported: true,
   launch_at_login_supported: true,

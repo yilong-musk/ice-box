@@ -22,7 +22,7 @@ use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 const GENERATED_LOG_LEVEL: &str = "info";
 
 /// Clash API listen + Bearer secret. `mode_list` must not be emitted — the
-/// pinned sing-box 1.13.19 rejects it ("unknown field").
+/// pinned sing-box 1.13.21 rejects it ("unknown field").
 fn clash_api_block(template: &LocalTemplate) -> Value {
     json!({
         "external_controller": format!(
@@ -109,7 +109,7 @@ fn build_direct_only_config_with(
     rules.extend(app_proxy_rules(&template.app_proxies, "direct", platform));
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
-    let route = json!({
+    let mut route = json!({
         "final": "direct",
         "auto_detect_interface": true,
         "rules": rules,
@@ -123,9 +123,12 @@ fn build_direct_only_config_with(
     });
     apply_shared_root(&mut log, &mut experimental, platform, shared_root);
 
+    let mut dns = minimal_dns_block(platform);
+    apply_dns_strategy(&mut dns, &mut route, template, capture_intent, platform);
+
     let config = json!({
         "log": log,
-        "dns": minimal_dns_block(platform),
+        "dns": dns,
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": route,
@@ -194,7 +197,9 @@ pub fn validate_template(template: &LocalTemplate) -> Result<(), ConfigError> {
 /// Windows (`docs/tun.md`): the OS-resolver-backed `local` server must not
 /// be used — its queries dial the TUN peer and re-enter the engine — and UDP
 /// upstreams are captured by the core's own TUN. The minimal block instead
-/// ships two DoT resolvers and `ipv4_only` (the IPv6 path is broken, #4178).
+/// ships two DoT resolvers. The builder applies the user's IPv6 switches
+/// afterwards; Windows TUN forces `ipv4_only` (the pinned core's IPv6 path is
+/// broken, #4178).
 pub fn minimal_dns_block(platform: HostPlatform) -> Value {
     if platform.is_windows() {
         json!({
@@ -216,6 +221,151 @@ pub fn minimal_dns_block(platform: HostPlatform) -> Value {
             "final": "local"
         })
     }
+}
+
+/// The DNS strategy for this build.
+///
+/// The user's IPv6 switches win over a profile's own `dns.strategy`: off
+/// pins `ipv4_only`; on uses `prefer_ipv4` unless "prefer IPv6" is also on.
+/// Windows TUN stays `ipv4_only` — the pinned core's IPv6 DNS/hijack path is
+/// broken (#4178) and the Windows hijack rule is IPv4-only by design.
+pub(crate) fn effective_dns_strategy(
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+    platform: HostPlatform,
+) -> &'static str {
+    if !template.ipv6 || (platform.is_windows() && capture_intent == CaptureIntent::Tun) {
+        "ipv4_only"
+    } else if template.prefer_ipv6 {
+        "prefer_ipv6"
+    } else {
+        "prefer_ipv4"
+    }
+}
+
+/// Apply [`effective_dns_strategy`] to a DNS block and to any rule-level
+/// strategy overrides carried by the profile.
+///
+/// sing-box lets DNS rules and `resolve` route actions carry their own
+/// `strategy`. Replacing those as well keeps an imported profile from
+/// overriding the user's IPv6 switches for matched queries.
+fn apply_dns_strategy(
+    dns: &mut Value,
+    route: &mut Value,
+    template: &LocalTemplate,
+    capture_intent: CaptureIntent,
+    platform: HostPlatform,
+) {
+    let strategy = effective_dns_strategy(template, capture_intent, platform);
+    if let Some(obj) = dns.as_object_mut() {
+        obj.insert("strategy".into(), json!(strategy));
+    }
+    override_rule_strategy(dns.get_mut("rules"), strategy);
+    override_rule_strategy(route.get_mut("rules"), strategy);
+}
+
+/// Replace rule-level address-family choices with the build-wide strategy.
+fn override_rule_strategy(rules: Option<&mut Value>, strategy: &str) {
+    let Some(rules) = rules.and_then(Value::as_array_mut) else {
+        return;
+    };
+    for rule in rules {
+        let Some(obj) = rule.as_object_mut() else {
+            continue;
+        };
+        if obj.contains_key("strategy") {
+            obj.insert("strategy".into(), json!(strategy));
+        }
+    }
+}
+
+/// Drop `AAAA` from fake-ip DNS rules that target an IPv4-only fake-ip server.
+///
+/// The pinned core's fake-ip transport answers AAAA with an empty success when
+/// `inet6_range` is absent, and an IPv6 fake range inside `fc00::/7` never
+/// enters the TUN (both TUN shapes exclude that prefix), so those answers are
+/// unreachable. Letting AAAA fall through to a real resolver keeps
+/// `prefer_ipv6` meaningful for fake-ip profiles; A still gets the fake IPv4
+/// address. A fake-ip server whose `inet6_range` lies outside the exclusion
+/// keeps its AAAA rule.
+///
+/// `query_type` accepts either a string or an array. Rules that target the
+/// v4-only fake-ip server without a `query_type` are narrowed to A as well:
+/// otherwise their AAAA queries still reach the transport and get an empty
+/// success, so the intended fall-through would not happen.
+fn strip_fakeip_aaaa(dns: &mut Value) {
+    let v4_only_fakeip_tags: std::collections::HashSet<String> = dns
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(|servers| {
+            servers
+                .iter()
+                .filter(|server| server.get("type").and_then(Value::as_str) == Some("fakeip"))
+                .filter(|server| {
+                    server
+                        .get("inet6_range")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|range| !range.is_empty())
+                        .is_none_or(fakeip_range_is_tun_excluded)
+                })
+                .filter_map(|server| server.get("tag").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if v4_only_fakeip_tags.is_empty() {
+        return;
+    }
+    let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
+        return;
+    };
+    rules.retain_mut(|rule| {
+        let targets_v4_only_fakeip = rule
+            .get("server")
+            .and_then(Value::as_str)
+            .is_some_and(|tag| v4_only_fakeip_tags.contains(tag));
+        if !targets_v4_only_fakeip {
+            return true;
+        }
+        let Some(obj) = rule.as_object_mut() else {
+            return true;
+        };
+        let Some(query_type) = obj.get_mut("query_type") else {
+            // A broad rule routes AAAA into the v4-only transport, which
+            // answers with an empty success. Narrow it to A so AAAA falls
+            // through to a real resolver.
+            obj.insert("query_type".into(), json!(["A"]));
+            return true;
+        };
+        match query_type {
+            Value::Array(types) => {
+                types.retain(|kind| kind.as_str() != Some("AAAA"));
+                !types.is_empty()
+            }
+            // `query_type` is a Listable field; a string is its one-element
+            // form, so keep or drop the whole rule instead of rewriting it.
+            Value::String(kind) => kind.as_str() != "AAAA",
+            _ => true,
+        }
+    });
+}
+
+/// Whether an IPv6 CIDR lies inside `fc00::/7`, the ULA prefix both TUN shapes
+/// exclude from capture via `route_exclude_address` (desktop and mobile).
+fn fakeip_range_is_tun_excluded(range: &str) -> bool {
+    let Some((addr, prefix)) = range.split_once('/') else {
+        return false;
+    };
+    let (Ok(addr), Ok(prefix)) = (
+        addr.trim().parse::<std::net::Ipv6Addr>(),
+        prefix.trim().parse::<u8>(),
+    ) else {
+        return false;
+    };
+    // `fc00::/7` is the first seven bits `1111110`; only a range at least that
+    // specific can be fully inside it.
+    (7..=128).contains(&prefix) && (u128::from(addr) >> 121) == 0b111_1110
 }
 
 /// Whether the DNS block contains a `local`-tagged server (required for
@@ -572,6 +722,16 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     ice_config_guard::retain_allowed_dns_servers(&mut dns);
     if !dns_block_is_usable(&dns) {
         dns = minimal_dns_block(input.platform);
+    }
+    apply_dns_strategy(
+        &mut dns,
+        &mut route,
+        &input.template,
+        capture_intent,
+        input.platform,
+    );
+    if input.template.ipv6 {
+        strip_fakeip_aaaa(&mut dns);
     }
 
     // sing-box 1.12+: domain addresses must be resolved via a domain resolver.
@@ -1036,7 +1196,7 @@ fn android_exclude_package(
 /// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver.
 ///
 /// This replaces the TUN inbound `dns_hijack` field, which the pinned
-/// sing-box 1.13.19 rejects as an unknown field (the feature moved to route
+/// sing-box 1.13.21 rejects as an unknown field (the feature moved to route
 /// rule actions in sing-box 1.9).
 pub fn tun_dns_hijack_rule() -> Value {
     json!({ "port": [53], "action": "hijack-dns" })
@@ -1175,7 +1335,7 @@ fn tun_network_cidr(address: &str) -> Option<String> {
     }
 }
 
-/// The locked TUN inbound shape for the bundled sing-box 1.13.19 (`docs/tun.md`):
+/// The locked TUN inbound shape for the bundled sing-box 1.13.21 (`docs/tun.md`):
 /// dual-stack `address` list, sub-range auto_route, and the fixed
 /// `route_exclude_address` / `loopback_address` sets. `interface_name` is
 /// required at build time (validated by [`validate_tun_capture`]).

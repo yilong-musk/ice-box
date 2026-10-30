@@ -202,6 +202,9 @@ pub struct StatusResponse {
     /// True when the platform must not surface TUN controls at all; the
     /// frontend hides the TUN card and switches when set.
     pub tun_ui_hidden: bool,
+    /// True when TUN capture keeps IPv6 disabled on this platform (Windows,
+    /// #4178); the IPv6 switches only affect the system proxy there.
+    pub tun_ipv6_disabled: bool,
     /// Privileged helper daemon installed + authorized (read-only probe).
     /// Drives helper install/uninstall actions in Settings and Home.
     pub helper_installed: bool,
@@ -1081,6 +1084,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         tun_available: capture.tun_available,
         tun_unavailable_reason: capture.tun_unavailable_reason,
         tun_ui_hidden: capture.tun_ui_hidden,
+        tun_ipv6_disabled: cfg!(target_os = "windows"),
         helper_installed: probes.helper_installed,
         helper_supported: cfg!(target_os = "macos"),
         launch_at_login_supported: crate::autostart::SUPPORTED,

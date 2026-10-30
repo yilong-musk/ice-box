@@ -307,7 +307,6 @@ const zh = {
 
   // --- settings page ---
   "settings.appearance": "外观",
-  "settings.appearanceDesc": "主题与语言默认跟随系统。",
   "settings.theme": "主题",
   "settings.appearance.system": "跟随系统",
   "settings.appearance.light": "浅色",
@@ -317,58 +316,42 @@ const zh = {
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
   "settings.tray": "系统托盘图标",
-  "settings.trayDesc":
-    "菜单栏图标显示的内容；选「仅网速」时读数一直显示，没有实时数据就显示 0.0",
   "settings.trayIconAndSpeed": "图标 + 网速",
   "settings.trayIconOnly": "仅图标",
   "settings.traySpeedOnly": "仅网速",
   "settings.startup": "启动",
-  "settings.startupDesc": "登录系统时如何启动 ice-box",
   "settings.launchAtLogin": "开机自启",
-  "settings.launchAtLoginDesc":
-    "登录后在后台启动并恢复上次的代理状态；窗口不弹出，可从托盘打开",
   "settings.tun": "TUN 模式",
-  "settings.tunDesc":
-    "决定下次启动代理服务时走透明代理还是系统代理；切换本开关不会立即启停当前服务",
   "settings.tunEnable": "启用 TUN 模式",
   "settings.tunTransition.preparing": "正在启用 TUN…",
   "settings.tunTransition.stopping": "正在关闭 TUN…",
   "settings.tunRecoveryRequired":
-    "TUN 清理未确认，已阻止新的 TUN 激活；请在主页点击「重试恢复」后再切换",
+    "TUN 清理未确认，请先在主页「重试恢复」。",
   "settings.tunNotSupported": "当前平台暂不支持 TUN 模式",
   "settings.tunActiveWithIface":
-    "当前通过 TUN 接管流量{interface}。关闭本开关不会停止当前服务，下次启动将改用系统代理",
+    "正在通过 TUN 接管流量{interface}；更改在下次启动生效。",
   "settings.helperStale":
-    "应用已更新内核版本，辅助组件仍在运行旧版内核。请点击下方「更新辅助组件」替换（将弹出系统授权密码框），更新前无法启用 TUN",
-  "settings.helperReady":
-    "辅助组件已安装并授权，可直接启用 TUN",
+    "更新辅助组件后才能启用 TUN。",
   "settings.helperNeeded":
-    "需要系统权限：先安装并授权辅助组件（将弹出系统授权密码框）。本开关只决定下次启动走 TUN 还是系统代理",
-  "settings.tunElevationDesc":
-    "首次启用会弹出一次系统 UAC，用于创建计划任务 ice-box-tun；之后开关与启停都不再提权。本开关只决定下次启动走 TUN 还是系统代理",
+    "请先安装并授权辅助组件。",
   "settings.updateHelper": "更新辅助组件",
   "settings.installHelper": "安装辅助组件",
   "settings.uninstallHelper": "卸载辅助组件",
   "settings.inbound": "入站",
-  "settings.inboundDesc": "Mixed 与 Clash API 监听地址",
   "settings.mixedListen": "Mixed 监听",
   "settings.mixedPort": "Mixed 端口",
   "settings.clashListen": "Clash API 监听",
   "settings.clashPort": "Clash API 端口",
   "settings.allowLan": "允许局域网共享（Allow LAN）",
-  "settings.allowLanDesc":
-    "局域网共享时 Mixed 入站监听 0.0.0.0，其他设备可通过本机局域网 IP 连接；Clash API 仍仅限本机",
+  "settings.ipv6": "IPv6",
+  "settings.ipv6Enable": "启用 IPv6 支持",
+  "settings.preferIpv6": "首选 IPv6",
+  "settings.ipv6TunIpv4Only":
+    "Windows 的 TUN 模式仍固定使用 IPv4；这两个开关仅影响系统代理。",
   "settings.autoDefaultRules": "为无规则的订阅附加默认分流规则",
-  "settings.autoDefaultRulesDesc":
-    "订阅本身不带规则时（如分享链接订阅），自动附加内置分流：私网 IP / 国内 IP / 国内域名直连，其余走所选节点；并配套国内 / 远程 DNS 分流",
   "settings.probeExitIp": "探测出口公网 IP",
-  "settings.probeExitIpDesc":
-    "核心运行时，约每 30 秒经本地 Mixed 入站向 Cloudflare 发起一次 HTTPS 探测，以便首页显示落地 IP；关闭后不再发起该请求",
   "settings.data": "数据",
-  "settings.dataDesc": "日志展示与本地文件",
   "settings.logDebug": "调试模式",
-  "settings.logDebugDesc":
-    "默认日志页只显示连接与重要事件；打开后显示全量日志",
   "settings.openDataDir": "打开数据目录",
   "settings.helperStatusUnconfirmed":
     "辅助组件状态未确认，未更改 TUN 设置；请稍后重试",
@@ -381,26 +364,16 @@ const zh = {
   "settings.updateAvailable": "发现新版本 {version}",
   "settings.updateInstall": "安装更新",
   "settings.updateDownload": "下载更新",
-  "settings.updatePhoneDesc":
-    "检查会直接访问 GitHub，不经过 VPN。发现新版本后由应用下载 APK，再交给系统安装器确认。若系统要求，请先允许此应用安装未知应用。",
   "settings.updateCheckFailed":
     "无法检查更新。若 GitHub 无法直连，请先启动代理服务后再试。",
   "settings.updateCheckFailedPhone":
     "无法检查更新。检查会直接访问 GitHub，不经过 VPN。",
   "settings.system": "系统",
-  "settings.systemDesc":
-    "这些开关在系统设置里。用来减少厂商停掉 VPN，并说明私人 DNS 会绕过 DNS 劫持。",
   "settings.batteryTitle": "电池优化",
-  "settings.batteryDesc":
-    "未忽略电池优化时，部分系统会在后台停掉 VPN。",
   "settings.batteryAction": "请求忽略电池优化",
   "settings.privateDnsTitle": "私人 DNS",
-  "settings.privateDnsDesc":
-    "私人 DNS 处于严格模式时，系统 DNS 不经过本应用的 DNS 劫持。",
   "settings.privateDnsAction": "打开网络设置",
   "settings.alwaysOnTitle": "始终开启 VPN",
-  "settings.alwaysOnDesc":
-    "在系统里把 ice-box 设为始终开启的 VPN 后，开机和离开界面也会自动连接。",
   "settings.alwaysOnAction": "打开 VPN 设置",
   "settings.alwaysOnEnabled": "已设为始终开启的 VPN。",
   "settings.updateFeedUnavailable":
@@ -841,7 +814,6 @@ const en: Record<MessageKey, string> = {
 
   // --- settings page ---
   "settings.appearance": "Appearance",
-  "settings.appearanceDesc": "Theme and language follow the system by default.",
   "settings.theme": "Theme",
   "settings.appearance.system": "System",
   "settings.appearance.light": "Light",
@@ -851,58 +823,42 @@ const en: Record<MessageKey, string> = {
   "settings.language.zh": "简体中文",
   "settings.language.en": "English",
   "settings.tray": "Menu Bar Item",
-  "settings.trayDesc":
-    "What the menu bar shows; Speed only keeps the readout up, showing 0.0 while there is no live data",
   "settings.trayIconAndSpeed": "Icon + speed",
   "settings.trayIconOnly": "Icon only",
   "settings.traySpeedOnly": "Speed only",
   "settings.startup": "Startup",
-  "settings.startupDesc": "How ice-box starts with your login session",
   "settings.launchAtLogin": "Launch at login",
-  "settings.launchAtLoginDesc":
-    "Start in the background after you log in and restore the last proxy state; the window stays in the tray instead of opening",
   "settings.tun": "TUN Mode",
-  "settings.tunDesc":
-    "Chooses transparent proxy vs the system proxy for the next time the proxy service starts. Toggling this switch does not start or stop the current service",
   "settings.tunEnable": "Enable TUN Mode",
   "settings.tunTransition.preparing": "Enabling TUN…",
   "settings.tunTransition.stopping": "Disabling TUN…",
   "settings.tunRecoveryRequired":
-    "TUN cleanup is unconfirmed, so new TUN activation is blocked. Run “Retry Recovery” on Home before switching",
+    "TUN cleanup is unconfirmed; run “Retry Recovery” on Home.",
   "settings.tunNotSupported": "TUN is not supported on this platform",
   "settings.tunActiveWithIface":
-    "Currently capturing via TUN{interface}. Turning this off does not stop the current service; the next start will use the system proxy",
+    "Capturing via TUN{interface}; changes apply on the next start.",
   "settings.helperStale":
-    "The app updated its core, but the helper still runs the old core. Click “Update Helper” below to replace it (a system authorization prompt will appear); TUN stays disabled until then",
-  "settings.helperReady":
-    "The helper is installed and authorized; TUN can be enabled directly",
+    "Update the helper before enabling TUN.",
   "settings.helperNeeded":
-    "System permission required: install and authorize the helper first (a system authorization prompt will appear). This switch only chooses TUN vs the system proxy for the next start",
-  "settings.tunElevationDesc":
-    "The first enable shows one UAC prompt to create the ice-box-tun scheduled task; later toggles and start/stop do not prompt. This switch only chooses TUN vs the system proxy for the next start",
+    "Install and authorize the helper first.",
   "settings.updateHelper": "Update Helper",
   "settings.installHelper": "Install Helper",
   "settings.uninstallHelper": "Uninstall Helper",
   "settings.inbound": "Inbound",
-  "settings.inboundDesc": "Mixed and Clash API listen addresses",
   "settings.mixedListen": "Mixed Listen",
   "settings.mixedPort": "Mixed Port",
   "settings.clashListen": "Clash API Listen",
   "settings.clashPort": "Clash API Port",
   "settings.allowLan": "Allow LAN Sharing (Allow LAN)",
-  "settings.allowLanDesc":
-    "With LAN sharing, the Mixed inbound listens on 0.0.0.0 and other devices can connect via this machine's LAN IP; the Clash API stays local-only",
+  "settings.ipv6": "IPv6",
+  "settings.ipv6Enable": "Enable IPv6 support",
+  "settings.preferIpv6": "Prefer IPv6",
+  "settings.ipv6TunIpv4Only":
+    "Windows TUN stays IPv4-only; these switches only affect the system proxy.",
   "settings.autoDefaultRules": "Attach default rules to rule-less subscriptions",
-  "settings.autoDefaultRulesDesc":
-    "When a subscription carries no rules (e.g. share-link subscriptions), built-in split routing is attached automatically: private IPs / China IPs / China domains go direct and the rest goes through the selected node, with matching China / remote DNS split",
   "settings.probeExitIp": "Probe public exit IP",
-  "settings.probeExitIpDesc":
-    "While the core is running, about every 30 seconds send one HTTPS probe through the local Mixed inbound to Cloudflare so Home can show the landing IP; turn off to skip those requests",
   "settings.data": "Data",
-  "settings.dataDesc": "Log display and local files",
   "settings.logDebug": "Debug logs",
-  "settings.logDebugDesc":
-    "The Logs page shows connections and important events by default; turn on to show every log line",
   "settings.openDataDir": "Open Data Directory",
   "settings.helperStatusUnconfirmed":
     "Helper status unconfirmed; TUN settings unchanged. Try again later",
@@ -915,26 +871,16 @@ const en: Record<MessageKey, string> = {
   "settings.updateAvailable": "Version {version} is available",
   "settings.updateInstall": "Install Update",
   "settings.updateDownload": "Download Update",
-  "settings.updatePhoneDesc":
-    "The check contacts GitHub directly and does not use the VPN. A newer version is downloaded in the app and handed to the system installer. If Android asks, allow this app to install unknown apps.",
   "settings.updateCheckFailed":
     "Could not check for updates. If GitHub is unreachable, start the proxy service and try again.",
   "settings.updateCheckFailedPhone":
     "Could not check for updates. The check contacts GitHub directly and does not use the VPN.",
   "settings.system": "System",
-  "settings.systemDesc":
-    "These controls live in system settings. They reduce the chance a vendor ROM stops the VPN, and explain when Private DNS bypasses DNS hijacking.",
   "settings.batteryTitle": "Battery optimization",
-  "settings.batteryDesc":
-    "Some systems stop the VPN in the background unless battery optimization is ignored.",
   "settings.batteryAction": "Request exemption",
   "settings.privateDnsTitle": "Private DNS",
-  "settings.privateDnsDesc":
-    "Strict Private DNS sends system DNS around this app's DNS hijacking.",
   "settings.privateDnsAction": "Open network settings",
   "settings.alwaysOnTitle": "Always-on VPN",
-  "settings.alwaysOnDesc":
-    "Set ice-box as the always-on VPN to connect at boot and after leaving this screen.",
   "settings.alwaysOnAction": "Open VPN settings",
   "settings.alwaysOnEnabled": "This app is the always-on VPN.",
   "settings.updateFeedUnavailable":

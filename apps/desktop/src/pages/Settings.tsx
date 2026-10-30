@@ -27,6 +27,7 @@ import { useRuntimeStore } from "../lib/runtimeStore";
 import { AndroidSystemCard } from "./settings/Android";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
+import { Ipv6Card } from "./settings/Ipv6";
 import { PortsCard } from "./settings/Ports";
 import { StartupCard } from "./settings/Startup";
 import { TunCard } from "./settings/Tun";
@@ -41,6 +42,8 @@ const defaults: AppSettings = {
   auto_set_system_proxy: false,
   proxy_service_enabled: false,
   allow_lan: false,
+  ipv6: true,
+  prefer_ipv6: false,
   proxy_mode: "rule",
   auto_default_rules: true,
   language: "system",
@@ -91,6 +94,12 @@ function settingsDiffPatch(
   }
   if (form.allow_lan !== previous.allow_lan) {
     patch.allow_lan = form.allow_lan;
+  }
+  if (form.ipv6 !== previous.ipv6) {
+    patch.ipv6 = form.ipv6;
+  }
+  if (form.prefer_ipv6 !== previous.prefer_ipv6) {
+    patch.prefer_ipv6 = form.prefer_ipv6;
   }
   if (form.auto_default_rules !== previous.auto_default_rules) {
     patch.auto_default_rules = form.auto_default_rules;
@@ -651,6 +660,11 @@ export function Settings({
 
   /** Windows hides the TUN controls entirely (gate blocked upstream). */
   const tunUiHidden = status?.tun_ui_hidden === true;
+  /** The Windows TUN IPv4-only note only matters while TUN is a usable path. */
+  const tunIpv6Disabled =
+    status?.tun_ipv6_disabled === true &&
+    !tunUiHidden &&
+    status?.tun_available !== false;
 
   return (
     <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="settings-panel">
@@ -690,6 +704,14 @@ export function Settings({
               setFieldErrors={setFieldErrors}
             />
           )}
+
+          <Ipv6Card
+            form={form}
+            setForm={setForm}
+            busy={busy}
+            loaded={loaded}
+            tunIpv6Disabled={tunIpv6Disabled}
+          />
 
           {tunUiHidden ? null : (
             <TunCard

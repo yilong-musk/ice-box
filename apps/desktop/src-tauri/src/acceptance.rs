@@ -813,7 +813,7 @@ mod live {
         );
     }
 
-    /// Slice 4c live: runtime mode switch against real sing-box. With the pinned 1.13.19 the
+    /// Slice 4c live: runtime mode switch against real sing-box. With the pinned 1.13.21 the
     /// runtime Clash `mode-list` is `[<default_mode>]`, so a raw `PATCH /configs` to another
     /// mode is silently ignored; the app-level path persists `settings.proxy_mode` and then
     /// rebuilds + reloads (SIGHUP), baking the new `default_mode`. Verify that path end to end.

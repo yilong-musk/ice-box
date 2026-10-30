@@ -546,8 +546,315 @@ fn dns_block_present() {
     let win = build_runtime_json(&windows_input).unwrap();
     assert_eq!(win["dns"]["final"], "dns-remote-0");
     assert_eq!(win["dns"]["servers"][0]["type"], "tls");
-    assert_eq!(win["dns"]["strategy"], "ipv4_only");
+    assert_eq!(win["dns"]["strategy"], "prefer_ipv4");
     assert_eq!(win["route"]["default_domain_resolver"], "dns-remote-0");
+}
+
+#[test]
+fn ipv6_switches_choose_the_dns_strategy() {
+    let build = |platform: HostPlatform, intent: CaptureIntent, ipv6: bool, prefer: bool| {
+        let mut template = if intent == CaptureIntent::Tun {
+            tun_template()
+        } else {
+            LocalTemplate::default()
+        };
+        template.ipv6 = ipv6;
+        template.prefer_ipv6 = prefer;
+        let mut input = build_input_from_nodes(template, vec![socks("a")], None);
+        input.platform = platform;
+        input.capture_intent = intent;
+        build_runtime_json(&input).expect("build")
+    };
+
+    assert_eq!(
+        build(HostPlatform::MacOs, CaptureIntent::Diagnostic, false, false)["dns"]["strategy"],
+        "ipv4_only"
+    );
+    assert_eq!(
+        build(HostPlatform::MacOs, CaptureIntent::Diagnostic, true, false)["dns"]["strategy"],
+        "prefer_ipv4"
+    );
+    assert_eq!(
+        build(HostPlatform::MacOs, CaptureIntent::Diagnostic, true, true)["dns"]["strategy"],
+        "prefer_ipv6"
+    );
+    // System proxy on Windows follows the switches; TUN stays IPv4-only.
+    assert_eq!(
+        build(HostPlatform::Windows, CaptureIntent::Diagnostic, true, true)["dns"]["strategy"],
+        "prefer_ipv6"
+    );
+    assert_eq!(
+        build(HostPlatform::Windows, CaptureIntent::Tun, true, true)["dns"]["strategy"],
+        "ipv4_only"
+    );
+    // Mobile TUN is not the Windows TUN path and keeps the preference.
+    assert_eq!(
+        build(HostPlatform::Android, CaptureIntent::Tun, true, true)["dns"]["strategy"],
+        "prefer_ipv6"
+    );
+}
+
+#[test]
+fn ipv6_switches_override_the_profile_dns_strategy() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [{ "type": "local", "tag": "local" }],
+        "final": "local",
+        "strategy": "ipv6_only",
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "local", "strategy": "ipv6_only" },
+        ],
+    }));
+    profile.route.rules = vec![json!({
+        "action": "resolve",
+        "strategy": "ipv6_only",
+    })];
+    let build = |template: LocalTemplate| {
+        let input = BuildInput {
+            template,
+            profile: Arc::new(profile.clone()),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform: HostPlatform::MacOs,
+        };
+        build_runtime_json(&input).expect("build")
+    };
+
+    let disabled = build(LocalTemplate {
+        ipv6: false,
+        ..LocalTemplate::default()
+    });
+    assert_eq!(disabled["dns"]["strategy"], "ipv4_only");
+    assert_eq!(disabled["dns"]["rules"][0]["strategy"], "ipv4_only");
+    let resolve_rule = disabled["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["action"] == "resolve")
+        .expect("profile resolve rule");
+    assert_eq!(resolve_rule["strategy"], "ipv4_only");
+
+    let preferred = build(LocalTemplate {
+        ipv6: true,
+        prefer_ipv6: true,
+        ..LocalTemplate::default()
+    });
+    assert_eq!(preferred["dns"]["strategy"], "prefer_ipv6");
+    assert_eq!(preferred["dns"]["rules"][0]["strategy"], "prefer_ipv6");
+    let resolve_rule = preferred["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["action"] == "resolve")
+        .expect("profile resolve rule");
+    assert_eq!(resolve_rule["strategy"], "prefer_ipv6");
+}
+
+#[test]
+fn direct_only_config_uses_the_ipv6_switches() {
+    let template = LocalTemplate {
+        ipv6: true,
+        prefer_ipv6: true,
+        ..LocalTemplate::default()
+    };
+    let cfg = build_direct_only_config(&template, CaptureIntent::Diagnostic, HostPlatform::MacOs)
+        .expect("direct-only");
+    assert_eq!(cfg["dns"]["strategy"], "prefer_ipv6");
+}
+
+#[test]
+fn fakeip_aaaa_falls_through_when_ipv6_is_enabled() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "query_type": ["AAAA"], "server": "fakeip" },
+        ],
+        "final": "local",
+    }));
+    let make = |ipv6: bool| {
+        let input = BuildInput {
+            template: LocalTemplate {
+                ipv6,
+                ..LocalTemplate::default()
+            },
+            profile: Arc::new(profile.clone()),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform: HostPlatform::MacOs,
+        };
+        build_runtime_json(&input).expect("build")
+    };
+
+    let with_ipv6 = make(true);
+    let rules = with_ipv6["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1, "AAAA-only fake-ip rule must be dropped");
+    assert_eq!(rules[0]["query_type"], json!(["A"]));
+    assert_eq!(with_ipv6["dns"]["strategy"], "prefer_ipv4");
+
+    let without_ipv6 = make(false);
+    let rules = without_ipv6["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "IPv4-only builds keep the fake-ip rules");
+    assert_eq!(rules[0]["query_type"], json!(["A", "AAAA"]));
+    assert_eq!(without_ipv6["dns"]["strategy"], "ipv4_only");
+}
+
+#[test]
+fn fakeip_aaaa_handles_string_and_broad_rules() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": "AAAA", "server": "fakeip" },
+            { "query_type": "A", "server": "fakeip" },
+            { "domain_suffix": ["broad.example"], "server": "fakeip" },
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+        ],
+        "final": "local",
+    }));
+    let input = BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    };
+    let cfg = build_runtime_json(&input).expect("build");
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 3, "an AAAA-only string rule must be dropped");
+    assert_eq!(
+        rules[0]["query_type"],
+        json!("A"),
+        "a non-AAAA string rule stays untouched"
+    );
+    assert_eq!(
+        rules[1]["query_type"],
+        json!(["A"]),
+        "a broad fake-ip rule is narrowed to A"
+    );
+    assert_eq!(rules[2]["query_type"], json!(["A"]));
+}
+
+#[test]
+fn fakeip_with_inet6_range_keeps_aaaa_when_ipv6_is_enabled() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip4", "inet4_range": "198.18.0.0/15" },
+            {
+                "type": "fakeip",
+                "tag": "fakeip6",
+                "inet4_range": "198.19.0.0/16",
+                "inet6_range": "2001:db8::/32",
+            },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip4" },
+            { "query_type": ["A", "AAAA"], "server": "fakeip6" },
+        ],
+        "final": "local",
+    }));
+    let input = BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    };
+    let cfg = build_runtime_json(&input).expect("build");
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "both fake-ip rules stay");
+    assert_eq!(
+        rules[0]["query_type"],
+        json!(["A"]),
+        "the IPv4-only fake-ip server drops AAAA"
+    );
+    assert_eq!(
+        rules[1]["query_type"],
+        json!(["A", "AAAA"]),
+        "an IPv6-capable fake-ip server keeps AAAA"
+    );
+}
+
+#[test]
+fn fakeip_inet6_range_inside_fc00_7_strips_aaaa() {
+    // Both TUN shapes exclude fc00::/7 from capture, so a fake-ip range there
+    // answers AAAA with addresses the tunnel never sees; treat it as IPv4-only.
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            {
+                "type": "fakeip",
+                "tag": "fakeip-ula",
+                "inet4_range": "198.18.0.0/15",
+                "inet6_range": "fc00::/18",
+            },
+            {
+                "type": "fakeip",
+                "tag": "fakeip-global",
+                "inet4_range": "198.19.0.0/16",
+                "inet6_range": "2001:db8::/32",
+            },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip-ula" },
+            { "query_type": ["A", "AAAA"], "server": "fakeip-global" },
+        ],
+        "final": "local",
+    }));
+    let input = BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    };
+    let cfg = build_runtime_json(&input).expect("build");
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules[0]["query_type"],
+        json!(["A"]),
+        "an inet6_range inside the TUN exclusion must drop AAAA"
+    );
+    assert_eq!(
+        rules[1]["query_type"],
+        json!(["A", "AAAA"]),
+        "a routable inet6_range keeps AAAA"
+    );
 }
 
 #[test]
@@ -1145,7 +1452,7 @@ fn clash_api_block_carries_default_mode_in_all_modes() {
         assert_eq!(api["secret"], ice_types::EXAMPLE_CLASH_API_SECRET);
         assert!(
             api.get("mode_list").is_none(),
-            "mode_list must not be emitted (rejected by pinned sing-box 1.13.19)"
+            "mode_list must not be emitted (rejected by pinned sing-box 1.13.21)"
         );
         assert!(
             cfg["experimental"].get("cache_file").is_none(),

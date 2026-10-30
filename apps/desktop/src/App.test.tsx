@@ -46,6 +46,8 @@ const defaultSettings = {
   auto_set_system_proxy: false,
   proxy_service_enabled: false,
   allow_lan: false,
+  ipv6: true,
+  prefer_ipv6: false,
   proxy_mode: "rule",
   auto_default_rules: true,
   tun: {
@@ -76,6 +78,7 @@ const tunStatus = {
   tun_available: true,
   tun_unavailable_reason: null,
   tun_ui_hidden: false,
+  tun_ipv6_disabled: false,
   helper_installed: false,
   helper_supported: true,
   launch_at_login_supported: true,

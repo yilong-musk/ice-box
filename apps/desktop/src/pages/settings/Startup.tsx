@@ -3,11 +3,10 @@
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { t } from "../../lib/i18n";
 
@@ -33,25 +32,21 @@ export function StartupCard({
     >
       <CardHeader>
         <CardTitle>{t("settings.startup")}</CardTitle>
-        <CardDescription>{t("settings.startupDesc")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex flex-col gap-3">
-          <Field orientation="horizontal" className="w-auto gap-2">
-            <Switch
-              id="settings-launch-at-login"
-              size="sm"
-              checked={enabled}
-              disabled={busy || !loaded}
-              aria-label={t("settings.launchAtLogin")}
-              onCheckedChange={(checked) => onChange(checked === true)}
-            />
-            <FieldLabel htmlFor="settings-launch-at-login">
-              {t("settings.launchAtLogin")}
-            </FieldLabel>
-          </Field>
-          <FieldDescription>{t("settings.launchAtLoginDesc")}</FieldDescription>
-        </div>
+        <Field orientation="horizontal" className="w-auto gap-2">
+          <Switch
+            id="settings-launch-at-login"
+            size="sm"
+            checked={enabled}
+            disabled={busy || !loaded}
+            aria-label={t("settings.launchAtLogin")}
+            onCheckedChange={(checked) => onChange(checked === true)}
+          />
+          <FieldLabel htmlFor="settings-launch-at-login">
+            {t("settings.launchAtLogin")}
+          </FieldLabel>
+        </Field>
       </CardContent>
     </Card>
   );

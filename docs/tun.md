@@ -1,7 +1,7 @@
 # TUN capture
 
 This document is the desktop TUN path on macOS and Windows, with the bundled
-sing-box **1.13.19**. Android captures traffic through the system VPN service;
+sing-box **1.13.21**. Android captures traffic through the system VPN service;
 see [architecture.md](architecture.md#clients). Desktop capture behavior,
 platform constraints, and recovery rules follow.
 
@@ -124,6 +124,10 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
   Local DNS loops through the adapter; UDP DNS can be captured by its own TUN;
   fake-ip addresses are unroutable. Reject UDP 443 with ICMP so browsers fall
   back to TCP instead of waiting on QUIC.
+- IPv6 stays disabled for Windows TUN even when Settings → IPv6 is on: the
+  pinned core's IPv6 DNS path is broken (#4178) and the hijack rule is
+  IPv4-only. The IPv6 switches still apply to system-proxy mode; macOS and
+  Android TUN follow them.
 - Re-normalize cached profiles so older DNS configurations adopt these rules.
   System proxy is the alternative capture path for applications needing traffic
   that Windows TUN cannot carry.

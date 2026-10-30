@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -47,67 +46,64 @@ export function AndroidSystemCard({
     >
       <CardHeader>
         <CardTitle>{t("settings.system")}</CardTitle>
-        <CardDescription>{t("settings.systemDesc")}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {showBattery ? (
+      <CardContent>
+        <div className="flex flex-col gap-3">
+          {showBattery ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs">{t("settings.batteryTitle")}</p>
+              <div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void run(() => api.requestBatteryExemption())}
+                >
+                  {t("settings.batteryAction")}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {showPrivateDns ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs">{t("settings.privateDnsTitle")}</p>
+              <div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void run(() => api.openNetworkSettings())}
+                >
+                  {t("settings.privateDnsAction")}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex flex-col gap-2">
-            <p className="text-xs">{t("settings.batteryTitle")}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("settings.batteryDesc")}
-            </p>
-            <div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void run(() => api.requestBatteryExemption())}
-              >
-                {t("settings.batteryAction")}
-              </Button>
-            </div>
+            <p className="text-xs">{t("settings.alwaysOnTitle")}</p>
+            {alwaysOn ? (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.alwaysOnEnabled")}
+              </p>
+            ) : null}
+            {alwaysOn ? null : (
+              <div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void run(() => api.openVpnSettings())}
+                >
+                  {t("settings.alwaysOnAction")}
+                </Button>
+              </div>
+            )}
           </div>
-        ) : null}
-        {showPrivateDns ? (
-          <div className="flex flex-col gap-2">
-            <p className="text-xs">{t("settings.privateDnsTitle")}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("settings.privateDnsDesc")}
-            </p>
-            <div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void run(() => api.openNetworkSettings())}
-              >
-                {t("settings.privateDnsAction")}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs">{t("settings.alwaysOnTitle")}</p>
-          <p className="text-xs text-muted-foreground">
-            {alwaysOn ? t("settings.alwaysOnEnabled") : t("settings.alwaysOnDesc")}
-          </p>
-          {alwaysOn ? null : (
-            <div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void run(() => api.openVpnSettings())}
-              >
-                {t("settings.alwaysOnAction")}
-              </Button>
-            </div>
-          )}
+          {error ? <FieldError>{error}</FieldError> : null}
         </div>
-        {error ? <FieldError>{error}</FieldError> : null}
       </CardContent>
     </Card>
   );

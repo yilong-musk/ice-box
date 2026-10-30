@@ -311,6 +311,9 @@ pub fn normalize_dns_on(profile: &mut NormalizedProfile, windows: bool) {
         }
     }
 
+    // Safe parse-time default. The config builder applies the user's IPv6
+    // switches afterwards (system proxy can use prefer_ipv4 / prefer_ipv6;
+    // Windows TUN clamps back to ipv4_only, #4178).
     dns["strategy"] = json!("ipv4_only");
 
     if !usable {

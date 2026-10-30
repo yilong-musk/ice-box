@@ -682,7 +682,7 @@ pub fn current_settings(app_paths: &AppPaths) -> Result<AppSettings, AppError> {
 }
 
 /// True when the on-disk `config.json` (the config the running core was started from)
-/// carries the `clash_mode` route rules. Under the pinned sing-box 1.13.19 the runtime
+/// carries the `clash_mode` route rules. Under the pinned sing-box 1.13.21 the runtime
 /// `mode-list` is always `[<default_mode>]`, so a `PATCH /configs` to a different mode is
 /// silently ignored and mode switching must rebuild + reload (SIGHUP on Unix) so the new
 /// `default_mode` is baked in; the `clash_mode` rules make the baked mode take effect at
@@ -701,7 +701,7 @@ pub fn running_config_supports_clash_mode(app_paths: &AppPaths) -> bool {
         .is_some_and(|rules| rules.iter().any(|r| r.get("clash_mode").is_some()))
 }
 
-/// Switch routing mode. Under the pinned sing-box 1.13.19 the runtime Clash `mode-list`
+/// Switch routing mode. Under the pinned sing-box 1.13.21 the runtime Clash `mode-list`
 /// is `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored: the
 /// PATCH + `GET /configs` verification below always falls through to the rebuild +
 /// reload/restart path (SIGHUP on Unix, restart on Windows). The PATCH attempt is kept as
@@ -2067,7 +2067,7 @@ mod tests {
     #[test]
     fn g7_15_set_mode_running_patches_and_does_not_reload() {
         // Exercises the forward-compatible PATCH capability gate in isolation: this mock
-        // applies the PATCH (a real 1.13.19 core never does — its runtime mode-list is
+        // applies the PATCH (a real 1.13.21 core never does — its runtime mode-list is
         // `[<default_mode>]` — so in production this branch is never taken and every mode
         // switch reloads). The gate is kept so a future core that accepts live switches
         // activates without code changes.
