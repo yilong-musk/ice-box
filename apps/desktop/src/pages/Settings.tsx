@@ -660,6 +660,11 @@ export function Settings({
 
   /** Windows hides the TUN controls entirely (gate blocked upstream). */
   const tunUiHidden = status?.tun_ui_hidden === true;
+  /** The Windows TUN IPv4-only note only matters while TUN is a usable path. */
+  const tunIpv6Disabled =
+    status?.tun_ipv6_disabled === true &&
+    !tunUiHidden &&
+    status?.tun_available !== false;
 
   return (
     <div className="settings-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="settings-panel">
@@ -705,7 +710,7 @@ export function Settings({
             setForm={setForm}
             busy={busy}
             loaded={loaded}
-            tunIpv6Disabled={status?.tun_ipv6_disabled === true}
+            tunIpv6Disabled={tunIpv6Disabled}
           />
 
           {tunUiHidden ? null : (

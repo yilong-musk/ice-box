@@ -754,17 +754,24 @@ mod tests {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_stop = Arc::clone(&stop);
         let server = std::thread::spawn(move || {
-            let (mut tcp, _) = listener.accept().expect("accept");
+            let Ok((mut tcp, _)) = listener.accept() else {
+                return;
+            };
             let mut conn =
                 rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
             {
                 let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
                 let mut req = [0u8; 1024];
                 let _ = tls.read(&mut req);
-                tls.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
-                )
-                .expect("headers");
+                // The client may already have hit its deadline under load.
+                if tls
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
+                    )
+                    .is_err()
+                {
+                    return;
+                }
                 // Drip one byte at a time: every read succeeds inside the
                 // per-read timeout, so only the overall deadline can stop it.
                 while !server_stop.load(std::sync::atomic::Ordering::SeqCst) {
@@ -826,22 +833,30 @@ mod tests {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_stop = Arc::clone(&stop);
         let server = std::thread::spawn(move || {
-            let (mut tcp, _) = listener.accept().expect("accept");
+            let Ok((mut tcp, _)) = listener.accept() else {
+                return;
+            };
             let mut conn =
                 rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
-            // Read the ClientHello, then stage the server flight.
+            // Read the ClientHello, then stage the server flight. The client
+            // may already have hit its deadline under load.
             let mut buf = [0u8; 4096];
             while !conn.wants_write() {
-                let n = tcp.read(&mut buf).expect("read client hello");
+                let Ok(n) = tcp.read(&mut buf) else {
+                    return;
+                };
                 if n == 0 {
                     return;
                 }
-                conn.read_tls(&mut &buf[..n]).expect("read_tls");
-                conn.process_new_packets().expect("process client hello");
+                if conn.read_tls(&mut &buf[..n]).is_err() || conn.process_new_packets().is_err() {
+                    return;
+                }
             }
             let mut flight = Vec::new();
             while conn.wants_write() {
-                conn.write_tls(&mut flight).expect("write_tls");
+                if conn.write_tls(&mut flight).is_err() {
+                    return;
+                }
             }
             // Drip the handshake one byte at a time: every read succeeds inside
             // the per-read timeout, so only the overall deadline can stop it.

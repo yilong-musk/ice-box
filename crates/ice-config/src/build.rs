@@ -109,7 +109,7 @@ fn build_direct_only_config_with(
     rules.extend(app_proxy_rules(&template.app_proxies, "direct", platform));
     rules.push(json!({ "clash_mode": "global", "outbound": "direct" }));
     rules.push(json!({ "clash_mode": "direct", "outbound": "direct" }));
-    let route = json!({
+    let mut route = json!({
         "final": "direct",
         "auto_detect_interface": true,
         "rules": rules,
@@ -124,7 +124,7 @@ fn build_direct_only_config_with(
     apply_shared_root(&mut log, &mut experimental, platform, shared_root);
 
     let mut dns = minimal_dns_block(platform);
-    apply_dns_strategy(&mut dns, template, capture_intent, platform);
+    apply_dns_strategy(&mut dns, &mut route, template, capture_intent, platform);
 
     let config = json!({
         "log": log,
@@ -243,20 +243,40 @@ pub(crate) fn effective_dns_strategy(
     }
 }
 
-/// Apply [`effective_dns_strategy`] to a DNS block.
+/// Apply [`effective_dns_strategy`] to a DNS block and to any rule-level
+/// strategy overrides carried by the profile.
+///
+/// sing-box lets DNS rules and `resolve` route actions carry their own
+/// `strategy`. Replacing those as well keeps an imported profile from
+/// overriding the user's IPv6 switches for matched queries.
 fn apply_dns_strategy(
     dns: &mut Value,
+    route: &mut Value,
     template: &LocalTemplate,
     capture_intent: CaptureIntent,
     platform: HostPlatform,
 ) {
-    let Some(obj) = dns.as_object_mut() else {
+    let strategy = effective_dns_strategy(template, capture_intent, platform);
+    if let Some(obj) = dns.as_object_mut() {
+        obj.insert("strategy".into(), json!(strategy));
+    }
+    override_rule_strategy(dns.get_mut("rules"), strategy);
+    override_rule_strategy(route.get_mut("rules"), strategy);
+}
+
+/// Replace rule-level address-family choices with the build-wide strategy.
+fn override_rule_strategy(rules: Option<&mut Value>, strategy: &str) {
+    let Some(rules) = rules.and_then(Value::as_array_mut) else {
         return;
     };
-    obj.insert(
-        "strategy".into(),
-        json!(effective_dns_strategy(template, capture_intent, platform)),
-    );
+    for rule in rules {
+        let Some(obj) = rule.as_object_mut() else {
+            continue;
+        };
+        if obj.contains_key("strategy") {
+            obj.insert("strategy".into(), json!(strategy));
+        }
+    }
 }
 
 /// Drop `AAAA` from fake-ip DNS rules that target an IPv4-only fake-ip server.
@@ -267,8 +287,12 @@ fn apply_dns_strategy(
 /// unreachable. Letting AAAA fall through to a real resolver keeps
 /// `prefer_ipv6` meaningful for fake-ip profiles; A still gets the fake IPv4
 /// address. A fake-ip server whose `inet6_range` lies outside the exclusion
-/// keeps its AAAA rule. Rules without an explicit `query_type` are left
-/// untouched.
+/// keeps its AAAA rule.
+///
+/// `query_type` accepts either a string or an array. Rules that target the
+/// v4-only fake-ip server without a `query_type` are narrowed to A as well:
+/// otherwise their AAAA queries still reach the transport and get an empty
+/// success, so the intended fall-through would not happen.
 fn strip_fakeip_aaaa(dns: &mut Value) {
     let v4_only_fakeip_tags: std::collections::HashSet<String> = dns
         .get("servers")
@@ -304,11 +328,26 @@ fn strip_fakeip_aaaa(dns: &mut Value) {
         if !targets_v4_only_fakeip {
             return true;
         }
-        let Some(query_type) = rule.get_mut("query_type").and_then(Value::as_array_mut) else {
+        let Some(obj) = rule.as_object_mut() else {
             return true;
         };
-        query_type.retain(|kind| kind.as_str() != Some("AAAA"));
-        !query_type.is_empty()
+        let Some(query_type) = obj.get_mut("query_type") else {
+            // A broad rule routes AAAA into the v4-only transport, which
+            // answers with an empty success. Narrow it to A so AAAA falls
+            // through to a real resolver.
+            obj.insert("query_type".into(), json!(["A"]));
+            return true;
+        };
+        match query_type {
+            Value::Array(types) => {
+                types.retain(|kind| kind.as_str() != Some("AAAA"));
+                !types.is_empty()
+            }
+            // `query_type` is a Listable field; a string is its one-element
+            // form, so keep or drop the whole rule instead of rewriting it.
+            Value::String(kind) => kind.as_str() != "AAAA",
+            _ => true,
+        }
     });
 }
 
@@ -684,7 +723,13 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     if !dns_block_is_usable(&dns) {
         dns = minimal_dns_block(input.platform);
     }
-    apply_dns_strategy(&mut dns, &input.template, capture_intent, input.platform);
+    apply_dns_strategy(
+        &mut dns,
+        &mut route,
+        &input.template,
+        capture_intent,
+        input.platform,
+    );
     if input.template.ipv6 {
         strip_fakeip_aaaa(&mut dns);
     }

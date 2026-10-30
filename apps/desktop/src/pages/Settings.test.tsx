@@ -315,6 +315,38 @@ describe("Settings", () => {
     });
   });
 
+  it("hides the Windows TUN IPv6 note when TUN is not usable", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+      tun_ui_hidden: true,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+    expect(
+      view.queryByText(t("settings.ipv6TunIpv4Only")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the Windows TUN IPv6 note when TUN is unavailable", async () => {
+    getStatus.mockResolvedValue({
+      ...defaultStatus,
+      tun_ipv6_disabled: true,
+      tun_available: false,
+    });
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByLabelText(t("settings.ipv6Enable"))).toBeInTheDocument();
+    });
+    expect(
+      view.queryByText(t("settings.ipv6TunIpv4Only")),
+    ).not.toBeInTheDocument();
+  });
+
   it("persists turning on debug logs", async () => {
     const { container } = render(<Settings />);
     const view = within(container);

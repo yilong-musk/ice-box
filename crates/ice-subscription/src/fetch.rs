@@ -32,13 +32,14 @@ pub(crate) fn sanitize_http_header_value(value: &str) -> Result<String, Subscrip
 /// deadline ([`FETCH_TOTAL_TIMEOUT`]) instead.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Overall wall-clock limit for one subscription fetch across every redirect
+/// Overall network-I/O budget for one subscription fetch across every redirect
 /// hop and the response body. Without it a provider that drips the body slowly
 /// keeps resetting the per-read timeout and the update never ends. The limit is
 /// checked between I/O operations, so a connect already in flight when it
 /// passes keeps its own [`FETCH_TIMEOUT`] cap, and DNS resolution is left to
-/// the OS resolver (the hostname is normally cached and fast): a fetch can
-/// overshoot by up to one connect plus that lookup.
+/// the OS resolver (the hostname is normally cached and fast): each hop's
+/// lookup and any in-flight connect can overshoot by one resolver or connect
+/// timeout.
 pub const FETCH_TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Max redirect hops; each target is SSRF-validated before follow.
@@ -1148,12 +1149,19 @@ mod tests {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let server_stop = std::sync::Arc::clone(&stop);
         let server = std::thread::spawn(move || {
-            let (mut tcp, _) = listener.accept().expect("proxy accept");
+            let Ok((mut tcp, _)) = listener.accept() else {
+                return;
+            };
             let _ = read_request_head(&mut tcp);
-            tcp.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
-            )
-            .expect("proxy headers");
+            // The client may already have hit its deadline under load.
+            if tcp
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n",
+                )
+                .is_err()
+            {
+                return;
+            }
             // Drip one byte at a time: every read succeeds inside the
             // per-operation timeout, so only the overall deadline can stop it.
             while !server_stop.load(std::sync::atomic::Ordering::SeqCst) {

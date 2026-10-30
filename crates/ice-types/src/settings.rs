@@ -380,8 +380,9 @@ pub struct AppSettings {
     pub allow_lan: bool,
     /// Query AAAA records when resolving domains. Off pins the generated DNS
     /// block to `ipv4_only`; on uses `prefer_ipv4` unless
-    /// [`Self::prefer_ipv6`] is also set. Windows TUN remains IPv4-only
-    /// regardless (pinned core #4178).
+    /// [`Self::prefer_ipv6`] is also set. The builder also overrides
+    /// rule-level strategies from imported profiles. Windows TUN remains
+    /// IPv4-only regardless (pinned core #4178).
     #[serde(default = "default_ipv6")]
     pub ipv6: bool,
     /// Prefer AAAA answers over A when both exist (`prefer_ipv6`). Requires
