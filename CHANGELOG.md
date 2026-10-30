@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-30
+
 ### Added
 
 - Settings → IPv6 adds the two Shadowrocket-style DNS switches: **Enable IPv6
@@ -33,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   minutes. Hostname lookups still use the OS resolver and are not counted in
   that budget. The 20-second connect limit and the 8 MiB body cap are unchanged.
 - Settings item descriptions are removed; only live status and errors remain.
+
+### Fixed
+
+- Subscription fetches on Windows now report a socket read timeout as a
+  timeout, matching the wording on other platforms.
 
 ## [0.2.4] - 2026-10-29
 
