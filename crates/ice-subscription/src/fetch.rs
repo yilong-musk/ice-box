@@ -421,7 +421,20 @@ fn read_limited_body(reader: impl Read) -> Result<Vec<u8>, SubscriptionError> {
     reader
         .take(MAX_BODY_BYTES as u64 + 1)
         .read_to_end(&mut body)
-        .map_err(|e| SubscriptionError::FetchFailed(format!("read body: {e}")))?;
+        .map_err(|e| {
+            // Windows reports the socket read timeout as WSAETIMEDOUT, whose
+            // OS message does not contain "timed out". Normalize timeout
+            // kinds so callers and users see the same wording on every
+            // platform (Unix uses WouldBlock for socket timeouts).
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) {
+                SubscriptionError::FetchFailed("read body: timed out".into())
+            } else {
+                SubscriptionError::FetchFailed(format!("read body: {e}"))
+            }
+        })?;
     if body.len() > MAX_BODY_BYTES {
         return Err(SubscriptionError::FetchFailed(format!(
             "body exceeds {MAX_BODY_BYTES} bytes"
@@ -1140,6 +1153,24 @@ mod tests {
             .expect_err("a redirect to a private host must be rejected");
         assert!(err.to_string().contains("not allowed"), "{err}");
         proxy.join().expect("proxy thread");
+    }
+
+    #[test]
+    fn read_body_reports_socket_timeouts_as_timed_out() {
+        struct SlowSocket(std::io::ErrorKind);
+
+        impl Read for SlowSocket {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(self.0, "socket timeout"))
+            }
+        }
+
+        // Unix reports WouldBlock for socket timeouts, Windows WSAETIMEDOUT
+        // (TimedOut) with an OS message that does not say "timed out".
+        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
+            let err = read_limited_body(SlowSocket(kind)).unwrap_err();
+            assert!(err.to_string().contains("timed out"), "{kind:?}: {err}");
+        }
     }
 
     #[test]
