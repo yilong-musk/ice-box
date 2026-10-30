@@ -143,6 +143,14 @@ generation against that release's schema before shipping it. The client owns
 configuration generation; sing-box never fetches subscriptions or interprets
 application preferences.
 
+Hysteria2 outbounds that rely on a self-signed or pinned certificate are
+generated with `disable_chrome_parrot: true`. sing-box 1.14 parrots Chrome's
+QUIC handshake by default, but Chrome does not advertise Ed25519, so an
+Ed25519 server certificate would fail the handshake. Share links cannot carry
+the certificate key type, so the generated config keeps the pre-1.14 handshake
+for the non-standard-certificate nodes; normal CA-issued nodes keep the new
+fingerprint.
+
 ## Runtime ownership
 
 Core availability and traffic capture are separate states. A running core can

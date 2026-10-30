@@ -17,7 +17,7 @@ use crate::build::{
     dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, rule_set_refs_are_known,
     split_wireguard_endpoints, validate_route_refs, wireguard_endpoint,
 };
-use crate::runtime_config::tagged_outbound;
+use crate::runtime_config::prepared_outbound;
 use crate::{
     ConfigError, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
 };
@@ -68,14 +68,14 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         push_unique_outbound(
             &mut outbounds,
             &mut tag_set,
-            tagged_outbound(&node.outbound, &node.tag),
+            prepared_outbound(&node.outbound, &node.tag),
         );
     }
     for group in &profile.groups {
         push_unique_outbound(
             &mut outbounds,
             &mut tag_set,
-            tagged_outbound(&group.outbound, &group.tag),
+            prepared_outbound(&group.outbound, &group.tag),
         );
     }
     // Groups often list `direct` / `block` before those builtins are copied

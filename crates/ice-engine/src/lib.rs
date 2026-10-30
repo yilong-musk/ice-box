@@ -402,7 +402,7 @@ proxies:
             value["experimental"]["clash_api"]
                 .get("mode_list")
                 .is_none(),
-            "mode_list must not be emitted (rejected by pinned sing-box 1.13.21)"
+            "mode_list must not be emitted (rejected by pinned sing-box 1.14.4)"
         );
     }
 

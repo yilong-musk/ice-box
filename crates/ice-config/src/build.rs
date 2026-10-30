@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use crate::atomic::write_bytes_atomic;
 use crate::is_loopback_host;
-use crate::runtime_config::{tagged_outbound, RuntimeConfig};
+use crate::runtime_config::{prepared_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
 use crate::settings::{clash_mode_name, AppProxyMode, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
@@ -22,7 +22,7 @@ use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 const GENERATED_LOG_LEVEL: &str = "info";
 
 /// Clash API listen + Bearer secret. `mode_list` must not be emitted — the
-/// pinned sing-box 1.13.21 rejects it ("unknown field").
+/// pinned sing-box 1.14.4 rejects it ("unknown field").
 fn clash_api_block(template: &LocalTemplate) -> Value {
     json!({
         "external_controller": format!(
@@ -246,9 +246,11 @@ pub(crate) fn effective_dns_strategy(
 /// Apply [`effective_dns_strategy`] to a DNS block and to any rule-level
 /// strategy overrides carried by the profile.
 ///
-/// sing-box lets DNS rules and `resolve` route actions carry their own
-/// `strategy`. Replacing those as well keeps an imported profile from
-/// overriding the user's IPv6 switches for matched queries.
+/// sing-box 1.14 removed the legacy `strategy` DNS rule action option (it is
+/// rejected when combined with `query_type` / `ip_version`). The build-wide
+/// strategy already goes into `dns.strategy`, so the rule-level copies are
+/// redundant: drop them instead of rewriting them. Route rules keep their
+/// `strategy` (a route `resolve` action option, still supported).
 fn apply_dns_strategy(
     dns: &mut Value,
     route: &mut Value,
@@ -260,12 +262,27 @@ fn apply_dns_strategy(
     if let Some(obj) = dns.as_object_mut() {
         obj.insert("strategy".into(), json!(strategy));
     }
-    override_rule_strategy(dns.get_mut("rules"), strategy);
-    override_rule_strategy(route.get_mut("rules"), strategy);
+    remove_dns_rule_strategy(dns.get_mut("rules"));
+    override_route_rule_strategy(route.get_mut("rules"), strategy);
 }
 
-/// Replace rule-level address-family choices with the build-wide strategy.
-fn override_rule_strategy(rules: Option<&mut Value>, strategy: &str) {
+/// Remove the legacy `strategy` DNS rule action option, including nested
+/// logical rules. The top-level `dns.strategy` carries the same value.
+fn remove_dns_rule_strategy(rules: Option<&mut Value>) {
+    let Some(rules) = rules.and_then(Value::as_array_mut) else {
+        return;
+    };
+    for rule in rules {
+        let Some(obj) = rule.as_object_mut() else {
+            continue;
+        };
+        obj.remove("strategy");
+        remove_dns_rule_strategy(obj.get_mut("rules"));
+    }
+}
+
+/// Replace route-rule address-family choices with the build-wide strategy.
+fn override_route_rule_strategy(rules: Option<&mut Value>, strategy: &str) {
     let Some(rules) = rules.and_then(Value::as_array_mut) else {
         return;
     };
@@ -504,11 +521,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     let mut outbounds: Vec<Arc<Value>> = Vec::new();
 
     for node in &input.profile.nodes {
-        outbounds.push(tagged_outbound(&node.outbound, &node.tag));
+        outbounds.push(prepared_outbound(&node.outbound, &node.tag));
     }
 
     for group in &input.profile.groups {
-        outbounds.push(tagged_outbound(&group.outbound, &group.tag));
+        outbounds.push(prepared_outbound(&group.outbound, &group.tag));
     }
 
     ensure_builtin_outbound(
@@ -730,7 +747,28 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         capture_intent,
         input.platform,
     );
-    if input.template.ipv6 {
+    // sing-box 1.14 rejects legacy DNS address filters (`ip_cidr` /
+    // `ip_is_private` / legacy `strategy`) in the same DNS block as
+    // `query_type` / `ip_version`. Profiles are imported verbatim, so keep
+    // legacy blocks in legacy mode instead of injecting `query_type` below.
+    let legacy_dns_rules = ice_config_guard::dns_rules_use_legacy_fields(&dns);
+    let legacy_dns_mode = legacy_dns_rules
+        || ice_config_guard::dns_rules_reference_rule_set_without_match_response(&dns);
+    if legacy_dns_rules {
+        if ice_config_guard::dns_rules_use_evaluate_or_match_response(&dns) {
+            return Err(ConfigError::invalid(
+                "DNS rules combine legacy address filters with evaluate/match_response; migrate the legacy rules to match_response",
+            ));
+        }
+        let removed = ice_config_guard::strip_dns_rule_address_family_fields(&mut dns);
+        if removed > 0 {
+            tracing::warn!(
+                removed,
+                "removed DNS rule query_type/ip_version fields to keep the legacy DNS block valid"
+            );
+        }
+    }
+    if input.template.ipv6 && !legacy_dns_mode {
         strip_fakeip_aaaa(&mut dns);
     }
 
@@ -926,7 +964,7 @@ fn capture_inbounds(
                 exclude_package,
             )?);
         } else {
-            inbounds.push(tun_inbound(&template.tun));
+            inbounds.push(tun_inbound(&template.tun, platform));
         }
     }
     Ok(inbounds)
@@ -1196,7 +1234,7 @@ fn android_exclude_package(
 /// (DoH / DoT / fake-ip) instead of a GFW-poisoned system resolver.
 ///
 /// This replaces the TUN inbound `dns_hijack` field, which the pinned
-/// sing-box 1.13.21 rejects as an unknown field (the feature moved to route
+/// sing-box 1.14.4 rejects as an unknown field (the feature moved to route
 /// rule actions in sing-box 1.9).
 pub fn tun_dns_hijack_rule() -> Value {
     json!({ "port": [53], "action": "hijack-dns" })
@@ -1335,17 +1373,32 @@ fn tun_network_cidr(address: &str) -> Option<String> {
     }
 }
 
-/// The locked TUN inbound shape for the bundled sing-box 1.13.21 (`docs/tun.md`):
+/// The locked TUN inbound shape for the bundled sing-box (`docs/tun.md`):
 /// dual-stack `address` list, sub-range auto_route, and the fixed
 /// `route_exclude_address` / `loopback_address` sets. `interface_name` is
 /// required at build time (validated by [`validate_tun_capture`]).
-fn tun_inbound(tun: &TunSettings) -> Value {
+///
+/// `dns_mode` is pinned explicitly because sing-box 1.14 changed the default
+/// to `hijack` when `auto_route` is enabled. On Windows, `hijack` installs WFP
+/// filters that block port 53 outside the TUN; because LAN routes are
+/// excluded from capture, that would break LAN DNS. `native` keeps the
+/// pre-1.14 behaviour (the TUN adapter's DNS points at the TUN peers) without
+/// the firewall filters. On macOS the backend owns system DNS (`scutil` /
+/// `networksetup`), so sing-box must not touch it: `disabled` leaves DNS to
+/// the explicit `hijack-dns` route rules.
+fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
+    let dns_mode = if platform.is_windows() {
+        "native"
+    } else {
+        "disabled"
+    };
     let mut inbound = json!({
         "type": "tun",
         "tag": "tun-in",
         "interface_name": tun.interface_name,
         "address": [tun.ipv4_address, tun.ipv6_address],
         "mtu": tun.mtu,
+        "dns_mode": dns_mode,
         "auto_route": tun.auto_route,
         "strict_route": tun.strict_route,
         "stack": tun.stack,

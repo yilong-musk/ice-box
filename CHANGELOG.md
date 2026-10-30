@@ -5,6 +5,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundle sing-box 1.14.4 instead of 1.13.21. The desktop TUN inbound now pins
+  `dns_mode`: `native` on Windows keeps the adapter DNS/TUN peers without
+  sing-box 1.14's WFP port-53 block (which would also block LAN resolvers),
+  and `disabled` on macOS leaves system DNS to the backend. DNS blocks that
+  still carry legacy address filters stay in legacy mode, legacy rule-level
+  `strategy` options are dropped, and `query_type`/`ip_version` are stripped
+  from such blocks because 1.14 rejects the combination. The Android libbox
+  AAR is rebuilt against the 1.14 `PlatformInterface` and `TunOptions` APIs.
+- Hysteria2 nodes that use a self-signed or pinned certificate keep the
+  pre-1.14 QUIC handshake (`disable_chrome_parrot: true`). sing-box 1.14
+  parrots Chrome's QUIC fingerprint by default, and Chrome does not advertise
+  Ed25519, so servers with an Ed25519 certificate would fail; share links
+  cannot carry the certificate key type. Nodes with a normal CA certificate
+  keep the new fingerprint, and an explicit `disable_chrome_parrot` in an
+  imported config wins.
+
 ## [0.2.5] - 2026-10-30
 
 ### Added

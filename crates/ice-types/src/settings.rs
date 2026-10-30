@@ -109,7 +109,7 @@ pub enum TrayDisplayMode {
 }
 
 /// Capitalized Clash runtime mode, matching sing-box's case-sensitive `mode-list`
-/// membership checks (the pinned 1.13.21 does not accept an emitted `mode_list`).
+/// membership checks (the pinned 1.14.4 does not accept an emitted `mode_list`).
 ///
 /// sing-box `experimental/clashapi` `NewServer` starts with an empty `mode-list` and
 /// prepends `default_mode` when it is missing, so the runtime list is `[<default_mode>]`

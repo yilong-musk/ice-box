@@ -65,6 +65,7 @@ host and stop the app first. Core/TUN tests require the bundled binary
 | macOS helper (G9.13) | `bash scripts/run-acceptance-macos-tun.sh --helper` | Authorization for helper install/uninstall |
 | macOS restart recovery (G9.15) | `cargo test -p ice-box --lib g9_15 -- --ignored --nocapture` | Installed helper; unset `ICE_BOX_TUN_DEV_SUDO`; uses the installed app data directory |
 | Windows TUN (G9.14) | `bash scripts/run-acceptance-windows-tun.sh` | Elevated Bash shell and MSVC toolchain |
+| Pinned core config check | `ICE_BOX_SINGBOX_BIN=third_party/sing-box/darwin-aarch64/sing-box cargo test -p ice-config generated_configs_pass_pinned_core_check -- --ignored` | Bundled binary for the host (`bash scripts/fetch-singbox.sh`) |
 | System proxy | `cargo test -p ice-proxy-sys --lib -- --ignored --test-threads=1` | Native macOS/Windows host |
 | HTTPS fetch | `cargo test -p ice-subscription --lib https_fetch_succeeds -- --ignored` | Network access |
 | HTTPS fetch through the app proxy | `ICE_BOX_TEST_PROXY=http://127.0.0.1:17890 cargo test -p ice-subscription --lib proxied_https_fetch_succeeds -- --ignored` | App running with the proxy on |
