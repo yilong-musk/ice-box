@@ -22,9 +22,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cannot carry the certificate key type. Nodes with a normal CA certificate
   keep the new fingerprint, and an explicit `disable_chrome_parrot` in an
   imported config wins.
+- The Home power button now names the backend it controls: **Start System
+  Proxy** / **Stop System Proxy** / **Start TUN Proxy** / **Stop TUN Proxy**.
+  Previously one generic start/stop label did not distinguish system proxy
+  from TUN.
+- The Home TUN switch now switches the live capture backend while the proxy
+  service is running: system proxy → TUN when enabled, TUN → system proxy
+  when disabled. With the service stopped it still records the next-start
+  desire only. Enabling TUN with a missing or stale helper first runs the
+  helper install/update flow, then applies the same live switch.
 
 ### Fixed
 
+- Stopping the proxy service while TUN capture is active no longer tries to
+  restart the app-managed core before the elevated core has released the mixed
+  port. That hand-off surfaced `core.spawn_failed` even though the user only
+  asked to stop the service; the core now stays stopped until the next start.
+- The Home **Running for** timer now starts when the proxy service starts
+  (system proxy or TUN becomes active), not when the core process starts. A
+  core that had been running in diagnostic mode for tens of minutes no longer
+  makes a fresh service start begin at that old uptime; the row stays hidden
+  while the service is off.
 - Dev and package builds no longer stage a stale sing-box binary. The prepare
   script fetches the pinned release when the existing artifact is missing or
   reports another version, and refuses to continue if the staged binary still

@@ -96,8 +96,10 @@ const zh = {
   "home.coreStatus.starting": "启动中",
   "home.coreStatus.stopping": "停止中",
   "home.coreStatus.error": "出错",
-  "home.power.start": "启动代理服务",
-  "home.power.stop": "停止代理服务",
+  "home.power.startSystem": "启动系统代理",
+  "home.power.stopSystem": "关闭系统代理",
+  "home.power.startTun": "启动TUN代理",
+  "home.power.stopTun": "关闭TUN代理",
   "home.power.busy": "处理中…",
   "home.power.tunActive": "TUN 已接管{iface}",
   "home.power.proxyLive": "系统代理已接管",
@@ -394,6 +396,10 @@ const zh = {
   "tunDialog.desc":
     "辅助组件以系统权限运行 TUN 内核，当前尚未安装或未授权。点击「安装并启用」将弹出系统授权密码框，安装成功后再保存并启用 TUN 设置；取消则不启用。",
   "tunDialog.installAndEnable": "安装并启用",
+  "tunDialog.updateTitle": "启用 TUN 需要先更新辅助组件",
+  "tunDialog.updateDesc":
+    "辅助组件仍在运行旧版内核，直接启用会继续使用旧版本。点击「更新并启用」会重新安装辅助组件（需要系统授权）；成功后会按当前代理服务状态切换到 TUN，取消则保持关闭。",
+  "tunDialog.updateAndEnable": "更新并启用",
 
   // --- custom rule form ---
   "ruleForm.title": "添加自定义规则",
@@ -600,8 +606,10 @@ const en: Record<MessageKey, string> = {
   "home.coreStatus.starting": "Starting",
   "home.coreStatus.stopping": "Stopping",
   "home.coreStatus.error": "Error",
-  "home.power.start": "Start Proxy Service",
-  "home.power.stop": "Stop Proxy Service",
+  "home.power.startSystem": "Start System Proxy",
+  "home.power.stopSystem": "Stop System Proxy",
+  "home.power.startTun": "Start TUN Proxy",
+  "home.power.stopTun": "Stop TUN Proxy",
   "home.power.busy": "Working…",
   "home.power.tunActive": "TUN is active{iface}",
   "home.power.proxyLive": "System proxy is active",
@@ -901,6 +909,10 @@ const en: Record<MessageKey, string> = {
   "tunDialog.desc":
     "The helper runs the TUN core with system permission and is not installed or authorized yet. Clicking “Install & Enable” opens the system authorization prompt; the TUN setting is saved and enabled after a successful install. Cancel keeps TUN disabled.",
   "tunDialog.installAndEnable": "Install & Enable",
+  "tunDialog.updateTitle": "Update the helper before enabling TUN",
+  "tunDialog.updateDesc":
+    "The helper still runs the previous core, so enabling TUN would keep using the old version. Clicking “Update & Enable” reinstalls the helper (system authorization required); on success it switches to TUN according to the current proxy service. Cancel keeps TUN disabled.",
+  "tunDialog.updateAndEnable": "Update & Enable",
 
   // --- custom rule form ---
   "ruleForm.title": "Add Custom Rule",

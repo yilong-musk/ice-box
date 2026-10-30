@@ -253,7 +253,7 @@ describe("Home", () => {
     expect(view.getByRole("radio", { name: t("home.mode.global") })).toHaveAttribute("data-state", "off");
     expect(view.getByRole("radio", { name: t("home.mode.direct") })).toHaveAttribute("data-state", "off");
     expect(
-      within(statusCard).getByRole("button", { name: t("home.power.stop") }),
+      within(statusCard).getByRole("button", { name: t("home.power.stopSystem") }),
     ).toBeInTheDocument();
     // TUN mode lives inside the proxy status card, under the power button.
     expect(
@@ -288,6 +288,7 @@ describe("Home", () => {
   it("ticks the proxy run uptime from the backend start time", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
+      const coreStartedAt = Date.now() - 28 * 60_000;
       const startedAt = Date.now() - 65_000;
       getStatus.mockResolvedValue({
         core: {
@@ -296,7 +297,8 @@ describe("Home", () => {
           inbound_host: "127.0.0.1",
           inbound_port: 17890,
         },
-        running_since_ms: startedAt,
+        running_since_ms: coreStartedAt,
+        capture_since_ms: startedAt,
         subscription_count: 1,
         proxy_recovery_warning: null,
         system_proxy_applied: true,
@@ -347,6 +349,36 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText(t("home.coreStatus.stopped"))).toBeInTheDocument();
     });
+    expect(view.queryByTestId("home-run-uptime")).toBeNull();
+  });
+
+  it("hides the run uptime when the proxy service is off but the core keeps running", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      running_since_ms: Date.now() - 65_000,
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      has_nodes: true,
+      ...tunStatus,
+    });
+
+    const view = within(render(<Home />).container);
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.power.startSystem") }),
+      ).toBeInTheDocument();
+    });
+    expect(view.getByTestId("home-health-core")).toHaveTextContent(
+      t("home.coreStatus.running"),
+    );
     expect(view.queryByTestId("home-run-uptime")).toBeNull();
   });
 
@@ -548,7 +580,7 @@ describe("Home", () => {
     const view = within(container);
     await waitFor(() => {
       expect(
-        view.getByRole("button", { name: t("home.power.start") }),
+        view.getByRole("button", { name: t("home.power.startSystem") }),
       ).toBeInTheDocument();
     });
     expect(
@@ -589,7 +621,7 @@ describe("Home", () => {
 
     await waitFor(() => {
       expect(
-        view.getByRole("button", { name: t("home.power.stop") }),
+        view.getByRole("button", { name: t("home.power.stopSystem") }),
       ).toBeInTheDocument();
     });
     expect(
@@ -916,10 +948,10 @@ describe("Home", () => {
     });
     expect(healthRowLabels(container)).toEqual(healthRows());
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
-    const power = view.getByRole("button", { name: t("home.power.start") });
+    const power = view.getByRole("button", { name: t("home.power.startSystem") });
     expect(power).not.toBeDisabled();
     expect(power).toHaveAttribute("aria-pressed", "false");
-    expect(view.queryByRole("button", { name: t("home.power.stop") })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.stopSystem") })).toBeNull();
     fireEvent.click(view.getByRole("button", { name: t("home.goToSubs") }));
     expect(onNavigate).toHaveBeenCalledWith("subs");
   });
@@ -947,10 +979,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.power.startSystem") })).toBeInTheDocument();
     });
     expect(view.queryByText(t("home.warn.proxyOutOfSync"))).toBeNull();
-    const power = view.getByRole("button", { name: t("home.power.start") });
+    const power = view.getByRole("button", { name: t("home.power.startSystem") });
     expect(power).not.toBeDisabled();
     expect(power).toHaveAttribute("aria-pressed", "false");
   });
@@ -1007,8 +1039,8 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText(t("home.unsupported"))).toBeInTheDocument();
     });
-    expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
-    expect(view.queryByRole("button", { name: t("home.power.stop") })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.startSystem") })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.stopSystem") })).toBeNull();
   });
 
   it("shows stop on the power toggle when disk recorded but live check is false", async () => {
@@ -1034,11 +1066,11 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.stop") })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.stopSystem") })).not.toBeDisabled();
     });
-    const power = view.getByRole("button", { name: t("home.power.stop") });
+    const power = view.getByRole("button", { name: t("home.power.stopSystem") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(view.queryByRole("button", { name: t("home.power.start") })).toBeNull();
+    expect(view.queryByRole("button", { name: t("home.power.startSystem") })).toBeNull();
     expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.proxyOutOfSync"));
     expect(healthRowLabels(container)).toEqual(healthRows());
   });
@@ -1058,10 +1090,10 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.startSystem") })).not.toBeDisabled();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("home.power.start") }));
+    fireEvent.click(view.getByRole("button", { name: t("home.power.startSystem") }));
     await waitFor(() => {
       expect(start).toHaveBeenCalled();
     });
@@ -1156,11 +1188,11 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.stop") })).not.toBeDisabled();
+      expect(view.getByRole("button", { name: t("home.power.stopTun") })).not.toBeDisabled();
     });
-    const power = view.getByRole("button", { name: t("home.power.stop") });
+    const power = view.getByRole("button", { name: t("home.power.stopTun") });
     expect(power).toHaveAttribute("aria-pressed", "true");
-    expect(power).toHaveTextContent(t("home.power.stop"));
+    expect(power).toHaveTextContent(t("home.power.stopTun"));
     expect(healthRowLabels(container)).toEqual(healthRows());
   });
 
@@ -1189,7 +1221,7 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("home.power.startTun") })).toBeInTheDocument();
   });
 
   it("disables the power control and shows the reason when TUN is unavailable", async () => {
@@ -1220,7 +1252,7 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByText(t("tun.unsupportedPlatform"))).toBeInTheDocument();
     });
-    const power = view.getByRole("button", { name: t("home.power.start") });
+    const power = view.getByRole("button", { name: t("home.power.startTun") });
     expect(power).toBeDisabled();
   });
 
@@ -1248,14 +1280,14 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
+      expect(view.getByRole("button", { name: t("home.power.startSystem") })).toBeInTheDocument();
     });
     // No TUN switch on the home page, no TUN reason text anywhere.
     expect(view.queryByRole("switch", { name: t("home.tunMode") })).not.toBeInTheDocument();
     expect(container.textContent).not.toContain(t("tun.unsupportedPlatform"));
     // The power control ignores the hidden TUN desire: system proxy stays usable.
-    expect(view.getByRole("button", { name: t("home.power.start") })).not.toBeDisabled();
-    expect(view.getByRole("button", { name: t("home.power.start") })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("home.power.startSystem") })).not.toBeDisabled();
+    expect(view.getByRole("button", { name: t("home.power.startSystem") })).toBeInTheDocument();
   });
 
   it("connects and disconnects the VPN from the power button on the phone shell", async () => {
@@ -1562,7 +1594,60 @@ describe("Home", () => {
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
-  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+  it("turning TUN on while the system proxy is live switches to TUN", async () => {
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: false,
+      helper_installed: true,
+    });
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.power.stopSystem") }),
+      ).toBeInTheDocument();
+    });
+    const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
+    expect(tunToggle).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(tunToggle);
+    await waitFor(() => {
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+      expect(stopSystemProxy).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    });
+  });
+
+  it("turning TUN off while capture is live switches to the system proxy", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -1611,12 +1696,12 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: false }),
         }),
       );
+      expect(stopSystemProxy).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
     });
-    expect(start).not.toHaveBeenCalled();
-    expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
-  it("does not mark the power button busy while the TUN setting is saved", async () => {
+  it("disables the power button while the TUN switch performs a live switch", async () => {
     let releaseSave: (() => void) | undefined;
     saveSettings.mockImplementation(
       () =>
@@ -1656,11 +1741,13 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
+      expect(view.getByRole("button", { name: t("home.power.stopSystem") })).toBeEnabled();
     });
     fireEvent.click(view.getByRole("switch", { name: t("home.tunMode") }));
 
-    expect(view.getByRole("button", { name: t("home.power.stop") })).toBeEnabled();
+    expect(
+      view.getByRole("button", { name: t("home.power.stopSystem") }),
+    ).toBeDisabled();
     expect(container.textContent).not.toContain(t("home.power.busy"));
     expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeDisabled();
     expect(view.getByRole("switch", { name: t("home.tunMode") })).toHaveAttribute(
@@ -1671,13 +1758,13 @@ describe("Home", () => {
     releaseSave?.();
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalled();
+      expect(stopSystemProxy).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeEnabled();
     });
     expect(container.textContent).not.toContain(t("home.power.busy"));
-    expect(start).not.toHaveBeenCalled();
-    expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
   it("reflects the TUN toggle optimistically and snaps back when the save is not committed", async () => {
@@ -1943,6 +2030,126 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
+    });
+  });
+
+  it("updates a stale helper before switching to TUN on the home page", async () => {
+    installHelper.mockResolvedValue(undefined);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: true,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: tunSettings,
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: true,
+      system_proxy_recorded: true,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: false,
+      helper_installed: true,
+      helper_stale: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeEnabled();
+    });
+    fireEvent.click(view.getByRole("switch", { name: t("home.tunMode") }));
+
+    // Stale helper: guide through the update before touching the live backend.
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      t("tunDialog.updateTitle"),
+    );
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: t("tunDialog.updateAndEnable") }),
+    );
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tun: expect.objectContaining({ enabled: true }),
+        }),
+      );
+      expect(stopSystemProxy).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    });
+  });
+
+  it("updates a stale helper before starting TUN from the power button", async () => {
+    installHelper.mockResolvedValue(undefined);
+    getSettings.mockResolvedValue({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: null,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+      tun: { ...tunSettings, enabled: true },
+    });
+    getStatus.mockResolvedValue({
+      core: {
+        status: "running",
+        message: null,
+        inbound_host: "127.0.0.1",
+        inbound_port: 17890,
+      },
+      subscription_count: 1,
+      proxy_recovery_warning: null,
+      system_proxy_applied: false,
+      system_proxy_recorded: false,
+      system_proxy_available: true,
+      ...tunStatus,
+      configured_tun: true,
+      helper_installed: true,
+      helper_stale: true,
+    });
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(
+        view.getByRole("button", { name: t("home.power.startTun") }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      view.getByRole("button", { name: t("home.power.startTun") }),
+    );
+
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      t("tunDialog.updateTitle"),
+    );
+    expect(start).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: t("tunDialog.updateAndEnable") }),
+    );
+    await waitFor(() => {
+      expect(installHelper).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalled();
     });
   });
 

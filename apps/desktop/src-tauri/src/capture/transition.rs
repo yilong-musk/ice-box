@@ -10,6 +10,9 @@ impl CaptureController {
             .inner
             .lock()
             .map_err(|_| lock_poisoned("capture state"))?;
+        if inner.active != TrafficCapture::SystemProxy || inner.active_since_ms.is_none() {
+            inner.active_since_ms = Some(crate::runtime_status::timestamp_ms());
+        }
         inner.active = TrafficCapture::SystemProxy;
         Ok(())
     }
@@ -111,6 +114,14 @@ impl CaptureController {
             .inner
             .lock()
             .map_err(|_| lock_poisoned("capture state"))?;
+        // Start the service uptime when a backend becomes active, not when the
+        // core process started: the core may have been running in diagnostic
+        // mode for a long time before the user starts the proxy service.
+        if active == TrafficCapture::Inactive {
+            inner.active_since_ms = None;
+        } else if inner.active != active || inner.active_since_ms.is_none() {
+            inner.active_since_ms = Some(crate::runtime_status::timestamp_ms());
+        }
         inner.active = active;
         inner.tun_status = status;
         inner.tun_error = None;
@@ -137,6 +148,7 @@ impl CaptureController {
             .lock()
             .map_err(|_| lock_poisoned("capture state"))?;
         inner.active = TrafficCapture::Inactive;
+        inner.active_since_ms = None;
         inner.tun_status = status;
         inner.tun_error = Some(err.clone());
         inner.transition_id = None;
