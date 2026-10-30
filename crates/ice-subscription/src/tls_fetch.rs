@@ -784,7 +784,12 @@ mod tests {
             }
             conn.send_close_notify();
             while conn.wants_write() {
-                let _ = conn.write_tls(&mut tcp);
+                // The client may have dropped the socket after hitting its
+                // deadline, so a failed close_notify is expected: stop instead
+                // of retrying forever and hanging join().
+                if conn.write_tls(&mut tcp).is_err() {
+                    break;
+                }
             }
         });
 
