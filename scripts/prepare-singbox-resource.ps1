@@ -22,14 +22,34 @@ $Src = Join-Path $Root "third_party/sing-box/$TargetDir/$Bin"
 $DestDir = Join-Path $St "resources"
 $Dest = Join-Path $DestDir $Bin
 
+# A binary that cannot run on this host (cross-arch / cross-OS) prints nothing.
+function Get-CoreVersion([string]$Path) {
+  try {
+    $line = & $Path version 2>$null | Select-Object -First 1
+    if ($null -eq $line) { return "" }
+    return [string]$line
+  } catch {
+    return ""
+  }
+}
+
 if (-not (Test-Path $Src)) {
   Write-Error "Missing $Src - run: npm run fetch-singbox -- $Platform (pin $Version)"
   exit 1
 }
 
+# Never stage a core that does not match the pin: the generated config uses the
+# pinned core's schema, so a stale binary fails at startup with an "unknown
+# field" decode error.
+$SrcVersion = Get-CoreVersion $Src
+if ($SrcVersion -and $SrcVersion -notmatch [regex]::Escape($Version)) {
+  Write-Error "Stale $Src ($SrcVersion) - run: npm run fetch-singbox -- $Platform (pin $Version)"
+  exit 1
+}
+
 New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
 Copy-Item $Src $Dest -Force
-Write-Host "Prepared resource $Dest for $Platform (pin $Version)"
+Write-Host "Prepared resource $Dest for $Platform ($SrcVersion)"
 
 # The shared tauri.conf.json also bundles `resources/sing-box` (unused at runtime on
 # Windows, where the binary is resolved as sing-box.exe), so keep it present or the

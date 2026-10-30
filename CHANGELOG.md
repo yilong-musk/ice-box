@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   keep the new fingerprint, and an explicit `disable_chrome_parrot` in an
   imported config wins.
 
+### Fixed
+
+- Dev and package builds no longer stage a stale sing-box binary. The prepare
+  script fetches the pinned release when the existing artifact is missing or
+  reports another version, and refuses to continue if the staged binary still
+  does not match `third_party/sing-box/VERSION`. Previously a 1.13 binary
+  launched with a 1.14 config and the core exited with
+  `unknown field "disable_chrome_parrot"`.
+
 ## [0.2.5] - 2026-10-30
 
 ### Added
