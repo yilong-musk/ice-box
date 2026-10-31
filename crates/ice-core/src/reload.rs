@@ -2,7 +2,7 @@
 
 //! Reload strategies for the running sing-box process.
 //!
-//! sing-box 1.13.x does not implement config reload through its Clash API
+//! sing-box 1.13-1.14 does not implement config reload through its Clash API
 //! (`PUT /configs` is a 204 stub), so the only in-place reload is **SIGHUP**:
 //! `sing-box run -c <config>` re-validates and rebuilds the whole service from
 //! the same config path while keeping the process (and PID) alive.

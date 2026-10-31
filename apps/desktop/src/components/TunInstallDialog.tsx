@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { t, useLanguagePreference } from "@/lib/i18n";
 
-/** Guided "install the privileged helper, then enable TUN" confirmation
+/** Guided "install/update the privileged helper, then enable TUN" confirmation
  * dialog shared by the Home and Settings pages. `onConfirm` is expected to
  * install the helper and then persist `tun.enabled = true`; success is only
  * claimed after that persistence resolves (the caller reports busy/errors). */
@@ -23,19 +23,27 @@ function TunInstallDialog({
   onOpenChange,
   onConfirm,
   busy = false,
+  stale = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
   busy?: boolean;
+  /** The helper exists but still runs the previous core; copy switches from
+   * install to update. */
+  stale?: boolean;
 }) {
   useLanguagePreference();
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("tunDialog.title")}</AlertDialogTitle>
-          <AlertDialogDescription>{t("tunDialog.desc")}</AlertDialogDescription>
+          <AlertDialogTitle>
+            {t(stale ? "tunDialog.updateTitle" : "tunDialog.title")}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {t(stale ? "tunDialog.updateDesc" : "tunDialog.desc")}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel asChild>
@@ -45,7 +53,11 @@ function TunInstallDialog({
           </AlertDialogCancel>
           <AlertDialogAction asChild>
             <Button type="button" size="sm" disabled={busy} onClick={onConfirm}>
-              {t("tunDialog.installAndEnable")}
+              {t(
+                stale
+                  ? "tunDialog.updateAndEnable"
+                  : "tunDialog.installAndEnable",
+              )}
             </Button>
           </AlertDialogAction>
         </AlertDialogFooter>

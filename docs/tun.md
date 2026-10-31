@@ -1,7 +1,7 @@
 # TUN capture
 
 This document is the desktop TUN path on macOS and Windows, with the bundled
-sing-box **1.13.21**. Android captures traffic through the system VPN service;
+sing-box **1.14.4**. Android captures traffic through the system VPN service;
 see [architecture.md](architecture.md#clients). Desktop capture behavior,
 platform constraints, and recovery rules follow.
 
@@ -12,8 +12,9 @@ platform constraints, and recovery rules follow.
 
 ## Product model
 
-- TUN defaults off. The Settings/Home switch only selects the backend for the
-  next service start; changing it never switches active capture.
+- TUN defaults off. While the proxy service is running, the Settings/Home
+  switch switches the active capture backend immediately (system proxy ↔ TUN).
+  With the service stopped it only records the next-start choice.
 - Home starts/stops the proxy service. Stop releases the active backend even
   if the saved choice has changed. System proxy and TUN are mutually exclusive;
   capture selection is independent of Rule / Global / Direct routing policy.
@@ -37,7 +38,7 @@ recovery share the application's orchestration lock.
 | Operation | Required ordering |
 |-----------|-------------------|
 | Enable | Journal intent, build/validate config, start/reload core, verify Clash API and TUN health, mark applied |
-| Disable | Mark restoring, release owned resources, verify cleanup, mark clean; the core may continue in diagnostic mode |
+| Disable | Mark restoring, release owned resources, verify cleanup, mark clean; TUN disable stops the core and leaves it stopped until the next start, while system-proxy disable restores the OS proxy and keeps the core running |
 | Topology change | Disable, validate, re-enable; commit settings after health checks, otherwise roll back |
 | Policy change | Reload and verify health; a restart that removes resources requires re-application |
 | Core failure or quit | Release capture and restore diagnostic config as appropriate; quit then stops the core |
@@ -57,7 +58,11 @@ failures may offer system-proxy fallback only when no TUN resources remain.
 
 Generated configurations must match the pinned core: use `address`, not
 `inet4_address` / `inet6_address`, and route-level `action: sniff`, not inbound
-sniff fields. Sniffing precedes domain-based policy rules.
+sniff fields. Sniffing precedes domain-based policy rules. The desktop TUN
+inbound pins `dns_mode` explicitly: `native` on Windows and `disabled` on
+macOS. sing-box 1.14 defaults to `hijack` when `auto_route` is enabled; on
+Windows that installs WFP filters blocking port 53 outside the TUN, which
+would break LAN DNS because those routes are excluded from capture.
 
 Reserved routing protects loopback, local/link-local/multicast ranges, control
 endpoints, and resolver traffic. The TUN CIDR has platform-specific handling;
@@ -72,6 +77,10 @@ bypass policy. Rule ordering is significant; see the
 - sing-box owns the native adapter and routes; the backend journals and
   verifies them. DNS changes use the helper. Even after a process exit removes
   the utun, recovery must verify cleanup.
+- The TUN inbound sets `dns_mode: disabled`: system DNS belongs to this backend,
+  not the core (sing-tun has no Darwin native-DNS path, and a future one must
+  not silently take ownership). DNS is captured by the explicit `hijack-dns`
+  route rules.
 - With `dns_hijack`, set the primary service's DNS to public resolvers so
   queries enter TUN instead of staying on a LAN resolver. Journal the previous
   DNS and compare before restoring it. Core process bypass precedes DNS hijack
@@ -120,6 +129,9 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
 - IPv4 port-53 hijack must come first, followed by process bypass, sniffing,
   and TUN-peer rejection. Do not add post-sniff `protocol: dns` hijack; it can
   misclassify unrelated UDP traffic.
+- The TUN inbound sets `dns_mode: native`, preserving the adapter-DNS/TUN-peer
+  behaviour without sing-box 1.14's WFP port-53 block (which would also block
+  LAN resolvers on excluded routes).
 - Use TCP DNS (DoT/DoH), anchored by an IP-addressed server, with `ipv4_only`.
   Local DNS loops through the adapter; UDP DNS can be captured by its own TUN;
   fake-ip addresses are unroutable. Reject UDP 443 with ICMP so browsers fall

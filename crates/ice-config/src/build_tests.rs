@@ -630,7 +630,10 @@ fn ipv6_switches_override_the_profile_dns_strategy() {
         ..LocalTemplate::default()
     });
     assert_eq!(disabled["dns"]["strategy"], "ipv4_only");
-    assert_eq!(disabled["dns"]["rules"][0]["strategy"], "ipv4_only");
+    assert!(
+        disabled["dns"]["rules"][0].get("strategy").is_none(),
+        "legacy rule-level strategy must be dropped for sing-box 1.14"
+    );
     let resolve_rule = disabled["route"]["rules"]
         .as_array()
         .unwrap()
@@ -645,7 +648,7 @@ fn ipv6_switches_override_the_profile_dns_strategy() {
         ..LocalTemplate::default()
     });
     assert_eq!(preferred["dns"]["strategy"], "prefer_ipv6");
-    assert_eq!(preferred["dns"]["rules"][0]["strategy"], "prefer_ipv6");
+    assert!(preferred["dns"]["rules"][0].get("strategy").is_none());
     let resolve_rule = preferred["route"]["rules"]
         .as_array()
         .unwrap()
@@ -802,6 +805,217 @@ fn fakeip_with_inet6_range_keeps_aaaa_when_ipv6_is_enabled() {
         json!(["A", "AAAA"]),
         "an IPv6-capable fake-ip server keeps AAAA"
     );
+}
+
+#[test]
+fn legacy_dns_rules_keep_the_block_in_legacy_mode() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "ip_is_private": true, "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("legacy DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.len(),
+        1,
+        "the query_type-only fake-ip rule must be dropped instead of matching every query"
+    );
+    assert_eq!(rules[0]["ip_is_private"], true);
+    assert!(
+        rules
+            .iter()
+            .all(|rule| rule.get("server") != Some(&json!("fakeip"))),
+        "a leftover action-only fake-ip rule would route every query to fake-ip"
+    );
+}
+
+#[test]
+fn legacy_dns_query_type_rules_do_not_become_unconditional() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "ip_is_private": true, "server": "local" },
+            { "query_type": ["AAAA"], "server": "local" },
+            { "query_type": ["A"], "server": "remote" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("legacy DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["ip_is_private"], true);
+    assert!(
+        rules
+            .iter()
+            .all(|rule| rule.get("server") != Some(&json!("remote"))),
+        "the A-only rule must not turn into a catch-all remote route"
+    );
+}
+
+#[test]
+fn dns_rules_reject_mixed_legacy_and_response_matching() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [{ "type": "local", "tag": "local" }],
+        "rules": [
+            { "match_response": true, "ip_cidr": ["10.0.0.0/8"], "server": "local" },
+            { "ip_is_private": true, "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let err = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect_err("mixed DNS modes must fail with a clear error");
+
+    assert!(
+        err.to_string().contains("legacy address filters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rule_set_legacy_dns_mode_strips_profile_address_family_fields() {
+    // A DNS rule that references a generated GeoIP rule-set can force legacy
+    // mode even when the profile has no inline legacy address filter. Any
+    // `query_type` left in the block would then make sing-box 1.14 reject it.
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-dns-ruleset-legacy-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("geoip-cn.srs"), b"srs").unwrap();
+
+    let mut profile = profile_with_geoip(&["cn"]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "rule_set": ["geoip-cn"], "server": "local" },
+            { "query_type": ["AAAA"], "server": "local" },
+            { "query_type": ["A"], "server": "remote" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(dir.clone()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("rule-set legacy DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.len(),
+        1,
+        "address-family-only rules must not survive as unconditional routes"
+    );
+    assert_eq!(rules[0]["rule_set"][0], "geoip-cn");
+    assert!(rules.iter().all(|rule| rule.get("query_type").is_none()));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_rules_reject_legacy_with_response_actions() {
+    for disabling_rule in [
+        json!({ "action": "respond", "server": "local" }),
+        json!({ "race": true, "server": "local" }),
+        json!({ "speculative": true, "server": "local" }),
+        json!({ "disable_optimistic_cache": true, "server": "local" }),
+    ] {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.dns = Some(json!({
+            "servers": [{ "type": "local", "tag": "local" }],
+            "rules": [
+                { "ip_is_private": true, "server": "local" },
+                disabling_rule,
+            ],
+            "final": "local",
+        }));
+        let err = build_runtime_json(&BuildInput {
+            template: LocalTemplate::default(),
+            profile: Arc::new(profile),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform: HostPlatform::MacOs,
+        })
+        .expect_err("other legacy-mode-disabling features must fail with a clear error");
+
+        assert!(
+            err.to_string().contains("legacy address filters"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[test]
@@ -1452,7 +1666,7 @@ fn clash_api_block_carries_default_mode_in_all_modes() {
         assert_eq!(api["secret"], ice_types::EXAMPLE_CLASH_API_SECRET);
         assert!(
             api.get("mode_list").is_none(),
-            "mode_list must not be emitted (rejected by pinned sing-box 1.13.21)"
+            "mode_list must not be emitted (rejected by pinned sing-box 1.14.4)"
         );
         assert!(
             cfg["experimental"].get("cache_file").is_none(),
@@ -1603,6 +1817,10 @@ fn tun_config_has_both_inbounds_and_locked_shape() {
     assert_eq!(tun["address"][0], "10.0.0.1/30");
     assert_eq!(tun["address"][1], "fdfe:dcba:9876::1/126");
     assert_eq!(tun["mtu"], 9000);
+    assert_eq!(
+        tun["dns_mode"], "disabled",
+        "macOS DNS is owned by the backend"
+    );
     assert_eq!(tun["auto_route"], true);
     assert_eq!(tun["strict_route"], true);
     assert_eq!(tun["stack"], "gvisor");
@@ -1895,6 +2113,11 @@ fn windows_tun_runtime_config_emits_ipv4_port_53_hijack_without_protocol_dns() {
         platform: HostPlatform::Windows,
     })
     .expect("windows tun build");
+    let inbounds = cfg["inbounds"].as_array().unwrap();
+    assert_eq!(
+        inbounds[1]["dns_mode"], "native",
+        "Windows keeps adapter DNS without sing-box WFP port-53 blocks"
+    );
     let rules = cfg["route"]["rules"].as_array().unwrap();
     assert_eq!(rules[0]["action"], "hijack-dns");
     assert_eq!(rules[0]["ip_version"], 4);
@@ -2814,4 +3037,315 @@ fn example_minimal_direct_passes_elevated_guard() {
         .expect("example");
     let cfg: Value = serde_json::from_str(&raw).expect("json");
     assert_guard_unchanged(cfg);
+}
+
+#[test]
+#[ignore = "requires ICE_BOX_SINGBOX_BIN pointing at the pinned sing-box binary"]
+fn generated_configs_pass_pinned_core_check() {
+    let bin = std::env::var_os("ICE_BOX_SINGBOX_BIN")
+        .expect("set ICE_BOX_SINGBOX_BIN to the pinned sing-box binary");
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-core-check-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let profile = || Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")]));
+    let mut legacy = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    legacy.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "ip_is_private": true, "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let mut fakeip = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    fakeip.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [{ "query_type": ["A", "AAAA"], "server": "fakeip" }],
+        "final": "local",
+    }));
+    let hysteria2 = NormalizedProfile::from_nodes_only(vec![
+        NormalizedOutbound {
+            tag: "hy2-pinned".into(),
+            outbound: Arc::new(json!({
+                "type": "hysteria2",
+                "server": "hy2.example",
+                "server_port": 443,
+                "password": "secret",
+                "tls": { "enabled": true, "insecure": true },
+            })),
+        },
+        NormalizedOutbound {
+            tag: "hy2-standard".into(),
+            outbound: Arc::new(json!({
+                "type": "hysteria2",
+                "server": "hy2.example",
+                "server_port": 443,
+                "password": "secret",
+                "tls": { "enabled": true, "server_name": "hy2.example" },
+            })),
+        },
+    ]);
+
+    let cases = vec![
+        (
+            "diagnostic-macos",
+            build_direct_only_config(
+                &LocalTemplate::default(),
+                CaptureIntent::Diagnostic,
+                HostPlatform::MacOs,
+            )
+            .expect("diagnostic"),
+        ),
+        (
+            "tun-macos",
+            build_runtime_json(&BuildInput {
+                template: tun_template(),
+                profile: profile(),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Tun,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("macos tun"),
+        ),
+        (
+            "tun-windows",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate {
+                    tun: TunSettings {
+                        enabled: true,
+                        interface_name: Some("Wintun".into()),
+                        ..TunSettings::default()
+                    },
+                    ..LocalTemplate::default()
+                },
+                profile: profile(),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Tun,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::Windows,
+            })
+            .expect("windows tun"),
+        ),
+        (
+            "fakeip-modern",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate {
+                    ipv6: true,
+                    ..LocalTemplate::default()
+                },
+                profile: Arc::new(fakeip),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("fakeip"),
+        ),
+        (
+            "fakeip-legacy-dns",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate {
+                    ipv6: true,
+                    ..LocalTemplate::default()
+                },
+                profile: Arc::new(legacy),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("legacy dns"),
+        ),
+        (
+            "hysteria2",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate::default(),
+                profile: Arc::new(hysteria2),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("hysteria2"),
+        ),
+        (
+            "mobile-android",
+            build_direct_only_config(
+                &LocalTemplate::default(),
+                CaptureIntent::Diagnostic,
+                HostPlatform::Android,
+            )
+            .expect("android"),
+        ),
+    ];
+
+    for (name, cfg) in cases {
+        let path = dir.join(format!("{name}.json"));
+        fs::write(&path, serde_json::to_vec_pretty(&cfg).unwrap()).unwrap();
+        let output = std::process::Command::new(&bin)
+            .arg("check")
+            .arg("-c")
+            .arg(&path)
+            .output()
+            .expect("run sing-box check");
+        assert!(
+            output.status.success(),
+            "{name} rejected by pinned core:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn generated_tun_configs_pass_the_elevated_guard() {
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-elevated-guard-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let ctx = ice_config_guard::GuardContext {
+        data_dir: dir.clone(),
+        resources_dir: dir.clone(),
+        log_output: None,
+        cache_file_path: None,
+        rule_set_staging_dir: None,
+    };
+
+    for (platform, interface) in [
+        (HostPlatform::MacOs, "utun420"),
+        (HostPlatform::Windows, "Wintun"),
+    ] {
+        let mut cfg = build_runtime_json(&BuildInput {
+            template: LocalTemplate {
+                tun: TunSettings {
+                    enabled: true,
+                    interface_name: Some(interface.into()),
+                    ..TunSettings::default()
+                },
+                ..LocalTemplate::default()
+            },
+            profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Tun,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform,
+        })
+        .expect("tun build");
+        ice_config_guard::sanitize_for_elevated_core(&mut cfg, &ctx).expect("elevated guard");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hysteria2_self_signed_nodes_keep_the_pre_1_14_handshake() {
+    let node = |tag: &str, tls: Value| NormalizedOutbound {
+        tag: tag.into(),
+        outbound: Arc::new(json!({
+            "type": "hysteria2",
+            "server": format!("{tag}.example"),
+            "server_port": 443,
+            "tls": tls,
+        })),
+    };
+    let profile = NormalizedProfile::from_nodes_only(vec![
+        node("pinned", json!({ "enabled": true, "insecure": true })),
+        node(
+            "standard",
+            json!({ "enabled": true, "server_name": "standard.example" }),
+        ),
+    ]);
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("hysteria2 build");
+
+    let outbounds = cfg["outbounds"].as_array().unwrap();
+    let pinned = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "pinned")
+        .unwrap();
+    assert_eq!(pinned["disable_chrome_parrot"], true);
+    let standard = outbounds
+        .iter()
+        .find(|outbound| outbound["tag"] == "standard")
+        .unwrap();
+    assert!(standard.get("disable_chrome_parrot").is_none());
+}
+
+#[test]
+fn share_config_keeps_hysteria2_handshake_compat() {
+    let shared = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
+        NormalizedOutbound::new(
+            "hy2",
+            json!({
+                "type": "hysteria2",
+                "server": "hy2.example",
+                "server_port": 443,
+                "password": "secret",
+                "tls": { "enabled": true, "insecure": true }
+            }),
+        ),
+    ]))
+    .expect("share");
+    let value: Value = serde_json::from_str(&shared).expect("json");
+    let node = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "hy2")
+        .expect("hy2 outbound");
+    assert_eq!(node["disable_chrome_parrot"], true);
 }

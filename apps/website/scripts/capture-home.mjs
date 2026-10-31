@@ -32,14 +32,14 @@ const TARGETS = [
   {
     language: "en",
     locale: "en-US",
-    // Power button label (`home.power.stop`) proving the UI language.
-    stopLabel: "Stop Proxy Service",
+    // Power button label (`home.power.stopSystem`) proving the UI language.
+    stopLabel: "Stop System Proxy",
     screenshot: "docs/images/home.png",
   },
   {
     language: "zh",
     locale: "zh-CN",
-    stopLabel: "停止代理服务",
+    stopLabel: "关闭系统代理",
     screenshot: "docs/images/home.zh-CN.png",
   },
 ];
@@ -241,7 +241,7 @@ async function capture(browser, baseUrl, target) {
     await page.goto(`${baseUrl}/demo.html?capture=1`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     // Mount signal: the shell renders the power button in either language.
     await page
-      .getByRole("button", { name: /Stop Proxy Service|停止代理服务/ })
+      .getByRole("button", { name: /Stop System Proxy|关闭系统代理/ })
       .waitFor({ timeout: 30_000 });
     await waitForLanguage(page, target);
     await page.evaluate(() => window.dispatchEvent(new Event("resize")));

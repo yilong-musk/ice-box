@@ -5,6 +5,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bundle sing-box 1.14.4 instead of 1.13.21. The desktop TUN inbound now pins
+  `dns_mode`: `native` on Windows keeps the adapter DNS/TUN peers without
+  sing-box 1.14's WFP port-53 block (which would also block LAN resolvers),
+  and `disabled` on macOS leaves system DNS to the backend. DNS blocks that
+  still carry legacy address filters or local rule-set references stay in
+  legacy mode, legacy rule-level `strategy` options are dropped, and
+  `query_type`/`ip_version` are stripped from such blocks because 1.14 rejects
+  the combination. The Android libbox AAR is rebuilt against the 1.14
+  `PlatformInterface` and `TunOptions` APIs.
+- Hysteria2 nodes that use a self-signed or pinned certificate keep the
+  pre-1.14 QUIC handshake (`disable_chrome_parrot: true`). sing-box 1.14
+  parrots Chrome's QUIC fingerprint by default, and Chrome does not advertise
+  Ed25519, so servers with an Ed25519 certificate would fail; share links
+  cannot carry the certificate key type. Nodes with a normal CA certificate
+  keep the new fingerprint, and an explicit `disable_chrome_parrot` in an
+  imported config wins.
+- The Home power button now names the backend it controls: **Start System
+  Proxy** / **Stop System Proxy** / **Start TUN Proxy** / **Stop TUN Proxy**.
+  Previously one generic start/stop label did not distinguish system proxy
+  from TUN.
+- The Home TUN switch now switches the live capture backend while the proxy
+  service is running: system proxy → TUN when enabled, TUN → system proxy
+  when disabled. With the service stopped it still records the next-start
+  desire only. Enabling TUN with a missing or stale helper first runs the
+  helper install/update flow, then applies the same live switch.
+
+### Fixed
+
+- Legacy DNS rules whose only match condition was `query_type` / `ip_version`
+  are now dropped when those fields are stripped for sing-box 1.14. Keeping
+  just the action (`server`, `action`, …) turned the rule into an
+  unconditional match: in a profile with per-query-type rules, all queries
+  could silently go to the `local` server instead of only the stripped family.
+  The same stripping now also applies when a DNS rule references a local
+  rule-set without `match_response`, which can force legacy mode when the set
+  contains only `ip_cidr` entries.
+- Stopping the proxy service while TUN capture is active no longer tries to
+  restart the app-managed core before the elevated core has released the mixed
+  port. That hand-off surfaced `core.spawn_failed` even though the user only
+  asked to stop the service; the core now stays stopped until the next start.
+- The Home **Running for** timer now starts when the proxy service starts
+  (system proxy or TUN becomes active), not when the core process starts. A
+  core that had been running in diagnostic mode for tens of minutes no longer
+  makes a fresh service start begin at that old uptime; the row stays hidden
+  while the service is off.
+- Dev and package builds no longer stage a stale sing-box binary. The prepare
+  script fetches the pinned release when the existing artifact is missing or
+  reports another version, and refuses to continue if the staged binary still
+  does not match `third_party/sing-box/VERSION`. Previously a 1.13 binary
+  launched with a 1.14 config and the core exited with
+  `unknown field "disable_chrome_parrot"`.
+
 ## [0.2.5] - 2026-10-30
 
 ### Added
