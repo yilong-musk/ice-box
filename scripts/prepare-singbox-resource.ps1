@@ -33,8 +33,109 @@ function Get-CoreVersion([string]$Path) {
   }
 }
 
+function Get-SingBoxAsset([string]$Platform) {
+  switch ($Platform) {
+    "win" { return "sing-box-$Version-windows-amd64.zip" }
+    "mac-arm64" { return "sing-box-$Version-darwin-arm64.tar.gz" }
+    "mac-x64" { return "sing-box-$Version-darwin-amd64.tar.gz" }
+    default { throw "unknown platform: $Platform" }
+  }
+}
+
+# Mirror scripts/fetch-singbox.sh: download the pinned release, verify its
+# checksum, and install it (plus the Windows archive companions) before
+# staging. A stale core would otherwise fail later with an "unknown field"
+# decode error because the generated config uses the pinned schema.
+function Invoke-SingBoxFetch([string]$Platform) {
+  $Asset = Get-SingBoxAsset $Platform
+  $Url = "https://github.com/SagerNet/sing-box/releases/download/v$Version/$Asset"
+  $Checksums = Join-Path $Root "third_party/sing-box/CHECKSUMS.sha256"
+  if (-not (Test-Path $Checksums)) {
+    Write-Error "Missing $Checksums (expected pinned SHA-256 list)"
+    exit 1
+  }
+  $Expected = Get-Content $Checksums |
+    ForEach-Object {
+      $Parts = $_ -split '\s+'
+      if ($Parts.Count -ge 2 -and $Parts[1] -eq $Asset) { $Parts[0] }
+    } |
+    Select-Object -First 1
+  if (-not $Expected) {
+    Write-Error "No SHA-256 entry for $Asset in $Checksums"
+    exit 1
+  }
+
+  $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ice-singbox-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+  try {
+    $Archive = Join-Path $Tmp $Asset
+    Write-Host "Fetching ${Platform}: $Url"
+    # Windows PowerShell 5.1 defaults to older TLS versions on some hosts;
+    # GitHub release downloads require TLS 1.2.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $Url -OutFile $Archive -UseBasicParsing
+    $Actual = (Get-FileHash -Algorithm SHA256 -Path $Archive).Hash.ToLowerInvariant()
+    if ($Actual -ne $Expected.ToLowerInvariant()) {
+      Write-Error "SHA-256 mismatch for ${Asset}: expected $Expected, got $Actual"
+      exit 1
+    }
+    Write-Host "SHA-256 ok: $Asset"
+
+    $Extract = Join-Path $Tmp "extract"
+    New-Item -ItemType Directory -Force -Path $Extract | Out-Null
+    if ($Asset.EndsWith(".zip")) {
+      Expand-Archive -Path $Archive -DestinationPath $Extract -Force
+    } else {
+      & tar -xzf $Archive -C $Extract
+      if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to extract $Asset"
+        exit 1
+      }
+    }
+    $Found = Get-ChildItem -Path $Extract -Recurse -File -Filter $Bin | Select-Object -First 1
+    if ($null -eq $Found) {
+      Write-Error "Extracted binary not found in $Asset"
+      exit 1
+    }
+    $DestDir = Split-Path -Parent $Src
+    New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+    Copy-Item $Found.FullName $Src -Force
+    Write-Host "Installed $Src"
+
+    if ($Platform -eq "win") {
+      $Companion = Get-ChildItem -Path $Extract -Recurse -File -Filter "libcronet.dll" | Select-Object -First 1
+      if ($null -ne $Companion) {
+        Copy-Item $Companion.FullName (Join-Path $DestDir "libcronet.dll") -Force
+        Write-Host "Installed $(Join-Path $DestDir 'libcronet.dll')"
+      } else {
+        Write-Warning "libcronet.dll not found in $Asset (NaiveProxy outbound will fail at runtime)"
+      }
+    }
+  } finally {
+    Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
+  }
+}
+
+$NeedsFetch = $false
 if (-not (Test-Path $Src)) {
-  Write-Error "Missing $Src - run: npm run fetch-singbox -- $Platform (pin $Version)"
+  Write-Host "Missing $Src - fetching pinned $Version"
+  $NeedsFetch = $true
+} else {
+  $SrcVersion = Get-CoreVersion $Src
+  if (-not $SrcVersion) {
+    Write-Host "note: cannot execute $Src on this host; skipping version check"
+  } elseif ($SrcVersion -notmatch [regex]::Escape($Version)) {
+    Write-Host "Stale $Src ($SrcVersion) - fetching pinned $Version"
+    $NeedsFetch = $true
+  }
+}
+
+if ($NeedsFetch) {
+  Invoke-SingBoxFetch -Platform $Platform
+}
+
+if (-not (Test-Path $Src)) {
+  Write-Error "Missing $Src after fetch - pin $Version"
   exit 1
 }
 
@@ -43,7 +144,7 @@ if (-not (Test-Path $Src)) {
 # field" decode error.
 $SrcVersion = Get-CoreVersion $Src
 if ($SrcVersion -and $SrcVersion -notmatch [regex]::Escape($Version)) {
-  Write-Error "Stale $Src ($SrcVersion) - run: npm run fetch-singbox -- $Platform (pin $Version)"
+  Write-Error "Stale $Src ($SrcVersion) after fetch - expected pin $Version"
   exit 1
 }
 

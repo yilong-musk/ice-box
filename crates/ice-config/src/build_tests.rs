@@ -839,12 +839,58 @@ fn legacy_dns_rules_keep_the_block_in_legacy_mode() {
     .expect("legacy DNS build");
 
     let rules = cfg["dns"]["rules"].as_array().unwrap();
-    assert_eq!(rules.len(), 2);
-    assert!(
-        rules[0].get("query_type").is_none(),
-        "sing-box 1.14 rejects query_type next to a legacy ip_is_private rule"
+    assert_eq!(
+        rules.len(),
+        1,
+        "the query_type-only fake-ip rule must be dropped instead of matching every query"
     );
-    assert_eq!(rules[1]["ip_is_private"], true);
+    assert_eq!(rules[0]["ip_is_private"], true);
+    assert!(
+        rules
+            .iter()
+            .all(|rule| rule.get("server") != Some(&json!("fakeip"))),
+        "a leftover action-only fake-ip rule would route every query to fake-ip"
+    );
+}
+
+#[test]
+fn legacy_dns_query_type_rules_do_not_become_unconditional() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "ip_is_private": true, "server": "local" },
+            { "query_type": ["AAAA"], "server": "local" },
+            { "query_type": ["A"], "server": "remote" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("legacy DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["ip_is_private"], true);
+    assert!(
+        rules
+            .iter()
+            .all(|rule| rule.get("server") != Some(&json!("remote"))),
+        "the A-only rule must not turn into a catch-all remote route"
+    );
 }
 
 #[test]
@@ -876,6 +922,100 @@ fn dns_rules_reject_mixed_legacy_and_response_matching() {
         err.to_string().contains("legacy address filters"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn rule_set_legacy_dns_mode_strips_profile_address_family_fields() {
+    // A DNS rule that references a generated GeoIP rule-set can force legacy
+    // mode even when the profile has no inline legacy address filter. Any
+    // `query_type` left in the block would then make sing-box 1.14 reject it.
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-dns-ruleset-legacy-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("geoip-cn.srs"), b"srs").unwrap();
+
+    let mut profile = profile_with_geoip(&["cn"]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "rule_set": ["geoip-cn"], "server": "local" },
+            { "query_type": ["AAAA"], "server": "local" },
+            { "query_type": ["A"], "server": "remote" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(dir.clone()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("rule-set legacy DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.len(),
+        1,
+        "address-family-only rules must not survive as unconditional routes"
+    );
+    assert_eq!(rules[0]["rule_set"][0], "geoip-cn");
+    assert!(rules.iter().all(|rule| rule.get("query_type").is_none()));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_rules_reject_legacy_with_response_actions() {
+    for disabling_rule in [
+        json!({ "action": "respond", "server": "local" }),
+        json!({ "race": true, "server": "local" }),
+        json!({ "speculative": true, "server": "local" }),
+        json!({ "disable_optimistic_cache": true, "server": "local" }),
+    ] {
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.dns = Some(json!({
+            "servers": [{ "type": "local", "tag": "local" }],
+            "rules": [
+                { "ip_is_private": true, "server": "local" },
+                disabling_rule,
+            ],
+            "final": "local",
+        }));
+        let err = build_runtime_json(&BuildInput {
+            template: LocalTemplate::default(),
+            profile: Arc::new(profile),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform: HostPlatform::MacOs,
+        })
+        .expect_err("other legacy-mode-disabling features must fail with a clear error");
+
+        assert!(
+            err.to_string().contains("legacy address filters"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[test]

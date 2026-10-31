@@ -12,8 +12,9 @@ platform constraints, and recovery rules follow.
 
 ## Product model
 
-- TUN defaults off. The Settings/Home switch only selects the backend for the
-  next service start; changing it never switches active capture.
+- TUN defaults off. While the proxy service is running, the Settings/Home
+  switch switches the active capture backend immediately (system proxy ↔ TUN).
+  With the service stopped it only records the next-start choice.
 - Home starts/stops the proxy service. Stop releases the active backend even
   if the saved choice has changed. System proxy and TUN are mutually exclusive;
   capture selection is independent of Rule / Global / Direct routing policy.
@@ -37,7 +38,7 @@ recovery share the application's orchestration lock.
 | Operation | Required ordering |
 |-----------|-------------------|
 | Enable | Journal intent, build/validate config, start/reload core, verify Clash API and TUN health, mark applied |
-| Disable | Mark restoring, release owned resources, verify cleanup, mark clean; the core may continue in diagnostic mode |
+| Disable | Mark restoring, release owned resources, verify cleanup, mark clean; TUN disable stops the core and leaves it stopped until the next start, while system-proxy disable restores the OS proxy and keeps the core running |
 | Topology change | Disable, validate, re-enable; commit settings after health checks, otherwise roll back |
 | Policy change | Reload and verify health; a restart that removes resources requires re-application |
 | Core failure or quit | Release capture and restore diagnostic config as appropriate; quit then stops the core |

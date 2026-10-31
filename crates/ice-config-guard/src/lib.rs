@@ -184,8 +184,9 @@ pub fn dns_rules_use_legacy_fields(dns: &Value) -> bool {
 ///
 /// sing-box 1.14 rejects such a rule when the set contains only `ip_cidr`
 /// entries and the DNS block also uses `query_type` / `ip_version`. The set
-/// contents are not available here, so callers treat this conservatively and
-/// keep the block in legacy mode instead of injecting `query_type`.
+/// contents are not available here, so callers treat this conservatively:
+/// keep the block in legacy mode and strip any profile-supplied
+/// `query_type` / `ip_version` instead of injecting their own.
 pub fn dns_rules_reference_rule_set_without_match_response(dns: &Value) -> bool {
     let mut references = false;
     visit_dns_rules(dns, &mut |rule| {
@@ -196,34 +197,45 @@ pub fn dns_rules_reference_rule_set_without_match_response(dns: &Value) -> bool 
     references
 }
 
-/// Whether a DNS configuration uses `evaluate` / `match_response`, the
-/// response-matching features added in sing-box 1.14. These cannot be
-/// combined with the legacy fields detected by
+/// Whether a DNS configuration uses a 1.14 feature that disables legacy DNS
+/// mode. These cannot be combined with the legacy fields detected by
 /// [`dns_rules_use_legacy_fields`].
-pub fn dns_rules_use_evaluate_or_match_response(dns: &Value) -> bool {
-    let mut response_mode = false;
+///
+/// Mirrors the upstream `defaultRuleDisablesLegacyDNSMode` /
+/// `dnsRuleActionDisablesLegacyDNSMode` checks, except `query_type` /
+/// `ip_version`: callers strip those separately because legacy profiles can
+/// tolerate losing the address-family narrowing.
+pub fn dns_rules_use_features_that_disable_legacy_mode(dns: &Value) -> bool {
+    let mut disables_legacy = false;
     visit_dns_rules(dns, &mut |rule| {
         if match_response_enabled(rule)
-            || rule.get("action").and_then(Value::as_str) == Some("evaluate")
+            || matches!(
+                rule.get("action").and_then(Value::as_str),
+                Some("evaluate" | "respond")
+            )
             || rule.get("response_rcode").is_some()
             || rule.get("response_answer").is_some()
             || rule.get("response_ns").is_some()
             || rule.get("response_extra").is_some()
+            || json_is_trueish(rule.get("race"))
+            || json_is_trueish(rule.get("speculative"))
+            || json_is_trueish(rule.get("disable_optimistic_cache"))
         {
-            response_mode = true;
+            disables_legacy = true;
         }
     });
-    response_mode
+    disables_legacy
 }
 
 /// Remove `query_type` and `ip_version` from DNS rules, including logical
 /// sub-rules. Returns the number of fields removed.
 ///
-/// Used when a profile carries legacy DNS address filters: keeping the
-/// address-family fields would make sing-box 1.14 reject the whole DNS
-/// configuration at startup. Dropping them keeps the legacy routing rules
-/// working; the only regression is fake-IP AAAA handling, which the caller
-/// can document.
+/// Used when a profile is kept in legacy DNS mode: keeping the address-family
+/// fields would make sing-box 1.14 reject the whole DNS configuration at
+/// startup. A rule left with no match condition is dropped instead of leaving
+/// the action behind: an action-only DNS rule matches every query, which would
+/// silently change routing (for example sending all queries to the `local`
+/// server instead of only AAAA).
 pub fn strip_dns_rule_address_family_fields(dns: &mut Value) -> usize {
     let mut removed = 0;
     let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
@@ -231,9 +243,9 @@ pub fn strip_dns_rule_address_family_fields(dns: &mut Value) -> usize {
     };
     let mut index = 0;
     while index < rules.len() {
-        let (count, empty) = strip_address_family_fields(&mut rules[index]);
+        let (count, drop_rule) = strip_address_family_fields(&mut rules[index]);
         removed += count;
-        if empty {
+        if drop_rule {
             rules.remove(index);
         } else {
             index += 1;
@@ -242,9 +254,9 @@ pub fn strip_dns_rule_address_family_fields(dns: &mut Value) -> usize {
     removed
 }
 
-/// Returns `(removed fields, rule now empty)`. A rule that only carried
-/// `query_type` / `ip_version` has no matching condition left and must be
-/// dropped instead of leaving an empty object that sing-box rejects.
+/// Returns `(removed fields, drop rule)`. A rule that only carried
+/// `query_type` / `ip_version` has no matching condition left: keeping its
+/// action fields would turn it into an unconditional rule, so drop it.
 fn strip_address_family_fields(rule: &mut Value) -> (usize, bool) {
     let Some(obj) = rule.as_object_mut() else {
         return (0, false);
@@ -259,9 +271,9 @@ fn strip_address_family_fields(rule: &mut Value) -> (usize, bool) {
     if let Some(sub_rules) = obj.get_mut("rules").and_then(Value::as_array_mut) {
         let mut index = 0;
         while index < sub_rules.len() {
-            let (count, empty) = strip_address_family_fields(&mut sub_rules[index]);
+            let (count, drop_rule) = strip_address_family_fields(&mut sub_rules[index]);
             removed += count;
-            if empty {
+            if drop_rule {
                 sub_rules.remove(index);
             } else {
                 index += 1;
@@ -272,11 +284,57 @@ fn strip_address_family_fields(rule: &mut Value) -> (usize, bool) {
         .get("rules")
         .and_then(Value::as_array)
         .is_some_and(|rules| !rules.is_empty());
-    let empty = !has_children
+    // Only drop an action-only rule when stripping actually removed one of its
+    // match conditions. A pre-existing unconditional rule is left untouched:
+    // it did not become match-all because of this rewrite. An empty logical
+    // wrapper is still removed as before.
+    let structurally_empty = !has_children
         && obj
             .keys()
             .all(|key| matches!(key.as_str(), "type" | "mode" | "rules" | "invert"));
-    (removed, empty)
+    let no_match_condition = !has_children
+        && obj
+            .keys()
+            .all(|key| is_dns_rule_non_match_key(key.as_str()));
+    (
+        removed,
+        structurally_empty || (removed > 0 && no_match_condition),
+    )
+}
+
+/// DNS rule keys that configure an action or the logical wrapper instead of
+/// narrowing which queries match. Unknown keys count as match conditions, so
+/// an unrecognised matcher keeps the rule.
+fn is_dns_rule_non_match_key(key: &str) -> bool {
+    matches!(
+        key,
+        "type"
+            | "mode"
+            | "rules"
+            | "invert"
+            | "match_response"
+            | "action"
+            | "server"
+            | "tag"
+            | "strategy"
+            | "disable_cache"
+            | "disable_optimistic_cache"
+            | "timeout"
+            | "rewrite_ttl"
+            | "client_subnet"
+            | "remove_client_subnet"
+            | "speculative"
+            | "race"
+            | "method"
+            | "no_drop"
+            | "rcode"
+            | "answer"
+            | "ns"
+            | "extra"
+            | "rule_set_ip_cidr_accept_empty"
+            | "rule_set_ip_cidr_match_source"
+            | "rule_set_ipcidr_match_source"
+    )
 }
 
 /// `match_response` accepts a boolean or a non-empty response tag.
@@ -2173,7 +2231,7 @@ mod tests {
             ]
         });
         assert!(dns_rules_use_legacy_fields(&legacy));
-        assert!(!dns_rules_use_evaluate_or_match_response(&legacy));
+        assert!(!dns_rules_use_features_that_disable_legacy_mode(&legacy));
 
         let rule_set = json!({
             "rules": [{ "rule_set": ["geosite-cn"], "server": "local" }]
@@ -2198,7 +2256,7 @@ mod tests {
             ]
         });
         assert!(!dns_rules_use_legacy_fields(&response));
-        assert!(dns_rules_use_evaluate_or_match_response(&response));
+        assert!(dns_rules_use_features_that_disable_legacy_mode(&response));
 
         let evaluate_domain = json!({
             "rules": [
@@ -2207,7 +2265,9 @@ mod tests {
             ]
         });
         assert!(!dns_rules_use_legacy_fields(&evaluate_domain));
-        assert!(dns_rules_use_evaluate_or_match_response(&evaluate_domain));
+        assert!(dns_rules_use_features_that_disable_legacy_mode(
+            &evaluate_domain
+        ));
         assert!(dns_rules_reference_rule_set_without_match_response(
             &evaluate_domain
         ));
@@ -2216,7 +2276,21 @@ mod tests {
             "rules": [{ "query_type": ["A"], "server": "fakeip" }]
         });
         assert!(!dns_rules_use_legacy_fields(&modern));
-        assert!(!dns_rules_use_evaluate_or_match_response(&modern));
+        assert!(!dns_rules_use_features_that_disable_legacy_mode(&modern));
+
+        for rule in [
+            json!({ "action": "respond", "server": "local" }),
+            json!({ "race": true, "server": "local" }),
+            json!({ "speculative": true, "server": "local" }),
+            json!({ "disable_optimistic_cache": true, "server": "local" }),
+        ] {
+            let dns = json!({ "rules": [rule] });
+            assert!(!dns_rules_use_legacy_fields(&dns));
+            assert!(
+                dns_rules_use_features_that_disable_legacy_mode(&dns),
+                "feature must disable legacy DNS mode: {dns}"
+            );
+        }
     }
 
     #[test]
@@ -2225,21 +2299,54 @@ mod tests {
             "rules": [
                 { "query_type": ["A"], "server": "fakeip" },
                 { "type": "logical", "mode": "and", "rules": [
-                    { "ip_version": 6, "server": "local" },
+                    { "ip_version": 6, "domain": ["example.com"], "server": "local" },
                     { "query_type": ["AAAA"] }
                 ] },
-                { "ip_is_private": true, "server": "local" }
+                { "ip_is_private": true, "server": "local" },
+                { "server": "remote" }
             ]
         });
         assert_eq!(strip_dns_rule_address_family_fields(&mut dns), 3);
-        assert!(dns["rules"][0].get("query_type").is_none());
-        assert!(dns["rules"][1]["rules"][0].get("ip_version").is_none());
+        let rules = dns["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 3, "address-family-only rules are dropped");
+        assert_eq!(rules[0]["type"], "logical");
+        assert!(rules[0]["rules"][0].get("ip_version").is_none());
         assert_eq!(
-            dns["rules"][1]["rules"].as_array().unwrap().len(),
+            rules[0]["rules"].as_array().unwrap().len(),
             1,
             "a sub-rule left with only query_type must be dropped"
         );
-        assert_eq!(dns["rules"][2]["ip_is_private"], true);
+        assert_eq!(rules[1]["ip_is_private"], true);
+        assert_eq!(
+            rules[2]["server"], "remote",
+            "a pre-existing unconditional rule is not removed"
+        );
+    }
+
+    #[test]
+    fn strip_dns_address_family_fields_drops_action_only_rules() {
+        let mut dns = json!({
+            "rules": [
+                { "query_type": ["AAAA"], "server": "local" },
+                { "ip_version": 6, "action": "reject" },
+                {
+                    "query_type": ["A"],
+                    "server": "remote",
+                    "strategy": "ipv4_only",
+                    "disable_cache": true
+                },
+                { "query_type": ["A"], "domain": ["example.com"], "server": "remote" }
+            ]
+        });
+        assert_eq!(strip_dns_rule_address_family_fields(&mut dns), 4);
+        let rules = dns["rules"].as_array().unwrap();
+        assert_eq!(
+            rules.len(),
+            1,
+            "a rule left with only action fields would match every query"
+        );
+        assert_eq!(rules[0]["domain"], json!(["example.com"]));
+        assert_eq!(rules[0]["server"], "remote");
     }
 
     #[test]

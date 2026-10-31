@@ -751,15 +751,18 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // `ip_is_private` / legacy `strategy`) in the same DNS block as
     // `query_type` / `ip_version`. Profiles are imported verbatim, so keep
     // legacy blocks in legacy mode instead of injecting `query_type` below.
+    // A rule-set reference without `match_response` can also force legacy mode
+    // when the referenced set contains `ip_cidr`, so treat it conservatively:
+    // strip the address-family fields there too.
     let legacy_dns_rules = ice_config_guard::dns_rules_use_legacy_fields(&dns);
     let legacy_dns_mode = legacy_dns_rules
         || ice_config_guard::dns_rules_reference_rule_set_without_match_response(&dns);
-    if legacy_dns_rules {
-        if ice_config_guard::dns_rules_use_evaluate_or_match_response(&dns) {
-            return Err(ConfigError::invalid(
-                "DNS rules combine legacy address filters with evaluate/match_response; migrate the legacy rules to match_response",
-            ));
-        }
+    if legacy_dns_rules && ice_config_guard::dns_rules_use_features_that_disable_legacy_mode(&dns) {
+        return Err(ConfigError::invalid(
+            "DNS rules combine legacy address filters with features that disable legacy DNS mode (match_response / evaluate / respond / race / speculative / disable_optimistic_cache); migrate the legacy rules to match_response",
+        ));
+    }
+    if legacy_dns_mode {
         let removed = ice_config_guard::strip_dns_rule_address_family_fields(&mut dns);
         if removed > 0 {
             tracing::warn!(

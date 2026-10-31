@@ -11,10 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `dns_mode`: `native` on Windows keeps the adapter DNS/TUN peers without
   sing-box 1.14's WFP port-53 block (which would also block LAN resolvers),
   and `disabled` on macOS leaves system DNS to the backend. DNS blocks that
-  still carry legacy address filters stay in legacy mode, legacy rule-level
-  `strategy` options are dropped, and `query_type`/`ip_version` are stripped
-  from such blocks because 1.14 rejects the combination. The Android libbox
-  AAR is rebuilt against the 1.14 `PlatformInterface` and `TunOptions` APIs.
+  still carry legacy address filters or local rule-set references stay in
+  legacy mode, legacy rule-level `strategy` options are dropped, and
+  `query_type`/`ip_version` are stripped from such blocks because 1.14 rejects
+  the combination. The Android libbox AAR is rebuilt against the 1.14
+  `PlatformInterface` and `TunOptions` APIs.
 - Hysteria2 nodes that use a self-signed or pinned certificate keep the
   pre-1.14 QUIC handshake (`disable_chrome_parrot: true`). sing-box 1.14
   parrots Chrome's QUIC fingerprint by default, and Chrome does not advertise
@@ -34,6 +35,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Legacy DNS rules whose only match condition was `query_type` / `ip_version`
+  are now dropped when those fields are stripped for sing-box 1.14. Keeping
+  just the action (`server`, `action`, …) turned the rule into an
+  unconditional match: in a profile with per-query-type rules, all queries
+  could silently go to the `local` server instead of only the stripped family.
+  The same stripping now also applies when a DNS rule references a local
+  rule-set without `match_response`, which can force legacy mode when the set
+  contains only `ip_cidr` entries.
 - Stopping the proxy service while TUN capture is active no longer tries to
   restart the app-managed core before the elevated core has released the mixed
   port. That hand-off surfaced `core.spawn_failed` even though the user only
