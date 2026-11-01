@@ -9,8 +9,10 @@
 //! those fields. A leading `!` on a country code becomes `invert` on that set.
 //!
 //! The exported document targets the pinned core (`ENGINE_COMPAT_CORE_VERSION`).
-//! In particular, Hysteria2 nodes with a self-signed or pinned certificate
-//! carry `disable_chrome_parrot`, which requires sing-box 1.14+; older cores
+//! DNS blocks are reconciled with sing-box 1.14's legacy/modern split (inline
+//! legacy address filters cannot be combined with `query_type`), and Hysteria2
+//! nodes with a self-signed or pinned certificate carry
+//! `disable_chrome_parrot`. Both changes require sing-box 1.14+; older cores
 //! reject the document at config load.
 
 use std::collections::HashSet;
@@ -19,8 +21,8 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::build::{
-    dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, rule_set_refs_are_known,
-    split_wireguard_endpoints, validate_route_refs, wireguard_endpoint,
+    dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, reconcile_legacy_dns_rules,
+    rule_set_refs_are_known, split_wireguard_endpoints, validate_route_refs, wireguard_endpoint,
 };
 use crate::runtime_config::prepared_outbound;
 use crate::{
@@ -172,6 +174,13 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         if prepare_share_dns(&mut dns, &tag_set, &mut rule_sets, &mut set_tags)
             && dns_block_is_usable(&dns)
         {
+            // The exported document targets the pinned core, so it needs the
+            // same legacy DNS migration as the runtime config: 1.14 rejects
+            // inline legacy address filters next to `query_type`, and a
+            // `geoip-*` rule-set reference without `match_response` forces
+            // legacy mode (generated geoip sets are IP-only; geosite sets are
+            // domain-only).
+            reconcile_legacy_dns_rules(&mut dns, |tag| tag.starts_with("geoip-"))?;
             Some(dns)
         } else {
             None

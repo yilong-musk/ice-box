@@ -296,6 +296,45 @@ fn override_route_rule_strategy(rules: Option<&mut Value>, strategy: &str) {
     }
 }
 
+/// Reconcile a DNS block with sing-box 1.14's legacy/modern DNS split.
+///
+/// Returns whether the block is kept in legacy mode. A rule-set reference
+/// without `match_response` forces legacy mode when `is_legacy_rule_set` says
+/// the set is IP-only; inline address filters and `rule_set_ip_cidr_accept_empty`
+/// always do. Modern-only features combined with any legacy signal make the
+/// core reject the whole block, so that case is reported as a config error
+/// instead of reaching the core.
+///
+/// When legacy mode wins, `query_type` / `ip_version` are stripped from every
+/// rule (dropping rules that only carried those fields): keeping them would
+/// make sing-box pick modern mode and reject the legacy filters.
+pub(crate) fn reconcile_legacy_dns_rules(
+    dns: &mut Value,
+    is_legacy_rule_set: impl Fn(&str) -> bool,
+) -> Result<bool, ConfigError> {
+    let legacy_dns_rules = ice_config_guard::dns_rules_use_legacy_fields(dns);
+    let legacy_dns_mode = legacy_dns_rules
+        || ice_config_guard::dns_rules_reference_rule_set_without_match_response(
+            dns,
+            is_legacy_rule_set,
+        );
+    if legacy_dns_mode && ice_config_guard::dns_rules_use_features_that_disable_legacy_mode(dns) {
+        return Err(ConfigError::invalid(
+            "DNS rules combine legacy address filters with features that disable legacy DNS mode (match_response / evaluate / respond / race / speculative / disable_optimistic_cache); migrate the legacy rules to match_response",
+        ));
+    }
+    if legacy_dns_mode {
+        let removed = ice_config_guard::strip_dns_rule_address_family_fields(dns);
+        if removed > 0 {
+            tracing::warn!(
+                removed,
+                "removed DNS rule query_type/ip_version fields to keep the legacy DNS block valid"
+            );
+        }
+    }
+    Ok(legacy_dns_mode)
+}
+
 /// Drop `AAAA` from fake-ip DNS rules that target an IPv4-only fake-ip server.
 ///
 /// The pinned core's fake-ip transport answers AAAA with an empty success when
@@ -760,27 +799,11 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // `query_type` / `ip_version`. Profiles are imported verbatim, so keep
     // legacy blocks in legacy mode instead of injecting `query_type` below.
     // A rule-set reference without `match_response` can also force legacy mode
-    // when the referenced set contains `ip_cidr`; only known GeoIP sets do, so
-    // domain-only sets keep their modern query_type rules (including fake-ip).
-    let legacy_dns_rules = ice_config_guard::dns_rules_use_legacy_fields(&dns);
-    let legacy_dns_mode = legacy_dns_rules
-        || ice_config_guard::dns_rules_reference_rule_set_without_match_response(&dns, |tag| {
-            legacy_dns_rule_set_tags.contains(tag)
-        });
-    if legacy_dns_rules && ice_config_guard::dns_rules_use_features_that_disable_legacy_mode(&dns) {
-        return Err(ConfigError::invalid(
-            "DNS rules combine legacy address filters with features that disable legacy DNS mode (match_response / evaluate / respond / race / speculative / disable_optimistic_cache); migrate the legacy rules to match_response",
-        ));
-    }
-    if legacy_dns_mode {
-        let removed = ice_config_guard::strip_dns_rule_address_family_fields(&mut dns);
-        if removed > 0 {
-            tracing::warn!(
-                removed,
-                "removed DNS rule query_type/ip_version fields to keep the legacy DNS block valid"
-            );
-        }
-    }
+    // when the referenced set contains `ip_cidr`; generated GeoIP sets and
+    // inspected source-format sets do, so domain-only sets keep their modern
+    // query_type rules (including fake-ip).
+    let legacy_dns_mode =
+        reconcile_legacy_dns_rules(&mut dns, |tag| legacy_dns_rule_set_tags.contains(tag))?;
     if input.template.ipv6 && !legacy_dns_mode {
         strip_fakeip_aaaa(&mut dns);
     }
@@ -1435,9 +1458,19 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
 /// Rules using the removed `geosite` option are dropped the same way.
 type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
 
-/// Whether a local rule-set is a generated GeoIP set, which contains only
-/// `ip_cidr` entries. Domain-only GeoSite sets must not force legacy DNS mode:
-/// a `query_type` rule next to them is valid in modern mode.
+/// Whether a local rule-set is known to contain only `ip_cidr` entries.
+///
+/// Generated GeoIP sets are recognized by their `geoip-*` tag or path. A
+/// source-format (JSON) set is inspected on disk: it counts as pure-IP only
+/// when it has at least one `ip_cidr` and no other match field, matching the
+/// pinned core's `ContainsIPCIDRRule && !ContainsNonIPCIDRRule` metadata.
+/// Domain-only GeoSite sets must not force legacy DNS mode: a `query_type`
+/// rule next to them is valid in modern mode.
+///
+/// Binary `.srs` sets cannot be inspected without parsing the binary format,
+/// so only the `geoip-*` name is recognized for them. An arbitrarily named
+/// binary set is treated as not-known-IP; a profile using one as an IP filter
+/// must use `match_response` to stay loadable on sing-box 1.14.
 fn rule_set_is_known_ip_cidr(set: &Value) -> bool {
     if set.get("type").and_then(Value::as_str) != Some("local") {
         return false;
@@ -1446,11 +1479,99 @@ fn rule_set_is_known_ip_cidr(set: &Value) -> bool {
     if tag.starts_with("geoip-") {
         return true;
     }
-    set.get("path")
-        .and_then(Value::as_str)
+    let path = set.get("path").and_then(Value::as_str);
+    let file_name = path
         .and_then(|path| Path::new(path).file_name())
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("geoip-"))
+        .and_then(|name| name.to_str());
+    if file_name.is_some_and(|name| name.starts_with("geoip-")) {
+        return true;
+    }
+    if rule_set_format(set, file_name) == Some("source") {
+        if let Some(pure_ip) = path.and_then(|path| source_rule_set_is_pure_ip(Path::new(path))) {
+            return pure_ip;
+        }
+    }
+    false
+}
+
+/// The explicit `format` field, or the extension-derived default.
+fn rule_set_format(set: &Value, file_name: Option<&str>) -> Option<&'static str> {
+    match set.get("format").and_then(Value::as_str) {
+        Some("source") => Some("source"),
+        Some("binary") => Some("binary"),
+        Some(_) => None,
+        None => file_name.and_then(|name| {
+            if name.ends_with(".json") {
+                Some("source")
+            } else if name.ends_with(".srs") {
+                Some("binary")
+            } else {
+                None
+            }
+        }),
+    }
+}
+
+/// Inspect a source-format local rule-set for `ip_cidr`-only contents.
+///
+/// Returns `None` when the file cannot be read or parsed, so the caller can
+/// fall back to the name heuristic.
+fn source_rule_set_is_pure_ip(path: &Path) -> Option<bool> {
+    let raw = ice_config_guard::read_config_file(path).ok()?;
+    let doc: Value = serde_json::from_slice(&raw).ok()?;
+    let rules = doc.get("rules").and_then(Value::as_array)?;
+    let mut contents = SourceRuleSetContents::default();
+    for rule in rules {
+        inspect_source_headless_rule(rule, &mut contents);
+    }
+    Some(contents.has_ip_cidr && !contents.has_non_ip)
+}
+
+#[derive(Default)]
+struct SourceRuleSetContents {
+    has_ip_cidr: bool,
+    has_non_ip: bool,
+}
+
+/// Walk one source-format headless rule. Logical wrappers recurse; any field
+/// other than `ip_cidr` / `invert` on an ordinary rule marks the set as
+/// non-IP, matching the core's `isNonIPCIDRHeadlessRule`.
+fn inspect_source_headless_rule(rule: &Value, contents: &mut SourceRuleSetContents) {
+    let Some(obj) = rule.as_object() else {
+        contents.has_non_ip = true;
+        return;
+    };
+    if obj.get("type").and_then(Value::as_str) == Some("logical") {
+        let Some(children) = obj.get("rules").and_then(Value::as_array) else {
+            contents.has_non_ip = true;
+            return;
+        };
+        for child in children {
+            inspect_source_headless_rule(child, contents);
+        }
+        return;
+    }
+    for (key, value) in obj {
+        match key.as_str() {
+            // Neither is a match field for the core's IP-only metadata.
+            "type" | "invert" => {}
+            "ip_cidr" => {
+                if !json_listable_is_empty(value) {
+                    contents.has_ip_cidr = true;
+                }
+            }
+            _ => contents.has_non_ip = true,
+        }
+    }
+}
+
+fn json_listable_is_empty(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.is_empty(),
+        Value::String(text) => text.trim().is_empty(),
+        Value::Null => true,
+        _ => false,
+    }
 }
 
 fn geoip_code_cache() -> &'static Mutex<GeoipCodeCache> {

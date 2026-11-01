@@ -151,6 +151,17 @@ the certificate key type, so the generated config keeps the pre-1.14 handshake
 for the non-standard-certificate nodes; normal CA-issued nodes keep the new
 fingerprint.
 
+DNS blocks keep the legacy/modern split valid for the pinned core. Inline
+legacy address filters and IP-only rule-set references (`geoip-*` sets, plus
+source-format local rule-sets inspected on disk) force legacy mode, so
+`query_type` / `ip_version` are stripped from the block; pairing those filters
+with `match_response` / `evaluate` / `respond` is rejected with a clear config
+error. Source-format sets are read at build time to distinguish a pure
+`ip_cidr` filter from a domain-only set, which keeps modern fake-IP rules.
+Binary `.srs` sets cannot be inspected: an arbitrarily named one is treated as
+domain-only, so a profile using it as an IP filter needs `match_response` to
+stay loadable.
+
 ## Runtime ownership
 
 Core availability and traffic capture are separate states. A running core can

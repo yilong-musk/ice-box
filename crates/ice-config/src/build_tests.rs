@@ -1045,6 +1045,229 @@ fn domain_only_dns_rule_set_keeps_fakeip_query_type_rules() {
 }
 
 #[test]
+fn source_format_ip_rule_set_forces_legacy_dns_mode() {
+    // An imported local rule-set can use any tag. Its source (JSON) contents
+    // decide whether it is a pure-IP filter, not the `geoip-*` name.
+    let dir = temp_ruleset_dir("ice-box-dns-source-ip");
+    fs::write(
+        dir.join("custom-ip.json"),
+        br#"{"version":3,"rules":[{"type":"logical","mode":"and","rules":[{"ip_cidr":["10.0.0.0/8"]}]}]}"#,
+    )
+    .unwrap();
+
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "custom-ip",
+        "format": "source",
+        "path": dir.join("custom-ip.json").to_string_lossy(),
+    })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "rule_set": ["custom-ip"], "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("source-format IP rule-set DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert_eq!(
+        rules.len(),
+        1,
+        "address-family-only rules must not survive as unconditional routes"
+    );
+    assert_eq!(rules[0]["rule_set"][0], "custom-ip");
+    assert!(rules.iter().all(|rule| rule.get("query_type").is_none()));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn source_format_domain_rule_set_keeps_fakeip_query_type_rules() {
+    let dir = temp_ruleset_dir("ice-box-dns-source-domain");
+    fs::write(
+        dir.join("custom-domains.json"),
+        br#"{"version":3,"rules":[{"domain_suffix":["example.com"]}]}"#,
+    )
+    .unwrap();
+
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "custom-domains",
+        "format": "source",
+        "path": dir.join("custom-domains.json").to_string_lossy(),
+    })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "rule_set": ["custom-domains"], "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("source-format domain rule-set DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    let fakeip_rule = rules
+        .iter()
+        .find(|rule| rule.get("server").and_then(Value::as_str) == Some("fakeip"))
+        .expect("domain-only source set must keep the fake-ip query_type rule");
+    assert!(
+        fakeip_rule.get("query_type").is_some(),
+        "modern DNS mode must keep query_type"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_rule_set_reference_with_modern_features_is_rejected() {
+    // A source-format pure-IP set forces legacy mode even without an inline
+    // address filter. Combining it with `evaluate` makes sing-box reject the
+    // config, so the build must report the clear error instead.
+    let dir = temp_ruleset_dir("ice-box-dns-source-mixed");
+    fs::write(
+        dir.join("custom-ip.json"),
+        br#"{"version":3,"rules":[{"ip_cidr":["10.0.0.0/8"]}]}"#,
+    )
+    .unwrap();
+
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "custom-ip",
+        "format": "source",
+        "path": dir.join("custom-ip.json").to_string_lossy(),
+    })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "action": "evaluate", "server": "remote" },
+            { "rule_set": ["custom-ip"], "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let err = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect_err("legacy rule-set plus evaluate must fail with a clear error");
+
+    assert!(
+        err.to_string().contains("legacy address filters"),
+        "unexpected error: {err}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_geoip_rule_set_reference_with_modern_features_is_rejected() {
+    // The tag-based GeoIP heuristic must feed the same mixed-mode guard as an
+    // inspected source set.
+    let dir = temp_ruleset_dir("ice-box-dns-geoip-mixed");
+    fs::write(dir.join("geoip-cn.srs"), b"srs").unwrap();
+
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "geoip-cn",
+        "format": "binary",
+        "path": dir.join("geoip-cn.srs").to_string_lossy(),
+    })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "action": "evaluate", "server": "remote" },
+            { "rule_set": ["geoip-cn"], "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let err = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect_err("legacy GeoIP rule-set plus evaluate must fail with a clear error");
+
+    assert!(
+        err.to_string().contains("legacy address filters"),
+        "unexpected error: {err}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn temp_ruleset_dir(prefix: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
 fn dns_rules_reject_legacy_with_response_actions() {
     for disabling_rule in [
         json!({ "action": "respond", "server": "local" }),
@@ -3140,6 +3363,30 @@ fn generated_configs_pass_pinned_core_check() {
         "rules": [{ "query_type": ["A", "AAAA"], "server": "fakeip" }],
         "final": "local",
     }));
+    let source_set_path = dir.join("custom-ip.json");
+    fs::write(
+        &source_set_path,
+        br#"{"version":3,"rules":[{"ip_cidr":["10.0.0.0/8"]}]}"#,
+    )
+    .unwrap();
+    let mut legacy_rule_set = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    legacy_rule_set.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "custom-ip",
+        "format": "source",
+        "path": source_set_path,
+    })];
+    legacy_rule_set.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "rule_set": ["custom-ip"], "server": "local" },
+        ],
+        "final": "local",
+    }));
     let hysteria2 = NormalizedProfile::from_nodes_only(vec![
         NormalizedOutbound {
             tag: "hy2-pinned".into(),
@@ -3249,6 +3496,25 @@ fn generated_configs_pass_pinned_core_check() {
                 platform: HostPlatform::MacOs,
             })
             .expect("legacy dns"),
+        ),
+        (
+            "legacy-source-rule-set",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate {
+                    ipv6: true,
+                    ..LocalTemplate::default()
+                },
+                profile: Arc::new(legacy_rule_set),
+                selected_tag: None,
+                geoip_rule_set_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("legacy source rule-set dns"),
         ),
         (
             "hysteria2",
@@ -3412,4 +3678,48 @@ fn share_config_keeps_hysteria2_handshake_compat() {
         .find(|outbound| outbound["tag"] == "hy2")
         .expect("hy2 outbound");
     assert_eq!(node["disable_chrome_parrot"], true);
+}
+
+#[test]
+fn share_config_reconciles_legacy_dns_rules() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "ip_is_private": true, "server": "local" },
+        ],
+        "final": "local",
+    }));
+
+    let shared = share_singbox_config(&profile).expect("share");
+    let value: Value = serde_json::from_str(&shared).expect("json");
+    let rules = value["dns"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().all(|rule| rule.get("query_type").is_none()),
+        "legacy blocks must not keep query_type in an exported document: {rules:?}"
+    );
+    assert!(rules.iter().any(|rule| rule["ip_is_private"] == true));
+}
+
+#[test]
+fn share_config_rejects_mixed_legacy_and_response_dns_rules() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [{ "type": "local", "tag": "local" }],
+        "rules": [
+            { "match_response": true, "ip_cidr": ["10.0.0.0/8"], "server": "local" },
+            { "ip_is_private": true, "server": "local" },
+        ],
+        "final": "local",
+    }));
+
+    let err = share_singbox_config(&profile).expect_err("mixed DNS modes must not export");
+    assert!(
+        err.to_string().contains("legacy address filters"),
+        "unexpected error: {err}"
+    );
 }
