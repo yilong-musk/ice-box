@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `dns_mode`: `native` on Windows keeps the adapter DNS/TUN peers without
   sing-box 1.14's WFP port-53 block (which would also block LAN resolvers),
   and `disabled` on macOS leaves system DNS to the backend. DNS blocks that
-  still carry legacy address filters or local rule-set references stay in
+  still carry legacy address filters or GeoIP rule-set references stay in
   legacy mode, legacy rule-level `strategy` options are dropped, and
   `query_type`/`ip_version` are stripped from such blocks because 1.14 rejects
   the combination. The Android libbox AAR is rebuilt against the 1.14
@@ -22,16 +22,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Ed25519, so servers with an Ed25519 certificate would fail; share links
   cannot carry the certificate key type. Nodes with a normal CA certificate
   keep the new fingerprint, and an explicit `disable_chrome_parrot` in an
-  imported config wins.
+  imported config wins. An exported sing-box document that carries this field
+  requires 1.14+.
 - The Home power button now names the backend it controls: **Start System
   Proxy** / **Stop System Proxy** / **Start TUN Proxy** / **Stop TUN Proxy**.
   Previously one generic start/stop label did not distinguish system proxy
   from TUN.
-- The Home TUN switch now switches the live capture backend while the proxy
-  service is running: system proxy → TUN when enabled, TUN → system proxy
-  when disabled. With the service stopped it still records the next-start
-  desire only. Enabling TUN with a missing or stale helper first runs the
-  helper install/update flow, then applies the same live switch.
+- The Home and Settings TUN switches now switch the live capture backend while
+  the proxy service is running: system proxy → TUN when enabled, TUN → system
+  proxy when disabled. The save path commits only after the new backend is
+  healthy and rolls back on failure. With the service stopped it still records
+  the next-start desire only. Enabling TUN with a missing or stale helper first
+  runs the helper install/update flow, then applies the same live switch.
 
 ### Fixed
 
@@ -41,8 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unconditional match: in a profile with per-query-type rules, all queries
   could silently go to the `local` server instead of only the stripped family.
   The same stripping now also applies when a DNS rule references a local
-  rule-set without `match_response`, which can force legacy mode when the set
-  contains only `ip_cidr` entries.
+  GeoIP rule-set without `match_response`, which forces legacy mode because
+  the set contains only `ip_cidr` entries. Domain-only GeoSite sets keep
+  modern DNS mode, including their fake-ip `query_type` rules.
 - Stopping the proxy service while TUN capture is active no longer tries to
   restart the app-managed core before the elevated core has released the mixed
   port. That hand-off surfaced `core.spawn_failed` even though the user only

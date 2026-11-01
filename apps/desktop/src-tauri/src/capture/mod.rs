@@ -257,9 +257,9 @@ pub fn tun_topology_changed(a: &TunSettings, b: &TunSettings) -> bool {
         || a.strict_route != b.strict_route
 }
 
-/// `tun.enabled` is the desired backend for the *next* service start. A
-/// settings save that only flips that flag must persist it without touching
-/// the live capture (no start, no stop, no backend switch).
+/// A settings save whose only runtime change is the `tun.enabled` desire.
+/// The save path applies that desire transactionally when a capture backend is
+/// active, and persists it as the next-start choice when the service is off.
 pub fn only_tun_enabled_changed(previous: &AppSettings, next: &AppSettings) -> bool {
     let mut left = previous.clone();
     let mut right = next.clone();

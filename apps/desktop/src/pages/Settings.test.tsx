@@ -1046,7 +1046,7 @@ describe("Settings", () => {
     });
   });
 
-  it("turning TUN off while capture is live only persists the next-start desire", async () => {
+  it("delegates turning TUN off while capture is live to the transactional save path", async () => {
     getStatus.mockResolvedValue({
       ...defaultStatus,
       helper_installed: true,
@@ -1156,8 +1156,8 @@ describe("Settings", () => {
 
   it("enables TUN via the one-time scheduled-task elevation on a platform without a helper", async () => {
     // Windows (plan B): no install dialog, no UAC relaunch; the one-time
-    // elevation component is installed and the next-start desire is
-    // persisted. The proxy service is not started from this switch.
+    // elevation component is installed and the TUN-on desire is saved for the
+    // backend to apply. With the service off the proxy is not started here.
     ensureTunElevation.mockResolvedValue(undefined);
     getStatus.mockResolvedValue({
       ...defaultStatus,

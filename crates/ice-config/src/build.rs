@@ -718,6 +718,14 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .unwrap()
             .insert("rules".into(), Value::Array(final_rules));
     }
+    // DNS rules can only be kept in legacy mode when they reference a set
+    // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
+    // so; GeoSite and other local sets may be domain-only.
+    let legacy_dns_rule_set_tags: HashSet<String> = rule_sets
+        .iter()
+        .filter(|set| rule_set_is_known_ip_cidr(set))
+        .filter_map(|set| set.get("tag").and_then(Value::as_str).map(str::to_string))
+        .collect();
     if !rule_sets.is_empty() {
         route
             .as_object_mut()
@@ -752,11 +760,13 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // `query_type` / `ip_version`. Profiles are imported verbatim, so keep
     // legacy blocks in legacy mode instead of injecting `query_type` below.
     // A rule-set reference without `match_response` can also force legacy mode
-    // when the referenced set contains `ip_cidr`, so treat it conservatively:
-    // strip the address-family fields there too.
+    // when the referenced set contains `ip_cidr`; only known GeoIP sets do, so
+    // domain-only sets keep their modern query_type rules (including fake-ip).
     let legacy_dns_rules = ice_config_guard::dns_rules_use_legacy_fields(&dns);
     let legacy_dns_mode = legacy_dns_rules
-        || ice_config_guard::dns_rules_reference_rule_set_without_match_response(&dns);
+        || ice_config_guard::dns_rules_reference_rule_set_without_match_response(&dns, |tag| {
+            legacy_dns_rule_set_tags.contains(tag)
+        });
     if legacy_dns_rules && ice_config_guard::dns_rules_use_features_that_disable_legacy_mode(&dns) {
         return Err(ConfigError::invalid(
             "DNS rules combine legacy address filters with features that disable legacy DNS mode (match_response / evaluate / respond / race / speculative / disable_optimistic_cache); migrate the legacy rules to match_response",
@@ -1424,6 +1434,24 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
 /// `geoip_rule_set_dir` are dropped (counted via tracing warn) instead of failing the build.
 /// Rules using the removed `geosite` option are dropped the same way.
 type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
+
+/// Whether a local rule-set is a generated GeoIP set, which contains only
+/// `ip_cidr` entries. Domain-only GeoSite sets must not force legacy DNS mode:
+/// a `query_type` rule next to them is valid in modern mode.
+fn rule_set_is_known_ip_cidr(set: &Value) -> bool {
+    if set.get("type").and_then(Value::as_str) != Some("local") {
+        return false;
+    }
+    let tag = set.get("tag").and_then(Value::as_str).unwrap_or_default();
+    if tag.starts_with("geoip-") {
+        return true;
+    }
+    set.get("path")
+        .and_then(Value::as_str)
+        .and_then(|path| Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("geoip-"))
+}
 
 fn geoip_code_cache() -> &'static Mutex<GeoipCodeCache> {
     static CACHE: Mutex<GeoipCodeCache> = Mutex::new(None);

@@ -332,6 +332,7 @@ export const api = {
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
       running_since_ms: running ? runningSinceMs : null,
+      capture_since_ms: running ? runningSinceMs : null,
       subscription_count: subscriptions.length,
       proxy_recovery_warning: [],
       system_proxy_applied: running,

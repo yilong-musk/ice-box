@@ -1658,6 +1658,129 @@ fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
 }
 
 #[test]
+fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+    use ice_tun_sys::fake::FakeTunBackend;
+    use std::path::{Path, PathBuf};
+
+    struct RunningCore {
+        status: CoreStatus,
+    }
+
+    impl CoreHandle for RunningCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: self.status,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.status = CoreStatus::Running;
+            Ok(())
+        }
+
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            self.status = CoreStatus::Stopped;
+            Ok(())
+        }
+
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Err(CoreError::invalid_state("mock"))
+        }
+
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+
+        fn clear_needs_proxy_restore(&mut self) {}
+
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            self.status = CoreStatus::Running;
+            Ok(())
+        }
+
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            self.status = CoreStatus::Stopped;
+            Ok(())
+        }
+    }
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let mut state = temp_state_with_node("live-tun-settings");
+    let paths = state.paths.clone();
+    state.capture = CaptureController::with_backend_for_tests(
+        paths.clone(),
+        Box::new(FakeTunBackend::new("ice-box:test")),
+    );
+    let (core, core_snapshot) = wrap_core(Box::new(RunningCore {
+        status: CoreStatus::Running,
+    }));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    let mut settings = current_settings(&paths).unwrap();
+    settings.tun.interface_name = Some("utun420".into());
+    settings.proxy_service_enabled = true;
+    persist_settings(&paths.settings(), &settings, host_platform()).unwrap();
+    state.capture.set_system_proxy_active().unwrap();
+
+    let resources = paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            tun: Some(ice_config::TunSettingsPatch {
+                enabled: Some(true),
+                ..Default::default()
+            }),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("live TUN switch");
+
+    assert_eq!(state.capture.active_backend(), TrafficCapture::Tun);
+    let on_disk = current_settings(&paths).unwrap();
+    assert!(on_disk.tun.enabled);
+    assert!(on_disk.proxy_service_enabled);
+    assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
 fn only_tray_display_mode_changed_ignores_other_fields() {
     use crate::application::settings::only_tray_display_mode_changed;
 

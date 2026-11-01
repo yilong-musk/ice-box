@@ -402,9 +402,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** Persist next-start TUN desire (and optional elevation / helper install)
-   * without treating it as a live capture start/stop. The power button stays
-   * on the current service state. */
+  /** Persist the TUN desire (and optional elevation / helper install). The
+   * save path applies the live switch transactionally when a capture backend
+   * is active; with the service off it only records the next-start choice. */
   async function persistTunDesire(action: () => Promise<void>) {
     pollGenRef.current += 1;
     runtime?.bumpGeneration();
@@ -591,22 +591,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** Persist the TUN desire and, while the proxy service is running, switch
-   * the live capture backend immediately: system proxy -> TUN when enabling,
-   * TUN -> system proxy when disabling. With the service off this is only the
-   * next-start desire. */
+  /** Persist the TUN desire. The backend save path switches system proxy ↔
+   * TUN transactionally while the proxy service is running and rolls back on
+   * failure; with the service off it only records the next-start desire. */
   async function applyTunDesire(enabled: boolean) {
-    const serviceRunning = proxyOn;
     await api.saveSettings({
       tun: { enabled },
     });
-    if (!serviceRunning) return;
-    await api.stopSystemProxy();
-    await api.start();
   }
 
   /** TUN setting switch on the home page. Enabling without an authorized
-   * helper guides the user through install first (same flow as Settings). */
+   * helper guides the user through install first. The save path applies the
+   * live backend switch (same as Settings). */
   function onToggleTunSetting(enabled: boolean) {
     if (!settings) return;
     setTunOverride(enabled);
@@ -749,9 +745,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   const powerOn = phone ? vpnActive : proxyOn;
   // Service uptime, not core process lifetime: the diagnostic core can keep
-  // running long before the user starts the proxy service.
-  const uptimeSince =
-    status?.capture_since_ms ?? status?.running_since_ms ?? null;
+  // running long before the user starts the proxy service. The phone shell
+  // does not report `capture_since_ms`, so it keeps the core-start fallback.
+  const uptimeSince = phone
+    ? status?.capture_since_ms ?? status?.running_since_ms ?? null
+    : status?.capture_since_ms ?? null;
   const canToggle = phone ? !busy : canToggleProxy;
   // The button names the backend it starts/stops: TUN when configured (or
   // active), otherwise the system proxy (docs/tun.md).
@@ -946,8 +944,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                                 // Windows (plan B): a one-time elevation component (a
                                 // scheduled task) makes TUN work without any further
                                 // prompt. The first enable triggers a single UAC to
-                                // install it, then persists the next-start desire.
-                                // Never start/stop the proxy service from this switch.
+                                // install it, then the save path applies the live
+                                // switch (or records the next-start desire when off).
                                 setTunOverride(true);
                                 void persistTunDesire(async () => {
                                   if (status?.tun_elevation_ready !== true) {

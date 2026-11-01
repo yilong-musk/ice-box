@@ -489,7 +489,8 @@ export function Settings({
    * e.g. a guided install must never flash「已保存」while the TUN-on setting
    * was dropped by validation. Autosave omits this field, so a successful
    * save must refresh shared status (Home reads `configured_tun` from it)
-   * and a failed save must roll the switch back. */
+   * and a failed save must roll the switch back. While capture is active the
+   * save path performs the live backend switch transactionally. */
   async function persistTunEnabled(enabled: boolean) {
     const previous = form.tun.enabled;
     const candidate = { ...form, tun: { ...form.tun, enabled } };

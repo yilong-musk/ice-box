@@ -289,12 +289,12 @@ fn controller(paths: &AppPaths) -> CaptureController {
 }
 
 #[test]
-fn only_tun_enabled_changed_ignores_live_capture_desire() {
+fn only_tun_enabled_changed_detects_a_desire_flip() {
     let off = tun_settings(false);
     let on = tun_settings(true);
     assert!(
         only_tun_enabled_changed(&off, &on),
-        "flipping tun.enabled alone is a next-start desire"
+        "flipping tun.enabled alone is routed through the live switch path"
     );
     assert!(only_tun_enabled_changed(&on, &off));
     assert!(!only_tun_enabled_changed(&off, &off));
@@ -746,6 +746,75 @@ fn transition_from_system_proxy_to_tun_commits_settings() {
     let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
     assert!(on_disk.tun.enabled, "committed only after healthy");
     assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn transition_from_tun_to_system_proxy_commits_settings() {
+    let paths = temp_paths("transition-off");
+    seed_subscription(&paths);
+    let c = controller(&paths);
+    let previous = tun_settings(true);
+    let mut core = TrackCore::running();
+    let proxy = TrackProxy::default();
+    c.enable_tun(&previous, &mut core, PathBuf::from("/bin/true"))
+        .expect("enable");
+
+    let candidate = tun_settings(false);
+    c.transition_tun_settings(
+        &previous,
+        &candidate,
+        &mut core,
+        &proxy,
+        PathBuf::from("/bin/true"),
+    )
+    .expect("transition");
+
+    assert_eq!(c.active_backend(), TrafficCapture::SystemProxy);
+    assert_eq!(proxy.apply_calls.get(), 1, "new backend applied");
+    let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
+    assert!(!on_disk.tun.enabled, "committed only after healthy");
+    assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn transition_from_tun_to_system_proxy_failure_restores_tun() {
+    let paths = temp_paths("transition-off-rollback");
+    seed_subscription(&paths);
+    let c = controller(&paths);
+    let previous = tun_settings(true);
+    let mut core = TrackCore::running();
+    c.enable_tun(&previous, &mut core, PathBuf::from("/bin/true"))
+        .expect("enable");
+
+    let proxy = TrackProxy::default();
+    proxy.fail_apply.set(true);
+    let candidate = tun_settings(false);
+    let err = c
+        .transition_tun_settings(
+            &previous,
+            &candidate,
+            &mut core,
+            &proxy,
+            PathBuf::from("/bin/true"),
+        )
+        .expect_err("system proxy apply failed");
+
+    assert_eq!(err.code, ErrorCode::ProxyApplyFailed.as_str());
+    assert_eq!(
+        proxy.apply_calls.get(),
+        1,
+        "the failed new backend was attempted once"
+    );
+    assert_eq!(
+        c.active_backend(),
+        TrafficCapture::Tun,
+        "rollback restored TUN"
+    );
+    let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
+    assert!(on_disk.tun.enabled, "failed candidate was not committed");
+    assert!(!paths.pending_settings().exists(), "pending cleared");
     let _ = fs::remove_dir_all(paths.root());
 }
 

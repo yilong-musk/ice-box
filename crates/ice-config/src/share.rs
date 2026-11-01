@@ -7,6 +7,11 @@
 //! stay on this machine. Legacy `geoip` / `geosite` matchers on both route and
 //! DNS rules are rewritten to remote rule-sets because sing-box 1.13 rejects
 //! those fields. A leading `!` on a country code becomes `invert` on that set.
+//!
+//! The exported document targets the pinned core (`ENGINE_COMPAT_CORE_VERSION`).
+//! In particular, Hysteria2 nodes with a self-signed or pinned certificate
+//! carry `disable_chrome_parrot`, which requires sing-box 1.14+; older cores
+//! reject the document at config load.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -51,7 +56,10 @@ const RULE_META_KEYS: &[&str] = &[
 ///
 /// Outbounds, WireGuard endpoints, route, remote rule-sets, and DNS travel
 /// with the copy. Local inbounds, the Clash API, and log paths stay behind.
-/// Credentials are left intact so the copy can be imported elsewhere.
+/// Credentials are left intact so the copy can be imported elsewhere. The
+/// document targets the pinned core version: version-specific outbound fields
+/// (for example Hysteria2 `disable_chrome_parrot`) may not load on older
+/// sing-box releases.
 pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, ConfigError> {
     if !profile.nodes.iter().any(share_node_is_proxy) {
         return Err(ConfigError::EmptyOutbounds);

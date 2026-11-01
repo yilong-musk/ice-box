@@ -233,9 +233,8 @@ pub struct StatusResponse {
     pub helper_stale: bool,
     /// Windows scheduled-task elevation is installed (plan B): when true, TUN
     /// start/stop runs without any elevation prompt; when false the frontend
-    /// runs the one-time `ensure_tun_elevation` (single UAC) before persisting
-    /// the TUN-on next-start desire. Always true on non-Windows hosts (no
-    /// task concept there).
+    /// runs the one-time `ensure_tun_elevation` (single UAC) before saving the
+    /// TUN-on desire. Always true on non-Windows hosts (no task concept there).
     pub tun_elevation_ready: bool,
     /// The active profile has at least one outbound. Home uses this instead of
     /// the full node list to choose the empty state.

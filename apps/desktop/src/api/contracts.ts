@@ -127,8 +127,8 @@ export type StatusResponse = {
   helper_stale: boolean;
   /** Windows scheduled-task elevation installed (plan B): when true, TUN
    * start/stop runs without any elevation prompt; when false the frontend
-   * runs the one-time `ensureTunElevation` (single UAC) before persisting
-   * the TUN-on next-start desire. Always true on non-Windows hosts. */
+   * runs the one-time `ensureTunElevation` (single UAC) before saving the
+   * TUN-on desire. Always true on non-Windows hosts. */
   tun_elevation_ready: boolean;
   /** Whether Settings can offer a menu-bar readout. macOS only; never inferred
    * from the user agent (an iPhone webview would look like macOS). */

@@ -981,6 +981,70 @@ fn rule_set_legacy_dns_mode_strips_profile_address_family_fields() {
 }
 
 #[test]
+fn domain_only_dns_rule_set_keeps_fakeip_query_type_rules() {
+    // GeoSite sets contain domains, not ip_cidr. Referencing one must not
+    // force legacy DNS mode or drop the fake-ip query_type rule.
+    let dir = std::env::temp_dir().join(format!(
+        "ice-box-dns-ruleset-domain-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("geosite-cn.srs"), b"srs").unwrap();
+
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({
+        "type": "local",
+        "tag": "geosite-cn",
+        "format": "binary",
+        "path": dir.join("geosite-cn.srs").to_string_lossy(),
+    })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+            { "type": "local", "tag": "local" },
+        ],
+        "rules": [
+            { "query_type": ["A", "AAAA"], "server": "fakeip" },
+            { "rule_set": ["geosite-cn"], "server": "local" },
+        ],
+        "final": "local",
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate {
+            ipv6: true,
+            ..LocalTemplate::default()
+        },
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("domain-only rule-set DNS build");
+
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    let fakeip_rule = rules
+        .iter()
+        .find(|rule| rule.get("server").and_then(Value::as_str) == Some("fakeip"))
+        .expect("fake-ip query_type rule must survive a domain-only rule-set");
+    assert!(
+        fakeip_rule.get("query_type").is_some(),
+        "modern DNS mode must keep query_type"
+    );
+    assert!(rules
+        .iter()
+        .any(|rule| rule.get("rule_set") == Some(&json!(["geosite-cn"]))));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dns_rules_reject_legacy_with_response_actions() {
     for disabling_rule in [
         json!({ "action": "respond", "server": "local" }),

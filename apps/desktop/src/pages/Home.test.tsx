@@ -1056,6 +1056,7 @@ describe("Home", () => {
       system_proxy_applied: false,
       system_proxy_recorded: true,
       system_proxy_available: true,
+      running_since_ms: Date.now() - 65_000,
       ...tunStatus,
     });
     listNodes.mockResolvedValue([
@@ -1072,6 +1073,7 @@ describe("Home", () => {
     expect(power).toHaveAttribute("aria-pressed", "true");
     expect(view.queryByRole("button", { name: t("home.power.startSystem") })).toBeNull();
     expect(view.getByRole("alert")).toHaveTextContent(t("home.warn.proxyOutOfSync"));
+    expect(view.queryByTestId("home-run-uptime")).toBeNull();
     expect(healthRowLabels(container)).toEqual(healthRows());
   });
 
@@ -1594,7 +1596,7 @@ describe("Home", () => {
     expect(stopSystemProxy).not.toHaveBeenCalled();
   });
 
-  it("turning TUN on while the system proxy is live switches to TUN", async () => {
+  it("turning TUN on while the system proxy is live delegates to the save path", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -1642,12 +1644,13 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
-      expect(stopSystemProxy).toHaveBeenCalled();
-      expect(start).toHaveBeenCalled();
+      // The backend save path owns the live switch and rollback.
+      expect(stopSystemProxy).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
     });
   });
 
-  it("turning TUN off while capture is live switches to the system proxy", async () => {
+  it("turning TUN off while capture is live delegates to the save path", async () => {
     getStatus.mockResolvedValue({
       core: {
         status: "running",
@@ -1696,8 +1699,9 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: false }),
         }),
       );
-      expect(stopSystemProxy).toHaveBeenCalled();
-      expect(start).toHaveBeenCalled();
+      // The backend save path owns the live switch and rollback.
+      expect(stopSystemProxy).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
     });
   });
 
@@ -1758,9 +1762,9 @@ describe("Home", () => {
     releaseSave?.();
     await waitFor(() => {
       expect(saveSettings).toHaveBeenCalled();
-      expect(stopSystemProxy).toHaveBeenCalled();
-      expect(start).toHaveBeenCalled();
     });
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(view.getByRole("switch", { name: t("home.tunMode") })).toBeEnabled();
     });
@@ -1854,9 +1858,9 @@ describe("Home", () => {
     const tunToggle = view.getByRole("switch", { name: t("home.tunMode") });
 
     // Windows (plan B): the one-time elevation component is installed
-    // (single UAC) and the TUN-on next-start desire persists — no dialog,
-    // no installHelper, no app relaunch, and the live proxy service is
-    // not started from this switch.
+    // (single UAC) and the TUN-on desire is saved for the backend to apply —
+    // no dialog, no installHelper, no app relaunch, and with the service off
+    // the live proxy is not started from this switch.
     fireEvent.click(tunToggle);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(installHelper).not.toHaveBeenCalled();
@@ -2090,9 +2094,9 @@ describe("Home", () => {
           tun: expect.objectContaining({ enabled: true }),
         }),
       );
-      expect(stopSystemProxy).toHaveBeenCalled();
-      expect(start).toHaveBeenCalled();
     });
+    expect(stopSystemProxy).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("updates a stale helper before starting TUN from the power button", async () => {

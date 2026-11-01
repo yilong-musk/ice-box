@@ -180,18 +180,39 @@ pub fn dns_rules_use_legacy_fields(dns: &Value) -> bool {
     legacy
 }
 
-/// Whether a DNS rule references a rule-set without `match_response`.
+/// Whether a DNS rule without `match_response` references a rule-set that is
+/// known to contain `ip_cidr` entries.
 ///
-/// sing-box 1.14 rejects such a rule when the set contains only `ip_cidr`
-/// entries and the DNS block also uses `query_type` / `ip_version`. The set
-/// contents are not available here, so callers treat this conservatively:
-/// keep the block in legacy mode and strip any profile-supplied
-/// `query_type` / `ip_version` instead of injecting their own.
-pub fn dns_rules_reference_rule_set_without_match_response(dns: &Value) -> bool {
+/// sing-box 1.14 rejects such a rule when the referenced set contains only
+/// `ip_cidr` entries and the DNS block also uses `query_type` / `ip_version`.
+/// `is_legacy_rule_set` supplies the caller's knowledge of the sets: generated
+/// GeoIP sets are `ip_cidr`-only, while domain-only GeoSite sets are valid in
+/// modern DNS mode. Unknown or domain-only sets must not force legacy mode.
+pub fn dns_rules_reference_rule_set_without_match_response(
+    dns: &Value,
+    is_legacy_rule_set: impl Fn(&str) -> bool,
+) -> bool {
     let mut references = false;
     visit_dns_rules(dns, &mut |rule| {
-        if !match_response_enabled(rule) && rule.get("rule_set").is_some() {
-            references = true;
+        if match_response_enabled(rule) {
+            return;
+        }
+        match rule.get("rule_set") {
+            Some(Value::String(tag)) => {
+                if is_legacy_rule_set(tag) {
+                    references = true;
+                }
+            }
+            Some(Value::Array(tags)) => {
+                if tags
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(&is_legacy_rule_set)
+                {
+                    references = true;
+                }
+            }
+            _ => {}
         }
     });
     references
@@ -2240,8 +2261,24 @@ mod tests {
             !dns_rules_use_legacy_fields(&rule_set),
             "a plain rule-set reference is not a definite legacy field"
         );
+        assert!(
+            !dns_rules_reference_rule_set_without_match_response(&rule_set, |_| false),
+            "domain-only sets must not force legacy DNS mode"
+        );
         assert!(dns_rules_reference_rule_set_without_match_response(
-            &rule_set
+            &rule_set,
+            |tag| tag == "geosite-cn"
+        ));
+        let mixed_rule_set = json!({
+            "rules": [{ "rule_set": ["geosite-cn", "geoip-cn"], "server": "local" }]
+        });
+        assert!(dns_rules_reference_rule_set_without_match_response(
+            &mixed_rule_set,
+            |tag| tag == "geoip-cn"
+        ));
+        assert!(!dns_rules_reference_rule_set_without_match_response(
+            &mixed_rule_set,
+            |tag| tag == "other-set"
         ));
 
         let legacy_strategy = json!({
@@ -2269,7 +2306,12 @@ mod tests {
             &evaluate_domain
         ));
         assert!(dns_rules_reference_rule_set_without_match_response(
-            &evaluate_domain
+            &evaluate_domain,
+            |tag| tag == "geosite-cn"
+        ));
+        assert!(!dns_rules_reference_rule_set_without_match_response(
+            &evaluate_domain,
+            |_| false
         ));
 
         let modern = json!({

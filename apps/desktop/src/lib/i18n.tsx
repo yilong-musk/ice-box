@@ -331,7 +331,7 @@ const zh = {
     "TUN 清理未确认，请先在主页「重试恢复」。",
   "settings.tunNotSupported": "当前平台暂不支持 TUN 模式",
   "settings.tunActiveWithIface":
-    "正在通过 TUN 接管流量{interface}；更改在下次启动生效。",
+    "正在通过 TUN 接管流量{interface}；修改会立即生效。",
   "settings.helperStale":
     "更新辅助组件后才能启用 TUN。",
   "settings.helperNeeded":
@@ -844,7 +844,7 @@ const en: Record<MessageKey, string> = {
     "TUN cleanup is unconfirmed; run “Retry Recovery” on Home.",
   "settings.tunNotSupported": "TUN is not supported on this platform",
   "settings.tunActiveWithIface":
-    "Capturing via TUN{interface}; changes apply on the next start.",
+    "Capturing via TUN{interface}; changes apply immediately.",
   "settings.helperStale":
     "Update the helper before enabling TUN.",
   "settings.helperNeeded":
