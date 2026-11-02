@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The first launch after an in-app update no longer reports
+  `core.spawn_failed` with `os error 32` ("another program is using this
+  file") when the updater or an antivirus scanner still holds the freshly
+  replaced `sing-box` binary. Both the app-managed spawner and the elevated
+  core launchers (the macOS helper and the Windows scheduled-task launcher)
+  now retry a temporarily locked executable for up to ~7 seconds (Windows
+  sharing violation / access denied, Unix `ETXTBSY`) before surfacing the
+  error.
 - The Home outbound mode switch now follows its visual orientation for
   keyboard navigation: up/down on desktop and left/right on phone.
 

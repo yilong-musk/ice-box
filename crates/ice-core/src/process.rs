@@ -74,28 +74,17 @@ pub trait ProcessSpawner: Send {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CommandSpawner;
 
-impl ProcessSpawner for CommandSpawner {
-    fn spawn(
-        &self,
-        binary: &Path,
-        config: &Path,
-        log_file: &Path,
-    ) -> Result<Box<dyn ManagedProcess>, CoreError> {
-        if !binary.is_file() {
-            return Err(CoreError::NotFound(format!(
-                "sing-box binary not found at {}",
-                binary.display()
-            )));
-        }
-        if !config.is_file() {
-            return Err(CoreError::SpawnFailed(format!(
-                "config not found at {}",
-                config.display()
-            )));
-        }
+impl CommandSpawner {
+    /// Build one spawn attempt. Callers must rebuild the command for every
+    /// retry: a failed spawn consumes the redirected stdio handles, so the
+    /// log must be reopened.
+    fn build_command(binary: &Path, config: &Path, log_file: &Path) -> io::Result<Command> {
         if let Some(parent) = log_file.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                CoreError::SpawnFailed(format!("create log dir {}: {e}", parent.display()))
+                io::Error::new(
+                    e.kind(),
+                    format!("create log dir {}: {e}", parent.display()),
+                )
             })?;
         }
         let _ = crate::cap_log_file(log_file, crate::CORE_LOG_MAX_BYTES, crate::CORE_LOG_KEEP);
@@ -104,10 +93,12 @@ impl ProcessSpawner for CommandSpawner {
             .create(true)
             .append(true)
             .open(log_file)
-            .map_err(|e| CoreError::SpawnFailed(format!("open log {}: {e}", log_file.display())))?;
+            .map_err(|e| {
+                io::Error::new(e.kind(), format!("open log {}: {e}", log_file.display()))
+            })?;
         let log_err = log
             .try_clone()
-            .map_err(|e| CoreError::SpawnFailed(format!("clone log handle: {e}")))?;
+            .map_err(|e| io::Error::new(e.kind(), format!("clone log handle: {e}")))?;
 
         let mut command = Command::new(binary);
         command
@@ -124,14 +115,44 @@ impl ProcessSpawner for CommandSpawner {
             // and closing the console must not take the core down with it.
             command.creation_flags(0x08000000);
         }
-        let child = command.spawn().map_err(|e| {
+        Ok(command)
+    }
+}
+
+impl ProcessSpawner for CommandSpawner {
+    fn spawn(
+        &self,
+        binary: &Path,
+        config: &Path,
+        log_file: &Path,
+    ) -> Result<Box<dyn ManagedProcess>, CoreError> {
+        // A missing binary is deliberately not retried: the updater finishes
+        // replacing the file before relaunching (the observed post-update
+        // failure is a lock, not an absent file), and retrying would delay a
+        // genuine missing-core error by the whole retry budget.
+        if !binary.is_file() {
+            return Err(CoreError::NotFound(format!(
+                "sing-box binary not found at {}",
+                binary.display()
+            )));
+        }
+        if !config.is_file() {
+            return Err(CoreError::SpawnFailed(format!(
+                "config not found at {}",
+                config.display()
+            )));
+        }
+
+        let child = ice_spawn::spawn_with_lock_retry(|| {
+            Self::build_command(binary, config, log_file).and_then(|mut command| command.spawn())
+        })
+        .map_err(|err| {
             CoreError::SpawnFailed(format!(
-                "spawn {} -c {}: {e}",
+                "spawn {} -c {}: {err}",
                 binary.display(),
                 config.display()
             ))
         })?;
-
         Ok(Box::new(RealChild { child }))
     }
 }
@@ -911,5 +932,77 @@ mod tests {
             pid_is_alive(4),
             "pid 4 (System) is ACCESS_DENIED and must count as alive"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_spawner_retries_while_the_binary_is_open_for_writing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ice-box-spawn-lock-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("fake-core.sh");
+        std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let log_file = dir.join("core.log");
+
+        // ETXTBSY: the kernel refuses to exec a file that is open for writing.
+        let held = OpenOptions::new().write(true).open(&binary).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(450));
+            drop(held);
+        });
+
+        let started = Instant::now();
+        let mut child = CommandSpawner
+            .spawn(&binary, &config, &log_file)
+            .expect("spawn retries until the writer releases the binary");
+        release.join().unwrap();
+        assert!(
+            started.elapsed() >= ice_spawn::LOCK_RETRY_DELAYS[0],
+            "the first attempt must fail with ETXTBSY and wait before retrying"
+        );
+        let _ = child.force_kill();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_spawner_fails_fast_on_a_non_lock_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ice-box-spawn-eacces-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("not-executable.sh");
+        std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let log_file = dir.join("core.log");
+
+        let started = Instant::now();
+        let err = match CommandSpawner.spawn(&binary, &config, &log_file) {
+            Ok(_) => panic!("a non-executable binary must not spawn"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, CoreError::SpawnFailed(_)),
+            "EACCES must surface as spawn_failed, got {err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "EACCES is not a lock error and must not consume the retry budget"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

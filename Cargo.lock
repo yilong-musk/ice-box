@@ -1783,6 +1783,7 @@ name = "ice-core"
 version = "0.2.6"
 dependencies = [
  "anyhow",
+ "ice-spawn",
  "ice-types",
  "libc",
  "serde",
@@ -1818,6 +1819,7 @@ name = "ice-helper"
 version = "0.2.6"
 dependencies = [
  "ice-config-guard",
+ "ice-spawn",
  "ice-tun-helper-proto",
  "ice-types",
  "libc",
@@ -1841,6 +1843,14 @@ dependencies = [
  "tracing",
  "windows-sys 0.59.0",
  "winreg",
+]
+
+[[package]]
+name = "ice-spawn"
+version = "0.2.6"
+dependencies = [
+ "libc",
+ "tracing",
 ]
 
 [[package]]
@@ -1892,6 +1902,7 @@ name = "ice-tun-launcher"
 version = "0.2.6"
 dependencies = [
  "ice-config-guard",
+ "ice-spawn",
  "ice-tun-pin",
  "serde_json",
  "windows",

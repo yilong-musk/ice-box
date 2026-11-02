@@ -14,6 +14,7 @@ subtle = "2.6"
 ice-types = { workspace = true }
 ice-tun-helper-proto = { workspace = true }
 ice-config-guard = { workspace = true }
+ice-spawn = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

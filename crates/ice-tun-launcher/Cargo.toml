@@ -9,6 +9,7 @@ description = "Elevated scheduled-task launcher for the Windows TUN core"
 serde_json = { workspace = true }
 ice-config-guard = { workspace = true }
 ice-tun-pin = { workspace = true }
+ice-spawn = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

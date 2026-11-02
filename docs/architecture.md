@@ -249,7 +249,12 @@ Configuration changes are validated before application. Reload is preferred
 where supported, with restart as a fallback; health checks determine success.
 Failures attempt to restore the previous configuration and release capture
 when service cannot be recovered. OS proxy settings are backed up before
-mutation and restored on stop or failure.
+mutation and restored on stop or failure. Spawning the bundled core — in the
+app process and in the elevated core launchers — retries a transiently locked
+executable (an in-place update or antivirus scan still holding the freshly
+replaced binary) for about seven seconds before surfacing the spawn error
+(`core.spawn_failed` in the app process), so the first launch after an update
+does not fail on a sharing violation.
 
 Startup reconciles leftover processes and capture state before starting the
 core. Recovery itself does not enable capture; restoring the user's saved

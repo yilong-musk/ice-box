@@ -19,6 +19,7 @@ members = [
   "crates/ice-tun-launcher",
   "crates/ice-helper",
   "crates/ice-elevate",
+  "crates/ice-spawn",
 ]
 
 [workspace.package]
@@ -57,3 +58,4 @@ ice-tun-helper-proto = { path = "crates/ice-tun-helper-proto" }
 ice-tun-journal = { path = "crates/ice-tun-journal" }
 ice-tun-pin = { path = "crates/ice-tun-pin" }
 ice-elevate = { path = "crates/ice-elevate" }
+ice-spawn = { path = "crates/ice-spawn" }

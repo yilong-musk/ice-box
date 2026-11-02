@@ -550,35 +550,46 @@ fn run_core(args: Args) -> i32 {
 
     use std::os::windows::process::CommandExt;
 
-    let log = match std::fs::OpenOptions::new()
+    // Create the protected log and apply the read ACL once, before any spawn
+    // attempt. Each attempt then reopens it because a failed spawn consumes
+    // the redirected stdio handles.
+    match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&args.log)
     {
-        Ok(log) => log,
+        Ok(log) => drop(log),
         Err(err) => {
             eprintln!("open core log {}: {err}", args.log.display());
             return 2;
         }
-    };
+    }
     let _ = acl::apply_acl(&args.log, false, acl::UsersAccess::Read);
-    let log_err = match log.try_clone() {
-        Ok(clone) => clone,
-        Err(err) => {
-            eprintln!("clone core log handle: {err}");
-            return 2;
-        }
+    let spawn_core = || -> std::io::Result<std::process::Child> {
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&args.log)
+            .map_err(|err| {
+                std::io::Error::new(
+                    err.kind(),
+                    format!("open core log {}: {err}", args.log.display()),
+                )
+            })?;
+        let log_err = log
+            .try_clone()
+            .map_err(|err| std::io::Error::new(err.kind(), format!("clone log handle: {err}")))?;
+        Command::new(&args.binary)
+            .arg("run")
+            .arg("-c")
+            .arg(&protected_config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err))
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
     };
-    let mut child = match Command::new(&args.binary)
-        .arg("run")
-        .arg("-c")
-        .arg(&protected_config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-    {
+    let mut child = match ice_spawn::spawn_with_lock_retry(spawn_core) {
         Ok(child) => child,
         Err(err) => {
             eprintln!(
