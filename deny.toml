@@ -29,6 +29,7 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
     { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
     { id = "RUSTSEC-2026-0369", reason = "zip 4.x symlink perms via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
+    { id = "RUSTSEC-2026-0429", reason = "zip 4.x symlink allocation abort via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
 ]
 
 [licenses]

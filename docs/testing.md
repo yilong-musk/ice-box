@@ -8,7 +8,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Formatting; clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`); TUN integration tests; desktop/website/mobile typechecks; website installer-link tests; the mobile Live Demo smoke test; Vitest; updater fixtures; Android version-code and APK-signer fixtures; demo screenshots and the composed README hero |
+| `bash scripts/gate-local.sh` | Formatting; clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`); TUN integration tests; desktop/website/mobile typechecks; website installer-link tests; the mobile Live Demo smoke test; Vitest; updater fixtures; release preflight, updater-signature, signing-key, release-asset, release-state, and Android-keystore fixtures; Android version-code and APK-signer fixtures; demo screenshots and the composed README hero |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
 
 The local gate omits the desktop and mobile Tauri shells from clippy and Rust
@@ -24,10 +24,13 @@ VPN power toggle, and the language and theme bridges from the site into the
 iframe. The Linux CI gate installs Chromium and runs it; `GATE_SCOPE=rust` jobs
 skip it.
 
-CI runs the full gate on Linux and `GATE_SCOPE=rust` on macOS/Windows; packaging
-jobs build separately. `GATE_SCOPE=frontend` runs only the frontend half.
-The [gate scripts](../scripts/gate.sh) and [CI workflow](../.github/workflows/ci.yml)
-define the exact commands.
+CI and the release workflow run the same `.github/actions/gate-linux` action
+(full gate) and `GATE_SCOPE=rust` on macOS/Windows; packaging jobs build
+separately. The release pipeline additionally
+runs `scripts/release-preflight.sh` before any build and
+`scripts/verify-release-assets.sh` after publication. `GATE_SCOPE=frontend` runs
+only the frontend half. The [gate scripts](../scripts/gate.sh) and
+[CI workflow](../.github/workflows/ci.yml) define the exact commands.
 
 ## Android builds
 

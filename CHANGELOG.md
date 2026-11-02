@@ -9,6 +9,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The phone Home screen renders the outbound mode switch (Rule / Global /
   Direct) as a single horizontal row instead of a vertical stack.
+- Release engineering: a fast preflight now validates the tag on `main`, every
+  tracked version source (including `apps/desktop/package.json`), the changelog
+  section, the signing secrets, the Android keystore and credentials, that the
+  signing key matches the committed pubkey, and that the version is newer than
+  every published release and existing tag before any build starts. A manual
+  `Release` workflow dispatch runs the preflight against `main` without building
+  or publishing, so the real secrets can be checked before tagging. The release
+  runs the full gate once on Linux, the platform gate on macOS/Windows, and
+  publishes through a verified draft that includes `SHA256SUMS`, verifies the
+  updater signatures cryptographically with minisign, downloads every published
+  asset (with retries) to verify its SHA-256, rejects extra assets or checksum
+  entries, and checks `latest.json`. The artifact checks now reject a wrong
+  macOS architecture, DMG/NSIS name, or APK `versionName`/`versionCode` as well;
+  a published release rerun is verification-only and does not re-download build
+  artifacts.
+- Pre-release tags are marked as GitHub pre-releases and no longer publish
+  `latest.json`, so the in-app updater only follows final releases. All builds
+  of the same `X.Y.Z` share one Android `versionCode`, so an Android install of
+  a pre-release must be uninstalled before installing another build of that
+  core version. The website now deploys after a final release is published,
+  checks that the three installer assets exist, and avoids a window where its
+  direct download links point at a tag that does not exist yet.
+- Release notes link to the changelog at the release tag instead of `main`, so
+  published bodies keep pointing at the notes that shipped.
 
 ### Fixed
 
@@ -22,6 +46,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error.
 - The Home outbound mode switch now follows its visual orientation for
   keyboard navigation: up/down on desktop and left/right on phone.
+
+### Security
+
+- The release workflow defaults to read-only repository permissions; only the
+  `publish` job can write, and it runs in the `release` environment.
+- Updated `tokio` to 1.53.3 for RUSTSEC-2026-0386. The zip 4.x
+  RUSTSEC-2026-0429 advisory is ignored under the same policy as the other
+  zip 4.x advisories: published updater assets are `.app.tar.gz` and raw NSIS
+  executables, never zip archives.
 
 ## [0.2.6] - 2026-11-02
 
