@@ -158,8 +158,11 @@ composed `docs/images/hero.png` and `docs/images/hero.zh-CN.png`.
 
 Open a PR from a `release/vX.Y.Z` branch and merge into `main`. `main` has
 branch protection: all CI checks (`gate (linux)`, `gate + build (macOS dmg)`,
-`gate + build (Windows nsis)`) must pass before the merge is allowed. To
-queue the merge, pass `--auto` to `gh pr merge`.
+`gate + build (Windows nsis)`) must pass and one approving review is required.
+GitHub does not allow approving your own PR, so a solo maintainer merges with
+`gh pr merge --merge --admin` (the repository allows administrator bypass).
+`gh pr merge --auto` only queues the merge; auto-merge must be enabled in the
+repository settings, and the queued merge still waits for the review.
 
 The release workflow repeats the full gate once on Linux and runs
 `GATE_SCOPE=rust` on macOS and Windows, so a release is never built from a tree
@@ -272,6 +275,7 @@ previous version instead of exposing download links that 404.
 | Preflight or a build job fails | Fix the cause and re-run the workflow if the tag can stay. If the tag itself is wrong, cut a new patch version; once a release has been published, the version is never reused. |
 | `publish` fails before the release is published | Rerun the failed `publish` job. It finds the draft, refreshes the notes, uploads the assets again (removing stale draft assets), and publishes only after the asset list matches. |
 | `publish` fails after the release is published | Rerun the job; it detects the published release before downloading artifacts, verifies the existing assets, and does not overwrite them. Fix the cause and cut a new patch if the assets themselves are wrong. |
+| The tagged workflow itself is broken | A tag-triggered run uses the workflow from the tag, so a fix on `main` does not change a rerun. If the draft already passed asset verification, publish that verified draft by hand (resolve it with GraphQL or `gh release view`, then `PATCH` it with `draft=false`), run `scripts/verify-release-assets.sh`, and fix the pipeline before the next patch. Do not move the tag. |
 | A published release is broken | Cut a higher patch with the fix. Deleting the bad release only makes `/releases/latest` point at the previous version for clients that have not updated yet; Tauri never downgrades, so clients already on the bad version stay there until a higher version exists. |
 | A published release was deleted | Do not reuse its version. Deleting a release removes it from the release list but does not make the version legal to publish again; cut a higher patch and rely on tag protection to prevent moving the old tag. |
 | A pre-release is broken | Publish another pre-release (`rc.2`, ...). Desktop clients are unaffected (pre-releases are not in `/releases/latest`). Android testers must uninstall the broken build first, because all builds of the same `X.Y.Z` share one `versionCode`. |
@@ -327,6 +331,14 @@ the committed checksum file is the trust root, as with
 `third_party/sing-box/CHECKSUMS.sha256`.
 
 ## Known issues and workarounds
+
+### Draft releases and the REST by-tag endpoint
+
+`GET /repos/{owner}/{repo}/releases/tags/{tag}` returns 404 for a draft
+release, even to a maintainer. `scripts/gh-release-state.sh` and the `publish`
+job therefore resolve releases through GraphQL or `gh release view`, which see
+drafts. Do not switch them back to the REST by-tag endpoint, or a rerun of a
+failed `publish` job will mistake its own draft for a missing release.
 
 ### Network instability to github.com
 

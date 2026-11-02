@@ -603,7 +603,10 @@ jobs:
         if: steps.release.outputs.published != 'true'
         run: |
           set -euo pipefail
-          id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')"
+          # `gh release view` resolves drafts as well; the REST
+          # /releases/tags/<tag> endpoint returns 404 for a draft release.
+          id="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+          test -n "$id"
           if [[ "$PRERELEASE" == "true" ]]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
               -F draft=false -F prerelease=true -f make_latest=false

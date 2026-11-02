@@ -12,8 +12,10 @@
 # website deploy uses --kind to distinguish a published final release from a
 # pre-release without a second API call.
 #
-# Requires gh and GH_TOKEN. This distinguishes a 404 from other API errors
-# instead of matching the human-readable text of `gh release view` errors.
+# Requires gh and GH_TOKEN. Uses GraphQL because the REST "get a release by
+# tag name" endpoint returns 404 for draft releases, which would make a rerun
+# mistake an existing draft for a missing release. GraphQL returns the draft
+# (and null for a missing tag) without matching human-readable error text.
 set -euo pipefail
 
 KIND=0
@@ -33,15 +35,35 @@ import json
 import os
 import subprocess
 import sys
-import urllib.parse
 
 tag = sys.argv[1]
 kind = sys.argv[2] == "1"
 repo = os.environ.get("GITHUB_REPOSITORY", "yilong-musk/ice-box")
-url = f"repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}"
+if "/" not in repo:
+    print(f"GITHUB_REPOSITORY is not owner/name: {repo!r}", file=sys.stderr)
+    sys.exit(1)
+owner, name = repo.split("/", 1)
+
+query = (
+    "query($owner:String!,$name:String!,$tag:String!){"
+    "repository(owner:$owner,name:$name){release(tagName:$tag){"
+    "databaseId isDraft isPrerelease}}}"
+)
 try:
     proc = subprocess.run(
-        ["gh", "api", "-i", url],
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-f",
+            f"tag={tag}",
+        ],
         text=True,
         capture_output=True,
     )
@@ -49,33 +71,33 @@ except OSError as error:
     print(f"cannot run gh: {error}", file=sys.stderr)
     sys.exit(1)
 
-response = proc.stdout.replace("\r\n", "\n")
-header, _, body = response.partition("\n\n")
-parts = header.split()
-status = parts[1] if len(parts) > 1 else ""
+if proc.returncode != 0:
+    sys.stderr.write(proc.stderr)
+    sys.stderr.write(proc.stdout)
+    sys.exit(1)
 
-if proc.returncode == 0:
-    try:
-        release = json.loads(body)
-    except json.JSONDecodeError as error:
-        print(f"cannot parse release response: {error}", file=sys.stderr)
-        sys.exit(1)
-    if kind:
-        if release.get("isDraft"):
-            print("draft")
-        elif release.get("isPrerelease"):
-            print("prerelease")
-        else:
-            print("final")
-    else:
-        print("true" if release.get("isDraft") else "false")
-    sys.exit(0)
+try:
+    payload = json.loads(proc.stdout)
+except json.JSONDecodeError as error:
+    print(f"cannot parse release response: {error}", file=sys.stderr)
+    sys.exit(1)
 
-if status == "404":
+repository = (payload.get("data") or {}).get("repository")
+if repository is None:
+    print("release lookup did not return a repository", file=sys.stderr)
+    sys.exit(1)
+release = repository.get("release")
+if release is None:
     print("missing")
     sys.exit(0)
 
-sys.stderr.write(proc.stderr)
-sys.stderr.write(proc.stdout)
-sys.exit(1)
+if kind:
+    if release.get("isDraft"):
+        print("draft")
+    elif release.get("isPrerelease"):
+        print("prerelease")
+    else:
+        print("final")
+else:
+    print("true" if release.get("isDraft") else "false")
 PY
