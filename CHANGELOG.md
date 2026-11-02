@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- The phone Home screen renders the outbound mode switch (Rule / Global /
+  Direct) as a single horizontal row instead of a vertical stack.
+
 ## [0.2.6] - 2026-11-02
 
 ### Changed

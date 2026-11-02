@@ -248,7 +248,10 @@ describe("Home", () => {
     expect(
       within(statusCard).queryByRole("radiogroup", { name: t("home.modeAria") }),
     ).toBeNull();
-    expect(view.getByRole("radiogroup", { name: t("home.modeAria") })).toBeInTheDocument();
+    expect(view.getByRole("radiogroup", { name: t("home.modeAria") })).toHaveAttribute(
+      "data-orientation",
+      "vertical",
+    );
     expect(view.getByRole("radio", { name: t("home.mode.rule") })).toHaveAttribute("data-state", "on");
     expect(view.getByRole("radio", { name: t("home.mode.global") })).toHaveAttribute("data-state", "off");
     expect(view.getByRole("radio", { name: t("home.mode.direct") })).toHaveAttribute("data-state", "off");
@@ -528,6 +531,11 @@ describe("Home", () => {
     phoneShell.value = true;
     const { container } = render(<Home />);
     const view = within(container);
+
+    expect(view.getByRole("radiogroup", { name: t("home.modeAria") })).toHaveAttribute(
+      "data-orientation",
+      "horizontal",
+    );
 
     await waitFor(() => {
       expect(view.getByTestId("home-proxy-core-status")).toHaveTextContent(
