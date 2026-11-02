@@ -268,7 +268,11 @@ fn apply_dns_strategy(
 
 /// Remove the legacy `strategy` DNS rule action option, including nested
 /// logical rules. The top-level `dns.strategy` carries the same value.
-fn remove_dns_rule_strategy(rules: Option<&mut Value>) {
+///
+/// Shared with the copy path: both must strip rule-level strategy before the
+/// legacy/modern DNS classification, otherwise sing-box 1.14's legacy signal
+/// depends on which path produced the document.
+pub(crate) fn remove_dns_rule_strategy(rules: Option<&mut Value>) {
     let Some(rules) = rules.and_then(Value::as_array_mut) else {
         return;
     };
@@ -1461,37 +1465,35 @@ type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String
 /// Whether a local rule-set is known to contain only `ip_cidr` entries.
 ///
 /// Generated GeoIP sets are recognized by their `geoip-*` tag or path. A
-/// source-format (JSON) set is inspected on disk: it counts as pure-IP only
-/// when it has at least one `ip_cidr` and no other match field, matching the
-/// pinned core's `ContainsIPCIDRRule && !ContainsNonIPCIDRRule` metadata.
-/// Domain-only GeoSite sets must not force legacy DNS mode: a `query_type`
-/// rule next to them is valid in modern mode.
+/// source-format (JSON) set is inspected on disk first: it counts as pure-IP
+/// only when it has at least one `ip_cidr` and no other match field, matching
+/// the pinned core's `ContainsIPCIDRRule && !ContainsNonIPCIDRRule` metadata.
+/// The `geoip-*` name is only a fallback for binary sets (which cannot be
+/// inspected without parsing the binary format) and for unreadable source
+/// files. Domain-only GeoSite sets must not force legacy DNS mode: a
+/// `query_type` rule next to them is valid in modern mode, even when a local
+/// import happens to use a `geoip-*` name.
 ///
-/// Binary `.srs` sets cannot be inspected without parsing the binary format,
-/// so only the `geoip-*` name is recognized for them. An arbitrarily named
-/// binary set is treated as not-known-IP; a profile using one as an IP filter
-/// must use `match_response` to stay loadable on sing-box 1.14.
+/// An arbitrarily named binary set is treated as not-known-IP; a profile
+/// using one as an IP filter must use `match_response` to stay loadable on
+/// sing-box 1.14.
 fn rule_set_is_known_ip_cidr(set: &Value) -> bool {
     if set.get("type").and_then(Value::as_str) != Some("local") {
         return false;
     }
     let tag = set.get("tag").and_then(Value::as_str).unwrap_or_default();
-    if tag.starts_with("geoip-") {
-        return true;
-    }
     let path = set.get("path").and_then(Value::as_str);
     let file_name = path
         .and_then(|path| Path::new(path).file_name())
         .and_then(|name| name.to_str());
-    if file_name.is_some_and(|name| name.starts_with("geoip-")) {
-        return true;
-    }
+    let name_is_geoip =
+        tag.starts_with("geoip-") || file_name.is_some_and(|name| name.starts_with("geoip-"));
     if rule_set_format(set, file_name) == Some("source") {
         if let Some(pure_ip) = path.and_then(|path| source_rule_set_is_pure_ip(Path::new(path))) {
             return pure_ip;
         }
     }
-    false
+    name_is_geoip
 }
 
 /// The explicit `format` field, or the extension-derived default.

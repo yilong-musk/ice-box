@@ -1158,6 +1158,73 @@ fn source_format_domain_rule_set_keeps_fakeip_query_type_rules() {
 }
 
 #[test]
+fn source_format_domain_rule_set_with_geoip_name_keeps_fakeip_query_type_rules() {
+    // A source-format set registered under a `geoip-*` tag or file name can
+    // still contain only domains. The on-disk contents must win over the
+    // binary-set name heuristic, or the whole DNS block silently drops
+    // fake-IP.
+    for (label, tag, file_name) in [
+        ("tag", "geoip-custom", "custom-domains.json"),
+        ("file", "custom-domains", "geoip-custom.json"),
+    ] {
+        let dir = temp_ruleset_dir(&format!("ice-box-dns-source-geoip-domain-{label}"));
+        fs::write(
+            dir.join(file_name),
+            br#"{"version":3,"rules":[{"domain_suffix":["example.com"]}]}"#,
+        )
+        .unwrap();
+
+        let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+        profile.route.rule_sets = vec![json!({
+            "type": "local",
+            "tag": tag,
+            "format": "source",
+            "path": dir.join(file_name).to_string_lossy(),
+        })];
+        profile.dns = Some(json!({
+            "servers": [
+                { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" },
+                { "type": "local", "tag": "local" },
+            ],
+            "rules": [
+                { "query_type": ["A", "AAAA"], "server": "fakeip" },
+                { "rule_set": [tag], "server": "local" },
+            ],
+            "final": "local",
+        }));
+        let cfg = build_runtime_json(&BuildInput {
+            template: LocalTemplate {
+                ipv6: true,
+                ..LocalTemplate::default()
+            },
+            profile: Arc::new(profile),
+            selected_tag: None,
+            geoip_rule_set_dir: None,
+            group_selections: GroupSelections::new(),
+            rule_overrides: RuleOverrides::default(),
+            capture_intent: CaptureIntent::Diagnostic,
+            tun_exclude_package: None,
+            shared_root: None,
+            platform: HostPlatform::MacOs,
+        })
+        .expect("geoip-named domain-only source rule-set DNS build");
+
+        let rules = cfg["dns"]["rules"].as_array().unwrap();
+        let fakeip_rule = rules
+            .iter()
+            .find(|rule| rule.get("server").and_then(Value::as_str) == Some("fakeip"))
+            .unwrap_or_else(|| {
+                panic!("{label}: domain-only source set must keep the fake-ip query_type rule")
+            });
+        assert!(
+            fakeip_rule.get("query_type").is_some(),
+            "{label}: modern DNS mode must keep query_type"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn legacy_rule_set_reference_with_modern_features_is_rejected() {
     // A source-format pure-IP set forces legacy mode even without an inline
     // address filter. Combining it with `evaluate` makes sing-box reject the
@@ -3703,6 +3770,38 @@ fn share_config_reconciles_legacy_dns_rules() {
         "legacy blocks must not keep query_type in an exported document: {rules:?}"
     );
     assert!(rules.iter().any(|rule| rule["ip_is_private"] == true));
+}
+
+#[test]
+fn share_config_ignores_rule_level_strategy_in_legacy_dns_split() {
+    // The runtime build drops the legacy rule-level `strategy` before deciding
+    // between legacy and modern DNS mode. The copy path must classify the same
+    // block identically instead of rejecting a config the app itself runs.
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "local", "tag": "remote" },
+        ],
+        "rules": [
+            { "strategy": "ipv4_only", "domain": ["example.com"], "server": "local" },
+            { "match_response": true, "ip_cidr": ["10.0.0.0/8"], "server": "remote" },
+        ],
+        "final": "local",
+    }));
+
+    let shared =
+        share_singbox_config(&profile).expect("rule-level strategy must not block the copy");
+    let value: Value = serde_json::from_str(&shared).expect("json");
+    let rules = value["dns"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().all(|rule| rule.get("strategy").is_none()),
+        "the exported document must not keep the legacy rule-level strategy: {rules:?}"
+    );
+    assert!(rules
+        .iter()
+        .any(|rule| rule.get("domain") == Some(&json!(["example.com"]))));
+    assert!(rules.iter().any(|rule| rule["match_response"] == true));
 }
 
 #[test]

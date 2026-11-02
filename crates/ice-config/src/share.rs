@@ -22,7 +22,8 @@ use serde_json::{json, Map, Value};
 
 use crate::build::{
     dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, reconcile_legacy_dns_rules,
-    rule_set_refs_are_known, split_wireguard_endpoints, validate_route_refs, wireguard_endpoint,
+    remove_dns_rule_strategy, rule_set_refs_are_known, split_wireguard_endpoints,
+    validate_route_refs, wireguard_endpoint,
 };
 use crate::runtime_config::prepared_outbound;
 use crate::{
@@ -179,7 +180,10 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
             // inline legacy address filters next to `query_type`, and a
             // `geoip-*` rule-set reference without `match_response` forces
             // legacy mode (generated geoip sets are IP-only; geosite sets are
-            // domain-only).
+            // domain-only). The runtime builder removes rule-level `strategy`
+            // before this classification; do the same here so the copy path
+            // never rejects a block the app itself can run.
+            remove_dns_rule_strategy(dns.get_mut("rules"));
             reconcile_legacy_dns_rules(&mut dns, |tag| tag.starts_with("geoip-"))?;
             Some(dns)
         } else {

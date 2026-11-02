@@ -1661,6 +1661,7 @@ fn launch_at_login_is_synced_when_combined_with_runtime_settings() {
 fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
     use crate::core_snapshot::wrap_core;
     use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+    use ice_proxy_sys::{ProxyBackup, ProxyEndpoints, ProxySysError, SystemProxy};
     use ice_tun_sys::fake::FakeTunBackend;
     use std::path::{Path, PathBuf};
 
@@ -1689,7 +1690,7 @@ fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
         }
 
         fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
-            Err(CoreError::invalid_state("mock"))
+            Ok(ReloadOutcome::HotReloaded)
         }
 
         fn needs_proxy_restore(&self) -> bool {
@@ -1729,6 +1730,22 @@ fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
 
     impl AppHost for Host {
         fn state_changed(&self) {}
+    }
+
+    struct LiveProxy;
+
+    impl SystemProxy for LiveProxy {
+        fn backup(&self) -> Result<ProxyBackup, ProxySysError> {
+            Ok(ProxyBackup::default())
+        }
+
+        fn apply(&self, _endpoints: &ProxyEndpoints) -> Result<(), ProxySysError> {
+            Ok(())
+        }
+
+        fn restore(&self, _backup: &ProxyBackup) -> Result<(), ProxySysError> {
+            Ok(())
+        }
     }
 
     let mut state = temp_state_with_node("live-tun-settings");
@@ -1776,6 +1793,34 @@ fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
     let on_disk = current_settings(&paths).unwrap();
     assert!(on_disk.tun.enabled);
     assert!(on_disk.proxy_service_enabled);
+    assert!(!paths.pending_settings().exists());
+
+    // A combined patch must not bypass the live switch: before the fix it
+    // persisted `tun.enabled = false` and then re-enabled TUN from the same
+    // candidate, leaving the switch UI showing off while capture stayed on.
+    state.proxy = Mutex::new(Box::new(LiveProxy));
+    save_settings_inner(
+        &host,
+        &state,
+        SettingsPatch {
+            tun: Some(ice_config::TunSettingsPatch {
+                enabled: Some(false),
+                ..Default::default()
+            }),
+            log_debug: Some(true),
+            ..SettingsPatch::default()
+        },
+    )
+    .expect("combined live TUN disable");
+
+    assert_eq!(
+        state.capture.active_backend(),
+        TrafficCapture::SystemProxy,
+        "the combined patch must tear down TUN instead of rebuilding it"
+    );
+    let off_disk = current_settings(&paths).unwrap();
+    assert!(!off_disk.tun.enabled);
+    assert!(off_disk.log_debug, "the other patch fields still apply");
     assert!(!paths.pending_settings().exists());
     let _ = fs::remove_dir_all(paths.root());
 }
