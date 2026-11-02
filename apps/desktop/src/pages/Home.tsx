@@ -1006,7 +1006,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               type="single"
               variant="outline"
               size="sm"
-              orientation="vertical"
+              orientation={phone ? "horizontal" : "vertical"}
               spacing={2}
               value={proxyMode}
               onValueChange={(value) => {
@@ -1015,11 +1015,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }
               }}
               disabled={modeBusy || busy}
-              className="flex w-full flex-1 flex-col"
+              className={cn("flex w-full", phone ? "flex-row" : "flex-1 flex-col")}
               aria-label={t("home.modeAria")}
             >
               {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
-                <ToggleGroupItem key={mode} value={mode} className="h-auto w-full flex-1">
+                <ToggleGroupItem
+                  key={mode}
+                  value={mode}
+                  className={cn("h-auto flex-1", phone ? "min-w-0" : "w-full")}
+                >
                   {t(labelKey)}
                 </ToggleGroupItem>
               ))}
