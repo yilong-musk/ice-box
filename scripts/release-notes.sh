@@ -10,7 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHANGELOG="$ROOT/CHANGELOG.md"
-REPO_URL="https://github.com/yilong-musk/ice-box"
+REPO="${GITHUB_REPOSITORY:-yilong-musk/ice-box}"
+REPO_URL="https://github.com/$REPO"
 
 VERSION="${1:-}"
 VERSION="${VERSION#v}"

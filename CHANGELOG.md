@@ -11,17 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Direct) as a single horizontal row instead of a vertical stack.
 - Release engineering: a fast preflight now validates the tag on `main`, every
   tracked version source (including `apps/desktop/package.json`), the changelog
-  section, the signing secrets, that the signing key matches the committed
-  pubkey, and that the version is newer than the latest release before any
-  build starts. The release runs the full gate once on Linux and the platform
-  gate on macOS/Windows, and publishes through a verified draft that includes
-  `SHA256SUMS`, checks the updater signature key ids against the committed
-  pubkey, downloads every published asset to verify its SHA-256, and checks
-  `latest.json`. The artifact checks now reject a wrong macOS architecture,
-  DMG/NSIS name, or APK `versionName` as well.
+  section, the signing secrets, the Android keystore and credentials, that the
+  signing key matches the committed pubkey, and that the version is newer than
+  every published release and existing tag before any build starts. A manual
+  `Release` workflow dispatch runs the preflight against `main` without building
+  or publishing, so the real secrets can be checked before tagging. The release
+  runs the full gate once on Linux, the platform gate on macOS/Windows, and
+  publishes through a verified draft that includes `SHA256SUMS`, verifies the
+  updater signatures cryptographically with minisign, downloads every published
+  asset (with retries) to verify its SHA-256, rejects extra assets or checksum
+  entries, and checks `latest.json`. The artifact checks now reject a wrong
+  macOS architecture, DMG/NSIS name, or APK `versionName`/`versionCode` as well;
+  a published release rerun is verification-only and does not re-download build
+  artifacts.
 - Pre-release tags are marked as GitHub pre-releases and no longer publish
-  `latest.json`, so the in-app updater only follows final releases. The website
-  now deploys after a final release is published, avoiding a window where its
+  `latest.json`, so the in-app updater only follows final releases. All builds
+  of the same `X.Y.Z` share one Android `versionCode`, so an Android install of
+  a pre-release must be uninstalled before installing another build of that
+  core version. The website now deploys after a final release is published,
+  checks that the three installer assets exist, and avoids a window where its
   direct download links point at a tag that does not exist yet.
 - Release notes link to the changelog at the release tag instead of `main`, so
   published bodies keep pointing at the notes that shipped.

@@ -66,7 +66,7 @@ cat >"$RELEASE/latest.json" <<'EOF'
 EOF
 
 python3 - "$RELEASE" "$TMP/meta-final.json" "$TMP/meta-prerelease.json" \
-  "$TMP/meta-prerelease-with-latest.json" <<'PY'
+  "$TMP/meta-prerelease-with-latest.json" "$TMP/meta-extra.json" <<'PY'
 import hashlib
 import json
 import sys
@@ -99,6 +99,28 @@ Path(sys.argv[3]).write_text(
     encoding="utf-8",
 )
 Path(sys.argv[4]).write_text(json.dumps(meta(True, names)), encoding="utf-8")
+Path(sys.argv[5]).write_text(
+    json.dumps(meta(False, names + ["extra.txt"])), encoding="utf-8"
+)
+PY
+
+# A pre-release has no latest.json; its SHA256SUMS must not list one either.
+cp -R "$RELEASE" "$TMP/prerelease"
+rm "$TMP/prerelease/latest.json"
+python3 - "$TMP/prerelease" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+entries = []
+for path in sorted(root.iterdir()):
+    if path.name == "SHA256SUMS":
+        continue
+    entries.append((path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+(root / "SHA256SUMS").write_text(
+    "".join(f"{digest}  {name}\n" for name, digest in entries), encoding="utf-8"
+)
 PY
 
 to_uri() {
@@ -119,6 +141,8 @@ verify() {
   base_uri="$(to_uri "$base")"
   PATH="$TMP/bin:$PATH" \
     GITHUB_REPOSITORY=fixture/repo \
+    ICE_BOX_RELEASE_RETRY_ATTEMPTS=2 \
+    ICE_BOX_RELEASE_RETRY_DELAY=0 \
     ICE_BOX_RELEASE_BASE_URL="$base_uri" \
     ICE_BOX_RELEASE_LATEST_URL="$base_uri/latest.json" \
     FIXTURE_META="$meta" \
@@ -156,7 +180,7 @@ echo "== happy paths =="
 expect_ok "latest" verify "$RELEASE" "$TMP/meta-final.json" v0.2.6 v0.2.6
 expect_ok "older-tag" verify "$RELEASE" "$TMP/meta-final.json" v0.2.7 v0.2.6
 expect_ok "no-latest-release" verify "$RELEASE" "$TMP/meta-final.json" "" v0.2.6
-expect_ok "prerelease" verify "$RELEASE" "$TMP/meta-prerelease.json" v0.2.7 --prerelease v0.2.6
+expect_ok "prerelease" verify "$TMP/prerelease" "$TMP/meta-prerelease.json" v0.2.7 --prerelease v0.2.6
 
 echo "== failures =="
 cp -R "$RELEASE" "$TMP/tampered"
@@ -183,6 +207,16 @@ expect_fail "sums-missing-entry" "does not list: NOTICE" \
 expect_fail "prerelease-with-latest" "must not publish latest.json" \
   verify "$RELEASE" "$TMP/meta-prerelease-with-latest.json" v0.2.7 --prerelease v0.2.6
 expect_fail "prerelease-marked-latest" "marked as GitHub's latest release" \
-  verify "$RELEASE" "$TMP/meta-prerelease.json" v0.2.6 --prerelease v0.2.6
+  verify "$TMP/prerelease" "$TMP/meta-prerelease.json" v0.2.6 --prerelease v0.2.6
+
+cp -R "$RELEASE" "$TMP/extra-asset"
+printf 'extra\n' >"$TMP/extra-asset/extra.txt"
+expect_fail "extra-asset" "unexpected assets" \
+  verify "$TMP/extra-asset" "$TMP/meta-extra.json" v0.2.6 v0.2.6
+
+cp -R "$RELEASE" "$TMP/extra-sums"
+printf '%064d  unexpected.txt\n' 0 >>"$TMP/extra-sums/SHA256SUMS"
+expect_fail "extra-sums-entry" "SHA256SUMS lists unexpected files" \
+  verify "$TMP/extra-sums" "$TMP/meta-final.json" v0.2.6 v0.2.6
 
 echo "test-verify-release-assets: OK"

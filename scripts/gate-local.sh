@@ -62,6 +62,12 @@ bash scripts/test-verify-signing-key.sh
 echo "== release asset fixtures =="
 bash scripts/test-verify-release-assets.sh
 
+echo "== release state fixtures =="
+bash scripts/test-gh-release-state.sh
+
+echo "== android keystore fixtures =="
+bash scripts/test-verify-android-keystore.sh
+
 echo "== android version code =="
 bash scripts/test-android-version-code.sh
 

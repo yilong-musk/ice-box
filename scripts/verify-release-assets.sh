@@ -65,6 +65,8 @@ import urllib.request
 
 repo, tag, prerelease = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 version = tag[1:]
+retry_attempts = int(os.environ.get("ICE_BOX_RELEASE_RETRY_ATTEMPTS", "6"))
+retry_delay = float(os.environ.get("ICE_BOX_RELEASE_RETRY_DELAY", "5"))
 # The overrides let scripts/test-verify-release-assets.sh serve a fixture with
 # file:// URLs instead of reaching GitHub.
 base = os.environ.get(
@@ -103,6 +105,28 @@ def sha256(url: str) -> str:
     return digest.hexdigest()
 
 
+def fetch_retry(url: str) -> bytes:
+    last = None
+    for _ in range(retry_attempts):
+        try:
+            return fetch(url)
+        except (OSError, http.client.HTTPException) as error:
+            last = error
+            time.sleep(retry_delay)
+    raise last
+
+
+def sha256_retry(url: str) -> str:
+    last = None
+    for _ in range(retry_attempts):
+        try:
+            return sha256(url)
+        except (OSError, http.client.HTTPException) as error:
+            last = error
+            time.sleep(retry_delay)
+    raise last
+
+
 expected = {
     f"ice-box_{version}_aarch64.dmg",
     "ice-box.app.tar.gz",
@@ -131,15 +155,13 @@ if missing:
     fail(f"{tag} is missing assets: {', '.join(missing)}")
 if prerelease and "latest.json" in names:
     fail(f"pre-release {tag} must not publish latest.json")
+extra = sorted(names - expected)
+if extra:
+    fail(f"{tag} has unexpected assets: {', '.join(extra)}")
 
-sums = ""
-for _ in range(12):
-    try:
-        sums = fetch(f"{base}/SHA256SUMS").decode("utf-8")
-        break
-    except (OSError, http.client.HTTPException, UnicodeDecodeError):
-        time.sleep(5)
-if not sums:
+try:
+    sums = fetch_retry(f"{base}/SHA256SUMS").decode("utf-8")
+except (OSError, http.client.HTTPException, UnicodeDecodeError):
     fail("could not download SHA256SUMS")
 
 sums_map: dict[str, str] = {}
@@ -151,12 +173,15 @@ for line in sums.splitlines():
 unlisted = sorted(expected - {"SHA256SUMS"} - set(sums_map))
 if unlisted:
     fail(f"SHA256SUMS does not list: {', '.join(unlisted)}")
+extra_sums = sorted(set(sums_map) - (expected - {"SHA256SUMS"}))
+if extra_sums:
+    fail(f"SHA256SUMS lists unexpected files: {', '.join(extra_sums)}")
 
 assets = sorted(expected - {"SHA256SUMS"})
 results: dict[str, str] = {}
 errors: list[str] = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-    futures = {pool.submit(sha256, f"{base}/{name}"): name for name in assets}
+    futures = {pool.submit(sha256_retry, f"{base}/{name}"): name for name in assets}
     for future in concurrent.futures.as_completed(futures):
         name = futures[future]
         try:
@@ -170,10 +195,13 @@ for name in assets:
         fail(f"{name}: sha256 {results[name]} does not match SHA256SUMS {sums_map[name]}")
     print(f"asset OK: {name}")
 
-try:
-    latest = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name").strip()
-except subprocess.CalledProcessError:
-    latest = ""
+latest = ""
+for _ in range(retry_attempts):
+    try:
+        latest = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name").strip()
+        break
+    except subprocess.CalledProcessError:
+        time.sleep(retry_delay)
 
 if prerelease:
     if latest == tag:

@@ -26,7 +26,10 @@ env:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # Never cancel an in-flight deployment: a main push can arrive while the
+  # post-release deploy is running, and that run may then skip because the next
+  # version is not published yet. Queue instead; the later run rebuilds main.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -59,14 +62,35 @@ jobs:
           fi
 
           version="$(python3 -c 'import json; print(json.load(open("apps/desktop/package.json"))["version"])')"
-          state="$(gh release view "v$version" --json isDraft,isPrerelease \
-            --jq 'if .isDraft or .isPrerelease then "not-final" else "final" end' \
-            2>/dev/null || true)"
-          if [[ "$state" != "final" ]]; then
-            echo "::notice::release v$version is not a published final release (${state:-missing}); skipping deploy"
+          state="$(bash scripts/gh-release-state.sh --kind "v$version")"
+          case "$state" in
+          missing)
+            echo "::notice::release v$version does not exist yet; skipping deploy"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
-          fi
+            ;;
+          draft | prerelease)
+            echo "::notice::release v$version is not a published final release ($state); skipping deploy"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+          final) ;;
+          *)
+            echo "unexpected release state: $state" >&2
+            exit 1
+            ;;
+          esac
+          assets="$(gh release view "v$version" --json assets --jq '.assets[].name')"
+          missing=0
+          for name in "ice-box_${version}_aarch64.dmg" \
+            "ice-box_${version}_x64-setup.exe" \
+            "ice-box_${version}_android_arm64.apk"; do
+            if ! grep -qxF "$name" <<< "$assets"; then
+              echo "release v$version is missing $name" >&2
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Install website dependencies

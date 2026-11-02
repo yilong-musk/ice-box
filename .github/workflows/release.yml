@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - "v*"
+  # Dry-run the preflight against main before pushing a tag. This validates the
+  # real signing/Android secrets and keystore without building or publishing.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to validate against the version on main
+        required: true
+        type: string
 
 # Least privilege: only the publish job writes to the repository.
 permissions:
@@ -19,19 +27,26 @@ jobs:
   preflight:
     name: Preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - name: Validate tag, version sources, changelog, secrets, and signing key
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -41,9 +56,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Tags pushed from an unmerged release branch must not publish.
+          # Tags pushed from an unmerged release branch must not publish. A
+          # workflow_dispatch dry run validates main itself, not a tag.
           git rev-parse --verify --quiet origin/main >/dev/null
-          tag_commit="$(git rev-list -n 1 "$TAG")"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag_commit="$(git rev-parse HEAD)"
+            echo "dry run: validating $TAG against main without building or publishing"
+          else
+            tag_commit="$(git rev-list -n 1 "$TAG")"
+          fi
           if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
             echo "$TAG is not reachable from main" >&2
             exit 1
@@ -55,40 +76,31 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-          missing=0
-          for name in TAURI_SIGNING_PRIVATE_KEY ANDROID_KEYSTORE_BASE64 \
-            ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "GitHub Actions secret $name is empty" >&2
-              missing=1
-            fi
-          done
-          test "$missing" -eq 0
-
-          # A wrong key would leave every installed client unable to verify the
-          # update; catch it before the platform builds start.
-          bash scripts/verify-signing-key.sh
-
+          # A published release is verification-only on a rerun, so it does
+          # not need the signing secrets. A new or draft release still needs
+          # them and must be newer than every published release and tag.
+          release_state="$(bash scripts/gh-release-state.sh "$TAG")"
           args=()
-          # An already published release is verification-only on a rerun. A
-          # draft must still be newer than the latest published release, so an
-          # abandoned old draft cannot be published after a newer release.
-          # Only "release not found" means there is nothing to resume; any
-          # other gh error must fail instead of silently starting a new release.
-          release_err="$RUNNER_TEMP/release-view.err"
-          if release_state="$(gh release view "$TAG" --json isDraft \
-            --jq '.isDraft' 2>"$release_err")"; then
-            :
-          elif grep -q "release not found" "$release_err"; then
-            release_state=""
-          else
-            cat "$release_err" >&2
-            echo "could not query release $TAG" >&2
-            exit 1
-          fi
           if [[ "$release_state" == "false" ]]; then
             args+=(--allow-existing)
           else
+            missing=0
+            for name in TAURI_SIGNING_PRIVATE_KEY ANDROID_KEYSTORE_BASE64 \
+              ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+              if [[ -z "${!name:-}" ]]; then
+                echo "GitHub Actions secret $name is empty" >&2
+                missing=1
+              fi
+            done
+            test "$missing" -eq 0
+
+            # A wrong key would leave every installed client unable to verify
+            # the update; catch it before the platform builds start. Validate
+            # the Android keystore too so a bad base64/password/alias does not
+            # waste the Android build.
+            bash scripts/verify-signing-key.sh
+            bash scripts/verify-android-keystore.sh
+
             latest_tags="$(gh api --paginate \
               "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
               --jq '.[] | select(.draft == false) | .tag_name')"
@@ -97,6 +109,25 @@ jobs:
                 args+=(--latest-tag "$latest")
               fi
             done <<< "$latest_tags"
+
+            # A newer tag without a release must also block an older release.
+            # Ignore non-release tags (e.g. a temporary v-test tag) and tags
+            # that are not on main so they cannot break the semver checks.
+            existing_tags="$(git tag -l 'v*' | grep -Fvx "$TAG" || true)"
+            while IFS= read -r existing; do
+              if [[ -z "$existing" ]]; then
+                continue
+              fi
+              if [[ "$existing" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+                if git merge-base --is-ancestor "$existing" origin/main 2>/dev/null; then
+                  args+=(--existing-tag "$existing")
+                else
+                  echo "note: ignoring tag not reachable from main: $existing"
+                fi
+              else
+                echo "note: ignoring non-release tag $existing"
+              fi
+            done <<< "$existing_tags"
           fi
           bash scripts/release-preflight.sh "$TAG" "${args[@]}"
 
@@ -105,17 +136,19 @@ jobs:
   gate-linux:
     name: Gate (linux)
     needs: preflight
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/gate-linux
 
   build-macos:
     name: Build macOS (arm64)
-    needs: preflight
+    needs: [preflight, gate-linux]
+    if: github.event_name != 'workflow_dispatch'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -227,9 +260,10 @@ jobs:
 
   build-windows:
     name: Build Windows (NSIS)
-    needs: preflight
+    needs: [preflight, gate-linux]
+    if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -335,9 +369,10 @@ jobs:
 
   build-android:
     name: Build Android (arm64)
-    needs: preflight
+    needs: [preflight, gate-linux]
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
@@ -428,8 +463,9 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [preflight, gate-linux, build-macos, build-windows, build-android]
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     # Configure required reviewers on this environment to gate publication.
     environment: release
     permissions:
@@ -441,7 +477,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Detect release state
+        id: release
+        run: |
+          set -euo pipefail
+          state="$(bash scripts/gh-release-state.sh "$TAG")"
+          case "$state" in
+          true)
+            echo "draft release $TAG already exists"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            ;;
+          false)
+            echo "release $TAG is already published; verification only"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            ;;
+          missing)
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "unexpected release state: $state" >&2
+            exit 1
+            ;;
+          esac
+
       - name: Download build artifacts
+        if: steps.release.outputs.published != 'true'
         uses: actions/download-artifact@v8
         with:
           path: release-assets
@@ -450,12 +513,20 @@ jobs:
       # upload-artifact keeps bundle subdirs (macos/, dmg/, nsis/). Flatten so
       # merge-updater-latest.sh and the release upload see files at one level.
       - name: Flatten downloaded artifacts
+        if: steps.release.outputs.published != 'true'
         run: |
           find release-assets -mindepth 2 -type f -exec mv -t release-assets {} +
           find release-assets -mindepth 1 -type d -empty -delete
           ls -la release-assets
 
+      - name: Install minisign
+        if: steps.release.outputs.published != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
       - name: Prepare release assets
+        if: steps.release.outputs.published != 'true'
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -466,7 +537,7 @@ jobs:
           bash scripts/release-notes.sh "$TAG" > RELEASE_NOTES.md
           test -s RELEASE_NOTES.md
 
-          bash scripts/verify-updater-signatures.sh release-assets
+          bash scripts/verify-updater-signatures.sh --strict release-assets
 
           test -s "release-assets/ice-box_${version}_aarch64.dmg"
           test -s "release-assets/ice-box_${version}_x64-setup.exe"
@@ -492,27 +563,15 @@ jobs:
           ls -la release-assets
 
       - name: Create or resume draft release
-        id: release
+        if: steps.release.outputs.published != 'true'
         run: |
           set -euo pipefail
-          release_err="$RUNNER_TEMP/release-publish-view.err"
-          if state="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$release_err")"; then
-            if [[ "$state" == "true" ]]; then
-              echo "resuming draft release $TAG"
-              echo "published=false" >> "$GITHUB_OUTPUT"
-              gh release edit "$TAG" --notes-file RELEASE_NOTES.md
-            else
-              echo "release $TAG is already published; verification only"
-              echo "published=true" >> "$GITHUB_OUTPUT"
-            fi
-          elif grep -q "release not found" "$release_err"; then
+          if [[ "${{ steps.release.outputs.exists }}" == "true" ]]; then
+            echo "resuming draft release $TAG"
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
             gh release create "$TAG" --draft \
               --title "ice-box $TAG" --notes-file RELEASE_NOTES.md
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          else
-            cat "$release_err" >&2
-            echo "could not query release $TAG" >&2
-            exit 1
           fi
 
       - name: Upload draft assets

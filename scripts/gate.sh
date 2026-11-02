@@ -76,6 +76,12 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== release asset fixtures =="
   bash "$ROOT/scripts/test-verify-release-assets.sh"
 
+  echo "== release state fixtures =="
+  bash "$ROOT/scripts/test-gh-release-state.sh"
+
+  echo "== android keystore fixtures =="
+  bash "$ROOT/scripts/test-verify-android-keystore.sh"
+
   echo "== android version code =="
   bash "$ROOT/scripts/test-android-version-code.sh"
 

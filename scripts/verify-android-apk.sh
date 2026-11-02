@@ -7,7 +7,8 @@
 # the Android debug key). With --release, the signer must not be that debug
 # key, and the native libraries must be arm64-v8a only.
 #
-# --version checks the APK manifest versionName against the release version.
+# --version checks the APK manifest versionName and versionCode against the
+# release version (the versionCode comes from scripts/android-version-code.sh).
 #
 # --release-certs-text reads `apksigner verify --print-certs` output on stdin
 # and applies only the release signer checks. --release-listing-text does the
@@ -15,6 +16,8 @@
 # `aapt2 dump badging` output. scripts/test-verify-android-apk.sh uses these
 # so the checks stay covered without an SDK.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # apksigner spells the signer line two ways:
 #   Signer #1 certificate DN:  (build-tools 36)
@@ -56,12 +59,24 @@ check_release_version() {
     echo "expected release version is empty" >&2
     return 1
   fi
-  local got
-  got="$(printf '%s\n' "$badging" |
+  local want_code
+  if ! want_code="$(bash "$SCRIPT_DIR/android-version-code.sh" "$want" 2>/dev/null)"; then
+    echo "expected release version '$want' is not a valid version" >&2
+    return 1
+  fi
+  local got_name got_code
+  got_name="$(printf '%s\n' "$badging" |
     sed -n "s/^package:.*versionName='\([^']*\)'.*$/\1/p" |
     head -n 1)"
-  if [[ "$got" != "$want" ]]; then
-    echo "release APK versionName '$got' does not match expected '$want'" >&2
+  if [[ "$got_name" != "$want" ]]; then
+    echo "release APK versionName '$got_name' does not match expected '$want'" >&2
+    return 1
+  fi
+  got_code="$(printf '%s\n' "$badging" |
+    sed -n "s/^package:.*versionCode='\([^']*\)'.*$/\1/p" |
+    head -n 1)"
+  if [[ "$got_code" != "$want_code" ]]; then
+    echo "release APK versionCode '$got_code' does not match expected '$want_code'" >&2
     return 1
   fi
 }

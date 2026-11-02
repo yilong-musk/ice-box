@@ -32,7 +32,24 @@ expect_fail() {
     echo "test-release-preflight: $name: expected failure" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$err" | grep -q "$needle"; then
+  if ! printf '%s\n' "$err" | grep -q -- "$needle"; then
+    echo "test-release-preflight: $name: missing '$needle' in:" >&2
+    printf '%s\n' "$err" >&2
+    exit 1
+  fi
+}
+
+expect_ok_with_note() {
+  local name="$1"
+  local needle="$2"
+  shift 2
+  local err
+  if ! err="$("$SCRIPT" "$@" 2>&1 >/dev/null)"; then
+    echo "test-release-preflight: $name: expected success" >&2
+    "$SCRIPT" "$@" >&2 || true
+    exit 1
+  fi
+  if ! printf '%s\n' "$err" | grep -q -- "$needle"; then
     echo "test-release-preflight: $name: missing '$needle' in:" >&2
     printf '%s\n' "$err" >&2
     exit 1
@@ -53,6 +70,29 @@ expect_ok "older-latest" "$TAG" --latest-tag v0.0.1
 expect_ok "options-before-tag" --latest-tag v0.0.1 "$TAG"
 expect_ok "multiple-older-latest" "$TAG" --latest-tag v0.0.1 --latest-tag v0.0.2
 expect_ok "existing-release" "$TAG" --latest-tag "$TAG" --allow-existing
+
+echo "== android versionCode reuse =="
+# Pick a pre-release of the same core that is older than the current tree, so
+# the ordering check still passes. A suffix-less tree can use any rc; a
+# pre-release tree needs a numerically low identifier (0 sorts below rc/alpha).
+if [[ "$VERSION" == *-* ]]; then
+  SAME_CORE_LATEST="v${VERSION%%-*}-0"
+else
+  SAME_CORE_LATEST="$TAG-rc.1"
+fi
+if [[ "$SAME_CORE_LATEST" != "$TAG" ]]; then
+  expect_ok_with_note "same-core-release" "cannot upgrade in place" \
+    "$TAG" --latest-tag "$SAME_CORE_LATEST"
+  expect_ok_with_note "same-core-tag" "cannot upgrade in place" \
+    "$TAG" --existing-tag "$SAME_CORE_LATEST"
+  expect_fail "same-core-strict" "--fail-on-same-core" \
+    "$TAG" --latest-tag "$SAME_CORE_LATEST" --fail-on-same-core
+fi
+
+echo "== existing tags =="
+expect_ok "older-existing-tag" "$TAG" --existing-tag v0.0.1
+expect_fail "newer-existing-tag" "must be newer than the existing tag" \
+  "$TAG" --existing-tag v9.9.9
 
 echo "== failures =="
 expect_fail "tag-without-v" "invalid release tag" "${TAG#v}"

@@ -7,14 +7,14 @@ update it whenever the process changes.
 ## Overview
 
 A release is a **`vX.Y.Z` tag pushed to `main`**. The tag push triggers
-`.github/workflows/release.yml`, which first validates the tag in a fast
-preflight job, runs the full gate once on Linux, builds the macOS arm64 `.dmg`
-(plus updater `.app.tar.gz` / `.sig`), the Windows NSIS `.exe` (plus
-`.exe.sig`), and one signed Android `arm64-v8a` APK, then stages everything as
-a **draft** GitHub Release. The publish job verifies the assets, writes
-`SHA256SUMS`, checks the updater signature key ids against the committed
-pubkey, and only then publishes; publishing makes the release the updater feed
-target.
+`.github/workflows/release.yml`, which first validates the tag, version sources,
+changelog, updater key, and Android keystore in a fast preflight job, runs the
+full gate once on Linux, then builds the macOS arm64 `.dmg` (plus updater
+`.app.tar.gz` / `.sig`), the Windows NSIS `.exe` (plus `.exe.sig`), and one
+signed Android `arm64-v8a` APK, and stages everything as a **draft** GitHub
+Release. The publish job verifies the assets and updater signatures, writes
+`SHA256SUMS`, and only then publishes; publishing makes the release the updater
+feed target.
 Pre-release tags (`vX.Y.Z-rc.N`) are published as GitHub pre-releases and do
 not contain `latest.json`.
 
@@ -50,15 +50,19 @@ the Android version code.
 `scripts/release-preflight.sh` checks every tracked source above before the
 release builds start. A local `tauri.properties` is only reported (and ignored)
 when it is stale, because a checkout can carry one from an older build; the
-Android job verifies the built APK's `versionName` instead.
+Android job verifies the built APK's `versionName` and `versionCode` instead.
 
 The Android version code is `major * 1000000 + minor * 1000 + patch` (the same
 integer Tauri uses when `versionCode` is unset). Minor and patch must stay below
 1000, otherwise they carry into the next component and collide with a different
-release. A pre-release suffix does not change it, so do not publish both a
-pre-release and a final build of the same `X.Y.Z` (or two pre-releases of the
-same `X.Y.Z`): Android will not treat the later build as an upgrade. `0.0.0` is
-rejected.
+release. A pre-release suffix does not change it, so every build of the same
+`X.Y.Z` shares one `versionCode`: Android does not treat a later pre-release or
+the final build as an upgrade over an earlier one. Testers who installed a
+pre-release must uninstall it before installing another build of the same core
+version. Desktop clients are unaffected because the updater only follows final
+releases. `0.0.0` is rejected. The preflight prints a note when a
+`--latest-tag` or `--existing-tag` already uses the same core version; pass
+`--fail-on-same-core` to turn that note into an error.
 
 ## Updater signing keys (one-time)
 
@@ -87,9 +91,10 @@ would otherwise fail). Only `release.yml` merges
 the secret key (decrypting it with the password when needed) and compares its
 key id with `plugins.updater.pubkey`, so a wrong key fails before any build.
 Before publishing, the publish job also checks that every updater `.sig`
-carries the same minisign key id as the committed public key. A mismatch fails
-the release instead of breaking every installed client; the signature itself is
-verified cryptographically by the updater on the client.
+carries the same minisign key id as the committed public key and verifies the
+signature cryptographically with `minisign -Vm` against the artifact. A
+mismatch or invalid signature fails the release instead of breaking every
+installed client.
 
 To rotate the key without abandoning installed clients, first publish a regular
 release signed with the **old** key whose binary embeds the **new** public key
@@ -170,19 +175,27 @@ git push origin v0.1.2
 ```
 
 The tag preflight requires the tag commit to be reachable from `main` and the
-version to be newer than the latest published release. It is the last cheap
-check: pushing the tag starts the release pipeline, and the tag is public even
-when the build later fails. Never move or reuse a tag after it has been pushed;
-cut a new patch version instead.
+version to be newer than every published release and every existing release tag
+on `main`. It
+also validates the updater signing key and the Android keystore, so it needs the
+repository secrets. To exercise those checks before pushing the tag, run the
+`Release` workflow manually (`workflow_dispatch`) with the intended tag: it
+checks out `main`, runs only the preflight, and does not build or publish. It is
+the last cheap check: pushing the tag starts the release pipeline, and the tag is
+public even when the build later fails. Never move or reuse a tag after it has
+been pushed; cut a new patch version instead. Deleting a release does not make
+its version reusable.
 
 A pre-release uses the same flow with a suffix, for example
 `git tag -a v0.1.2-rc.1 -m "ice-box v0.1.2-rc.1"`. Pre-release tags are
 published as GitHub pre-releases, are excluded from `/releases/latest`, and do
 not publish `latest.json`, so installed clients never receive them
 automatically. Numeric prerelease identifiers must not have leading zeros
-(`rc.1`, not `rc.01`). Android `versionCode` is unchanged by the suffix; do not
-publish both `X.Y.Z-rc.N` and `X.Y.Z` (or multiple pre-releases of the same
-core version), or Android will not treat the later build as an upgrade.
+(`rc.1`, not `rc.01`). Android `versionCode` is unchanged by the suffix, so all
+builds of the same `X.Y.Z` share it; Android will not offer an in-place upgrade
+from one to the next. An Android tester who installed a pre-release must
+uninstall it before installing the final build (or another pre-release) of the
+same core version. Desktop clients are unaffected.
 
 ### 5. Release pipeline
 
@@ -190,12 +203,12 @@ core version), or Android will not treat the later build as an upgrade.
 
 | Job | Runner | Work |
 |-----|--------|------|
-| `preflight` | ubuntu-latest | tag is on `main`, every version source matches, changelog section exists, signing secrets are present, the signing key matches the committed pubkey, version is newer than the latest release |
+| `preflight` | ubuntu-latest | tag is on `main`, every version source matches, changelog section exists, signing secrets are present, the updater key matches the committed pubkey, the Android keystore/alias/passwords validate, and the version is newer than every published release and existing tag |
 | `gate-linux` | ubuntu-latest | full workspace gate (formatting, clippy, tests, frontend, website, mobile demo) |
-| `build-macos` | macos-latest | `GATE_SCOPE=rust` gate + `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
-| `build-windows` | windows-latest | `GATE_SCOPE=rust` gate + NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
-| `build-android` | ubuntu-latest | signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
-| `publish` | ubuntu-latest | `needs` the gate and all three build jobs; downloads artifacts; builds the short release body; verifies the updater signature key ids against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
+| `build-macos` | macos-latest | waits for the Linux gate; `GATE_SCOPE=rust` gate + `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
+| `build-windows` | windows-latest | waits for the Linux gate; `GATE_SCOPE=rust` gate + NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
+| `build-android` | ubuntu-latest | waits for the Linux gate; signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
+| `publish` | ubuntu-latest | `needs` the gate and all three build jobs; detects the release state before downloading artifacts (a published rerun is verification-only); builds the short release body; cryptographically verifies the updater signatures with minisign against the committed pubkey; writes `SHA256SUMS`; creates a **draft** release, uploads, compares the draft asset list, then publishes (pre-release when the tag has a suffix) and runs `scripts/verify-release-assets.sh` |
 
 The `publish` job uses the `release` environment. Configure required reviewers
 on that environment to make publication wait for a human; see
@@ -232,22 +245,25 @@ bash scripts/verify-release-assets.sh v0.1.2   # asset downloads, SHA-256 checks
 ```
 
 `verify-release-assets.sh` checks releases produced by this pipeline: it
-downloads every asset, verifies its SHA-256 against `SHA256SUMS`, and validates
+downloads every asset (with retries), verifies its SHA-256 against
+`SHA256SUMS`, rejects extra assets or extra checksum entries, and validates
 `latest.json`. Releases published before `SHA256SUMS` was added do not have that
 asset and will fail the check.
 
 The release body is the fixed summary plus a changelog link from
 `scripts/release-notes.sh`; the link is pinned to the tag, not `main`, so it
-keeps pointing at the notes that shipped. The full notes stay one click away in
-`CHANGELOG.md`.
+keeps pointing at the notes that shipped. The repository URL comes from
+`GITHUB_REPOSITORY`, so a fork's release body points at the fork. The full
+notes stay one click away in `CHANGELOG.md`.
 
 `latest.json` must list both `darwin-aarch64` and `windows-x86_64` with non-empty
 signatures. Fixture coverage: `bash scripts/test-merge-updater-latest.sh`
 (also run from `scripts/gate.sh` / `scripts/gate-local.sh`).
 
 The website deploys only after a final release for the current
-`apps/desktop/package.json` version is published. A failed release leaves the
-site on the previous version instead of exposing download links that 404.
+`apps/desktop/package.json` version is published, and it checks that the
+installers the site links to exist. A failed release leaves the site on the
+previous version instead of exposing download links that 404.
 
 ## Release recovery
 
@@ -255,9 +271,10 @@ site on the previous version instead of exposing download links that 404.
 |-----------|--------|
 | Preflight or a build job fails | Fix the cause and re-run the workflow if the tag can stay. If the tag itself is wrong, cut a new patch version; once a release has been published, the version is never reused. |
 | `publish` fails before the release is published | Rerun the failed `publish` job. It finds the draft, refreshes the notes, uploads the assets again (removing stale draft assets), and publishes only after the asset list matches. |
-| `publish` fails after the release is published | Rerun the job; it detects the published release, verifies the existing assets, and does not overwrite them. Fix the cause and cut a new patch if the assets themselves are wrong. |
+| `publish` fails after the release is published | Rerun the job; it detects the published release before downloading artifacts, verifies the existing assets, and does not overwrite them. Fix the cause and cut a new patch if the assets themselves are wrong. |
 | A published release is broken | Cut a higher patch with the fix. Deleting the bad release only makes `/releases/latest` point at the previous version for clients that have not updated yet; Tauri never downgrades, so clients already on the bad version stay there until a higher version exists. |
-| A pre-release is broken | Publish another pre-release (`rc.2`, ...). Pre-releases are not in `/releases/latest`, so installed clients are unaffected. |
+| A published release was deleted | Do not reuse its version. Deleting a release removes it from the release list but does not make the version legal to publish again; cut a higher patch and rely on tag protection to prevent moving the old tag. |
+| A pre-release is broken | Publish another pre-release (`rc.2`, ...). Desktop clients are unaffected (pre-releases are not in `/releases/latest`). Android testers must uninstall the broken build first, because all builds of the same `X.Y.Z` share one `versionCode`. |
 
 Do not edit or replace assets on a published release: `latest.json` embeds the
 signature and URL of each updater payload, and clients may already be
@@ -286,11 +303,12 @@ GitHub:
 - **Secrets**: set `TAURI_SIGNING_PRIVATE_KEY`,
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `ANDROID_KEYSTORE_BASE64`,
   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
-  `ANDROID_KEY_PASSWORD`. The preflight checks the updater key and all four
-  Android secrets before any build, and verifies that the updater key matches
-  `plugins.updater.pubkey`; the updater-key password may be empty for an
-  unencrypted key. Back up the updater private key offline; see
-  [Updater signing keys](#updater-signing-keys-one-time).
+  `ANDROID_KEY_PASSWORD`. The preflight validates the Android keystore,
+  store/key passwords, and alias, verifies that the updater key matches
+  `plugins.updater.pubkey`, and runs before any build. The updater-key password
+  may be empty for an unencrypted key. Back up the updater private key offline;
+  see [Updater signing keys](#updater-signing-keys-one-time). Use the manual
+  `Release` dry run (step 4) to validate the real secrets before tagging.
 
 The workflow has read-only permissions by default; only the `publish` job can
 write to the repository.
@@ -392,9 +410,9 @@ bash scripts/build-android-apk.sh release arm64
 
 `scripts/verify-android-apk.sh --release --version <ver>` rejects an APK signed
 with the Android debug key, an APK that contains any ABI other than
-`arm64-v8a`, and an APK whose manifest `versionName` does not match the tag.
-The `x86_64` APK is a local emulator artifact (`debug amd64`) and is not
-published.
+`arm64-v8a`, and an APK whose manifest `versionName` or `versionCode` does not
+match the tag. The `x86_64` APK is a local emulator artifact (`debug amd64`) and
+is not published.
 
 ## Future milestones
 

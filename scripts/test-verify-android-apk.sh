@@ -131,9 +131,24 @@ expect_version_fail \
   "package: name='com.yilong-musk.icebox' versionCode='2005' versionName='0.2.5' platformBuildVersionName='15'" \
   "does not match"
 expect_version_fail \
+  "version-code-mismatch" \
+  "0.2.6" \
+  "package: name='com.yilong-musk.icebox' versionCode='2005' versionName='0.2.6' platformBuildVersionName='15'" \
+  "versionCode"
+expect_version_fail \
   "missing-version" \
   "0.2.6" \
   "package: name='com.yilong-musk.icebox' versionCode='2006' platformBuildVersionName='15'" \
   "does not match"
+expect_version_fail \
+  "missing-version-code" \
+  "0.2.6" \
+  "package: name='com.yilong-musk.icebox' versionName='0.2.6' platformBuildVersionName='15'" \
+  "versionCode"
+expect_version_fail \
+  "invalid-version" \
+  "not-a-version" \
+  "package: name='com.yilong-musk.icebox' versionCode='2006' versionName='not-a-version' platformBuildVersionName='15'" \
+  "not a valid version"
 
 echo "test-verify-android-apk: OK"

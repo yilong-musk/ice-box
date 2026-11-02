@@ -111,4 +111,28 @@ expect_fail "mismatched-key" "does not match" "$TMP/mismatch"
 expect_fail "missing-macos-sig" "expected exactly one macOS" "$TMP/missing"
 expect_fail "malformed-sig" "invalid base64" "$TMP/malformed"
 
+echo "== strict signature verification =="
+if command -v minisign >/dev/null 2>&1; then
+  mkdir -p "$TMP/strict"
+  minisign -G -p "$TMP/strict.pub" -s "$TMP/strict.key" -W >/dev/null
+  printf 'darwin\n' >"$TMP/strict/ice-box.app.tar.gz"
+  printf 'windows\n' >"$TMP/strict/ice-box_0.2.6_x64-setup.exe"
+  minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box.app.tar.gz" \
+    -x "$TMP/strict/ice-box.app.tar.gz.sig" >/dev/null
+  minisign -S -s "$TMP/strict.key" -m "$TMP/strict/ice-box_0.2.6_x64-setup.exe" \
+    -x "$TMP/strict/ice-box_0.2.6_x64-setup.exe.sig" >/dev/null
+  if ! "$SCRIPT" --strict --pubkey-file "$TMP/strict.pub" "$TMP/strict" >/dev/null; then
+    fail "strict-valid: expected success"
+  fi
+  cp -R "$TMP/strict" "$TMP/strict-tampered"
+  printf 'x' >>"$TMP/strict-tampered/ice-box.app.tar.gz"
+  if "$SCRIPT" --strict --pubkey-file "$TMP/strict.pub" "$TMP/strict-tampered" \
+    >/dev/null 2>&1; then
+    fail "strict-tampered: expected failure"
+  fi
+  echo "strict: valid signature accepted, tampered artifact rejected"
+else
+  echo "strict: skipped (minisign not installed)"
+fi
+
 echo "test-verify-updater-signatures: OK"

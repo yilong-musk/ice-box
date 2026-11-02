@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Check that Tauri updater signatures use the committed pubkey's key id.
-# Usage: scripts/verify-updater-signatures.sh [--pubkey-file <path>] <assets-dir>
+# Usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] <assets-dir>
 #
 # <assets-dir> must contain exactly one macOS *.app.tar.gz.sig and one Windows
 # *.exe.sig, plus their artifacts. The default pubkey source is the committed
@@ -9,24 +9,29 @@
 # same shape, or a decoded minisign public-key file.
 #
 # The updater verifies signatures cryptographically on the client. This check
-# catches the failure CI can prevent: a release signed with a different
-# minisign key than plugins.updater.pubkey, which would leave every installed
-# client unable to install the update. It compares key ids; it does not
-# re-verify the signature itself.
+# catches two failures CI can prevent: a release signed with a different
+# minisign key than plugins.updater.pubkey, and a signature that does not match
+# the artifact. By default it compares key ids; --strict also runs `minisign -Vm`
+# against each artifact. release.yml installs minisign and passes --strict.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PUBKEY_FILE="$ROOT/apps/desktop/src-tauri/tauri.conf.json"
 ASSETS=""
+STRICT=0
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/verify-updater-signatures.sh [--pubkey-file <path>] <assets-dir>
+usage: scripts/verify-updater-signatures.sh [--strict] [--pubkey-file <path>] <assets-dir>
 EOF
 }
 
 while (($# > 0)); do
   case "$1" in
+  --strict)
+    STRICT=1
+    shift
+    ;;
   --pubkey-file)
     PUBKEY_FILE="${2:-}"
     if [[ -z "$PUBKEY_FILE" ]]; then
@@ -64,12 +69,15 @@ if [[ ! -f "$PUBKEY_FILE" ]]; then
   exit 1
 fi
 
-python3 - "$PUBKEY_FILE" "$ASSETS" <<'PY'
+python3 - "$PUBKEY_FILE" "$ASSETS" "$STRICT" <<'PY'
 import base64
 import binascii
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 pubkey_path = Path(sys.argv[1])
@@ -86,6 +94,11 @@ def decode_base64(value: str, label: str) -> bytes:
         return base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError) as error:
         fail(f"{label}: invalid base64 ({error})")
+
+
+strict = sys.argv[3] == "1"
+if strict and not shutil.which("minisign"):
+    fail("minisign is required for --strict (install the minisign CLI)")
 
 
 source = pubkey_path.read_text(encoding="utf-8")
@@ -170,6 +183,30 @@ for signature in mac_sigs + win_sigs:
             f"plugins.updater.pubkey {display_id}"
         )
     print(f"{signature.name}: key id {display_id} matches the updater pubkey")
+
+    if strict:
+        with tempfile.TemporaryDirectory() as tmp:
+            pub_file = Path(tmp) / "updater.pub"
+            sig_file = Path(tmp) / "signature.minisign"
+            pub_file.write_text(source, encoding="utf-8")
+            sig_file.write_text(raw + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "minisign",
+                    "-Vm",
+                    str(artifact),
+                    "-p",
+                    str(pub_file),
+                    "-x",
+                    str(sig_file),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                output = (result.stdout + result.stderr).strip()
+                fail(f"{signature.name}: minisign verification failed ({output})")
+        print(f"{signature.name}: signature verified against {artifact.name}")
 
 print("verify-updater-signatures: OK")
 PY
