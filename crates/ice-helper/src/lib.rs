@@ -704,34 +704,38 @@ mod imp {
                 })?;
             }
             cap_core_log(log);
-            let log_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(log)
-                .map_err(|e| {
-                    TunError::new(
-                        ErrorCode::TunApplyFailed,
-                        format!("open core log {}: {e}", log.display()),
-                    )
-                })?;
-            let log_err = log_file.try_clone().map_err(|e| {
-                TunError::new(ErrorCode::TunApplyFailed, format!("clone log handle: {e}"))
+            // Rebuild the command per attempt: a failed spawn consumes the
+            // redirected stdio handles, so the retry must reopen the log.
+            let spawn_core = || -> std::io::Result<std::process::Child> {
+                let log_file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(log)
+                    .map_err(|e| {
+                        std::io::Error::new(
+                            e.kind(),
+                            format!("open core log {}: {e}", log.display()),
+                        )
+                    })?;
+                let log_err = log_file
+                    .try_clone()
+                    .map_err(|e| std::io::Error::new(e.kind(), format!("clone log handle: {e}")))?;
+                Command::new(bin)
+                    .arg("run")
+                    .arg("-c")
+                    .arg(config)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::from(log_file))
+                    .stderr(Stdio::from(log_err))
+                    .spawn()
+            };
+            let mut child = ice_spawn::spawn_with_lock_retry(spawn_core).map_err(|e| {
+                TunError::new(
+                    ErrorCode::TunApplyFailed,
+                    format!("spawn {} run -c {}: {e}", bin.display(), config.display()),
+                )
             })?;
-            let mut child = Command::new(bin)
-                .arg("run")
-                .arg("-c")
-                .arg(config)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(log_file))
-                .stderr(Stdio::from(log_err))
-                .spawn()
-                .map_err(|e| {
-                    TunError::new(
-                        ErrorCode::TunApplyFailed,
-                        format!("spawn {} run -c {}: {e}", bin.display(), config.display()),
-                    )
-                })?;
             let pid = child.id();
 
             // Bounded liveness wait: catch immediate config/bind errors.

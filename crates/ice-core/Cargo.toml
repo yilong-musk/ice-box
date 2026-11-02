@@ -11,6 +11,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ice-types = { workspace = true }
+ice-spawn = { workspace = true }
 tracing = { workspace = true }
 ureq = { workspace = true }
 urlencoding = "2.1"
