@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Check an ice-box APK signature.
-# Usage: scripts/verify-android-apk.sh [--release] <apk>
+# Usage: scripts/verify-android-apk.sh [--release] [--version <ver>] <apk>
 #
 # Without --release, the APK must verify (the CI debug APK is signed with
 # the Android debug key). With --release, the signer must not be that debug
 # key, and the native libraries must be arm64-v8a only.
 #
+# --version checks the APK manifest versionName against the release version.
+#
 # --release-certs-text reads `apksigner verify --print-certs` output on stdin
 # and applies only the release signer checks. --release-listing-text does the
-# same for `unzip -l` output. scripts/test-verify-android-apk.sh uses both so
-# the checks stay covered without an SDK.
+# same for `unzip -l` output, and --release-badging-text <ver> checks
+# `aapt2 dump badging` output. scripts/test-verify-android-apk.sh uses these
+# so the checks stay covered without an SDK.
 set -euo pipefail
 
 # apksigner spells the signer line two ways:
@@ -46,6 +49,23 @@ check_release_listing() {
   fi
 }
 
+check_release_version() {
+  local badging="$1"
+  local want="$2"
+  if [[ -z "$want" ]]; then
+    echo "expected release version is empty" >&2
+    return 1
+  fi
+  local got
+  got="$(printf '%s\n' "$badging" |
+    sed -n "s/^package:.*versionName='\([^']*\)'.*$/\1/p" |
+    head -n 1)"
+  if [[ "$got" != "$want" ]]; then
+    echo "release APK versionName '$got' does not match expected '$want'" >&2
+    return 1
+  fi
+}
+
 if [[ "${1:-}" == "--release-certs-text" ]]; then
   check_release_certs "$(cat)"
   exit 0
@@ -56,14 +76,39 @@ if [[ "${1:-}" == "--release-listing-text" ]]; then
   exit 0
 fi
 
-RELEASE=0
-if [[ "${1:-}" == "--release" ]]; then
-  RELEASE=1
-  shift
+if [[ "${1:-}" == "--release-badging-text" ]]; then
+  check_release_version "$(cat)" "${2:-}"
+  exit 0
 fi
+
+RELEASE=0
+EXPECT_VERSION=""
+while (($# > 0)); do
+  case "$1" in
+  --release)
+    RELEASE=1
+    shift
+    ;;
+  --version)
+    EXPECT_VERSION="${2:-}"
+    if [[ -z "$EXPECT_VERSION" ]]; then
+      echo "--version needs a value" >&2
+      exit 2
+    fi
+    shift 2
+    ;;
+  --*)
+    echo "unknown option: $1" >&2
+    exit 2
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
 APK="${1:-}"
 if [[ -z "$APK" || ! -f "$APK" ]]; then
-  echo "usage: $0 [--release] <apk>" >&2
+  echo "usage: $0 [--release] [--version <ver>] <apk>" >&2
   exit 1
 fi
 
@@ -95,6 +140,18 @@ if [[ "$RELEASE" == 1 ]]; then
   fi
   check_release_certs "$certs"
   check_release_listing "$(unzip -l "$APK")"
+fi
+
+if [[ -n "$EXPECT_VERSION" ]]; then
+  AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort | tail -n 1)"
+  if [[ -z "$AAPT" ]]; then
+    AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort | tail -n 1)"
+  fi
+  if [[ -z "$AAPT" ]]; then
+    echo "aapt/aapt2 not found under $ANDROID_HOME/build-tools" >&2
+    exit 1
+  fi
+  check_release_version "$("$AAPT" dump badging "$APK")" "$EXPECT_VERSION"
 fi
 
 echo "verify-android-apk: OK ($APK)"

@@ -9,6 +9,11 @@ on:
       - "apps/desktop/package.json"
       - "apps/desktop/package-lock.json"
       - ".github/workflows/deploy-website.yml"
+  # A release publishes the installers the site links to. Deploy after it
+  # finishes so direct download buttons never point at a missing tag.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -25,29 +30,67 @@ concurrency:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.release.outputs.skip }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # workflow_run checks out the default branch; pin it explicitly so
+          # push, release-completion, and manual runs all build main's site.
+          ref: main
+
+      - name: Require the app version's release to be published
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "manual dispatch: skipping the release check"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="$(python3 -c 'import json; print(json.load(open("apps/desktop/package.json"))["version"])')"
+          state="$(gh release view "v$version" --json isDraft,isPrerelease \
+            --jq 'if .isDraft or .isPrerelease then "not-final" else "final" end' \
+            2>/dev/null || true)"
+          if [[ "$state" != "final" ]]; then
+            echo "::notice::release v$version is not a published final release (${state:-missing}); skipping deploy"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
       - name: Install website dependencies
+        if: steps.release.outputs.skip != 'true'
         run: npm ci
         working-directory: apps/website
+
       - name: Make shared dependencies visible to desktop sources
+        if: steps.release.outputs.skip != 'true'
         run: ln -s "$GITHUB_WORKSPACE/apps/website/node_modules" "$GITHUB_WORKSPACE/apps/desktop/node_modules"
+
       - name: Build website
+        if: steps.release.outputs.skip != 'true'
         run: npm run build
         working-directory: apps/website
+
       - uses: actions/upload-pages-artifact@v5
+        if: steps.release.outputs.skip != 'true'
         with:
           path: apps/website/dist
+
   deploy:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.skip != 'true' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5

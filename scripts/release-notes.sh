@@ -49,8 +49,10 @@ ANCHOR="$(printf '%s - %s' "$VERSION" "$DATE" \
   | tr '[:upper:]' '[:lower:]' \
   | sed -e 's/[^a-z0-9 -]//g' -e 's/ /-/g')"
 
+# Pin the link to the release tag, not main: the body is immutable once the
+# release is published and must keep pointing at the changelog that shipped.
 cat <<EOF
 Fixes and improvements
 
-Full changelog: [CHANGELOG.md › $VERSION]($REPO_URL/blob/main/CHANGELOG.md#$ANCHOR)
+Full changelog: [CHANGELOG.md › $VERSION]($REPO_URL/blob/v$VERSION/CHANGELOG.md#$ANCHOR)
 EOF

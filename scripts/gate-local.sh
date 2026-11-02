@@ -50,6 +50,12 @@ echo "== vitest =="
 echo "== merge-updater-latest fixtures =="
 bash scripts/test-merge-updater-latest.sh
 
+echo "== release preflight fixtures =="
+bash scripts/test-release-preflight.sh
+
+echo "== updater signature fixtures =="
+bash scripts/test-verify-updater-signatures.sh
+
 echo "== android version code =="
 bash scripts/test-android-version-code.sh
 

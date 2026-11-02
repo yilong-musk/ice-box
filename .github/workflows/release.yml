@@ -5,13 +5,91 @@ on:
     tags:
       - "v*"
 
+# Least privilege: only the publish job writes to the repository.
 permissions:
-  contents: write
+  contents: read
+
+# Serialize every release run, including different tags: a slower older build
+# must not publish after a newer tag and move GitHub's "latest" backwards.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build-macos:
-    name: Build macOS (arm64)
-    runs-on: macos-latest
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag, version sources, changelog, and secrets
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # Tags pushed from an unmerged release branch must not publish.
+          git rev-parse --verify --quiet origin/main >/dev/null
+          tag_commit="$(git rev-list -n 1 "$TAG")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "$TAG is not reachable from main" >&2
+            exit 1
+          fi
+
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          missing=0
+          for name in TAURI_SIGNING_PRIVATE_KEY ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "GitHub Actions secret $name is empty" >&2
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+          args=()
+          # An already published release is verification-only on a rerun. A
+          # draft must still be newer than the latest published release, so an
+          # abandoned old draft cannot be published after a newer release.
+          release_state="$(gh release view "$TAG" --json isDraft \
+            --jq '.isDraft' 2>/dev/null || true)"
+          if [[ "$release_state" == "false" ]]; then
+            args+=(--allow-existing)
+          else
+            latest_tags="$(gh release list --limit 100 --exclude-drafts \
+              --json tagName --jq '.[].tagName')"
+            while IFS= read -r latest; do
+              if [[ -n "$latest" ]]; then
+                args+=(--latest-tag "$latest")
+              fi
+            done <<< "$latest_tags"
+          fi
+          bash scripts/release-preflight.sh "$TAG" "${args[@]}"
+
+  # The full gate (including frontend and website builds) runs once on Linux.
+  # The packaging jobs run only the platform half and then build.
+  gate-linux:
+    name: Gate (linux)
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -33,6 +111,12 @@ jobs:
             apps/desktop/package-lock.json
             apps/website/package-lock.json
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev
+
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
@@ -41,20 +125,51 @@ jobs:
         run: npm ci
         working-directory: apps/website
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/website
+
+      - name: Workspace gate (G9.10)
+        run: bash scripts/gate.sh
+
+  build-macos:
+    name: Build macOS (arm64)
+    needs: preflight
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ice-box-${{ runner.os }}
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: apps/desktop
+
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh mac-arm64
 
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
-      - name: Workspace gate (G9.10)
+      - name: Workspace gate (G9.10, rust)
+        env:
+          GATE_SCOPE: rust
         run: bash scripts/gate.sh
-
-      - name: Headless macOS acceptance (G9.1 / G9.6 / G9.7)
-        run: cargo test -p ice-box --lib 'g9_' -- --nocapture
-
-      - name: macOS proxy-sys tests
-        run: cargo test -p ice-proxy-sys
 
       - name: Build app bundle (tauri build)
         env:
@@ -75,6 +190,40 @@ jobs:
           APP=$(find target/release/bundle/macos -name '*.app' -maxdepth 1 | head -n 1)
           test -n "$APP"
           bash scripts/verify-macos-code-sign.sh "$APP"
+
+      - name: Verify macOS architecture and DMG name
+        run: |
+          APP=$(find target/release/bundle/macos -name '*.app' -maxdepth 1 | head -n 1)
+          test -n "$APP"
+          BIN="$APP/Contents/MacOS/ice-box"
+          test -x "$BIN"
+          archs="$(lipo -archs "$BIN")"
+          echo "app architectures: $archs"
+          case " $archs " in
+          *" arm64 "*) ;;
+          *)
+            echo "expected an arm64 binary, got: $archs" >&2
+            exit 1
+            ;;
+          esac
+          case " $archs " in
+          *" x86_64 "*)
+            echo "unexpected x86_64 slice: $archs" >&2
+            exit 1
+            ;;
+          esac
+          shopt -s nullglob
+          dmg=(target/release/bundle/dmg/*.dmg)
+          test "${#dmg[@]}" -eq 1
+          expected="ice-box_${GITHUB_REF_NAME#v}_aarch64.dmg"
+          case "$(basename "${dmg[0]}")" in
+          "$expected") ;;
+          *)
+            echo "unexpected DMG name: ${dmg[0]} (expected $expected)" >&2
+            exit 1
+            ;;
+          esac
+          echo "release DMG: ${dmg[0]}"
 
       - name: Verify updater artifacts (macOS)
         run: |
@@ -99,7 +248,9 @@ jobs:
 
   build-windows:
     name: Build Windows (NSIS)
+    needs: preflight
     runs-on: windows-latest
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -120,17 +271,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            apps/desktop/package-lock.json
-            apps/website/package-lock.json
+          cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Install frontend deps
         run: npm ci
         working-directory: apps/desktop
-
-      - name: Install website deps
-        run: npm ci
-        working-directory: apps/website
 
       - name: Fetch sing-box binary
         run: ./scripts/fetch-singbox.sh win
@@ -138,14 +283,10 @@ jobs:
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
-      - name: Workspace gate (G9.10)
+      - name: Workspace gate (G9.10, rust)
+        env:
+          GATE_SCOPE: rust
         run: bash scripts/gate.sh
-
-      - name: Headless acceptance (G9.1 / G9.6 / G9.7)
-        run: cargo test -p ice-box --lib 'g9_' -- --nocapture
-
-      - name: Windows proxy-sys tests
-        run: cargo test -p ice-proxy-sys
 
       - name: Build app bundle (tauri build, NSIS)
         env:
@@ -165,6 +306,14 @@ jobs:
           test "${#exe[@]}" -ge 1
           test "${#sig[@]}" -ge 1
           test -s "${sig[0]}"
+          expected="ice-box_${GITHUB_REF_NAME#v}_x64-setup.exe"
+          case "$(basename "${exe[0]}")" in
+          "$expected") ;;
+          *)
+            echo "unexpected NSIS artifact name: ${exe[0]} (expected $expected)" >&2
+            exit 1
+            ;;
+          esac
           echo "nsis installer: ${exe[0]}"
           echo "updater signature: ${sig[0]}"
 
@@ -207,21 +356,11 @@ jobs:
 
   build-android:
     name: Build Android (arm64)
+    needs: preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-
-      - name: Version matches the tag
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
-          desktop_version="$(python3 -c 'import json; print(json.load(open("apps/desktop/src-tauri/tauri.conf.json"))["version"])')"
-          mobile_version="$(python3 -c 'import json; print(json.load(open("apps/mobile/src-tauri/tauri.conf.json"))["version"])')"
-          mobile_package="$(python3 -c 'import json; print(json.load(open("apps/mobile/package.json"))["version"])')"
-          test "$tag" = "$cargo_version"
-          test "$tag" = "$desktop_version"
-          test "$tag" = "$mobile_version"
-          test "$tag" = "$mobile_package"
 
       - uses: actions/setup-java@v6
         with:
@@ -291,13 +430,14 @@ jobs:
           ICE_BOX_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/build-android-apk.sh release arm64
 
-      - name: Name the release APK
+      - name: Name and verify the release APK
         run: |
           ver="${GITHUB_REF_NAME#v}"
           src="$(find apps/mobile/src-tauri/gen/android/app/build/outputs/apk -type f -path '*/release/*.apk' | head -n 1)"
           test -n "$src"
           cp "$src" "ice-box_${ver}_android_arm64.apk"
-          bash scripts/verify-android-apk.sh --release "ice-box_${ver}_android_arm64.apk"
+          bash scripts/verify-android-apk.sh --release --version "$ver" \
+            "ice-box_${ver}_android_arm64.apk"
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v7
@@ -308,8 +448,17 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [build-macos, build-windows, build-android]
+    needs: [preflight, gate-linux, build-macos, build-windows, build-android]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Configure required reviewers on this environment to gate publication.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
 
@@ -319,41 +468,102 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      # upload-artifact keeps bundle subdirs (macos/, dmg/). Flatten so
-      # merge-updater-latest.sh and `gh release create release-assets/*` see files.
+      # upload-artifact keeps bundle subdirs (macos/, dmg/, nsis/). Flatten so
+      # merge-updater-latest.sh and the release upload see files at one level.
       - name: Flatten downloaded artifacts
         run: |
           find release-assets -mindepth 2 -type f -exec mv -t release-assets {} +
           find release-assets -mindepth 1 -type d -empty -delete
           ls -la release-assets
 
-      - name: Prepare release notes
-        id: notes
+      - name: Prepare release assets
         run: |
-          bash scripts/release-notes.sh "${{ github.ref_name }}" > RELEASE_NOTES.md
+          set -euo pipefail
+          version="${TAG#v}"
+
+          cp LICENSE NOTICE release-assets/
+          cp third_party/sing-box/LICENSE release-assets/sing-box-LICENSE
+
+          bash scripts/release-notes.sh "$TAG" > RELEASE_NOTES.md
           test -s RELEASE_NOTES.md
 
-      - name: Synthesize updater latest.json
-        run: |
-          bash scripts/merge-updater-latest.sh \
-            release-assets \
-            "${{ github.ref_name }}" \
-            RELEASE_NOTES.md \
-            > release-assets/latest.json
-          test -s release-assets/latest.json
+          bash scripts/verify-updater-signatures.sh release-assets
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+          test -s "release-assets/ice-box_${version}_aarch64.dmg"
+          test -s "release-assets/ice-box_${version}_x64-setup.exe"
+          test -s "release-assets/ice-box_${version}_android_arm64.apk"
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            # A pre-release must never feed the stable in-app updater.
+            rm -f release-assets/latest.json
+            echo "pre-release: latest.json is intentionally not published"
+          else
+            bash scripts/merge-updater-latest.sh \
+              release-assets "$TAG" RELEASE_NOTES.md > release-assets/latest.json
+            test -s release-assets/latest.json
+          fi
+
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' |
+              sort | xargs -d '\n' sha256sum > SHA256SUMS
+            sha256sum -c --quiet SHA256SUMS
+          )
+
+          ls -la release-assets
+
+      - name: Create or resume draft release
+        id: release
         run: |
-          # `file#label` only sets the GitHub label; the asset name stays the
-          # basename. Two LICENSE files would collide, so copy the bundled
-          # sing-box text to a unique name first.
-          cp third_party/sing-box/LICENSE sing-box-LICENSE
-          gh release create "${{ github.ref_name }}" \
-            release-assets/* \
-            NOTICE \
-            LICENSE \
-            sing-box-LICENSE \
-            --title "ice-box ${{ github.ref_name }}" \
-            --notes-file RELEASE_NOTES.md
+          set -euo pipefail
+          if state="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [[ "$state" == "true" ]]; then
+              echo "resuming draft release $TAG"
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+            else
+              echo "release $TAG is already published; verification only"
+              echo "published=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            gh release create "$TAG" --draft \
+              --title "ice-box $TAG" --notes-file RELEASE_NOTES.md
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload draft assets
+        if: steps.release.outputs.published != 'true'
+        run: gh release upload "$TAG" release-assets/* --clobber
+
+      - name: Verify draft assets
+        if: steps.release.outputs.published != 'true'
+        run: |
+          set -euo pipefail
+          expected="$(cd release-assets && find . -maxdepth 1 -type f -printf '%f\n' | sort)"
+          actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          if [[ "$expected" != "$actual" ]]; then
+            echo "draft asset list does not match the prepared assets" >&2
+            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+
+      - name: Publish release
+        if: steps.release.outputs.published != 'true'
+        run: |
+          set -euo pipefail
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')"
+          if [[ "$PRERELEASE" == "true" ]]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+              -F draft=false -F prerelease=true -f make_latest=false
+          else
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+              -F draft=false -F prerelease=false -f make_latest=true
+          fi
+
+      - name: Verify published release
+        run: |
+          if [[ "$PRERELEASE" == "true" ]]; then
+            bash scripts/verify-release-assets.sh --prerelease "$TAG"
+          else
+            bash scripts/verify-release-assets.sh "$TAG"
+          fi

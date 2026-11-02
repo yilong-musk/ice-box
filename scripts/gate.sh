@@ -64,6 +64,12 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== merge-updater-latest fixtures =="
   bash "$ROOT/scripts/test-merge-updater-latest.sh"
 
+  echo "== release preflight fixtures =="
+  bash "$ROOT/scripts/test-release-preflight.sh"
+
+  echo "== updater signature fixtures =="
+  bash "$ROOT/scripts/test-verify-updater-signatures.sh"
+
   echo "== android version code =="
   bash "$ROOT/scripts/test-android-version-code.sh"
 

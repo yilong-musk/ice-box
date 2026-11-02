@@ -90,4 +90,50 @@ expect_listing_fail \
   $'    100  2026-09-30 00:00   lib/arm64-v8a/libice.so\n    100  2026-09-30 00:00   lib/x86_64/libice.so' \
   "ABI other than arm64-v8a"
 
+expect_version_ok() {
+  local name="$1"
+  local version="$2"
+  local text="$3"
+  if ! printf '%s\n' "$text" | "$SCRIPT" --release-badging-text "$version" >/dev/null; then
+    echo "verify-android-apk version $name: expected success" >&2
+    exit 1
+  fi
+}
+
+expect_version_fail() {
+  local name="$1"
+  local version="$2"
+  local text="$3"
+  local needle="$4"
+  local err
+  if err="$(printf '%s\n' "$text" | "$SCRIPT" --release-badging-text "$version" 2>&1)"; then
+    echo "verify-android-apk version $name: expected failure" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$err" | grep -q "$needle"; then
+    echo "verify-android-apk version $name: missing '$needle' in:" >&2
+    printf '%s\n' "$err" >&2
+    exit 1
+  fi
+}
+
+expect_version_ok \
+  "match" \
+  "0.2.6" \
+  "package: name='com.yilong-musk.icebox' versionCode='2006' versionName='0.2.6' platformBuildVersionName='15'"
+expect_version_ok \
+  "prerelease" \
+  "0.3.0-rc.1" \
+  "package: name='com.yilong-musk.icebox' versionCode='3000' versionName='0.3.0-rc.1' platformBuildVersionName='15'"
+expect_version_fail \
+  "mismatch" \
+  "0.2.6" \
+  "package: name='com.yilong-musk.icebox' versionCode='2005' versionName='0.2.5' platformBuildVersionName='15'" \
+  "does not match"
+expect_version_fail \
+  "missing-version" \
+  "0.2.6" \
+  "package: name='com.yilong-musk.icebox' versionCode='2006' platformBuildVersionName='15'" \
+  "does not match"
+
 echo "test-verify-android-apk: OK"
