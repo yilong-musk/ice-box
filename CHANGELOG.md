@@ -42,6 +42,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The release workflow defaults to read-only repository permissions; only the
   `publish` job can write, and it runs in the `release` environment.
+- Updated `tokio` to 1.53.3 for RUSTSEC-2026-0386. The zip 4.x
+  RUSTSEC-2026-0429 advisory is ignored under the same policy as the other
+  zip 4.x advisories: published updater assets are `.app.tar.gz` and raw NSIS
+  executables, never zip archives.
 
 ## [0.2.6] - 2026-11-02
 
