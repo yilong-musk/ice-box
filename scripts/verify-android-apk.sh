@@ -125,7 +125,22 @@ if [[ -z "${ANDROID_HOME:-}" || ! -d "$ANDROID_HOME" ]]; then
 fi
 export ANDROID_HOME
 
-APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort | tail -n 1)"
+find_build_tools() {
+  local name="$1"
+  local found
+  found="$(find "$ANDROID_HOME/build-tools" -type f -name "$name")"
+  if [[ -z "$found" ]]; then
+    return 1
+  fi
+  # Version sort so build-tools 35 wins over 9 (plain sort would not).
+  if sort -V </dev/null >/dev/null 2>&1; then
+    printf '%s\n' "$found" | sort -V | tail -n 1
+  else
+    printf '%s\n' "$found" | sort | tail -n 1
+  fi
+}
+
+APKSIGNER="$(find_build_tools apksigner || true)"
 if [[ -z "$APKSIGNER" ]]; then
   echo "apksigner not found under $ANDROID_HOME/build-tools" >&2
   exit 1
@@ -143,9 +158,17 @@ if [[ "$RELEASE" == 1 ]]; then
 fi
 
 if [[ -n "$EXPECT_VERSION" ]]; then
-  AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort | tail -n 1)"
+  if [[ -z "${ANDROID_HOME:-}" ]]; then
+    echo "ANDROID_HOME is not set; cannot locate aapt/aapt2" >&2
+    exit 1
+  fi
+  if [[ ! -d "$ANDROID_HOME/build-tools" ]]; then
+    echo "ANDROID_HOME/build-tools not found: $ANDROID_HOME/build-tools" >&2
+    exit 1
+  fi
+  AAPT="$(find_build_tools aapt2 || true)"
   if [[ -z "$AAPT" ]]; then
-    AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort | tail -n 1)"
+    AAPT="$(find_build_tools aapt || true)"
   fi
   if [[ -z "$AAPT" ]]; then
     echo "aapt/aapt2 not found under $ANDROID_HOME/build-tools" >&2

@@ -10,14 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The phone Home screen renders the outbound mode switch (Rule / Global /
   Direct) as a single horizontal row instead of a vertical stack.
 - Release engineering: a fast preflight now validates the tag on `main`, every
-  version source (including `apps/desktop/package.json` and
-  `tauri.properties`), the changelog section, the signing secrets, and that the
-  version is newer than the latest release before any build starts. The release
-  runs the full gate once on Linux and the platform gate on macOS/Windows, and
-  publishes through a verified draft that includes `SHA256SUMS`, checks the
-  updater signatures against the committed pubkey, and verifies every asset URL
-  and `latest.json` after publishing. The artifact checks now reject a wrong
-  macOS architecture, DMG/NSIS name, or APK `versionName` as well.
+  tracked version source (including `apps/desktop/package.json`), the changelog
+  section, the signing secrets, that the signing key matches the committed
+  pubkey, and that the version is newer than the latest release before any
+  build starts. The release runs the full gate once on Linux and the platform
+  gate on macOS/Windows, and publishes through a verified draft that includes
+  `SHA256SUMS`, checks the updater signature key ids against the committed
+  pubkey, downloads every published asset to verify its SHA-256, and checks
+  `latest.json`. The artifact checks now reject a wrong macOS architecture,
+  DMG/NSIS name, or APK `versionName` as well.
 - Pre-release tags are marked as GitHub pre-releases and no longer publish
   `latest.json`, so the in-app updater only follows final releases. The website
   now deploys after a final release is published, avoiding a window where its

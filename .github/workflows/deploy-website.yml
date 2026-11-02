@@ -41,6 +41,10 @@ jobs:
           # push, release-completion, and manual runs all build main's site.
           ref: main
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Require the app version's release to be published
         id: release
         env:

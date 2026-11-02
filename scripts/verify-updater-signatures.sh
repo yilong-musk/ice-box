@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Check that Tauri updater signatures were made with the committed pubkey.
+# Check that Tauri updater signatures use the committed pubkey's key id.
 # Usage: scripts/verify-updater-signatures.sh [--pubkey-file <path>] <assets-dir>
 #
 # <assets-dir> must contain exactly one macOS *.app.tar.gz.sig and one Windows
@@ -11,7 +11,8 @@
 # The updater verifies signatures cryptographically on the client. This check
 # catches the failure CI can prevent: a release signed with a different
 # minisign key than plugins.updater.pubkey, which would leave every installed
-# client unable to install the update.
+# client unable to install the update. It compares key ids; it does not
+# re-verify the signature itself.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -70,6 +70,12 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== updater signature fixtures =="
   bash "$ROOT/scripts/test-verify-updater-signatures.sh"
 
+  echo "== signing key fixtures =="
+  bash "$ROOT/scripts/test-verify-signing-key.sh"
+
+  echo "== release asset fixtures =="
+  bash "$ROOT/scripts/test-verify-release-assets.sh"
+
   echo "== android version code =="
   bash "$ROOT/scripts/test-android-version-code.sh"
 

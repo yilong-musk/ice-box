@@ -56,6 +56,12 @@ bash scripts/test-release-preflight.sh
 echo "== updater signature fixtures =="
 bash scripts/test-verify-updater-signatures.sh
 
+echo "== signing key fixtures =="
+bash scripts/test-verify-signing-key.sh
+
+echo "== release asset fixtures =="
+bash scripts/test-verify-release-assets.sh
+
 echo "== android version code =="
 bash scripts/test-android-version-code.sh
 
