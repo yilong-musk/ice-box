@@ -92,6 +92,9 @@ export type StatusResponse = {
   // --- TUN capture status ---
   /** `inactive` means no backend is claimed; `tun_status=recovery_required` blocks fallback. */
   traffic_capture: TrafficCapture;
+  /** Wall-clock ms when the active capture backend started; null when the
+   * proxy service is off. Distinct from the core process lifetime. */
+  capture_since_ms?: number | null;
   /** Committed settings desire (`settings.tun.enabled`); not proof TUN is active. */
   configured_tun: boolean;
   tun_status: TunStatus;
@@ -124,8 +127,8 @@ export type StatusResponse = {
   helper_stale: boolean;
   /** Windows scheduled-task elevation installed (plan B): when true, TUN
    * start/stop runs without any elevation prompt; when false the frontend
-   * runs the one-time `ensureTunElevation` (single UAC) before persisting
-   * the TUN-on next-start desire. Always true on non-Windows hosts. */
+   * runs the one-time `ensureTunElevation` (single UAC) before saving the
+   * TUN-on desire. Always true on non-Windows hosts. */
   tun_elevation_ready: boolean;
   /** Whether Settings can offer a menu-bar readout. macOS only; never inferred
    * from the user agent (an iPhone webview would look like macOS). */

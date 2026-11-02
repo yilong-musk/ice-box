@@ -242,10 +242,54 @@ pub(super) fn save_settings_inner_with_autostart(
         return Ok(());
     }
     let active = state.capture.active_backend();
-    // `tun.enabled` is next-start desire only: persist it without starting,
-    // stopping, or switching the live capture backend.
-    if only_tun_enabled_changed(&previous_for_apply, &settings) {
-        persist_settings(&state.paths.settings(), &settings, host_platform())?;
+    let tun_desire_changed = previous_for_apply.tun.enabled != settings.tun.enabled;
+    // `tun.enabled` alone with no active backend is the next-start desire and
+    // only needs to be persisted. A combined patch still falls through so the
+    // normal apply below handles its other fields.
+    if tun_desire_changed && active == TrafficCapture::Inactive {
+        if only_tun_enabled_changed(&previous_for_apply, &settings) {
+            persist_settings(&state.paths.settings(), &settings, host_platform())?;
+            return Ok(());
+        }
+    } else if tun_desire_changed {
+        // Any `tun.enabled` change while a capture backend is live is
+        // transactional, even when the same patch touches other fields:
+        // otherwise the combined save bypasses the switch and can rebuild TUN
+        // from a candidate whose desire is off. Commit only after the
+        // requested backend is healthy, and roll back to the previous backend
+        // on failure.
+        //
+        // The service was running before this save; a successful switch keeps
+        // it on. Fold the flag into the candidate so the backend transition
+        // commits the backend state and the on/off flag together.
+        let mut committed = settings.clone();
+        committed.proxy_service_enabled = true;
+        let binary = binary_for(app)?;
+        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+        let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
+        state.capture.transition_tun_settings(
+            &previous_for_apply,
+            &committed,
+            &mut **core,
+            proxy.as_ref(),
+            binary,
+        )?;
+        let now_active = state.capture.active_backend();
+        let running = core.state().status == CoreStatus::Running;
+        drop(proxy);
+        drop(core);
+        if now_active == TrafficCapture::Tun {
+            if running {
+                attach_traffic(state, &committed)?;
+            } else {
+                detach_traffic(state);
+            }
+        } else {
+            // TUN was disabled: the transition restarted the app-managed core
+            // on the previous config, so apply the non-backend parts of the
+            // candidate now.
+            apply_after_change(app, state, &settings, &previous_for_apply)?;
+        }
         return Ok(());
     }
     if crate::app_update::only_check_app_updates_changed(&previous_for_apply, &settings) {

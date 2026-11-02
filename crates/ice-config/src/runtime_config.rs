@@ -80,6 +80,43 @@ pub(crate) fn tagged_outbound(src: &Arc<Value>, tag: &str) -> Arc<Value> {
     Arc::new(value)
 }
 
+/// Tag an outbound and apply the Hysteria2 handshake compatibility pin.
+///
+/// sing-box 1.14 parrots Chrome's QUIC fingerprint for Hysteria2 by default.
+/// Chrome does not advertise Ed25519, so a server using an Ed25519 certificate
+/// fails the handshake. Share links cannot carry the certificate key type;
+/// self-signed (`tls.insecure`) and pinned (`certificate_public_key_sha256`)
+/// nodes are the likely Ed25519 population, so they keep the pre-1.14
+/// handshake. Normal CA-issued nodes keep the new fingerprint, and an explicit
+/// `disable_chrome_parrot` in the profile always wins.
+pub(crate) fn prepared_outbound(src: &Arc<Value>, tag: &str) -> Arc<Value> {
+    let outbound = tagged_outbound(src, tag);
+    if outbound.get("type").and_then(Value::as_str) != Some("hysteria2")
+        || outbound.get("disable_chrome_parrot").is_some()
+        || !hysteria2_tls_is_nonstandard(outbound.get("tls"))
+    {
+        return outbound;
+    }
+    let mut value = (*outbound).clone();
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("disable_chrome_parrot".into(), Value::Bool(true));
+    }
+    Arc::new(value)
+}
+
+fn hysteria2_tls_is_nonstandard(tls: Option<&Value>) -> bool {
+    let Some(tls) = tls else {
+        return false;
+    };
+    let insecure = tls.get("insecure").and_then(Value::as_bool) == Some(true);
+    let pinned = match tls.get("certificate_public_key_sha256") {
+        Some(Value::Array(values)) => !values.is_empty(),
+        Some(Value::String(value)) => !value.is_empty(),
+        _ => false,
+    };
+    insecure || pinned
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +127,55 @@ mod tests {
         let src = Arc::new(json!({"type": "socks", "tag": "n1", "server": "127.0.0.1"}));
         let out = tagged_outbound(&src, "n1");
         assert!(Arc::ptr_eq(&src, &out));
+    }
+
+    #[test]
+    fn hysteria2_self_signed_or_pinned_nodes_disable_chrome_parrot() {
+        let insecure = Arc::new(json!({
+            "type": "hysteria2",
+            "server": "hy2.example",
+            "server_port": 443,
+            "tls": { "enabled": true, "insecure": true }
+        }));
+        let out = prepared_outbound(&insecure, "n1");
+        assert_eq!(out["tag"], "n1");
+        assert_eq!(out["disable_chrome_parrot"], true);
+
+        let pinned = Arc::new(json!({
+            "type": "hysteria2",
+            "server": "hy2.example",
+            "server_port": 443,
+            "tls": {
+                "enabled": true,
+                "certificate_public_key_sha256": ["c77f0fb1"]
+            }
+        }));
+        assert_eq!(
+            prepared_outbound(&pinned, "n2")["disable_chrome_parrot"],
+            true
+        );
+
+        let standard = Arc::new(json!({
+            "type": "hysteria2",
+            "server": "hy2.example",
+            "server_port": 443,
+            "tls": { "enabled": true, "server_name": "hy2.example" }
+        }));
+        assert!(prepared_outbound(&standard, "n3")
+            .get("disable_chrome_parrot")
+            .is_none());
+
+        let explicit = Arc::new(json!({
+            "type": "hysteria2",
+            "server": "hy2.example",
+            "server_port": 443,
+            "disable_chrome_parrot": false,
+            "tls": { "enabled": true, "insecure": true }
+        }));
+        assert_eq!(
+            prepared_outbound(&explicit, "n4")["disable_chrome_parrot"],
+            false
+        );
     }
 
     #[test]

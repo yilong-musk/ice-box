@@ -289,12 +289,12 @@ fn controller(paths: &AppPaths) -> CaptureController {
 }
 
 #[test]
-fn only_tun_enabled_changed_ignores_live_capture_desire() {
+fn only_tun_enabled_changed_detects_a_desire_flip() {
     let off = tun_settings(false);
     let on = tun_settings(true);
     assert!(
         only_tun_enabled_changed(&off, &on),
-        "flipping tun.enabled alone is a next-start desire"
+        "flipping tun.enabled alone is routed through the live switch path"
     );
     assert!(only_tun_enabled_changed(&on, &off));
     assert!(!only_tun_enabled_changed(&off, &off));
@@ -371,10 +371,18 @@ fn status_reports_available_and_configured() {
     let settings = tun_settings(true);
     let status = c.status(&settings);
     assert_eq!(status.traffic_capture, TrafficCapture::Inactive);
+    assert_eq!(status.active_since_ms, None, "service is off");
     assert!(status.configured_tun);
     assert_eq!(status.tun_status, TunStatus::Disabled);
     assert!(status.tun_available);
     assert_eq!(status.tun_unavailable_reason, None);
+
+    c.set_system_proxy_active().unwrap();
+    let active = c.status(&settings);
+    assert!(
+        active.active_since_ms.is_some(),
+        "service uptime starts when the backend becomes active"
+    );
     let _ = fs::remove_dir_all(paths.root());
 }
 
@@ -391,6 +399,7 @@ fn enable_tun_success_journals_applied_and_activates() {
 
     assert_eq!(c.active_backend(), TrafficCapture::Tun);
     assert_eq!(c.tun_status(), TunStatus::Enabled);
+    assert!(c.status(&settings).active_since_ms.is_some());
     assert!(
         c.helper_core_used(),
         "helper core log latched after a helper-managed TUN enable"
@@ -490,6 +499,7 @@ fn disable_tun_restores_diagnostic_and_cleans_journal() {
 
     assert_eq!(c.active_backend(), TrafficCapture::Inactive);
     assert_eq!(c.tun_status(), TunStatus::Disabled);
+    assert_eq!(c.status(&settings).active_since_ms, None);
     let journal = TunJournal::load(&paths.tun_state()).unwrap().unwrap();
     assert_eq!(journal.state, JournalState::Clean);
     assert_eq!(journal.interface_name, None);
@@ -505,6 +515,39 @@ fn disable_tun_restores_diagnostic_and_cleans_journal() {
         core.start_calls.get(),
         1,
         "app core restarted on Diagnostic"
+    );
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn disable_tun_without_diagnostic_restart_leaves_core_stopped() {
+    let paths = temp_paths("disable-stopped");
+    seed_subscription(&paths);
+    let c = controller(&paths);
+    let mut core = TrackCore::running();
+    let settings = tun_settings(true);
+    c.enable_tun(&settings, &mut core, PathBuf::from("/bin/true"))
+        .expect("enable");
+    core.start_calls.set(0);
+    core.stop_calls.set(0);
+
+    let proxy = TrackProxy::default();
+    c.disable_active_backend(
+        &settings,
+        &mut core,
+        &proxy,
+        PathBuf::from("/bin/true"),
+        false,
+    )
+    .expect("disable");
+
+    assert_eq!(c.active_backend(), TrafficCapture::Inactive);
+    assert_eq!(c.tun_status(), TunStatus::Disabled);
+    assert_eq!(core.stop_calls.get(), 1);
+    assert_eq!(
+        core.start_calls.get(),
+        0,
+        "stopping the service must not restart the core"
     );
     let _ = fs::remove_dir_all(paths.root());
 }
@@ -703,6 +746,75 @@ fn transition_from_system_proxy_to_tun_commits_settings() {
     let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
     assert!(on_disk.tun.enabled, "committed only after healthy");
     assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn transition_from_tun_to_system_proxy_commits_settings() {
+    let paths = temp_paths("transition-off");
+    seed_subscription(&paths);
+    let c = controller(&paths);
+    let previous = tun_settings(true);
+    let mut core = TrackCore::running();
+    let proxy = TrackProxy::default();
+    c.enable_tun(&previous, &mut core, PathBuf::from("/bin/true"))
+        .expect("enable");
+
+    let candidate = tun_settings(false);
+    c.transition_tun_settings(
+        &previous,
+        &candidate,
+        &mut core,
+        &proxy,
+        PathBuf::from("/bin/true"),
+    )
+    .expect("transition");
+
+    assert_eq!(c.active_backend(), TrafficCapture::SystemProxy);
+    assert_eq!(proxy.apply_calls.get(), 1, "new backend applied");
+    let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
+    assert!(!on_disk.tun.enabled, "committed only after healthy");
+    assert!(!paths.pending_settings().exists());
+    let _ = fs::remove_dir_all(paths.root());
+}
+
+#[test]
+fn transition_from_tun_to_system_proxy_failure_restores_tun() {
+    let paths = temp_paths("transition-off-rollback");
+    seed_subscription(&paths);
+    let c = controller(&paths);
+    let previous = tun_settings(true);
+    let mut core = TrackCore::running();
+    c.enable_tun(&previous, &mut core, PathBuf::from("/bin/true"))
+        .expect("enable");
+
+    let proxy = TrackProxy::default();
+    proxy.fail_apply.set(true);
+    let candidate = tun_settings(false);
+    let err = c
+        .transition_tun_settings(
+            &previous,
+            &candidate,
+            &mut core,
+            &proxy,
+            PathBuf::from("/bin/true"),
+        )
+        .expect_err("system proxy apply failed");
+
+    assert_eq!(err.code, ErrorCode::ProxyApplyFailed.as_str());
+    assert_eq!(
+        proxy.apply_calls.get(),
+        1,
+        "the failed new backend was attempted once"
+    );
+    assert_eq!(
+        c.active_backend(),
+        TrafficCapture::Tun,
+        "rollback restored TUN"
+    );
+    let on_disk = ice_config::load_settings(&paths.settings()).unwrap();
+    assert!(on_disk.tun.enabled, "failed candidate was not committed");
+    assert!(!paths.pending_settings().exists(), "pending cleared");
     let _ = fs::remove_dir_all(paths.root());
 }
 

@@ -1,5 +1,5 @@
 # SHA-256 digests for scripts/fetch-singbox.sh (sing-box release assets).
-# Source: GitHub release v1.13.21 asset metadata.
-62bca85bf08b9145288729cf010c98ea9877b8086f7369cde9e127012d509424  sing-box-1.13.21-darwin-arm64.tar.gz
-61093d79211a6ae7b707d30f07be35b1167ca8366bf0dbc06ee5fb35c90dc9e8  sing-box-1.13.21-darwin-amd64.tar.gz
-a03291793d3a3c6e266447a58140657ac099ff278abf3b8ff678932356a62ced  sing-box-1.13.21-windows-amd64.zip
+# Computed from the GitHub release v1.14.4 assets.
+0d8c7f5ed5d587b0f1a5e9772a708ec3bfa4ac4c9329604b01d8d9c2ba406838  sing-box-1.14.4-darwin-arm64.tar.gz
+eae86b9b033bba50b7c44ab719e4bfac0aca05efd28483390ed3aa510f32db25  sing-box-1.14.4-darwin-amd64.tar.gz
+99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df  sing-box-1.14.4-windows-amd64.zip

@@ -47,7 +47,7 @@ pub async fn set_tray_update_available(
     .await
 }
 
-/// Switch routing mode. With the pinned sing-box 1.13.21 the runtime Clash `mode-list` is
+/// Switch routing mode. With the pinned sing-box 1.14.4 the runtime Clash `mode-list` is
 /// only `[<default_mode>]`, so a `PATCH /configs` to another mode is silently ignored and
 /// the switch always takes the rebuild + reload/restart path (the PATCH attempt is a
 /// forward-compatible capability gate). Settings are always persisted so the next apply

@@ -15,17 +15,22 @@ import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.OsConstants
 import android.util.Log
+import io.nekohasekai.libbox.BridgeOptions
+import io.nekohasekai.libbox.BridgeSession
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.ConnectionOwner
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.LocalDNSTransport
+import io.nekohasekai.libbox.NeighborUpdateListener
 import io.nekohasekai.libbox.NetworkInterfaceIterator
 import io.nekohasekai.libbox.OverrideOptions
 import io.nekohasekai.libbox.PlatformInterface
+import io.nekohasekai.libbox.PlatformUser
 import io.nekohasekai.libbox.RoutePrefix
 import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
@@ -124,8 +129,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
             workingPath = File(shared, "work").path
             tempPath = cacheDir.path
             logMaxLines = 3000
+            crashReportSource = "ice-box"
         })
-        Libbox.redirectStderr(File(shared, "stderr.log").path)
         monitor.start()
         monitorStarted = true
         return Libbox.newCommandServer(this, this).also { server = it }
@@ -357,7 +362,12 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         val v6 = options.inet6Address.toPrefixes()
         (v4 + v6).forEach { builder.addAddress(it.address(), it.prefix()) }
         if (options.autoRoute) {
-            options.dnsServerAddress?.value?.takeIf { it.isNotEmpty() }?.let { builder.addDnsServer(it) }
+            if (options.dnsMode.value != Libbox.DNSModeDisabled) {
+                val dnsServerAddress = options.dnsServerAddress
+                while (dnsServerAddress.hasNext()) {
+                    builder.addDnsServer(dnsServerAddress.next())
+                }
+            }
             val v4Routes = options.inet4RouteAddress.toPrefixes()
             if (v4Routes.isNotEmpty()) v4Routes.forEach { builder.addRoute(it.toIpPrefix()) }
             else if (v4.isNotEmpty()) builder.addRoute("0.0.0.0", 0)
@@ -383,8 +393,6 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun autoDetectInterfaceControl(fd: Int) {
         if (!protect(fd)) error("protect($fd) failed")
     }
-
-    override fun useProcFS() = false
 
     override fun findConnectionOwner(
         ipProtocol: Int,
@@ -432,6 +440,13 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
                     },
                 )
                 dnsServer = StringArray(link.dnsServers.mapNotNull { it.hostAddress })
+                gateway = StringArray(
+                    link.routes
+                        .filter { it.destination.prefixLength == 0 }
+                        .mapNotNull { it.gateway }
+                        .filterNot { it.isAnyLocalAddress }
+                        .mapNotNull { it.hostAddress },
+                )
                 type = when {
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Libbox.InterfaceTypeCellular
@@ -459,7 +474,43 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun readWIFIState(): WIFIState? = null
 
-    override fun systemCertificates(): StringIterator = StringArray(emptyList())
+    // sing-box 1.14 expanded PlatformInterface. ice-box does not expose the
+    // features behind these methods (Tailscale SSH/SFTP, platform shell,
+    // bridge, neighbor rules), so they stay inert instead of failing TUN.
+    override fun cancelNotification(identifier: String, typeID: Int) {}
+
+    override fun startNeighborMonitor(listener: NeighborUpdateListener?) {}
+
+    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) {}
+
+    override fun registerMyInterface(name: String?) {}
+
+    override fun usePlatformShell(): Boolean = false
+
+    override fun checkPlatformShell() {}
+
+    override fun openShellSession(
+        user: PlatformUser?,
+        command: String?,
+        environ: StringIterator?,
+        term: String?,
+        rows: Int,
+        cols: Int,
+    ): ShellSession = error("platform shell is not supported")
+
+    override fun lookupUser(username: String?): PlatformUser =
+        error("platform user lookup is not supported")
+
+    override fun lookupSFTPServer(): String = error("SFTP is not supported")
+
+    override fun readSystemSSHHostKey(): String = error("system SSH host key is not supported")
+
+    override fun tailscaleHostname(): String = ""
+
+    override fun usePlatformBridge(): Boolean = false
+
+    override fun createBridge(options: BridgeOptions?): BridgeSession =
+        error("bridge is not supported")
 
     override fun clearDNSCache() {}
 
@@ -478,6 +529,12 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun getSystemProxyStatus() = SystemProxyStatus()
 
     override fun setSystemProxyEnabled(enabled: Boolean) {}
+
+    override fun triggerNativeCrash() {
+        throw RuntimeException("native crash requested")
+    }
+
+    override fun connectSSHAgent(): Int = -1
 
     override fun writeDebugMessage(message: String) {
         Log.i(NetworkMonitor.TAG, message)

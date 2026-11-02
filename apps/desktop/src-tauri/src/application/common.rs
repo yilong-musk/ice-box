@@ -191,6 +191,10 @@ pub struct StatusResponse {
     // --- TUN capture status ---
     /// Derived only from the runtime capture controller.
     pub traffic_capture: TrafficCapture,
+    /// Wall-clock ms when the active capture backend started (system proxy or
+    /// TUN); `None` when the proxy service is off. Use this for the Home
+    /// service uptime, not `running_since_ms` (core process lifetime).
+    pub capture_since_ms: Option<u64>,
     /// Committed settings desire (`settings.tun.enabled`).
     pub configured_tun: bool,
     pub tun_status: TunStatus,
@@ -229,9 +233,8 @@ pub struct StatusResponse {
     pub helper_stale: bool,
     /// Windows scheduled-task elevation is installed (plan B): when true, TUN
     /// start/stop runs without any elevation prompt; when false the frontend
-    /// runs the one-time `ensure_tun_elevation` (single UAC) before persisting
-    /// the TUN-on next-start desire. Always true on non-Windows hosts (no
-    /// task concept there).
+    /// runs the one-time `ensure_tun_elevation` (single UAC) before saving the
+    /// TUN-on desire. Always true on non-Windows hosts (no task concept there).
     pub tun_elevation_ready: bool,
     /// The active profile has at least one outbound. Home uses this instead of
     /// the full node list to choose the empty state.
@@ -1076,6 +1079,7 @@ pub(crate) fn collect_status(state: &AppState) -> Result<StatusResponse, AppErro
         system_proxy_recorded,
         system_proxy_available: proxy_available,
         traffic_capture: capture.traffic_capture,
+        capture_since_ms: capture.active_since_ms,
         configured_tun: capture.configured_tun,
         tun_status: capture.tun_status,
         tun_interface: capture.tun_interface,

@@ -252,15 +252,16 @@ impl CaptureController {
         Ok(warnings)
     }
 
-    /// Serialized live-TUN reconfigure when TUN topology changed while TUN
-    /// capture is already active (`docs/tun.md`). `tun.enabled` is *not* a live
-    /// switch: flipping it is a next-start desire and is persisted without
-    /// calling this. Writes the pending record first; commits `settings.json`
-    /// only after the requested backend is healthy; on failure rolls back to
-    /// the old backend; clears the pending record in both cases. An uncertain
-    /// rollback leaves both backends disabled and enters `RecoveryRequired`.
-    /// When the active backend and the committed settings already agree with
-    /// the candidate, no transition runs: the candidate is persisted as-is.
+    /// Serialized live backend switch for a `tun.enabled` flip while capture is
+    /// active, and for a TUN topology change while TUN stays enabled
+    /// (`docs/tun.md`). With the service off, `tun.enabled` is only a
+    /// next-start desire and the save path persists it without calling this.
+    /// Writes the pending record first; commits `settings.json` only after the
+    /// requested backend is healthy; on failure rolls back to the old backend;
+    /// clears the pending record in both cases. An uncertain rollback leaves
+    /// both backends disabled and enters `RecoveryRequired`. When the active
+    /// backend and the committed settings already agree with the candidate, no
+    /// transition runs: the candidate is persisted as-is.
     pub fn transition_tun_settings(
         &self,
         previous: &AppSettings,
@@ -315,6 +316,7 @@ impl CaptureController {
                 // tun -> system proxy
                 (TrafficCapture::Tun, true, false) => {
                     self.disable_active_backend(previous, core, proxy, binary.clone(), true)?;
+                    self.enable_system_proxy(&candidate, core, proxy)?;
                     Ok(None)
                 }
                 // TUN topology change while TUN stays enabled: explicit

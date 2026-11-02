@@ -1250,7 +1250,7 @@ fn create_backend_capability_matches_the_platform_gate() {
     {
         assert!(
             capability.supported,
-            "windows_tun_ready: gate green (pinned 1.13.21)"
+            "windows_tun_ready: gate green (pinned 1.14.4)"
         );
         assert!(
             capability.dns_hijack,

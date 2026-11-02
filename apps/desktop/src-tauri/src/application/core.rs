@@ -360,9 +360,13 @@ pub(crate) fn take_launch_proxy_restore(state: &AppState) -> Result<bool, AppErr
 }
 
 /// Stop proxy service: disable whichever capture backend is active. The IPC
-/// name is retained for compatibility (`docs/tun.md`); it delegates to the
-/// controller, so it restores the OS proxy for the system-proxy backend and
-/// releases TUN capture (core may stay Running on the Diagnostic config).
+/// name is retained for compatibility (`docs/tun.md`); it restores the OS
+/// proxy for the system-proxy backend (the core keeps running) and releases
+/// TUN capture. TUN teardown already stops the elevated core, so the
+/// app-managed core is deliberately not restarted afterwards: doing that
+/// races the elevated core's port release and surfaces `core.spawn_failed`
+/// when the user only asked to stop the service. The next `start` brings the
+/// diagnostic core back.
 pub(crate) fn disable_active_backend_inner(
     app: &impl AppHost,
     state: &AppState,
@@ -375,7 +379,7 @@ pub(crate) fn disable_active_backend_inner(
     let proxy = state.proxy.lock().map_err(|_| lock_poisoned("proxy"))?;
     state
         .capture
-        .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, true)?;
+        .disable_active_backend(&settings, &mut **core, proxy.as_ref(), binary, false)?;
     set_proxy_service_enabled_for(&state.paths.settings(), false, host_platform())?;
     if let Ok(mut slot) = state.proxy_recovery_warning.lock() {
         slot.clear();

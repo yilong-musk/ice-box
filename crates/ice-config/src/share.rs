@@ -7,6 +7,13 @@
 //! stay on this machine. Legacy `geoip` / `geosite` matchers on both route and
 //! DNS rules are rewritten to remote rule-sets because sing-box 1.13 rejects
 //! those fields. A leading `!` on a country code becomes `invert` on that set.
+//!
+//! The exported document targets the pinned core (`ENGINE_COMPAT_CORE_VERSION`).
+//! DNS blocks are reconciled with sing-box 1.14's legacy/modern split (inline
+//! legacy address filters cannot be combined with `query_type`), and Hysteria2
+//! nodes with a self-signed or pinned certificate carry
+//! `disable_chrome_parrot`. Both changes require sing-box 1.14+; older cores
+//! reject the document at config load.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -14,10 +21,11 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use crate::build::{
-    dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, rule_set_refs_are_known,
-    split_wireguard_endpoints, validate_route_refs, wireguard_endpoint,
+    dns_block_is_usable, dns_has_local_server, ensure_builtin_outbound, reconcile_legacy_dns_rules,
+    remove_dns_rule_strategy, rule_set_refs_are_known, split_wireguard_endpoints,
+    validate_route_refs, wireguard_endpoint,
 };
-use crate::runtime_config::tagged_outbound;
+use crate::runtime_config::prepared_outbound;
 use crate::{
     ConfigError, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
 };
@@ -51,7 +59,10 @@ const RULE_META_KEYS: &[&str] = &[
 ///
 /// Outbounds, WireGuard endpoints, route, remote rule-sets, and DNS travel
 /// with the copy. Local inbounds, the Clash API, and log paths stay behind.
-/// Credentials are left intact so the copy can be imported elsewhere.
+/// Credentials are left intact so the copy can be imported elsewhere. The
+/// document targets the pinned core version: version-specific outbound fields
+/// (for example Hysteria2 `disable_chrome_parrot`) may not load on older
+/// sing-box releases.
 pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, ConfigError> {
     if !profile.nodes.iter().any(share_node_is_proxy) {
         return Err(ConfigError::EmptyOutbounds);
@@ -68,14 +79,14 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         push_unique_outbound(
             &mut outbounds,
             &mut tag_set,
-            tagged_outbound(&node.outbound, &node.tag),
+            prepared_outbound(&node.outbound, &node.tag),
         );
     }
     for group in &profile.groups {
         push_unique_outbound(
             &mut outbounds,
             &mut tag_set,
-            tagged_outbound(&group.outbound, &group.tag),
+            prepared_outbound(&group.outbound, &group.tag),
         );
     }
     // Groups often list `direct` / `block` before those builtins are copied
@@ -164,6 +175,16 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         if prepare_share_dns(&mut dns, &tag_set, &mut rule_sets, &mut set_tags)
             && dns_block_is_usable(&dns)
         {
+            // The exported document targets the pinned core, so it needs the
+            // same legacy DNS migration as the runtime config: 1.14 rejects
+            // inline legacy address filters next to `query_type`, and a
+            // `geoip-*` rule-set reference without `match_response` forces
+            // legacy mode (generated geoip sets are IP-only; geosite sets are
+            // domain-only). The runtime builder removes rule-level `strategy`
+            // before this classification; do the same here so the copy path
+            // never rejects a block the app itself can run.
+            remove_dns_rule_strategy(dns.get_mut("rules"));
+            reconcile_legacy_dns_rules(&mut dns, |tag| tag.starts_with("geoip-"))?;
             Some(dns)
         } else {
             None

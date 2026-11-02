@@ -443,7 +443,7 @@ mod tests {
                         if fails.fetch_sub(1, Ordering::SeqCst) > 0 {
                             continue;
                         }
-                        let body = r#"{"version":"1.13.21"}"#;
+                        let body = r#"{"version":"1.14.4"}"#;
                         let resp = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),

@@ -149,6 +149,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
    * when fresh status arrives so the control snaps back on failure. */
   const [tunOverride, setTunOverride] = useState<boolean | null>(null);
   const tunInstall = useTunInstallDialog(onInstallHelperThenEnableTun);
+  /** The helper dialog was opened from the power button (start the service
+   * after the install/update), not from the TUN switch. */
+  const tunInstallStartServiceRef = useRef(false);
   const modeBusyRef = useRef(false);
   const pendingRef = useRef(false);
   const tunSaveRef = useRef(false);
@@ -399,9 +402,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** Persist next-start TUN desire (and optional elevation / helper install)
-   * without treating it as a live capture start/stop. The power button stays
-   * on the current service state. */
+  /** Persist the TUN desire (and optional elevation / helper install). The
+   * save path applies the live switch transactionally when a capture backend
+   * is active; with the service off it only records the next-start choice. */
   async function persistTunDesire(action: () => Promise<void>) {
     pollGenRef.current += 1;
     runtime?.bumpGeneration();
@@ -470,12 +473,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // (`docs/tun.md`: the setting remains a desired value, never a misleading state).
   const canEnableProxy =
     !busy &&
+    !tunSaving &&
     !proxyLive &&
     !tunActive &&
     status?.tun_status !== "recovery_required" &&
     (configuredTun ? tunAvailable : proxyAvailable);
   const canDisableProxy =
-    !busy && running && (proxyRecorded || (tunActive && tunAvailable));
+    !busy && !tunSaving && running && (proxyRecorded || (tunActive && tunAvailable));
   // Treat live or on-disk recorded as "on" so out-of-sync can still restore.
   const proxyOn = proxyLive || (proxyRecorded && running) || tunActive;
   const canToggleProxy = proxyOn ? canDisableProxy : canEnableProxy;
@@ -537,9 +541,20 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
     if (proxyOn) {
       void run(() => api.stopSystemProxy());
-    } else {
-      void run(() => api.start());
+      return;
     }
+    // Starting TUN with a missing or stale helper would fail in the backend;
+    // run the install/update flow first, then start the service.
+    if (
+      configuredTun &&
+      status?.helper_supported === true &&
+      (status?.helper_installed !== true || status?.helper_stale === true)
+    ) {
+      tunInstallStartServiceRef.current = true;
+      tunInstall.setOpen(true);
+      return;
+    }
+    void run(() => api.start());
   }
 
   async function onCopyCliProxy() {
@@ -576,27 +591,38 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     }
   }
 
-  /** TUN setting switch on the home page: persists `tun.enabled` as the
-   * desired backend for the *next* service start. It never starts or stops
-   * the live proxy service. Enabling without an authorized helper guides
-   * the user through install first (same flow as the Settings page). */
+  /** Persist the TUN desire. The backend save path switches system proxy ↔
+   * TUN transactionally while the proxy service is running and rolls back on
+   * failure; with the service off it only records the next-start desire. */
+  async function applyTunDesire(enabled: boolean) {
+    await api.saveSettings({
+      tun: { enabled },
+    });
+  }
+
+  /** TUN setting switch on the home page. Enabling without an authorized
+   * helper guides the user through install first. The save path applies the
+   * live backend switch (same as Settings). */
   function onToggleTunSetting(enabled: boolean) {
     if (!settings) return;
     setTunOverride(enabled);
-    void persistTunDesire(async () => {
-      await api.saveSettings({
-        tun: { enabled },
-      });
-    });
+    void persistTunDesire(() => applyTunDesire(enabled));
   }
 
   function onInstallHelperThenEnableTun() {
     if (!settings) return;
+    const startService = tunInstallStartServiceRef.current;
+    tunInstallStartServiceRef.current = false;
     void persistTunDesire(async () => {
       await api.installHelper();
-      await api.saveSettings({
-        tun: { enabled: true },
-      });
+      if (startService) {
+        await api.saveSettings({
+          tun: { enabled: true },
+        });
+        await api.start();
+        return;
+      }
+      await applyTunDesire(true);
     });
   }
 
@@ -718,14 +744,26 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   }
 
   const powerOn = phone ? vpnActive : proxyOn;
+  // Service uptime, not core process lifetime: the diagnostic core can keep
+  // running long before the user starts the proxy service. The phone shell
+  // does not report `capture_since_ms`, so it keeps the core-start fallback.
+  const uptimeSince = phone
+    ? status?.capture_since_ms ?? status?.running_since_ms ?? null
+    : status?.capture_since_ms ?? null;
   const canToggle = phone ? !busy : canToggleProxy;
+  // The button names the backend it starts/stops: TUN when configured (or
+  // active), otherwise the system proxy (docs/tun.md).
   const powerTitle = phone
     ? vpnActive
       ? t("home.power.vpnStop")
       : t("home.power.vpnStart")
     : proxyOn
-      ? t("home.power.stop")
-      : t("home.power.start");
+      ? tunActive
+        ? t("home.power.stopTun")
+        : t("home.power.stopSystem")
+      : configuredTun
+        ? t("home.power.startTun")
+        : t("home.power.startSystem");
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
 
@@ -890,11 +928,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                               if (!s) return;
                               if (
                                 status?.helper_supported === true &&
-                                status?.helper_installed !== true
+                                (status?.helper_installed !== true ||
+                                  status?.helper_stale === true)
                               ) {
-                                // No authorized helper (macOS): guide the user to
-                                // install it first; the TUN-on setting is persisted only
-                                // after a successful install (cancel leaves it off).
+                                // No authorized helper, or the installed helper
+                                // still runs the previous core (macOS): guide
+                                // the user through install/update first; the
+                                // TUN-on desire is applied only after it
+                                // succeeds (cancel leaves TUN off).
+                                tunInstallStartServiceRef.current = false;
                                 tunInstall.setOpen(true);
                                 return;
                               }
@@ -902,16 +944,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                                 // Windows (plan B): a one-time elevation component (a
                                 // scheduled task) makes TUN work without any further
                                 // prompt. The first enable triggers a single UAC to
-                                // install it, then persists the next-start desire.
-                                // Never start/stop the proxy service from this switch.
+                                // install it, then the save path applies the live
+                                // switch (or records the next-start desire when off).
                                 setTunOverride(true);
                                 void persistTunDesire(async () => {
                                   if (status?.tun_elevation_ready !== true) {
                                     await api.ensureTunElevation();
                                   }
-                                  await api.saveSettings({
-                                    tun: { enabled: true },
-                                  });
+                                  await applyTunDesire(true);
                                 });
                                 return;
                               }
@@ -924,8 +964,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                             busy ||
                             tunSaving ||
                             !settings ||
-                            status?.tun_available === false ||
-                            status?.helper_stale === true
+                            status?.tun_available === false
                           }
                           size="lg"
                           aria-label={t("home.tunMode")}
@@ -934,7 +973,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     )}
                   </div>
                 )}
-                {running && status?.running_since_ms != null && (
+                {powerOn && uptimeSince != null && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
                       {t("home.runUptime")}
@@ -943,7 +982,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                       className="font-mono text-sm tabular-nums"
                       data-testid="home-run-uptime"
                     >
-                      <RunUptime since={status.running_since_ms} />
+                      <RunUptime since={uptimeSince} />
                     </span>
                   </div>
                 )}
@@ -1161,6 +1200,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           onOpenChange={tunInstall.setOpen}
           onConfirm={tunInstall.confirm}
           busy={tunSaving}
+          stale={status?.helper_stale === true}
         />
       )}
     </div>

@@ -119,6 +119,10 @@ pub enum TunStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct CaptureStatus {
     pub traffic_capture: TrafficCapture,
+    /// Wall-clock ms when the active capture backend started; `None` when no
+    /// backend is active. Distinct from the core process start time: the core
+    /// can keep running in diagnostic mode after the service stops.
+    pub active_since_ms: Option<u64>,
     pub configured_tun: bool,
     pub tun_status: TunStatus,
     pub tun_interface: Option<String>,
@@ -146,6 +150,7 @@ pub struct PendingSettingsRecord {
 
 struct CaptureInner {
     active: TrafficCapture,
+    active_since_ms: Option<u64>,
     tun_status: TunStatus,
     transition_id: Option<String>,
     tun_interface: Option<String>,
@@ -252,9 +257,9 @@ pub fn tun_topology_changed(a: &TunSettings, b: &TunSettings) -> bool {
         || a.strict_route != b.strict_route
 }
 
-/// `tun.enabled` is the desired backend for the *next* service start. A
-/// settings save that only flips that flag must persist it without touching
-/// the live capture (no start, no stop, no backend switch).
+/// A settings save whose only runtime change is the `tun.enabled` desire.
+/// The save path applies that desire transactionally when a capture backend is
+/// active, and persists it as the next-start choice when the service is off.
 pub fn only_tun_enabled_changed(previous: &AppSettings, next: &AppSettings) -> bool {
     let mut left = previous.clone();
     let mut right = next.clone();
@@ -290,6 +295,7 @@ impl CaptureController {
             capability: Mutex::new(capability),
             inner: Mutex::new(CaptureInner {
                 active: TrafficCapture::Inactive,
+                active_since_ms: None,
                 tun_status: TunStatus::Disabled,
                 transition_id: None,
                 tun_interface: None,
@@ -335,6 +341,7 @@ impl CaptureController {
             capability: Mutex::new(capability),
             inner: Mutex::new(CaptureInner {
                 active: TrafficCapture::Inactive,
+                active_since_ms: None,
                 tun_status: TunStatus::Disabled,
                 transition_id: None,
                 tun_interface: None,
@@ -439,24 +446,28 @@ impl CaptureController {
         let inner = self.inner.lock().ok().map(|i| {
             (
                 i.active,
+                i.active_since_ms,
                 i.tun_status,
                 i.tun_interface.clone(),
                 i.tun_error.clone(),
                 i.transition_id.clone(),
             )
         });
-        let (traffic_capture, tun_status, tun_interface, tun_error, transition_id) = match inner {
-            Some(value) => value,
-            None => (
-                TrafficCapture::Inactive,
-                TunStatus::Disabled,
-                None,
-                None,
-                None,
-            ),
-        };
+        let (traffic_capture, active_since_ms, tun_status, tun_interface, tun_error, transition_id) =
+            match inner {
+                Some(value) => value,
+                None => (
+                    TrafficCapture::Inactive,
+                    None,
+                    TunStatus::Disabled,
+                    None,
+                    None,
+                    None,
+                ),
+            };
         CaptureStatus {
             traffic_capture,
+            active_since_ms,
             configured_tun: settings.tun.enabled,
             tun_status,
             tun_interface,

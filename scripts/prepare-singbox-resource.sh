@@ -17,6 +17,33 @@ SRC="$ROOT/third_party/sing-box/$ICE_TARGET_DIR/$ICE_BIN"
 DEST_DIR="$ST/resources"
 DEST="$DEST_DIR/$ICE_BIN"
 
+# A binary that cannot run on this host (cross-arch / cross-OS) prints nothing.
+probe_version() {
+  "$1" version 2>/dev/null | head -n 1 || true
+}
+
+# Never stage a core that does not match the pin. The generator emits the
+# pinned core's schema (for example `disable_chrome_parrot`, which 1.13
+# rejects), so a stale artifact only fails later at core startup with an
+# "unknown field" decode error. Fetch the pinned build when missing or stale.
+needs_fetch=false
+if [[ ! -f "$SRC" ]]; then
+  echo "Missing $SRC — fetching pinned $VERSION" >&2
+  needs_fetch=true
+else
+  src_version="$(probe_version "$SRC")"
+  if [[ -z "$src_version" ]]; then
+    echo "note: cannot execute $SRC on this host; skipping version check" >&2
+  elif [[ "$src_version" != *"$VERSION"* ]]; then
+    echo "Stale $SRC ($src_version) — fetching pinned $VERSION" >&2
+    needs_fetch=true
+  fi
+fi
+
+if $needs_fetch; then
+  bash "$ROOT/scripts/fetch-singbox.sh" "$ICE_PLATFORM_ALIAS"
+fi
+
 if [[ ! -f "$SRC" ]]; then
   echo "Missing $SRC — run: npm run fetch-singbox -- $ICE_PLATFORM_ALIAS (pin $VERSION)" >&2
   exit 1
@@ -26,10 +53,11 @@ mkdir -p "$DEST_DIR"
 cp "$SRC" "$DEST"
 chmod +x "$DEST" 2>/dev/null || true
 
-got="$("$DEST" version 2>/dev/null | head -n 1 || true)"
+got="$(probe_version "$DEST")"
 echo "Prepared resource $DEST for $ICE_PLATFORM_LABEL ($got)"
-if [[ "$got" != *"$VERSION"* ]]; then
-  echo "warning: binary version string does not contain pin $VERSION: $got" >&2
+if [[ -n "$got" && "$got" != *"$VERSION"* ]]; then
+  echo "error: staged core reports '$got', expected pin $VERSION" >&2
+  exit 1
 fi
 
 GEOIP_SRC="$ROOT/third_party/sing-geoip/rule-set"
