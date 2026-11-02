@@ -12,23 +12,24 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" != "api" || "${2:-}" != "graphql" ]]; then
+  echo "unexpected gh command: $*" >&2
+  exit 2
+fi
 case "${FAKE_STATE:-}" in
 draft)
-  printf 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"isDraft":true,"isPrerelease":false}\n'
+  printf '{"data":{"repository":{"release":{"databaseId":1,"isDraft":true,"isPrerelease":false}}}}\n'
   ;;
 published)
-  printf 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"isDraft":false,"isPrerelease":false}\n'
+  printf '{"data":{"repository":{"release":{"databaseId":1,"isDraft":false,"isPrerelease":false}}}}\n'
   ;;
 prerelease)
-  printf 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n{"isDraft":false,"isPrerelease":true}\n'
+  printf '{"data":{"repository":{"release":{"databaseId":1,"isDraft":false,"isPrerelease":true}}}}\n'
   ;;
 missing)
-  printf 'HTTP/2.0 404 Not Found\n\n{"message":"Not Found"}\n'
-  echo "gh: Not Found (HTTP 404)" >&2
-  exit 1
+  printf '{"data":{"repository":{"release":null}}}\n'
   ;;
 error)
-  printf 'HTTP/2.0 401 Unauthorized\n\n{"message":"Bad credentials"}\n'
   echo "gh: Bad credentials (HTTP 401)" >&2
   exit 1
   ;;

@@ -116,15 +116,24 @@ def fetch_retry(url: str) -> bytes:
     raise last
 
 
-def sha256_retry(url: str) -> str:
+def sha256_retry(url: str, expected: str) -> str:
+    # A freshly published asset can briefly return content that does not match
+    # the checksum (CDN lag). Retry both download errors and digest mismatches
+    # so the post-publish check does not fail on a transient response.
     last = None
+    digest = ""
     for _ in range(retry_attempts):
         try:
-            return sha256(url)
+            digest = sha256(url)
         except (OSError, http.client.HTTPException) as error:
             last = error
-            time.sleep(retry_delay)
-    raise last
+        else:
+            if digest == expected:
+                return digest
+        time.sleep(retry_delay)
+    if not digest:
+        raise last
+    return digest
 
 
 expected = {
@@ -181,7 +190,10 @@ assets = sorted(expected - {"SHA256SUMS"})
 results: dict[str, str] = {}
 errors: list[str] = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-    futures = {pool.submit(sha256_retry, f"{base}/{name}"): name for name in assets}
+    futures = {
+        pool.submit(sha256_retry, f"{base}/{name}", sums_map[name]): name
+        for name in assets
+    }
     for future in concurrent.futures.as_completed(futures):
         name = futures[future]
         try:

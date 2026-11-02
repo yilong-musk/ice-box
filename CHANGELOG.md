@@ -3,6 +3,16 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Release engineering: publishing and verifying a draft release works again.
+  GitHub's REST by-tag endpoint returns 404 for drafts, so release-state
+  detection and the publish step now resolve drafts through GraphQL /
+  `gh release view`. Asset verification retries a digest mismatch from a
+  freshly published CDN object instead of failing the release.
+
 ## [0.2.7] - 2026-11-02
 
 ### Changed
