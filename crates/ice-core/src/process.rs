@@ -13,6 +13,20 @@ use crate::error::CoreError;
 /// How long to wait after SIGTERM before SIGKILL.
 pub const STOP_GRACE_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Delays between spawn attempts while the executable is transiently locked:
+/// an in-place update or an antivirus scanner may still hold the freshly
+/// replaced binary when the app relaunches. Total added wait is ~7s; after
+/// that the original spawn error is surfaced.
+const SPAWN_LOCK_RETRY_DELAYS: [Duration; 7] = [
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+    Duration::from_millis(800),
+    Duration::from_millis(1600),
+    Duration::from_millis(2000),
+    Duration::from_millis(2000),
+];
+
 pub trait ManagedProcess: Send {
     fn id(&self) -> u32;
     fn request_terminate(&mut self) -> io::Result<()>;
@@ -74,25 +88,33 @@ pub trait ProcessSpawner: Send {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CommandSpawner;
 
-impl ProcessSpawner for CommandSpawner {
-    fn spawn(
-        &self,
-        binary: &Path,
-        config: &Path,
-        log_file: &Path,
-    ) -> Result<Box<dyn ManagedProcess>, CoreError> {
-        if !binary.is_file() {
-            return Err(CoreError::NotFound(format!(
-                "sing-box binary not found at {}",
-                binary.display()
-            )));
-        }
-        if !config.is_file() {
-            return Err(CoreError::SpawnFailed(format!(
-                "config not found at {}",
-                config.display()
-            )));
-        }
+/// Whether a failed spawn is worth retrying because the executable is still
+/// being released. Windows reports a sharing violation (32) or access denied
+/// (5) while an updater replaces the file or an antivirus scanner inspects it;
+/// Unix reports ETXTBSY while the file is open for writing.
+fn is_transient_spawn_lock(err: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        const ERROR_ACCESS_DENIED: i32 = 5;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        matches!(
+            err.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED) | Some(ERROR_SHARING_VIOLATION)
+        )
+    }
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::ETXTBSY)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = err;
+        false
+    }
+}
+
+impl CommandSpawner {
+    fn build_command(binary: &Path, config: &Path, log_file: &Path) -> Result<Command, CoreError> {
         if let Some(parent) = log_file.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 CoreError::SpawnFailed(format!("create log dir {}: {e}", parent.display()))
@@ -124,15 +146,61 @@ impl ProcessSpawner for CommandSpawner {
             // and closing the console must not take the core down with it.
             command.creation_flags(0x08000000);
         }
-        let child = command.spawn().map_err(|e| {
+        Ok(command)
+    }
+}
+
+impl ProcessSpawner for CommandSpawner {
+    fn spawn(
+        &self,
+        binary: &Path,
+        config: &Path,
+        log_file: &Path,
+    ) -> Result<Box<dyn ManagedProcess>, CoreError> {
+        if !binary.is_file() {
+            return Err(CoreError::NotFound(format!(
+                "sing-box binary not found at {}",
+                binary.display()
+            )));
+        }
+        if !config.is_file() {
+            return Err(CoreError::SpawnFailed(format!(
+                "config not found at {}",
+                config.display()
+            )));
+        }
+
+        let spawn_failed = |err: &io::Error| {
             CoreError::SpawnFailed(format!(
-                "spawn {} -c {}: {e}",
+                "spawn {} -c {}: {err}",
                 binary.display(),
                 config.display()
             ))
-        })?;
-
-        Ok(Box::new(RealChild { child }))
+        };
+        let mut attempt = 0usize;
+        loop {
+            // Rebuild the command per attempt: a failed spawn consumes the
+            // redirected stdio handles, so the retry must reopen the log.
+            let mut command = Self::build_command(binary, config, log_file)?;
+            match command.spawn() {
+                Ok(child) => return Ok(Box::new(RealChild { child })),
+                Err(err) => {
+                    let Some(delay) = SPAWN_LOCK_RETRY_DELAYS.get(attempt).copied() else {
+                        return Err(spawn_failed(&err));
+                    };
+                    if !is_transient_spawn_lock(&err) {
+                        return Err(spawn_failed(&err));
+                    }
+                    attempt += 1;
+                    tracing::warn!(
+                        attempt,
+                        error = %err,
+                        "sing-box binary is temporarily locked; retrying spawn"
+                    );
+                    std::thread::sleep(delay);
+                }
+            }
+        }
     }
 }
 
@@ -911,5 +979,62 @@ mod tests {
             pid_is_alive(4),
             "pid 4 (System) is ACCESS_DENIED and must count as alive"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_lock_classifier_matches_etxtbsy_only() {
+        assert!(is_transient_spawn_lock(&io::Error::from_raw_os_error(
+            libc::ETXTBSY
+        )));
+        assert!(!is_transient_spawn_lock(&io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spawn_lock_classifier_matches_windows_sharing_errors() {
+        assert!(is_transient_spawn_lock(&io::Error::from_raw_os_error(32)));
+        assert!(is_transient_spawn_lock(&io::Error::from_raw_os_error(5)));
+        assert!(!is_transient_spawn_lock(&io::Error::from_raw_os_error(2)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_spawner_retries_while_the_binary_is_open_for_writing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ice-box-spawn-lock-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("fake-core.sh");
+        std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(&config, b"{}").unwrap();
+        let log_file = dir.join("core.log");
+
+        // ETXTBSY: the kernel refuses to exec a file that is open for writing.
+        let held = OpenOptions::new().write(true).open(&binary).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(450));
+            drop(held);
+        });
+
+        let started = Instant::now();
+        let mut child = CommandSpawner
+            .spawn(&binary, &config, &log_file)
+            .expect("spawn retries until the writer releases the binary");
+        release.join().unwrap();
+        assert!(
+            started.elapsed() >= SPAWN_LOCK_RETRY_DELAYS[0],
+            "the first attempt must fail with ETXTBSY and wait before retrying"
+        );
+        let _ = child.force_kill();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
