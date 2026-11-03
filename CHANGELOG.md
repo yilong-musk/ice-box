@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Tab switches are faster, most of all between Home and Nodes. A switch now
+  renders only the page that comes in; the page that leaves catches up after
+  the frame is painted. The traffic chart keeps its size while Home is hidden
+  instead of rebuilding on every return, and unchanged node rows and Home
+  values no longer re-render on a refresh. Sidebar items switch their
+  highlight at once instead of fading it in.
+- Leaving Nodes keeps the node list, the strategy-group member lists, the
+  expanded groups, and the delay results; only the rendered rows unmount.
+  Dropping the member lists on leave did not free them in practice, and every
+  return waited for a refetch before groups could expand again.
+
 ## [0.2.8] - 2026-11-03
 
 ### Changed

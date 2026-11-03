@@ -17,10 +17,9 @@ import {
   nodesSnapshotRevision,
   orderNodesByFavorite,
   readNodesSnapshot,
-  releaseNodeMemberLists,
+  reuseUnchangedNodes,
   resolveSelectedTag,
   subscribeNodesSnapshot,
-  withoutGroupMembers,
   writeNodesSnapshot,
 } from "./nodes";
 
@@ -346,33 +345,46 @@ describe("node favorites", () => {
   });
 });
 
-describe("releaseNodeMemberLists", () => {
-  it("drops member lists without looking like a node switch", () => {
-    clearNodesSnapshot();
-    writeNodesSnapshot({
-      nodes: [
-        {
-          tag: "组",
-          outbound_type: "selector",
-          group_now: "a",
-          group_all: ["a", "b"],
-        },
-        { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
-      ],
-      selectedTag: "a",
-      running: true,
-    });
-    const revision = nodesSnapshotRevision();
-    releaseNodeMemberLists();
-    expect(nodesSnapshotRevision()).toBe(revision);
-    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
-    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("a");
-    expect(readNodesSnapshot()?.selectedTag).toBe("a");
-    releaseNodeMemberLists();
-    expect(nodesSnapshotRevision()).toBe(revision);
-    expect(withoutGroupMembers(readNodesSnapshot()?.nodes ?? [])).toBe(
-      readNodesSnapshot()?.nodes,
-    );
-    clearNodesSnapshot();
+describe("reuseUnchangedNodes", () => {
+  const leaf = (tag: string) => ({
+    tag,
+    outbound_type: "trojan",
+    group_now: null,
+    group_all: null,
+  });
+
+  it("returns the previous list when every node is unchanged", () => {
+    const prev = [leaf("a"), leaf("b")];
+    expect(reuseUnchangedNodes(prev, [leaf("a"), leaf("b")])).toBe(prev);
+  });
+
+  it("keeps unchanged node objects and takes changed ones", () => {
+    const group = {
+      tag: "g",
+      outbound_type: "selector",
+      group_now: "a",
+      group_all: null,
+    };
+    const prev = [group, leaf("a"), leaf("b")];
+    const nextGroup = { ...group, group_all: ["a", "b"] };
+    const merged = reuseUnchangedNodes(prev, [nextGroup, leaf("a"), leaf("b")]);
+    expect(merged).not.toBe(prev);
+    expect(merged[0]).toBe(nextGroup);
+    expect(merged[1]).toBe(prev[1]);
+    expect(merged[2]).toBe(prev[2]);
+  });
+
+  it("follows the new order and drops removed nodes", () => {
+    const prev = [leaf("a"), leaf("b"), leaf("c")];
+    const merged = reuseUnchangedNodes(prev, [leaf("c"), leaf("a")]);
+    expect(merged.map((node) => node.tag)).toEqual(["c", "a"]);
+    expect(merged[0]).toBe(prev[2]);
+    expect(merged[1]).toBe(prev[0]);
+  });
+
+  it("takes a favorite change", () => {
+    const prev = [leaf("a")];
+    const next = [{ ...leaf("a"), favorite: true, favorite_rank: 0 }];
+    expect(reuseUnchangedNodes(prev, next)[0]).toBe(next[0]);
   });
 });

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import {
+  memo,
+  useCallback,
+  useDeferredValue,
   useEffect,
   useRef,
   useState,
@@ -43,6 +46,7 @@ import {
 } from "@/components/ui/sidebar";
 import { ErrorAlert } from "@/components/StatusAlert";
 import { WindowControls } from "@/components/WindowControls";
+import { PaneVisibleContext } from "@/components/TitlebarActions";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
 import { isDesktopShell, isPhoneShell } from "@platform/shell";
@@ -71,6 +75,18 @@ type Tab =
 
 const SIDEBAR_WIDTH = "11rem";
 
+// Every visited page stays mounted. Memoized pages with stable props skip the
+// shell re-render on a tab switch, so only the two pages whose `active` flips
+// render again. Each page subscribes to language changes on its own.
+const HomePage = memo(Home);
+const NodesPage = memo(Nodes);
+const AppsPage = memo(Apps);
+const SubscriptionsPage = memo(Subscriptions);
+const RulesPage = memo(Rules);
+const LogsPage = memo(Logs);
+const SettingsPage = memo(Settings);
+const McpPage = memo(Mcp);
+
 const SIDEBAR_PROVIDER_STYLE = {
   "--sidebar-width": SIDEBAR_WIDTH,
 } as CSSProperties;
@@ -90,7 +106,9 @@ function TabPane({
       aria-hidden={!active}
       data-active={active ? "true" : "false"}
     >
-      {children}
+      <PaneVisibleContext.Provider value={active}>
+        {children}
+      </PaneVisibleContext.Provider>
     </div>
   );
 }
@@ -291,7 +309,7 @@ function AppShell() {
     });
   }, [languageReady, resolved]);
 
-  function selectTab(id: Tab) {
+  const selectTab = useCallback((id: Tab) => {
     setTab(id);
     setVisited((prev) => {
       if (prev.has(id)) return prev;
@@ -299,7 +317,15 @@ function AppShell() {
       next.add(id);
       return next;
     });
-  }
+  }, []);
+
+  // A tab switch renders the page that comes in on the click, and the page
+  // that leaves catches up in a background render after the frame is painted:
+  // its pane is hidden at once, only its `active` prop (polling, timers) turns
+  // false a moment later. Without this the leaving page re-rendered in the
+  // same frame, so Home <-> Nodes paid for both pages on every switch.
+  const leavingTab = useDeferredValue(tab);
+  const pageActive = (id: Tab) => tab === id || leavingTab === id;
 
   const phone = isPhoneShell();
   const desktop = isDesktopShell();
@@ -317,42 +343,42 @@ function AppShell() {
     <>
       {visited.has("home") && (
         <TabPane active={tab === "home"}>
-          <Home
+          <HomePage
             onNavigate={selectTab}
-            active={tab === "home"}
+            active={pageActive("home")}
             onStatus={setGlobalStatus}
           />
         </TabPane>
       )}
       {!phone && visited.has("nodes") && (
         <TabPane active={tab === "nodes"}>
-          <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+          <NodesPage onNavigate={selectTab} active={pageActive("nodes")} />
         </TabPane>
       )}
       {phone && visited.has("apps") && (
         <TabPane active={tab === "apps"}>
-          <Apps active={tab === "apps"} />
+          <AppsPage active={pageActive("apps")} />
         </TabPane>
       )}
       {visited.has("subs") && (
         <TabPane active={tab === "subs"}>
-          <Subscriptions active={tab === "subs"} />
+          <SubscriptionsPage active={pageActive("subs")} />
         </TabPane>
       )}
       {visited.has("rules") && (
         <TabPane active={tab === "rules"}>
-          <Rules onNavigate={selectTab} active={tab === "rules"} />
+          <RulesPage onNavigate={selectTab} active={pageActive("rules")} />
         </TabPane>
       )}
       {!phone && visited.has("logs") && (
         <TabPane active={tab === "logs"}>
-          <Logs active={tab === "logs"} />
+          <LogsPage active={pageActive("logs")} />
         </TabPane>
       )}
       {visited.has("settings") && (
         <TabPane active={tab === "settings"}>
-          <Settings
-            active={tab === "settings"}
+          <SettingsPage
+            active={pageActive("settings")}
             availableUpdate={availableUpdate}
             onAvailableUpdate={setAvailableUpdate}
             focusUpdateNonce={focusUpdateNonce}
@@ -361,7 +387,7 @@ function AppShell() {
       )}
       {desktop && visited.has("mcp") && (
         <TabPane active={tab === "mcp"}>
-          <Mcp active={tab === "mcp"} />
+          <McpPage active={pageActive("mcp")} />
         </TabPane>
       )}
     </>

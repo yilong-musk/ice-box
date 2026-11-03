@@ -276,7 +276,7 @@ describe("Nodes", () => {
     });
   });
 
-  it("drops group member lists when the pane is hidden", async () => {
+  it("keeps member lists and expanded groups while the pane is hidden", async () => {
     const members = Array.from({ length: 40 }, (_, i) => `leaf-${i}`);
     listNodes.mockResolvedValue([
       {
@@ -294,10 +294,22 @@ describe("Nodes", () => {
     });
     expect(readNodesSnapshot()?.nodes[0]?.group_all).toHaveLength(40);
 
+    await expandGroup(view, "选择组");
+
     rerender(<Nodes active={false} />);
-    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
-    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("leaf-0");
+    // The rows unmount, the data stays.
     expect(view.queryByText("选择组")).toBeNull();
+    expect(readNodesSnapshot()?.nodes[0]?.group_all).toHaveLength(40);
+
+    // Coming back renders the expanded group before any refetch lands.
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    rerender(<Nodes active />);
+    expect(
+      view.getByRole("button", { name: "选择组", expanded: true }),
+    ).toBeInTheDocument();
+    expect(
+      view.getByLabelText(t("nodes.membersAria", { group: "选择组" })),
+    ).toBeInTheDocument();
   });
 
   it("renders later rows when scrolling a freshly loaded long list", async () => {

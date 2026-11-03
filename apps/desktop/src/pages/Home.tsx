@@ -117,6 +117,14 @@ function formatSelectedOutbound(outbound: {
   });
 }
 
+/** Keep the current object when a re-read returns the same content, so a
+ * poll or tab reactivation does not re-render Home for nothing. Settings and
+ * MCP status are small plain JSON. */
+function keepIfSame<T>(prev: T | null, next: T): T {
+  if (prev != null && JSON.stringify(prev) === JSON.stringify(next)) return prev;
+  return next;
+}
+
 /** Elapsed time since `since` (epoch ms), re-rendered once a second on its own
  * timer so the parent page does not re-render every tick. */
 function RunUptime({ since }: { since: number }) {
@@ -197,7 +205,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           mcpPromise,
         ]);
         if (gen !== pollGenRef.current || !activeRef.current) return;
-        if (nextMcpStatus) setMcpStatus(nextMcpStatus);
+        if (nextMcpStatus) setMcpStatus((prev) => keepIfSame(prev, nextMcpStatus));
 
         // A node switch may land while this fetch is in flight. Keep the
         // snapshot selection instead of regressing to stale settings.
@@ -208,7 +216,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               ...nextSettings,
               selected_tag: snap.selectedTag,
             };
-            setSettings(settingsRef.current);
+            const merged = settingsRef.current;
+            setSettings((prev) => keepIfSame(prev, merged));
             setProxyMode(nextSettings.proxy_mode);
           }
           if (s) noteStatus(s);
@@ -223,7 +232,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         if (!nextSettings && !settingsRef.current) return;
         if (nextSettings) {
           settingsRef.current = nextSettings;
-          setSettings(nextSettings);
+          setSettings((prev) => keepIfSame(prev, nextSettings));
           setProxyMode(nextSettings.proxy_mode);
         }
         if (!tunSaveRef.current) {

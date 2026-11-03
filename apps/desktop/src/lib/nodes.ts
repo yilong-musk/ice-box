@@ -69,61 +69,61 @@ export function clearNodesSnapshot(): void {
   notifySnapshot();
 }
 
-/** Drop strategy-group member lists. Tags and the live exit stay. */
-export function withoutGroupMembers(nodes: NodeInfo[]): NodeInfo[] {
-  let changed = false;
-  const next = nodes.map((node) => {
-    if (node.group_all == null) return node;
-    changed = true;
-    return { ...node, group_all: null };
-  });
-  return changed ? next : nodes;
-}
-
-/**
- * Free member lists kept for the Nodes page. Does not bump the snapshot
- * revision: Home treats a revision change as a node switch.
- */
-export function releaseNodeMemberLists(): void {
-  const snap = nodesSnapshot;
-  if (snap == null) return;
-  const nodes = withoutGroupMembers(snap.nodes);
-  if (nodes === snap.nodes) return;
-  nodesSnapshot = { ...snap, nodes };
-  notifySnapshot();
+function nodeEqual(left: NodeInfo, right: NodeInfo): boolean {
+  if (left === right) return true;
+  if (
+    left.tag !== right.tag ||
+    left.outbound_type !== right.outbound_type ||
+    left.group_now !== right.group_now
+  ) {
+    return false;
+  }
+  if (isFavoriteNode(left) !== isFavoriteNode(right)) return false;
+  if (
+    isFavoriteNode(left) &&
+    (left.favorite_rank ?? null) !== (right.favorite_rank ?? null)
+  ) {
+    return false;
+  }
+  const leftMembers = left.group_all;
+  const rightMembers = right.group_all;
+  if (leftMembers === rightMembers) return true;
+  if (!leftMembers || !rightMembers || leftMembers.length !== rightMembers.length) {
+    return false;
+  }
+  for (let j = 0; j < leftMembers.length; j++) {
+    if (leftMembers[j] !== rightMembers[j]) return false;
+  }
+  return true;
 }
 
 export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    const left = a[i];
-    const right = b[i];
-    if (
-      left.tag !== right.tag ||
-      left.outbound_type !== right.outbound_type ||
-      left.group_now !== right.group_now
-    ) {
-      return false;
-    }
-    if (isFavoriteNode(left) !== isFavoriteNode(right)) return false;
-    if (
-      isFavoriteNode(left) &&
-      (left.favorite_rank ?? null) !== (right.favorite_rank ?? null)
-    ) {
-      return false;
-    }
-    const leftMembers = left.group_all;
-    const rightMembers = right.group_all;
-    if (leftMembers === rightMembers) continue;
-    if (!leftMembers || !rightMembers || leftMembers.length !== rightMembers.length) {
-      return false;
-    }
-    for (let j = 0; j < leftMembers.length; j++) {
-      if (leftMembers[j] !== rightMembers[j]) return false;
-    }
+    if (!nodeEqual(a[i], b[i])) return false;
   }
   return true;
+}
+
+/**
+ * Merge a fresh node list into the previous one, keeping the previous object
+ * for every unchanged node (matched by tag). Memoized rows then skip the
+ * re-render a poll or tab reactivation would otherwise cause. Returns `prev`
+ * itself when nothing changed.
+ */
+export function reuseUnchangedNodes(prev: NodeInfo[], next: NodeInfo[]): NodeInfo[] {
+  if (prev === next) return prev;
+  const byTag = new Map<string, NodeInfo>();
+  for (const node of prev) byTag.set(node.tag, node);
+  let same = prev.length === next.length;
+  const merged = next.map((node, index) => {
+    const old = byTag.get(node.tag);
+    const kept = old !== undefined && nodeEqual(old, node) ? old : node;
+    if (same && kept !== prev[index]) same = false;
+    return kept;
+  });
+  return same ? prev : merged;
 }
 
 /** Favorites are optional: a missing flag with a rank still counts. */

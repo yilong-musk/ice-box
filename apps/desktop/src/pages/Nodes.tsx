@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Gauge, Star } from "lucide-react";
 import {
   api,
@@ -8,7 +8,7 @@ import {
   type NodeInfo,
 } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
-import { TitlebarActions } from "../components/TitlebarActions";
+import { PaneVisibleContext, TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -42,9 +42,8 @@ import {
   nodesEqual,
   orderNodesByFavorite,
   readNodesSnapshot,
-  releaseNodeMemberLists,
   resolveSelectedTag,
-  withoutGroupMembers,
+  reuseUnchangedNodes,
   writeNodesSnapshot,
   type DelayCell,
 } from "../lib/nodes";
@@ -491,7 +490,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
-  const listVisible = active && (runtime?.visible ?? true);
+  // The pane hides on the click itself, while `active` may turn false a frame
+  // later. Unmount the rows with the pane: a scroll viewport left mounted
+  // under `display: none` reads 0 for its size and offset and would overwrite
+  // the saved position.
+  const paneVisible = useContext(PaneVisibleContext);
+  const listVisible = active && paneVisible && (runtime?.visible ?? true);
   const orderedNodes = useMemo(() => orderNodesByFavorite(nodes), [nodes]);
   const layout = useMemo(
     () => (listVisible ? nodeLayout(orderedNodes, expandedGroups) : EMPTY_LAYOUT),
@@ -545,7 +549,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
       const runningNow = status?.core.status === "running";
-      setNodes((prev) => (nodesEqual(prev, n) ? prev : n));
+      setNodes((prev) => reuseUnchangedNodes(prev, n));
       setSelectedTag((prev) => (prev === selected ? prev : selected));
       setRunning((prev) => (prev === runningNow ? prev : runningNow));
       writeNodesSnapshot({
@@ -586,13 +590,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     };
   }, [refresh]);
 
-  useEffect(() => {
-    if (active) return;
-    setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
-    setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
-    setNodes((prev) => withoutGroupMembers(prev));
-    releaseNodeMemberLists();
-  }, [active]);
+  // Leaving the tab keeps the list, its member lists, the expanded groups and
+  // the delay results; only the rendered rows unmount (`listVisible`). Dropping
+  // the member lists here did not free them: closures React keeps from earlier
+  // renders still held the full list, while every return paid for a refetch
+  // before the groups could expand again.
 
   useEffect(() => {
     activeRef.current = active;
