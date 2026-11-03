@@ -629,8 +629,30 @@ export const api = {
     saveTextFile(singboxExportFilename(name || sub.name), demoSingboxConfig());
     return "saved";
   },
-  async getRuleOverview(): Promise<RuleOverview> { await delay(); return { total: ruleRows.length, disabled: ruleRows.filter((row) => row.disabled).length, custom: 0, rule_sets: 2, types: [...new Set(ruleRows.map((row) => row.rule_type))].map((rule_type) => ({ rule_type, count: ruleRows.filter((row) => row.rule_type === rule_type).length })) }; },
-  async listRules(req: ListRulesRequest): Promise<ListRulesResponse> { await delay(); const keyword = req.keyword?.toLowerCase() ?? ""; const filtered = ruleRows.filter((row) => (!req.type || row.rule_type === req.type) && JSON.stringify(row.rule).toLowerCase().includes(keyword)); return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) }; },
+  async getRuleOverview(): Promise<RuleOverview> {
+    await delay();
+    return {
+      total: ruleRows.length,
+      disabled: ruleRows.filter((row) => row.disabled).length,
+      custom: ruleRows.filter((row) => row.custom).length,
+      // The backend counts route.rule_set definitions; the demo defines one
+      // per distinct set its rules reference.
+      rule_sets: new Set(ruleRows.flatMap((row) => (row.rule_type === "rule_set" ? [String(row.rule.rule_set)] : []))).size,
+      types: [...new Set(ruleRows.map((row) => row.rule_type))].map((rule_type) => ({ rule_type, count: ruleRows.filter((row) => row.rule_type === rule_type).length })),
+    };
+  },
+  async listRules(req: ListRulesRequest): Promise<ListRulesResponse> {
+    await delay();
+    const keyword = req.keyword?.toLowerCase() ?? "";
+    // Same filters as the backend: type, disabled ("all" | "disabled" | "enabled"), custom, keyword.
+    const filtered = ruleRows.filter((row) =>
+      (!req.type || row.rule_type === req.type)
+      && (req.disabled !== "disabled" || row.disabled)
+      && (req.disabled !== "enabled" || !row.disabled)
+      && (req.custom === undefined || req.custom === null || row.custom === req.custom)
+      && JSON.stringify(row.rule).toLowerCase().includes(keyword));
+    return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) };
+  },
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async updateCustomRule(fingerprint: string): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint }; },

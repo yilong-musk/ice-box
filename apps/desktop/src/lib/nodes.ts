@@ -234,8 +234,9 @@ export function applyGroupNowToNodes(
   return changed ? next : nodes;
 }
 
+/** Delay cell text; an untested node (`null`) shows nothing. */
 export function formatDelay(v: DelayCell): string {
-  if (v === null) return t("common.dash");
+  if (v === null) return "";
   if (v === "testing") return "…";
   if (v === "error") return t("delay.failed");
   return `${v} ms`;

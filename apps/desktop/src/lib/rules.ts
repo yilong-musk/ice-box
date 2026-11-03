@@ -68,6 +68,16 @@ export function ruleTypeLabel(ruleType: string): string {
 
 /** Human-readable match payload of a rule, e.g. `youtube.com, google.com`. */
 export function ruleMatchSummary(row: RuleRow): string {
+  const summary = baseMatchSummary(row);
+  // `invert` flips what the rule matches; say so, or the summary reads as
+  // the opposite of the rule's behavior.
+  if (row.rule.invert === true && summary) {
+    return t("rules.invertedSummary", { summary });
+  }
+  return summary;
+}
+
+function baseMatchSummary(row: RuleRow): string {
   for (const key of MATCH_KEY_ORDER) {
     const v = row.rule[key];
     if (v === undefined) continue;

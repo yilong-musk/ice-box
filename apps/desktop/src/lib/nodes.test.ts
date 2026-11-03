@@ -26,7 +26,7 @@ import {
 
 describe("formatDelay", () => {
   it("renders known states", () => {
-    expect(formatDelay(null)).toBe(t("common.dash"));
+    expect(formatDelay(null)).toBe("");
     expect(formatDelay("testing")).toBe("…");
     expect(formatDelay("error")).toBe(t("delay.failed"));
     expect(formatDelay(42)).toBe("42 ms");
