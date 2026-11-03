@@ -16,6 +16,11 @@ const setNodeFavorite = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
 const listenStateChanged = vi.fn();
+const phoneShell = { value: false };
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
@@ -40,6 +45,7 @@ describe("Nodes", () => {
     actions.dataset.titlebarActions = "";
     document.body.appendChild(actions);
     vi.clearAllMocks();
+    phoneShell.value = false;
     stateChangedHandler = null;
     listenStateChanged.mockImplementation((handler: () => void) => {
       stateChangedHandler = handler;
@@ -122,14 +128,28 @@ describe("Nodes", () => {
     expect(view.queryByTestId("delay-testing")).not.toBeInTheDocument();
   });
 
-  it("drops the per-node test buttons on the phone but keeps the batch test", async () => {
+  it("drops the per-node test on the phone and shortens the batch test", async () => {
+    phoneShell.value = true;
     const { container } = render(<Nodes embedded />);
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
 
     expect(view.queryAllByRole("button", { name: t("nodes.test") })).toHaveLength(0);
     expect(view.getAllByRole("button", { name: t("nodes.select") }).length).toBeGreaterThan(0);
-    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
+    const batch = view.getByRole("button", { name: t("nodes.batchTest") });
+    // Icon plus the short label, so it fits beside the card title on a
+    // narrow screen; the full name stays as its accessible name.
+    expect(batch.textContent).toBe(t("nodes.test"));
+    expect(batch.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps the full row and text batch test when embedded on desktop", async () => {
+    const { container } = render(<Nodes embedded />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.getAllByRole("button", { name: t("nodes.test") })[0]).toHaveTextContent(t("nodes.test"));
+    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toHaveTextContent(t("nodes.batchTest"));
   });
 
   it("does not warn while the service status is still loading", async () => {
@@ -737,6 +757,7 @@ describe("Nodes", () => {
     ["phone", true],
   ])("batch delay test on %s", (_platform, embedded) => {
     beforeEach(() => {
+      phoneShell.value = embedded;
       listNodes.mockResolvedValue([
         { tag: "node-a", outbound_type: "vmess", group_now: null, group_all: null },
         {

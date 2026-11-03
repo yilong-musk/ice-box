@@ -319,6 +319,18 @@ export function Rules({ onNavigate, active = true }: Props) {
   const page = Math.floor(offset / limit) + 1;
   const showList = overview.total > 0 || overview.custom > 0 || rows.length > 0;
 
+  const addCustomButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="shrink-0"
+      onClick={() => setCustomForm({ mode: "add" })}
+    >
+      {t("rules.addCustom")}
+    </Button>
+  );
+
   return (
     <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="rules-panel">
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
@@ -330,10 +342,19 @@ export function Rules({ onNavigate, active = true }: Props) {
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          <CardAction className="col-span-2 col-start-1 flex w-full flex-wrap items-center justify-end gap-2">
+          {/* On the phone the toolbar is only search + refresh; the add
+              button joins the end of the filter chips below, so it fills the
+              gap after the last chip instead of taking a row of its own. */}
+          <CardAction
+            className={cn(
+              "col-span-2 col-start-1 flex w-full items-center justify-end gap-2",
+              phone ? "flex-nowrap" : "flex-wrap",
+            )}
+            data-testid="rules-toolbar"
+          >
             <Input
               type="search"
-              className="min-w-48 flex-1"
+              className={phone ? "min-w-0 flex-1" : "min-w-48 flex-1"}
               placeholder={t("rules.searchPlaceholder")}
               aria-label={t("rules.searchAria")}
               value={filters.keyword}
@@ -343,23 +364,20 @@ export function Rules({ onNavigate, active = true }: Props) {
               type="button"
               size="sm"
               variant="outline"
+              className={phone ? "shrink-0" : undefined}
               onClick={() => void load(true)}
               disabled={busy}
             >
               {t("common.refresh")}
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setCustomForm({ mode: "add" })}
-            >
-              {t("rules.addCustom")}
-            </Button>
+            {phone ? null : addCustomButton}
           </CardAction>
         </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-          <div className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2">
+          <div
+            className="flex h-auto w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
+            data-testid="rules-filters"
+          >
             <ToggleGroup
               type="single"
               variant="outline"
@@ -371,7 +389,13 @@ export function Rules({ onNavigate, active = true }: Props) {
                   type: !value || value === "all" ? "" : value,
                 });
               }}
-              className="h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
+              // On the phone the group box is dissolved (display: contents)
+              // so its chips and the add button wrap as one flow.
+              className={
+                phone
+                  ? "contents"
+                  : "h-auto min-w-0 shrink-0 flex-wrap items-start justify-start"
+              }
               aria-label={t("rules.filtersAria")}
             >
               {overview.types.length > 0 ? (
@@ -405,6 +429,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                 {t("rules.disabledCount", { count: overview.disabled })}
               </Toggle>
             </ToggleGroup>
+            {phone ? addCustomButton : null}
           </div>
 
           {!showList ? (
@@ -427,7 +452,8 @@ export function Rules({ onNavigate, active = true }: Props) {
               <ItemGroup aria-label={t("rules.listAria")} className="gap-0 pb-14">
                 {rows.map((row, index) => {
                   const summary = ruleMatchSummary(row);
-                  const outboundLabel = ruleOutbound(row) || "—";
+                  const outbound = ruleOutbound(row);
+                  const outboundLabel = outbound || t("common.dash");
                   return (
                     <div key={row.fingerprint}>
                       {index > 0 ? <ItemSeparator className="my-0" /> : null}
@@ -457,30 +483,40 @@ export function Rules({ onNavigate, active = true }: Props) {
                               </Badge>
                             )}
                           </ItemTitle>
-                          {phone ? (
-                            // The phone row is too narrow for an outbound
-                            // badge beside the actions: a long node name would
-                            // squeeze the match itself to a few letters. Show
-                            // it under the match instead, truncated on its own.
-                            <ItemDescription
-                              className="flex min-w-0 items-center gap-1"
-                              data-testid="rule-outbound"
-                            >
+                          <ItemDescription data-testid="rule-description">
+                            {/*
+                              ItemDescription is a line-clamped -webkit-box,
+                              so the flex row lives in an inner span rather
+                              than fighting it for `display`.
+                            */}
+                            <span className="flex min-w-0 items-center gap-1">
                               <span className="shrink-0">
                                 {ruleTypeLabel(row.rule_type)}
                               </span>
-                              <span className="shrink-0" aria-hidden="true">
-                                →
-                              </span>
-                              <span className="truncate" title={outboundLabel}>
-                                {outboundLabel}
-                              </span>
-                            </ItemDescription>
-                          ) : (
-                            <ItemDescription>
-                              {ruleTypeLabel(row.rule_type)}
-                            </ItemDescription>
-                          )}
+                              {/*
+                                The phone row is too narrow for an outbound
+                                badge beside the actions: a long node name would
+                                squeeze the match itself to a few letters. Show
+                                it under the match instead, truncated on its
+                                own. Action-only rules have no outbound, so
+                                there is no arrow to draw.
+                              */}
+                              {phone && outbound ? (
+                                <>
+                                  <span className="shrink-0" aria-hidden="true">
+                                    →
+                                  </span>
+                                  <span
+                                    className="truncate"
+                                    title={outbound}
+                                    data-testid="rule-outbound"
+                                  >
+                                    {outbound}
+                                  </span>
+                                </>
+                              ) : null}
+                            </span>
+                          </ItemDescription>
                         </ItemContent>
                         <ItemActions className="flex-wrap">
                           {phone ? null : (
