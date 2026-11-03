@@ -27,6 +27,7 @@ pub use health::{
     tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,
     FailingHealthProbe, HealthCancel, HealthEndpoints, HealthProbe, ImmediateHealthProbe,
     SequenceHealthProbe, TcpHealthProbe, HEALTHCHECK_POLL_INTERVAL, HEALTHCHECK_TIMEOUT,
+    SPAWN_HEALTHCHECK_TIMEOUT,
 };
 pub use log_rotate::{
     cap_log_file, log_file_oversized, trim_log_file, truncate_log_file, APP_LOG_KEEP,
@@ -169,10 +170,12 @@ pub struct CoreController<S: ProcessSpawner = CommandSpawner, H: HealthProbe = T
     health: H,
     reloader: Box<dyn ConfigReloader>,
     health_timeout: Duration,
+    /// Healthcheck ceiling after spawning a fresh process (start / restart).
+    spawn_health_timeout: Duration,
     stop_grace: Duration,
     /// Set when reload + restart both failed; shell must restore system proxy.
     needs_proxy_restore: bool,
-    /// When set, healthchecks abort early so quit is not blocked by the 5s probe.
+    /// When set, healthchecks abort early so quit is not blocked by the healthcheck probe.
     health_cancel: Option<Arc<AtomicBool>>,
 }
 
@@ -191,6 +194,7 @@ impl CoreController<CommandSpawner, TcpHealthProbe> {
             HEALTHCHECK_TIMEOUT,
             STOP_GRACE_TIMEOUT,
         )
+        .with_spawn_health_timeout(SPAWN_HEALTHCHECK_TIMEOUT)
     }
 }
 
@@ -209,10 +213,18 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             health,
             reloader,
             health_timeout,
+            spawn_health_timeout: health_timeout,
             stop_grace,
             needs_proxy_restore: false,
             health_cancel: None,
         }
+    }
+
+    /// Override the healthcheck ceiling used after spawning a fresh process.
+    /// Defaults to the `health_timeout` passed to [`Self::with_deps`].
+    pub fn with_spawn_health_timeout(mut self, timeout: Duration) -> Self {
+        self.spawn_health_timeout = timeout;
+        self
     }
 
     /// Install a shared cancel flag checked during healthchecks (desktop quit path).
@@ -537,11 +549,11 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
             let probe = self.health.clone();
             let ep = endpoints.clone();
-            let timeout = self.health_timeout;
+            let timeout = self.spawn_health_timeout;
             let handle = std::thread::spawn(move || probe.wait_healthy(&ep, timeout));
             loop {
                 if let Some(err) = self.early_exit_health_error(paths) {
-                    // Leave the probe thread to finish on its own (at most health_timeout).
+                    // Leave the probe thread to finish on its own (at most spawn_health_timeout).
                     return Err(err);
                 }
                 if handle.is_finished() {
@@ -560,7 +572,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             }
         }
 
-        let deadline = Instant::now() + self.health_timeout;
+        let deadline = Instant::now() + self.spawn_health_timeout;
         let mut last_err = String::from("not attempted");
 
         while Instant::now() < deadline {
@@ -592,7 +604,7 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             paths,
             format!(
                 "timeout after {}ms waiting for {}:{}: {last_err}",
-                self.health_timeout.as_millis(),
+                self.spawn_health_timeout.as_millis(),
                 endpoints.host,
                 endpoints.port
             ),
@@ -1656,6 +1668,56 @@ mod tests {
             "pid file must be cleared"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Succeeds immediately and records the timeout each probe was given.
+    #[derive(Clone, Default)]
+    struct TimeoutRecordingProbe {
+        timeouts: Arc<std::sync::Mutex<Vec<Duration>>>,
+    }
+
+    impl HealthProbe for TimeoutRecordingProbe {
+        fn wait_ready(&self, _: &HealthEndpoints, timeout: Duration) -> Result<(), CoreError> {
+            self.timeouts.lock().unwrap().push(timeout);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn spawn_probe_uses_spawn_timeout_and_hot_reload_keeps_health_timeout() {
+        let dir = temp_root("hc-spawn-timeout");
+        let bin = marker_binary(&dir);
+        let paths = paths_in(&dir, bin);
+        fs::write(&paths.config, b"{}").unwrap();
+
+        let probe = TimeoutRecordingProbe::default();
+        let timeouts = probe.timeouts.clone();
+        let mut core = mock_ctrl(
+            MockSpawner::with_start_pid(4242),
+            probe,
+            MockReloader::new(MockReloadMode::Ok),
+        )
+        .with_spawn_health_timeout(Duration::from_millis(900));
+
+        core.start(&paths).expect("start");
+        assert_eq!(
+            core.reload(&paths).expect("reload"),
+            ReloadOutcome::HotReloaded
+        );
+        assert_eq!(
+            *timeouts.lock().unwrap(),
+            vec![Duration::from_millis(900), Duration::from_millis(50)],
+            "fresh spawn must use the spawn ceiling; hot reload keeps health_timeout"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_controller_uses_longer_spawn_timeout() {
+        let core = CoreController::new();
+        assert_eq!(core.health_timeout, HEALTHCHECK_TIMEOUT);
+        assert_eq!(core.spawn_health_timeout, SPAWN_HEALTHCHECK_TIMEOUT);
+        assert!(SPAWN_HEALTHCHECK_TIMEOUT > HEALTHCHECK_TIMEOUT);
     }
 
     #[test]

@@ -10,8 +10,18 @@ use std::time::{Duration, Instant};
 use crate::error::CoreError;
 use ice_types::is_loopback_host;
 
-/// Default healthcheck timeout: **5000 ms**.
+/// Default healthcheck timeout: **5000 ms**. Used for probes against an
+/// already running process (e.g. after a hot-reload signal).
 pub const HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// Healthcheck timeout after spawning a fresh sing-box process: **20000 ms**.
+///
+/// A cold first launch right after boot can stall process creation for
+/// several seconds while endpoint security products are still initializing
+/// and scan the new executable. Config and bind errors are still reported
+/// immediately through early-exit detection, so the longer ceiling only
+/// applies to a process that is alive but not yet listening.
+pub const SPAWN_HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(20_000);
 
 /// Poll interval while waiting for the port to accept connections.
 pub const HEALTHCHECK_POLL_INTERVAL: Duration = Duration::from_millis(100);
