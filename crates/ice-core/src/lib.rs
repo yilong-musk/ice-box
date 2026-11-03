@@ -170,7 +170,8 @@ pub struct CoreController<S: ProcessSpawner = CommandSpawner, H: HealthProbe = T
     health: H,
     reloader: Box<dyn ConfigReloader>,
     health_timeout: Duration,
-    /// Healthcheck ceiling after spawning a fresh process (start / restart).
+    /// Healthcheck ceiling for a freshly started process: start, restart, and
+    /// `adopt_external` (the elevated TUN core). Hot reload uses `health_timeout`.
     spawn_health_timeout: Duration,
     stop_grace: Duration,
     /// Set when reload + restart both failed; shell must restore system proxy.
@@ -550,10 +551,17 @@ impl<S: ProcessSpawner, H: HealthProbe + 'static> CoreController<S, H> {
             let probe = self.health.clone();
             let ep = endpoints.clone();
             let timeout = self.spawn_health_timeout;
-            let handle = std::thread::spawn(move || probe.wait_healthy(&ep, timeout));
+            // Lets an early exit stop the detached probe thread instead of
+            // leaving it to poll the port for the full spawn ceiling.
+            let abandon = Arc::new(AtomicBool::new(false));
+            let probe_abandon = Arc::clone(&abandon);
+            let handle = std::thread::spawn(move || {
+                probe.wait_healthy_until(&ep, timeout, Some(&probe_abandon))
+            });
             loop {
                 if let Some(err) = self.early_exit_health_error(paths) {
-                    // Leave the probe thread to finish on its own (at most spawn_health_timeout).
+                    // The probe thread sees the flag within one poll interval and exits.
+                    abandon.store(true, std::sync::atomic::Ordering::SeqCst);
                     return Err(err);
                 }
                 if handle.is_finished() {

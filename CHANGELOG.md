@@ -18,7 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Desktop: the first core start after boot no longer fails with
   `core.healthcheck_failed` when endpoint security software is still
   initializing and delays the new sing-box process. A freshly spawned core now
-  gets up to 20 s to bring up its Clash API (was 5 s); a core that exits early
+  gets up to 20 s to bring up its Clash API (was 5 s), and so does the elevated
+  TUN core when the app adopts it; a core that exits early
   on a config or bind error is still reported immediately, and the hot-reload
   probe keeps its 5 s limit.
 - Release engineering: publishing and verifying a draft release works again.
