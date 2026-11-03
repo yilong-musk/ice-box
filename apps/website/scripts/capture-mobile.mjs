@@ -64,6 +64,16 @@ const websiteDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(websiteDir, "../..");
 const mobileDir = path.join(repoRoot, "apps/mobile");
 const versionFile = path.join(repoRoot, "docs/images/mobile.version");
+
+/** Status-bar padding shared with the live phone demo (src/phone-demo.css). */
+function phoneStatusBarPadding() {
+  const css = fs.readFileSync(path.join(websiteDir, "src/phone-demo.css"), "utf8");
+  const match = css.match(/--phone-status-bar-padding:\s*([^;]+);/);
+  if (!match) {
+    throw new Error("src/phone-demo.css must define --phone-status-bar-padding");
+  }
+  return match[1].trim();
+}
 const mobilePackageJson = path.join(mobileDir, "package.json");
 
 function screenshotPath(target, page) {
@@ -267,7 +277,7 @@ function phoneShellHtml(screenshot) {
         align-items: center;
         justify-content: space-between;
         height: ${statusBar}px;
-        padding: 0 14px 0 16px;
+        padding: ${phoneStatusBarPadding()};
         background: #131416;
         color: #ecedef;
         font-family: "Inter", "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;

@@ -6,6 +6,12 @@ import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
 import { Rules } from "./Rules";
 
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
+
 const getRuleOverview = vi.fn();
 const listRules = vi.fn();
 const setRuleDisabled = vi.fn();
@@ -54,6 +60,9 @@ function sampleOverview(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/** The custom fixture rule is inverted, so its summary is marked. */
+const INVERTED_CUSTOM = t("rules.invertedSummary", { summary: "example.com" });
+
 function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     total: 3,
@@ -92,6 +101,7 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
 describe("Rules", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    phoneShell.value = false;
     getRuleOverview.mockResolvedValue(sampleOverview());
     listRules.mockResolvedValue(sampleList());
     setRuleDisabled.mockResolvedValue({ ok: true, disabled: true });
@@ -103,6 +113,114 @@ describe("Rules", () => {
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
     ]);
+  });
+
+  it("shows the outbound beside the actions on desktop", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    const outbound = await view.findByTitle("n1");
+    expect(outbound.closest("[data-slot='item-actions']")).not.toBeNull();
+    expect(view.queryAllByTestId("rule-outbound")).toHaveLength(0);
+  });
+
+  it("moves a long outbound under the match on the phone", async () => {
+    phoneShell.value = true;
+    const longOutbound = "🇯🇵 Tokyo / premium-edge-01 (vmess, IPLC, 10x)";
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 1,
+        items: [
+          {
+            index: 0,
+            fingerprint: "fp-long",
+            rule: { domain_suffix: ["googleapis.com"], outbound: longOutbound },
+            custom: false,
+            disabled: false,
+            rule_type: "domain_suffix",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("googleapis.com");
+
+    // The outbound is on the description line, truncated on its own, so it
+    // no longer takes width from the match in the title.
+    const line = view.getByTestId("rule-description");
+    expect(line).toHaveTextContent(ruleTypeLabel("domain_suffix"));
+    const outbound = view.getByTestId("rule-outbound");
+    expect(line).toContainElement(outbound);
+    expect(outbound).toHaveAttribute("title", longOutbound);
+    expect(outbound).toHaveClass("truncate");
+    // The flex row is an inner element, not the line-clamped description.
+    expect(line).not.toHaveClass("flex");
+    expect(outbound.parentElement).toHaveClass("flex");
+    expect(container.querySelector("[data-slot='item-actions']")).not.toHaveTextContent(longOutbound);
+  });
+
+  it("flows the add button after the filter chips on the phone", async () => {
+    phoneShell.value = true;
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("youtube.com");
+
+    const toolbar = view.getByTestId("rules-toolbar");
+    expect(toolbar).toHaveClass("flex-nowrap");
+    expect(within(toolbar).getByRole("searchbox")).toHaveClass("min-w-0");
+    expect(within(toolbar).queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
+
+    // The chips and the add button wrap as one flow: the group box is
+    // dissolved and the full-label add button is the flow's last item.
+    const filters = view.getByTestId("rules-filters");
+    const group = within(filters).getByRole("radiogroup", { name: t("rules.filtersAria") });
+    expect(group).toHaveClass("contents");
+    const add = within(filters).getByRole("button", { name: t("rules.addCustom") });
+    expect(add).toHaveTextContent(t("rules.addCustom"));
+    expect(filters.lastElementChild).toBe(add);
+    fireEvent.click(add);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps the add button in the wrapping toolbar on desktop", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("youtube.com");
+
+    const toolbar = view.getByTestId("rules-toolbar");
+    expect(toolbar).toHaveClass("flex-wrap");
+    expect(within(toolbar).getByRole("button", { name: t("rules.addCustom") })).toBeInTheDocument();
+    expect(
+      within(view.getByTestId("rules-filters")).queryByRole("button", { name: t("rules.addCustom") }),
+    ).toBeNull();
+  });
+
+  it("draws no arrow for an action-only rule on the phone", async () => {
+    phoneShell.value = true;
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 1,
+        items: [
+          {
+            index: 0,
+            fingerprint: "fp-sniff",
+            rule: { action: "sniff" },
+            custom: false,
+            disabled: false,
+            rule_type: "other",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("action: sniff");
+
+    const line = view.getByTestId("rule-description");
+    expect(line).toHaveTextContent(ruleTypeLabel("other"));
+    expect(line).not.toHaveTextContent("→");
+    expect(line).not.toHaveTextContent(t("common.dash"));
+    expect(view.queryAllByTestId("rule-outbound")).toHaveLength(0);
   });
 
   it("renders rows, type chips and filters", async () => {
@@ -119,9 +237,9 @@ describe("Rules", () => {
     const disabledFilter = view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) });
     expect(chips).toContainElement(customFilter);
     expect(chips).toContainElement(disabledFilter);
-    expect(view.getByText("example.com")).toBeInTheDocument();
+    expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
     const customRow = view
-      .getByText("example.com")
+      .getByText(INVERTED_CUSTOM)
       .closest("[data-slot=item]") as HTMLElement;
     const customMarker = within(customRow).getByText(t("rules.custom"));
     expect(customMarker).not.toHaveAttribute("data-slot", "badge");
@@ -297,10 +415,10 @@ describe("Rules", () => {
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByText("example.com")).toBeInTheDocument();
+      expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
     });
 
-    const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
+    const row = view.getByText(INVERTED_CUSTOM).closest("[data-slot=item]") as HTMLElement;
     expect(
       within(row).queryByRole("button", { name: t("common.disable") }),
     ).not.toBeInTheDocument();
@@ -649,10 +767,10 @@ describe("Rules", () => {
     const { container } = render(<Rules />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByText("example.com")).toBeInTheDocument();
+      expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
     });
 
-    const row = view.getByText("example.com").closest("[data-slot=item]") as HTMLElement;
+    const row = view.getByText(INVERTED_CUSTOM).closest("[data-slot=item]") as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: t("common.delete") }));
 
     await waitFor(() => {

@@ -677,7 +677,13 @@ export function Settings({
         scrollHideDelay={600}
         className="min-h-0 flex-1 overflow-hidden"
       >
-        <div className="flex w-full flex-col gap-3" data-testid="settings-stack">
+        {/* data-loaded lets browser smoke tests wait for the settings and
+            status reads instead of guessing with a timeout. */}
+        <div
+          className="flex w-full flex-col gap-3"
+          data-testid="settings-stack"
+          data-loaded={loaded ? "true" : "false"}
+        >
           <AppearanceCard
             themePreference={themePreference}
             setThemePreference={setThemePreference}
@@ -772,15 +778,20 @@ export function Settings({
             />
           </div>
 
-          {isPhoneShell() ? <AndroidSystemCard status={status} /> : null}
-
-          <DataCard
-            form={form}
-            setForm={setForm}
-            busy={busy}
-            loaded={loaded}
-            setError={setError}
-          />
+          {/* The Data card is desktop-only: its debug switch only filters the
+              Logs page and its button opens the data folder, and the phone
+              has neither. */}
+          {isPhoneShell() ? (
+            <AndroidSystemCard status={status} />
+          ) : (
+            <DataCard
+              form={form}
+              setForm={setForm}
+              busy={busy}
+              loaded={loaded}
+              setError={setError}
+            />
+          )}
         </div>
       </ScrollArea>
 

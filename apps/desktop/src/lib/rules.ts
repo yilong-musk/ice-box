@@ -68,13 +68,44 @@ export function ruleTypeLabel(ruleType: string): string {
 
 /** Human-readable match payload of a rule, e.g. `youtube.com, google.com`. */
 export function ruleMatchSummary(row: RuleRow): string {
+  const summary = baseMatchSummary(row);
+  // `invert` flips what the rule matches; say so, or the summary reads as
+  // the opposite of the rule's behavior.
+  if (row.rule.invert === true && summary) {
+    return t("rules.invertedSummary", { summary });
+  }
+  return summary;
+}
+
+function baseMatchSummary(row: RuleRow): string {
   for (const key of MATCH_KEY_ORDER) {
     const v = row.rule[key];
     if (v === undefined) continue;
     if (Array.isArray(v)) return v.map(String).join(", ");
     return String(v);
   }
-  return "";
+  // No recognized matcher (a logical rule, an action-only rule, a newer
+  // sing-box field): describe it instead of falling back to raw JSON.
+  const rule = row.rule;
+  if (rule.type === "logical" && Array.isArray(rule.rules)) {
+    return t("rules.logicalSummary", {
+      mode: String(rule.mode ?? "and").toUpperCase(),
+      count: rule.rules.length,
+    });
+  }
+  return Object.entries(rule)
+    .filter(([key]) => !SUMMARY_SKIP_KEYS.has(key))
+    .map(([key, value]) => `${key}: ${summaryValue(value)}`)
+    .join(" · ");
+}
+
+/** Keys that are not part of what a rule matches. */
+const SUMMARY_SKIP_KEYS = new Set(["outbound", "invert", "type"]);
+
+function summaryValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).join(", ");
+  if (value !== null && typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 /** Outbound target of a rule, or empty when missing. */

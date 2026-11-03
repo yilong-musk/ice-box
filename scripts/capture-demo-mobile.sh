@@ -43,14 +43,14 @@ ui_changed() {
   git diff --name-only HEAD -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
     apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
-    apps/website/src/browser-api.ts
+    apps/website/src/browser-api.ts apps/website/src/phone-api.ts
 }
 
 untracked_ui() {
   git ls-files --others --exclude-standard -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
     apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
-    apps/website/src/browser-api.ts
+    apps/website/src/browser-api.ts apps/website/src/phone-api.ts
 }
 
 CURRENT_VERSION="$(current_version)"

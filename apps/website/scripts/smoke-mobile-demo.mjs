@@ -259,6 +259,30 @@ try {
   await waitForText(power, "Disconnect VPN");
   await warning.waitFor({ state: "detached", timeout: 8000 });
 
+  // Settings must match the Android app: the VPN service is the only capture,
+  // so the desktop TUN mode, privileged helper, and launch at login stay
+  // hidden; with no Logs page, so does the debug-logs switch.
+  await frame
+    .getByTestId("phone-tab-bar")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  // Wait until Settings has read the settings and status: the status-gated
+  // cards (TUN, helper, launch at login) render only after that, so checking
+  // any earlier would pass even if they leaked onto the phone.
+  const settings = frame.locator('[data-testid="settings-stack"][data-loaded="true"]');
+  await settings.waitFor({ timeout: 15_000 });
+  // The Android system card stands in for the desktop Data card.
+  await settings
+    .locator('[data-slot="card-title"]', { hasText: /^System$/ })
+    .waitFor({ timeout: 8000 });
+  for (const desktopOnly of ["TUN Mode", "Install Helper", "Launch at login", "Debug logs"]) {
+    if ((await settings.getByText(desktopOnly, { exact: true }).count()) !== 0) {
+      throw new Error(`phone Settings must not show the desktop-only "${desktopOnly}"`);
+    }
+  }
+  await tabs.nth(0).click();
+  await frame.locator('[data-testid="home-panel"]').waitFor();
+
   await page.locator(".nav-language").click();
   await frame.getByRole("button", { name: "应用", exact: true }).waitFor({
     timeout: 10_000,

@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { isPhoneShell } from "@platform/shell";
 import { t } from "../../lib/i18n";
 import { formatInvokeError, api, type AppSettings } from "../../api/client";
 
@@ -54,23 +53,21 @@ export function DataCard({
               {t("settings.logDebug")}
             </FieldLabel>
           </Field>
-          {isPhoneShell() ? null : (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy || !loaded}
-                onClick={() =>
-                  void api
-                    .revealDataDir()
-                    .catch((err) => setError(formatInvokeError(err)))
-                }
-              >
-                {t("settings.openDataDir")}
-              </Button>
-            </div>
-          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy || !loaded}
+              onClick={() =>
+                void api
+                  .revealDataDir()
+                  .catch((err) => setError(formatInvokeError(err)))
+              }
+            >
+              {t("settings.openDataDir")}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

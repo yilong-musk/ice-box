@@ -73,6 +73,45 @@ describe("rule helpers", () => {
     expect(ruleMatchSummary(row({ outbound: "direct" }))).toBe("");
   });
 
+  it("describes rules without a recognized matcher instead of raw JSON", () => {
+    expect(
+      ruleMatchSummary(
+        row({
+          type: "logical",
+          mode: "or",
+          rules: [{ domain: ["a.com"] }, { port: [443] }],
+          outbound: "Proxies",
+        }),
+      ),
+    ).toBe(t("rules.logicalSummary", { mode: "OR", count: 2 }));
+    expect(ruleMatchSummary(row({ action: "sniff" }))).toBe("action: sniff");
+    expect(ruleMatchSummary(row({ ip_version: 6, outbound: "block" }))).toBe("ip_version: 6");
+  });
+
+  it("marks inverted rules so the summary does not read backwards", () => {
+    expect(
+      ruleMatchSummary(row({ ip_version: 6, invert: true, outbound: "block" })),
+    ).toBe(t("rules.invertedSummary", { summary: "ip_version: 6" }));
+    expect(
+      ruleMatchSummary(row({ domain: ["a.com"], invert: true, outbound: "direct" })),
+    ).toBe(t("rules.invertedSummary", { summary: "a.com" }));
+    expect(
+      ruleMatchSummary(
+        row({
+          type: "logical",
+          mode: "and",
+          invert: true,
+          rules: [{ domain: ["a.com"] }, { port: [443] }],
+          outbound: "block",
+        }),
+      ),
+    ).toBe(
+      t("rules.invertedSummary", {
+        summary: t("rules.logicalSummary", { mode: "AND", count: 2 }),
+      }),
+    );
+  });
+
   it("extracts outbound target", () => {
     expect(ruleOutbound(row({ domain: ["x.com"], outbound: "Proxies" }))).toBe("Proxies");
     expect(ruleOutbound(row({ domain: ["x.com"] }))).toBe("");

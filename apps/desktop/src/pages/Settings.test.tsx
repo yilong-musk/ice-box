@@ -616,8 +616,10 @@ describe("Settings", () => {
     ).not.toBeInTheDocument();
     expect(view.getByText(t("settings.system"))).toBeInTheDocument();
     expect(view.getByRole("button", { name: t("settings.alwaysOnAction") })).toBeInTheDocument();
+    // No Logs page and no reachable data folder on the phone.
+    expect(view.queryByText(t("settings.data"))).not.toBeInTheDocument();
     expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
-    expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
+    expect(view.queryByLabelText(t("settings.logDebug"))).not.toBeInTheDocument();
   });
 
   it("offers battery optimization and private DNS actions, and installs the APK", async () => {

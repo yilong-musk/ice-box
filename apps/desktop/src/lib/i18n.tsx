@@ -268,6 +268,8 @@ const zh = {
   "rules.filtersAria": "规则筛选",
   "rules.typeAll": "全部",
   "rules.customCount": "自定义 {count}",
+  "rules.logicalSummary": "{mode} 组合 · {count} 条规则",
+  "rules.invertedSummary": "非 ({summary})",
   "rules.disabledCount": "已禁用 {count}",
   "rules.emptyTitle": "暂无规则",
   "rules.emptyDesc":
@@ -781,6 +783,8 @@ const en: Record<MessageKey, string> = {
   "rules.filtersAria": "Rule filters",
   "rules.typeAll": "All",
   "rules.customCount": "Custom {count}",
+  "rules.logicalSummary": "{mode} of {count} rules",
+  "rules.invertedSummary": "NOT ({summary})",
   "rules.disabledCount": "Disabled {count}",
   "rules.emptyTitle": "No rules",
   "rules.emptyDesc":

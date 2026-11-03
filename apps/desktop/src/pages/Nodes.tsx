@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Star } from "lucide-react";
+import { ChevronRight, Gauge, Star } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -12,7 +12,7 @@ import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import {
   Item,
   ItemActions,
@@ -24,6 +24,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
@@ -91,8 +92,10 @@ function delayBadge(delay: DelayCell) {
       </span>
     );
   }
+  // No result yet: render no cell at all (formatDelay(null) is empty).
+  if (delay === null) return null;
   return (
-    <span data-testid="delay-idle" className="text-xs text-muted-foreground">
+    <span data-testid="delay-testing" className="text-xs text-muted-foreground">
       {formatDelay(delay)}
     </span>
   );
@@ -233,7 +236,8 @@ type NodeRowProps = {
   busy: boolean;
   favoritePending: boolean;
   selectionPending: boolean;
-  embedded: boolean;
+  /** Phone layout: trim the row to fit a narrow screen. */
+  compact: boolean;
   delay: DelayCell;
   delays: Record<string, DelayCell>;
   onToggleGroup: (tag: string, open: boolean) => void;
@@ -255,7 +259,7 @@ const NodeRow = memo(function NodeRow({
   busy,
   favoritePending,
   selectionPending,
-  embedded,
+  compact,
   delay,
   delays,
   onToggleGroup,
@@ -326,7 +330,7 @@ const NodeRow = memo(function NodeRow({
                 <span className={badgeVariants({ variant: "outline" })}>
                   → {node.group_now}
                 </span>
-              ) : embedded ? null : (
+              ) : compact ? null : (
                 <span
                   className={cn(
                     badgeVariants({ variant: "ghost" }),
@@ -344,19 +348,23 @@ const NodeRow = memo(function NodeRow({
                 pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy || favoritePending}
-                title={
-                  expanded
-                    ? t("nodes.testAllMembers")
-                    : t("nodes.testCurrent")
-                }
-                onClick={() => onTest(node)}
-              >
-                {t("nodes.test")}
-              </button>
+              {/* The phone row is too narrow for a per-node test; the header's
+                  batch test covers it there. */}
+              {compact ? null : (
+                <button
+                  type="button"
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                  disabled={!running || busy || favoritePending}
+                  title={
+                    expanded
+                      ? t("nodes.testAllMembers")
+                      : t("nodes.testCurrent")
+                  }
+                  onClick={() => onTest(node)}
+                >
+                  {t("nodes.test")}
+                </button>
+              )}
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
@@ -389,14 +397,16 @@ const NodeRow = memo(function NodeRow({
                 pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy || favoritePending}
-                onClick={() => onTest(node)}
-              >
-                {t("nodes.test")}
-              </button>
+              {compact ? null : (
+                <button
+                  type="button"
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                  disabled={!running || busy || favoritePending}
+                  onClick={() => onTest(node)}
+                >
+                  {t("nodes.test")}
+                </button>
+              )}
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
@@ -430,6 +440,9 @@ const NodeRow = memo(function NodeRow({
 });
 
 export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
+  // Row trimming follows the phone shell, not `embedded`: embedding is about
+  // the card chrome, the narrow screen is what forces the compact row.
+  const compact = isPhoneShell();
   const { resolved: lang } = useLanguagePreference();
   const { nextGeneration, isStale } = useGenerationGuard();
   const runtime = useRuntimeStore();
@@ -846,14 +859,26 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
           {batchProgress}
         </span>
       ) : null}
+      {/* The phone header shares its narrow row with the title and the
+          progress/cancel controls, so the batch test is a short icon + label
+          there; the full name stays as its accessible name and tooltip. */}
       <Button
         type="button"
         size="sm"
-        variant="outline"
+        variant={compact ? "ghost" : "outline"}
         disabled={!running || busy || favoritePending || nodes.length === 0}
+        aria-label={compact ? t("nodes.batchTest") : undefined}
+        title={compact ? t("nodes.batchTest") : undefined}
         onClick={() => void onBatchTest()}
       >
-        {t("nodes.batchTest")}
+        {compact ? (
+          <>
+            <Gauge data-icon="inline-start" aria-hidden="true" />
+            {t("nodes.test")}
+          </>
+        ) : (
+          t("nodes.batchTest")
+        )}
       </Button>
       {busy && batchProgress ? (
         <Button type="button" size="sm" variant="outline" onClick={onCancelBatch}>
@@ -882,12 +907,21 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         </WarnAlert>
       )}
 
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* On the phone the header bar starts the card, so the card's own top
+          padding would only add empty space above the title. */}
+      <Card
+        size="sm"
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-hidden",
+          embedded && "pt-0",
+        )}
+      >
         {embedded ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+            {/* Same title style as the other phone Home cards. */}
+            <CardTitle className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
               {t("app.nav.nodes")}
-            </span>
+            </CardTitle>
             {batchButton}
           </div>
         ) : null}
@@ -934,7 +968,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
                       busy={busy}
                       favoritePending={favoritePending}
                       selectionPending={selectionPending}
-                      embedded={embedded}
+                      compact={compact}
                       delay={delays[n.tag] ?? null}
                       delays={expanded ? delays : EMPTY_DELAYS}
                       onToggleGroup={setGroupOpen}

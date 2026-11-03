@@ -101,11 +101,32 @@ export function applyPhoneFixtures(api: ApiContract): void {
 
   api.getStatus = async (): Promise<StatusResponse> => {
     const status = await browserGetStatus();
+    const connected = status.core.status === "running";
     return {
       ...status,
       // The phone power button follows the tunnel, not the desktop core state.
       vpn_permission: "granted",
-      tunnel_status: status.core.status === "running" ? "connected" : "stopped",
+      tunnel_status: connected ? "connected" : "stopped",
+      // Platform capabilities exactly as the Android backend reports them
+      // (apps/mobile/src-tauri/src/status.rs): the VPN service is the only
+      // capture, so the desktop TUN mode, privileged helper, system proxy,
+      // launch at login, and tray settings never appear on the phone.
+      traffic_capture: connected ? "tun" : "inactive",
+      system_proxy_applied: null,
+      system_proxy_recorded: null,
+      system_proxy_available: false,
+      configured_tun: false,
+      tun_status: "disabled",
+      tun_interface: null,
+      tun_error: null,
+      tun_available: false,
+      tun_unavailable_reason: null,
+      tun_ui_hidden: true,
+      helper_installed: false,
+      helper_supported: false,
+      helper_stale: false,
+      launch_at_login_supported: false,
+      tray_display_supported: false,
     };
   };
 

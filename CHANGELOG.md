@@ -21,6 +21,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   platform builds start right after it. Both `tauri.conf.json` files read their
   version from `package.json`, and the gates check that every workflow pins the
   Rust toolchain from `rust-toolchain.toml`.
+- Nodes: a node without a delay result shows nothing instead of a `—`
+  placeholder.
+- Android: the Home node list drops the per-node Test button (Batch Test still
+  tests every node; a collapsed group tests only its current exit), so rows no
+  longer crowd or overlap. Batch Test is a compact icon button labelled
+  "Test" in the card header. Its header is shorter and its title matches the
+  other Home cards. The website Live Demo phone status bar keeps the clock and
+  icons further from the rounded corners, and its Settings page no longer
+  shows the desktop-only TUN mode, privileged helper, or launch at login,
+  matching the Android app.
+- Rules: on Android the outbound moves under the match (truncated on its own
+  line), so a long node name no longer squeezes the matched domain to a few
+  letters. The add-custom-rule button flows after the filter chips instead of
+  taking a line of its own under the search box. A rule
+  without a recognized matcher (a logical or action-only rule)
+  shows a readable summary instead of raw JSON, and an inverted rule is marked
+  `NOT (…)` so its summary no longer reads as the opposite of what it matches.
+- Android: Settings no longer shows the Data card. Its debug-logs switch only
+  filters the desktop Logs page, which the phone does not have.
 
 ### Fixed
 

@@ -16,6 +16,11 @@ const setNodeFavorite = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
 const listenStateChanged = vi.fn();
+const phoneShell = { value: false };
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
 
 /** Handler the page registers for `app://state-changed` (tray actions). */
 let stateChangedHandler: (() => void) | null = null;
@@ -40,6 +45,7 @@ describe("Nodes", () => {
     actions.dataset.titlebarActions = "";
     document.body.appendChild(actions);
     vi.clearAllMocks();
+    phoneShell.value = false;
     stateChangedHandler = null;
     listenStateChanged.mockImplementation((handler: () => void) => {
       stateChangedHandler = handler;
@@ -111,6 +117,39 @@ describe("Nodes", () => {
       scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
     ).toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
+  });
+
+  it("shows no delay placeholder before a node was tested", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.queryByText(t("common.dash"))).not.toBeInTheDocument();
+    expect(view.queryByTestId("delay-testing")).not.toBeInTheDocument();
+  });
+
+  it("drops the per-node test on the phone and shortens the batch test", async () => {
+    phoneShell.value = true;
+    const { container } = render(<Nodes embedded />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.queryAllByRole("button", { name: t("nodes.test") })).toHaveLength(0);
+    expect(view.getAllByRole("button", { name: t("nodes.select") }).length).toBeGreaterThan(0);
+    const batch = view.getByRole("button", { name: t("nodes.batchTest") });
+    // Icon plus the short label, so it fits beside the card title on a
+    // narrow screen; the full name stays as its accessible name.
+    expect(batch.textContent).toBe(t("nodes.test"));
+    expect(batch.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps the full row and text batch test when embedded on desktop", async () => {
+    const { container } = render(<Nodes embedded />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.getAllByRole("button", { name: t("nodes.test") })[0]).toHaveTextContent(t("nodes.test"));
+    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toHaveTextContent(t("nodes.batchTest"));
   });
 
   it("does not warn while the service status is still loading", async () => {
@@ -709,6 +748,54 @@ describe("Nodes", () => {
 
     expect(await view.findByText(t("nodes.noTestable"))).toBeInTheDocument();
     expect(testNodeDelay).not.toHaveBeenCalled();
+  });
+
+  // The batch test is shared by every platform: a collapsed group probes only
+  // its current exit (shown on the group row), an expanded one every member.
+  describe.each([
+    ["desktop", false],
+    ["phone", true],
+  ])("batch delay test on %s", (_platform, embedded) => {
+    beforeEach(() => {
+      phoneShell.value = embedded;
+      listNodes.mockResolvedValue([
+        { tag: "node-a", outbound_type: "vmess", group_now: null, group_all: null },
+        {
+          tag: "选择组",
+          outbound_type: "selector",
+          group_now: "hk-1",
+          group_all: ["hk-1", "hk-2", "hk-3"],
+        },
+      ]);
+    });
+
+    it("tests only the current exit of a collapsed group", async () => {
+      const { container } = render(<Nodes embedded={embedded} />);
+      const view = within(container);
+      await view.findByRole("button", { name: "选择组", expanded: false });
+
+      fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
+
+      await waitFor(() => {
+        expect(within(rowOf(view, "选择组")).getByText("42 ms")).toBeInTheDocument();
+      });
+      const probed = testNodeDelay.mock.calls.map(([tag]) => tag);
+      expect(probed.sort()).toEqual(["hk-1", "node-a"]);
+    });
+
+    it("tests every member of an expanded group", async () => {
+      const { container } = render(<Nodes embedded={embedded} />);
+      const view = within(container);
+      await expandGroup(view, "选择组");
+
+      fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
+
+      await waitFor(() => {
+        expect(testNodeDelay).toHaveBeenCalledTimes(4);
+      });
+      const probed = testNodeDelay.mock.calls.map(([tag]) => tag);
+      expect(probed.sort()).toEqual(["hk-1", "hk-2", "hk-3", "node-a"]);
+    });
   });
 
   it("expands a strategy group from the keyboard", async () => {
