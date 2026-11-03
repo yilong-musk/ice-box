@@ -5,12 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Development: `scripts/gate-local.sh` now runs only the checks that match the
+  files changed on the branch (Rust, frontend, or script fixtures), with
+  `--full` for every check and `--dry-run` to print the scope. Documentation
+  screenshots moved out of both gates into `scripts/capture-docs.sh`, so a gate
+  run no longer rewrites `docs/images/hero*.png`.
+
 ### Fixed
 
 - Desktop: the first core start after boot no longer fails with
   `core.healthcheck_failed` when endpoint security software is still
   initializing and delays the new sing-box process. A freshly spawned core now
-  gets up to 20 s to bring up its Clash API (was 5 s); a core that exits early
+  gets up to 20 s to bring up its Clash API (was 5 s), and so does the elevated
+  TUN core when the app adopts it; a core that exits early
   on a config or bind error is still reported immediately, and the hot-reload
   probe keeps its 5 s limit.
 - Release engineering: publishing and verifying a draft release works again.
