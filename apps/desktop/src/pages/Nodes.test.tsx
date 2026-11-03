@@ -113,6 +113,25 @@ describe("Nodes", () => {
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
   });
 
+  it("shows no delay placeholder before a node was tested", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.queryByText(t("common.dash"))).not.toBeInTheDocument();
+    expect(view.queryByTestId("delay-testing")).not.toBeInTheDocument();
+  });
+
+  it("drops the per-node test buttons on the phone but keeps the batch test", async () => {
+    const { container } = render(<Nodes embedded />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+
+    expect(view.queryAllByRole("button", { name: t("nodes.test") })).toHaveLength(0);
+    expect(view.getAllByRole("button", { name: t("nodes.select") }).length).toBeGreaterThan(0);
+    expect(view.getByRole("button", { name: t("nodes.batchTest") })).toBeInTheDocument();
+  });
+
   it("does not warn while the service status is still loading", async () => {
     getStatus.mockImplementation(async () => {
       // Hold the status past the node/settings reads: the list used to render
@@ -709,6 +728,53 @@ describe("Nodes", () => {
 
     expect(await view.findByText(t("nodes.noTestable"))).toBeInTheDocument();
     expect(testNodeDelay).not.toHaveBeenCalled();
+  });
+
+  // The batch test is shared by every platform: a collapsed group probes only
+  // its current exit (shown on the group row), an expanded one every member.
+  describe.each([
+    ["desktop", false],
+    ["phone", true],
+  ])("batch delay test on %s", (_platform, embedded) => {
+    beforeEach(() => {
+      listNodes.mockResolvedValue([
+        { tag: "node-a", outbound_type: "vmess", group_now: null, group_all: null },
+        {
+          tag: "选择组",
+          outbound_type: "selector",
+          group_now: "hk-1",
+          group_all: ["hk-1", "hk-2", "hk-3"],
+        },
+      ]);
+    });
+
+    it("tests only the current exit of a collapsed group", async () => {
+      const { container } = render(<Nodes embedded={embedded} />);
+      const view = within(container);
+      await view.findByRole("button", { name: "选择组", expanded: false });
+
+      fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
+
+      await waitFor(() => {
+        expect(within(rowOf(view, "选择组")).getByText("42 ms")).toBeInTheDocument();
+      });
+      const probed = testNodeDelay.mock.calls.map(([tag]) => tag);
+      expect(probed.sort()).toEqual(["hk-1", "node-a"]);
+    });
+
+    it("tests every member of an expanded group", async () => {
+      const { container } = render(<Nodes embedded={embedded} />);
+      const view = within(container);
+      await expandGroup(view, "选择组");
+
+      fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
+
+      await waitFor(() => {
+        expect(testNodeDelay).toHaveBeenCalledTimes(4);
+      });
+      const probed = testNodeDelay.mock.calls.map(([tag]) => tag);
+      expect(probed.sort()).toEqual(["hk-1", "hk-2", "hk-3", "node-a"]);
+    });
   });
 
   it("expands a strategy group from the keyboard", async () => {

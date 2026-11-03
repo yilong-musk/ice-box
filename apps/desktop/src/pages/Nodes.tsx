@@ -12,7 +12,7 @@ import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import {
   Item,
   ItemActions,
@@ -91,8 +91,10 @@ function delayBadge(delay: DelayCell) {
       </span>
     );
   }
+  // No result yet: leave the cell empty instead of a placeholder dash.
+  if (delay === null) return null;
   return (
-    <span data-testid="delay-idle" className="text-xs text-muted-foreground">
+    <span data-testid="delay-testing" className="text-xs text-muted-foreground">
       {formatDelay(delay)}
     </span>
   );
@@ -344,19 +346,23 @@ const NodeRow = memo(function NodeRow({
                 pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy || favoritePending}
-                title={
-                  expanded
-                    ? t("nodes.testAllMembers")
-                    : t("nodes.testCurrent")
-                }
-                onClick={() => onTest(node)}
-              >
-                {t("nodes.test")}
-              </button>
+              {/* The phone row is too narrow for a per-node test; the header's
+                  batch test covers it there. */}
+              {embedded ? null : (
+                <button
+                  type="button"
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                  disabled={!running || busy || favoritePending}
+                  title={
+                    expanded
+                      ? t("nodes.testAllMembers")
+                      : t("nodes.testCurrent")
+                  }
+                  onClick={() => onTest(node)}
+                >
+                  {t("nodes.test")}
+                </button>
+              )}
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
@@ -389,14 +395,16 @@ const NodeRow = memo(function NodeRow({
                 pending={favoritePending || selectionPending}
                 onToggle={onToggleFavorite}
               />
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm", variant: "outline" })}
-                disabled={!running || busy || favoritePending}
-                onClick={() => onTest(node)}
-              >
-                {t("nodes.test")}
-              </button>
+              {embedded ? null : (
+                <button
+                  type="button"
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                  disabled={!running || busy || favoritePending}
+                  onClick={() => onTest(node)}
+                >
+                  {t("nodes.test")}
+                </button>
+              )}
               <button
                 type="button"
                 className={buttonVariants({ size: "sm" })}
@@ -882,12 +890,21 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         </WarnAlert>
       )}
 
-      <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* On the phone the header bar starts the card, so the card's own top
+          padding would only add empty space above the title. */}
+      <Card
+        size="sm"
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-hidden",
+          embedded && "pt-0",
+        )}
+      >
         {embedded ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+            {/* Same title style as the other phone Home cards. */}
+            <CardTitle className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
               {t("app.nav.nodes")}
-            </span>
+            </CardTitle>
             {batchButton}
           </div>
         ) : null}

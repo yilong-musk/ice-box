@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   platform builds start right after it. Both `tauri.conf.json` files read their
   version from `package.json`, and the gates check that every workflow pins the
   Rust toolchain from `rust-toolchain.toml`.
+- Nodes: a node without a delay result shows nothing instead of a `—`
+  placeholder.
+- Android: the Home node list drops the per-node Test button (Batch Test still
+  tests every node; a collapsed group tests only its current exit), so rows no
+  longer crowd or overlap. Its header is shorter and its title matches the
+  other Home cards. The website Live Demo phone status bar keeps the clock and
+  icons further from the rounded corners.
 
 ### Fixed
 

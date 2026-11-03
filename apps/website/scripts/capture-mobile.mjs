@@ -267,7 +267,7 @@ function phoneShellHtml(screenshot) {
         align-items: center;
         justify-content: space-between;
         height: ${statusBar}px;
-        padding: 0 14px 0 16px;
+        padding: 0 20px 0 22px;
         background: #131416;
         color: #ecedef;
         font-family: "Inter", "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
