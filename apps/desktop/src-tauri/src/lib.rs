@@ -119,7 +119,7 @@ pub struct AppState {
     pub proxy_applied_cache: Mutex<Option<(ProxyEndpoints, Instant, bool)>>,
     /// Platform backend capability; set once at process start (`Noop` is false).
     pub system_proxy_available: bool,
-    /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking ~5s.
+    /// Set by quit so an in-flight auto-start healthcheck aborts instead of blocking for the full timeout.
     pub shutdown_requested: Arc<AtomicBool>,
     /// Held for app lifetime; releasing the file unlocks the data directory.
     _instance_lock: std::fs::File,
