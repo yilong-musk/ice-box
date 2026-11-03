@@ -90,17 +90,8 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
 
   echo "== vite build =="
   (cd apps/desktop && npm run build)
-
-  if [[ -z "${CI:-}" ]]; then
-    echo "== capture demo home =="
-    bash "$ROOT/scripts/capture-demo-home.sh"
-
-    echo "== capture demo mobile =="
-    bash "$ROOT/scripts/capture-demo-mobile.sh"
-
-    echo "== compose README hero =="
-    (cd "$ROOT/apps/website" && npm run capture-hero)
-  fi
+  # Documentation screenshots are refreshed separately by
+  # scripts/capture-docs.sh; the gate does not write tracked files.
 fi
 
 echo "G9.10 gate ($SCOPE): OK"

@@ -8,14 +8,31 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Formatting; clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`); TUN integration tests; desktop/website/mobile typechecks; website installer-link tests; the mobile Live Demo smoke test; Vitest; updater fixtures; release preflight, updater-signature, signing-key, release-asset, release-state, and Android-keystore fixtures; Android version-code and APK-signer fixtures; demo screenshots and the composed README hero |
+| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, updater, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
+| `bash scripts/capture-docs.sh` | Not a gate: refreshes the desktop and Android Home captures and recomposes the README hero |
+
+The local gate compares `HEAD` with its merge base on `origin/main` (or
+`main`; override with `GATE_LOCAL_BASE`) and also counts staged, unstaged, and
+untracked files. Each path selects a bucket:
+
+| Changed paths | Checks |
+|---------------|--------|
+| `crates/`, `apps/*/src-tauri/`, `apps/mobile/plugins/`, `configs/`, `third_party/`, `spikes/`, `Cargo.*`, `rust-toolchain.toml`, `deny.toml` | Rust |
+| Other files under `apps/desktop/`, `apps/mobile/`, `apps/website/`; root `package*.json` | Frontend (all three apps, since they share sources) |
+| `scripts/` | Script fixtures |
+| `*.md`, `docs/`, `.github/`, `LICENSE`, `NOTICE`, `.gitignore` | Formatting only |
+
+Any other path, a change to `scripts/gate-local.sh` itself, or a missing merge
+base runs every check. `--dry-run` prints the selected scope without running
+it.
 
 The local gate omits the desktop and mobile Tauri shells from clippy and Rust
-tests because GTK/WebKit dependencies may be unavailable. Its screenshot step
-refreshes the desktop and Android Home captures when the version or relevant UI
-files change, or when any capture is missing, and recomposes the README hero on
-every run. CI skips screenshot capture.
+tests because GTK/WebKit dependencies may be unavailable. Neither gate touches
+tracked files: `scripts/capture-docs.sh` refreshes the desktop and Android Home
+captures when the version or relevant UI files change, or when any capture is
+missing, and recomposes the README hero on every run. Run it when the Live Demo
+UI changes and before a release.
 
 The mobile Live Demo smoke test builds the website, serves `dist` with
 `vite preview`, and checks the phone iframe on the landing page: the node-list

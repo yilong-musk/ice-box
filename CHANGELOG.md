@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Development: `scripts/gate-local.sh` now runs only the checks that match the
+  files changed on the branch (Rust, frontend, or script fixtures), with
+  `--full` for every check and `--dry-run` to print the scope. Documentation
+  screenshots moved out of both gates into `scripts/capture-docs.sh`, so a gate
+  run no longer rewrites `docs/images/hero*.png`.
+
 ### Fixed
 
 - Desktop: the first core start after boot no longer fails with

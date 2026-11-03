@@ -139,18 +139,14 @@ run it before tagging.
 ### 3. Gate and merge to `main`
 
 ```bash
-bash scripts/gate-local.sh
+bash scripts/gate-local.sh --full
+bash scripts/capture-docs.sh
 ```
 
-The gate recaptures the documentation screenshots when the version or the UI
-changed, and recomposes the README product shot from them on every run. To
-refresh them explicitly:
-
-```bash
-bash scripts/capture-demo-home.sh
-bash scripts/capture-demo-mobile.sh
-(cd apps/website && npm run capture-hero)
-```
+The release runs the full local gate rather than the scoped default. The gate
+does not touch documentation screenshots; `capture-docs.sh` recaptures them when
+the version or the UI changed, and recomposes the README product shot from them
+on every run.
 
 The capture scripts write the desktop and phone screenshots plus their version
 files to `docs/images/`. Those intermediates are ignored by git; commit only the
@@ -319,8 +315,9 @@ write to the repository.
 
 ## Local vs CI gates
 
-Run `scripts/gate-local.sh` before every commit and require all CI checks to
-pass before merging or tagging, as described above. The maintained reference
+Run `scripts/gate-local.sh` before every commit (it is scoped to the changed
+files; use `--full` before a release) and require all CI checks to pass before
+merging or tagging, as described above. The maintained reference
 for gate coverage, platform splits, and manual live tests is
 [`testing.md`](testing.md).
 
