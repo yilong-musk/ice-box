@@ -153,7 +153,7 @@ if [[ "$full" == 0 ]]; then
   changed="$(
     {
       # --no-renames lists both sides of a rename, so a file moved out of a
-      # code area still selects that area's checks.
+      # code area still selects the checks for that area.
       git diff --name-only --no-renames "$base"
       git ls-files --others --exclude-standard
     } | sort -u
@@ -194,7 +194,11 @@ fi
 [[ "$run_frontend" == 1 ]] && scope+=(frontend)
 [[ "$run_vitest" == 1 ]] && scope+=(vitest)
 [[ "$run_fixtures" == 1 ]] && scope+=(fixtures)
-echo "gate-local: scope = ${scope[*]:-fmt only}$([[ "$full" == 1 ]] && echo ' (full)')"
+# Assigned in two statements: bash 3.2 (macOS /bin/bash) cannot parse a
+# command substitution nested inside a parameter expansion inside quotes.
+scope_label="${scope[*]:-fmt only}"
+[[ "$full" == 1 ]] && scope_label+=" (full)"
+echo "gate-local: scope = $scope_label"
 [[ "$dry_run" == 1 ]] && exit 0
 
 echo "== cargo fmt --check =="
