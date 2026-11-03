@@ -10,6 +10,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/version-lib.sh
+source "$ROOT/scripts/version-lib.sh"
 
 usage() {
   echo "usage: $0 <version> [--date YYYY-MM-DD] [--file PATH]" >&2
@@ -43,13 +45,13 @@ while (($# > 0)); do
       usage
       exit 2
     fi
-    VERSION="${1#v}"
+    VERSION="$1"
     shift
     ;;
   esac
 done
 
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+if [[ -z "$VERSION" ]] || ! VERSION="$(release_version "$VERSION")"; then
   usage
   exit 2
 fi

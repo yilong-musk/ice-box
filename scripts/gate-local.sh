@@ -276,11 +276,17 @@ if [[ "$run_fixtures" == 1 ]]; then
   echo "== merge-updater-latest fixtures =="
   bash scripts/test-merge-updater-latest.sh
 
+  echo "== toolchain pin fixtures =="
+  bash scripts/test-check-toolchain-pins.sh
+
   echo "== changelog release fixtures =="
   bash scripts/test-changelog-release.sh
 
   echo "== CI status fixtures =="
   bash scripts/test-verify-ci-status.sh
+
+  echo "== release environment fixtures =="
+  bash scripts/test-verify-release-environment.sh
 
   echo "== release preflight fixtures =="
   bash scripts/test-release-preflight.sh

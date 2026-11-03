@@ -5,9 +5,14 @@
 # the gate result it relies on is the CI run on main for the same SHA.
 #
 # Usage: scripts/verify-ci-status.sh <commit-sha>
-# Needs GH_TOKEN with `checks: read` and GITHUB_REPOSITORY (owner/repo).
-# The required check names match the `main` branch protection rules
-# (docs/release-process.md); keep them in sync with .github/workflows/ci.yml.
+# Needs GH_TOKEN with `checks: read` and `contents: read`, and
+# GITHUB_REPOSITORY (owner/repo).
+#
+# The required check names are read from GitHub, not listed here: the status
+# checks required on `main` by its branch protection and by any branch ruleset.
+# A rename in ci.yml therefore only has to be mirrored in those settings, and
+# a check added there is verified here too. No required check at all is an
+# error, so a missing setting cannot let an unchecked commit through.
 set -euo pipefail
 
 SHA="${1:-}"
@@ -17,11 +22,28 @@ if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 
-REQUIRED=(
-  "gate (linux)"
-  "gate + build (macOS dmg)"
-  "gate + build (Windows nsis)"
-)
+BRANCH=main
+
+# Classic branch protection exposes its required contexts on the branch
+# itself, which only needs read access (the /protection endpoint needs admin).
+# Rulesets that apply to the branch add their own required checks.
+required="$(
+  {
+    gh api "repos/$REPO/branches/$BRANCH" \
+      --jq '.protection.required_status_checks.contexts // [] | .[]'
+    gh api --paginate "repos/$REPO/rules/branches/$BRANCH" \
+      --jq '.[] | select(.type == "required_status_checks") |
+        .parameters.required_status_checks[].context'
+  } | sed '/^$/d' | sort -u
+)"
+if [[ -z "$required" ]]; then
+  echo "verify-ci-status: no status checks are required on $BRANCH; configure branch protection (docs/release-process.md)" >&2
+  exit 1
+fi
+REQUIRED=()
+while IFS= read -r name; do
+  REQUIRED+=("$name")
+done <<<"$required"
 
 # One line per check run: id, name, status, conclusion.
 runs="$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \

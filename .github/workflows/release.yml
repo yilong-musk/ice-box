@@ -4,11 +4,13 @@ on:
   push:
     tags:
       - "v*"
-  # Manual runs always use the current main commit:
+  # Manual runs use the current main commit:
   #   preflight  validate the tag, version sources, changelog, CI status, and
   #              the real signing/Android secrets; no build, no tag
   #   release    the same checks, then create the tag on that commit, build,
-  #              and publish (the alternative to pushing the tag by hand)
+  #              and publish (the alternative to pushing the tag by hand). If
+  #              the tag already exists, the run resumes that tag's commit
+  #              instead, like re-running a tag push
   #   rehearse   build main's current version and stage it as a throwaway draft
   #              under a rehearsal-<run id> name, run every publish check except
   #              the final publish, then delete the draft
@@ -47,6 +49,8 @@ jobs:
       contents: read
       # scripts/verify-ci-status.sh reads the CI check runs of the commit.
       checks: read
+      # scripts/verify-release-environment.sh reads the environment's rules.
+      actions: read
     outputs:
       prerelease: ${{ steps.check.outputs.prerelease }}
       tag: ${{ steps.check.outputs.tag }}
@@ -96,16 +100,16 @@ jobs:
                 exit 1
               fi
             fi
-            # "Re-run all jobs" after the tag job succeeded finds its own tag;
-            # anything else means the version is taken.
+            # An existing tag fixes the release commit: "Re-run all jobs" after
+            # the tag job, or a new dispatch for a tag whose build failed,
+            # resumes that commit even after main moved on, exactly like
+            # re-running a tag push. Validate the files of that commit.
             if [[ "$mode" == release ]] && git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
-              if [[ "$(git rev-list -n 1 "$TAG")" != "$commit" ]]; then
-                echo "tag $TAG already exists on another commit; versions are never reused" >&2
-                exit 1
-              fi
-              echo "note: tag $TAG already points at $commit (re-run)"
+              commit="$(git rev-list -n 1 "$TAG")"
+              echo "note: tag $TAG already exists; resuming its commit $commit"
+              git checkout --quiet --detach "$commit"
             fi
-            echo "$mode: validating $TAG against main at $commit"
+            echo "$mode: validating $TAG at $commit"
           else
             mode=release
             TAG="$GITHUB_REF_NAME"
@@ -137,6 +141,12 @@ jobs:
           # The release builds do not re-run the gate: they rely on the CI run
           # on main for this exact commit.
           bash scripts/verify-ci-status.sh "$commit"
+
+          # The publish job deploys to the `release` environment from this
+          # run's ref; fail now, not after the builds, if its rules reject it.
+          if [[ "$mode" != preflight ]]; then
+            bash scripts/verify-release-environment.sh "$GITHUB_REF"
+          fi
 
           # A published release is verification-only on a rerun, so it does
           # not need the signing secrets. A new or draft release still needs
@@ -183,12 +193,13 @@ jobs:
             # A newer tag without a release must also block an older release.
             # Ignore non-release tags (e.g. a temporary v-test tag) and tags
             # that are not on main so they cannot break the semver checks.
+            source scripts/version-lib.sh
             existing_tags="$(git tag -l 'v*' | grep -Fvx "$TAG" || true)"
             while IFS= read -r existing; do
               if [[ -z "$existing" ]]; then
                 continue
               fi
-              if [[ "$existing" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+              if release_version "$existing" >/dev/null 2>&1; then
                 if git merge-base --is-ancestor "$existing" origin/main 2>/dev/null; then
                   args+=(--existing-tag "$existing")
                 else
@@ -204,13 +215,15 @@ jobs:
   # The release does not re-run the gate: the preflight requires the CI run on
   # main to have passed for the exact commit being released.
 
-  # Manual `release` runs create the tag here, on the commit the preflight
+  # The single gate for every build and publish job: it runs whenever the
+  # preflight asks for a build, so the jobs after it need no `if:` of their own.
+  # Manual `release` runs also create the tag here, on the commit the preflight
   # validated. A tag pushed with GITHUB_TOKEN does not start another workflow
   # run, so this run carries on with the build and publish jobs.
   tag:
     name: Create tag
     needs: preflight
-    if: github.event_name == 'workflow_dispatch' && needs.preflight.outputs.mode == 'release'
+    if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -224,17 +237,21 @@ jobs:
           ref: ${{ needs.preflight.outputs.sha }}
 
       - name: Create and push the annotated tag
+        # Tag pushes already have their tag; rehearsals never create one.
+        if: github.event_name == 'workflow_dispatch' && needs.preflight.outputs.mode == 'release'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The preflight already resolved an existing tag to its commit;
+          # this only catches a tag pushed by someone else in the meantime.
           git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
           if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
             if [[ "$(git rev-list -n 1 "$TAG")" != "$SHA" ]]; then
-              echo "tag $TAG exists on another commit" >&2
+              echo "tag $TAG was created on another commit after the preflight" >&2
               exit 1
             fi
-            echo "tag $TAG already points at $SHA (re-run)"
+            echo "tag $TAG already points at $SHA"
             exit 0
           fi
           git tag -a "$TAG" -m "ice-box $TAG" "$SHA"
@@ -243,11 +260,6 @@ jobs:
   build-macos:
     name: Build macOS (arm64)
     needs: [preflight, tag]
-    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
-    if: >-
-      !cancelled() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.build == 'true' &&
-      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -361,11 +373,6 @@ jobs:
   build-windows:
     name: Build Windows (NSIS)
     needs: [preflight, tag]
-    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
-    if: >-
-      !cancelled() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.build == 'true' &&
-      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: windows-latest
     timeout-minutes: 90
     defaults:
@@ -473,11 +480,6 @@ jobs:
   build-android:
     name: Build Android (arm64)
     needs: [preflight, tag]
-    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
-    if: >-
-      !cancelled() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.build == 'true' &&
-      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -574,13 +576,6 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [preflight, tag, build-macos, build-windows, build-android]
-    if: >-
-      !cancelled() && needs.preflight.result == 'success' &&
-      needs.preflight.outputs.build == 'true' &&
-      (needs.tag.result == 'success' || needs.tag.result == 'skipped') &&
-      needs.build-macos.result == 'success' &&
-      needs.build-windows.result == 'success' &&
-      needs.build-android.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Configure required reviewers on this environment to gate publication.

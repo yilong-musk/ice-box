@@ -13,10 +13,33 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" != api || "$*" != *"/commits/0123456789abcdef0123456789abcdef01234567/check-runs"* ]]; then
+if [[ "${1:-}" != api ]]; then
   echo "unexpected gh command: $*" >&2
   exit 2
 fi
+# Required checks: two from classic branch protection, one from a ruleset
+# (deduplicated with the first), unless FAKE_REQUIRED overrides them.
+case "$*" in
+*"/rules/branches/main "*)
+  case "${FAKE_REQUIRED:-default}" in
+  default) printf '%s\n' "gate + build (Windows nsis)" "gate (linux)" ;;
+  none) ;;
+  esac
+  exit 0
+  ;;
+*" repos/fixture/repo/branches/main "*)
+  case "${FAKE_REQUIRED:-default}" in
+  default) printf '%s\n' "gate (linux)" "gate + build (macOS dmg)" ;;
+  none) ;;
+  esac
+  exit 0
+  ;;
+*"/commits/0123456789abcdef0123456789abcdef01234567/check-runs"*) ;;
+*)
+  echo "unexpected gh command: $*" >&2
+  exit 2
+  ;;
+esac
 row() { printf '%s\t%s\t%s\t%s\n' "$@"; }
 green() {
   row 10 "gate (linux)" completed success
@@ -91,6 +114,12 @@ expect_fail pending "still in_progress"
 expect_fail cancelled "concluded 'cancelled'"
 expect_fail missing "has not run"
 expect_fail error "HTTP 403"
+# A required check that only the ruleset lists must still be verified.
+expect_fail missing "'gate + build (Windows nsis)' has not run"
+# "test (macOS)" is not required, so its absence or failure does not matter.
+out="$(FAKE_REQUIRED=none run green 2>&1)" && fail "no-required: expected failure"
+printf '%s\n' "$out" | grep -Fq "no status checks are required" ||
+  fail "no-required: unexpected output: $out"
 if GITHUB_REPOSITORY=fixture/repo bash "$SCRIPT" not-a-sha >/dev/null 2>&1; then
   fail "bad-sha: expected failure"
 fi

@@ -21,6 +21,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/version-lib.sh
+source "$ROOT/scripts/version-lib.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -97,28 +99,14 @@ if [[ -z "$TAG" ]]; then
   exit 2
 fi
 
-# Semver without leading zeros. The suffix is kept for the changelog lookup and
-# for the user-facing version string.
-if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+# The tag needs its "v"; the version rules live in scripts/version-lib.sh.
+if [[ "$TAG" != v* ]] || ! VERSION="$(release_version "$TAG")"; then
   echo "invalid release tag '$TAG' (expected vX.Y.Z or vX.Y.Z-suffix)" >&2
   exit 1
 fi
-MAJOR="${BASH_REMATCH[1]}"
+[[ "$VERSION" =~ $ICE_BOX_VERSION_RE ]]
 MINOR="${BASH_REMATCH[2]}"
 PATCH="${BASH_REMATCH[3]}"
-SUFFIX="${BASH_REMATCH[4]:-}"
-VERSION="$MAJOR.$MINOR.$PATCH$SUFFIX"
-
-# Semver numeric prerelease identifiers must not have leading zeros.
-if [[ -n "$SUFFIX" ]]; then
-  IFS='.' read -r -a PRERELEASE_IDS <<< "${SUFFIX#-}"
-  for identifier in "${PRERELEASE_IDS[@]}"; do
-    if [[ "$identifier" =~ ^0[0-9]+$ ]]; then
-      echo "invalid release tag '$TAG' (numeric prerelease identifier '$identifier' cannot have leading zeros)" >&2
-      exit 1
-    fi
-  done
-fi
 
 # The Android version code encodes minor and patch in three digits each.
 # Values at or above 1000 would carry into the next component and collide with

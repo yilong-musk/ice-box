@@ -8,10 +8,15 @@
 # ("version": "../package.json"), so they are not rewritten here.
 # --no-changelog leaves CHANGELOG.md alone, e.g. when the section for this
 # version was written by hand.
+#
+# All or nothing: when any step fails, every file it wrote is restored, so the
+# same command can simply be run again after the fix.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/version-lib.sh
+source "$ROOT/scripts/version-lib.sh"
 
 NEW_VERSION=""
 ROLL_CHANGELOG=1
@@ -23,11 +28,11 @@ for arg in "$@"; do
       echo "unexpected argument: $arg" >&2
       exit 1
     fi
-    NEW_VERSION="${arg#v}"
+    NEW_VERSION="$arg"
     ;;
   esac
 done
-if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+if [[ -z "$NEW_VERSION" ]] || ! NEW_VERSION="$(release_version "$NEW_VERSION")"; then
   echo "usage: $0 <semver, e.g. 0.1.1> [--no-changelog]" >&2
   exit 1
 fi
@@ -59,8 +64,40 @@ for conf in "$TAURI_CONF" "$MOBILE_TAURI_CONF"; do
   fi
 done
 
+# Every file this script may write. On any failure they are restored, so a
+# re-run starts from the same state instead of finding CHANGELOG.md already
+# rolled or the version sources half-bumped.
+TOUCHED=(
+  CHANGELOG.md Cargo.toml Cargo.lock "$PACKAGE_JSON" "$MOBILE_PACKAGE_JSON"
+  "$MOBILE_TAURI_CONF" "$ANDROID_PROPERTIES"
+)
+BACKUP="$(mktemp -d "${TMPDIR:-/tmp}/ice-box-bump-XXXXXX")"
+for file in "${TOUCHED[@]}"; do
+  if [[ -e "$file" ]]; then
+    mkdir -p "$BACKUP/$(dirname "$file")"
+    cp -p "$file" "$BACKUP/$file"
+  fi
+done
+restore_on_failure() {
+  local status=$?
+  if [[ "$status" != 0 ]]; then
+    for file in "${TOUCHED[@]}"; do
+      if [[ -e "$BACKUP/$file" ]]; then
+        cp -p "$BACKUP/$file" "$file"
+      else
+        # tauri.properties is generated and may not have existed.
+        rm -f "$file"
+      fi
+    done
+    echo "bump-version: failed; restored ${TOUCHED[*]}" >&2
+  fi
+  rm -rf "$BACKUP"
+  exit "$status"
+}
+trap restore_on_failure EXIT
+
 # Roll the changelog first: it is the step most likely to fail (empty
-# Unreleased section), and it fails before any version file changes.
+# Unreleased section), so it fails before the slower steps run.
 if [[ "$ROLL_CHANGELOG" == 1 ]]; then
   bash "$ROOT/scripts/changelog-release.sh" "$NEW_VERSION"
 fi

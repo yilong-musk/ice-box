@@ -114,7 +114,8 @@ mkdir -p "$FIXTURE/scripts" \
   "$FIXTURE/apps/desktop/src-tauri" \
   "$FIXTURE/apps/mobile/src-tauri/gen/android/app"
 cp "$SCRIPT" "$FIXTURE/scripts/release-preflight.sh"
-cp "$ROOT/scripts/release-notes.sh" "$ROOT/scripts/android-version-code.sh" "$FIXTURE/scripts/"
+cp "$ROOT/scripts/release-notes.sh" "$ROOT/scripts/android-version-code.sh" \
+  "$ROOT/scripts/version-lib.sh" "$FIXTURE/scripts/"
 printf 'version = "%s"\n' "$VERSION" >"$FIXTURE/Cargo.toml"
 printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/desktop/package.json"
 printf '{"version": "../package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"

@@ -123,7 +123,9 @@ secrets switch to the new private key.
 the changelog), runs a local preflight, `gate-local.sh --full`, and
 `capture-docs.sh`, commits only the release files (it stops if anything else
 changed), pushes the branch, and opens the PR. `--no-push` stops after the
-commit; `--no-changelog` is passed through to the bump. The steps below are
+commit; `--no-changelog` is passed through to the bump. If a step fails before
+the commit, it discards its changes, returns to `main`, and deletes the local
+branch, so the same command can be run again after the fix. The steps below are
 what it does, and how to do them by hand.
 
 ### 1. Bump the version
@@ -135,13 +137,18 @@ bash scripts/bump-version.sh 0.1.2
 The script rewrites every version source above, verifies each pattern was found,
 moves the changelog's Unreleased section to the new version (step 2), refreshes
 `Cargo.lock` (`cargo check --workspace --quiet`), and prints the release body.
+It is all or nothing: when any step fails, every file it wrote (including
+`CHANGELOG.md`) is restored, so the same command works again after the fix.
+`release.sh`, `bump-version.sh`, `changelog-release.sh`, and the preflight all
+validate the version with `scripts/version-lib.sh`, so they accept exactly the
+same versions.
 
 ### 2. Changelog
 
 Changes are recorded under `## [Unreleased]` in `CHANGELOG.md` (Keep a
 Changelog style) as they land. The bump turns that section into
 `## [0.1.2] - <today, UTC>` and leaves an empty `## [Unreleased]` above it
-(`scripts/changelog-release.sh`). It fails, before changing any version file,
+(`scripts/changelog-release.sh`). It fails, before the slower bump steps run,
 when the Unreleased section is empty, has no `### Added/Changed/Fixed/...`
 subsection, or the version already has a section. For a hand-written section
 (for example a final release that merges pre-release notes), pass
@@ -186,9 +193,11 @@ repository settings, and the queued merge still waits for the review.
 
 The release workflow does not repeat the gate. Its preflight runs
 `scripts/verify-ci-status.sh`, which requires the newest run of each required
-check (`gate (linux)`, `gate + build (macOS dmg)`, `gate + build (Windows
-nsis)`) on the release commit to have completed successfully, so a release is
-never built from a tree that only passed the local gate. CI on `main` cancels a
+check on the release commit to have completed successfully, so a release is
+never built from a tree that only passed the local gate. The required checks
+are read from GitHub (the `main` branch protection and any branch ruleset), not
+listed in the script, so renaming a CI job only needs the branch protection
+updated; with no required checks configured the preflight fails. CI on `main` cancels a
 run when a newer commit lands; to release such a commit, re-run its CI first or
 release the newer one.
 
@@ -242,8 +251,8 @@ checks out the commit the preflight validated:
 
 | Job | Runner | Work |
 |-----|--------|------|
-| `preflight` | ubuntu-latest | tag is on `main`, the required CI checks passed on the commit, every version source matches, changelog section exists, signing secrets are present, the updater key matches the committed pubkey, the Android keystore/alias/passwords validate, and the version is newer than every published release and existing tag |
-| `tag` | ubuntu-latest | manual `release` mode only: creates and pushes the annotated tag on the validated commit |
+| `preflight` | ubuntu-latest | tag is on `main`, the required CI checks passed on the commit, the `release` environment's deployment rules allow this run's ref (`scripts/verify-release-environment.sh`), every version source matches, changelog section exists, signing secrets are present, the updater key matches the committed pubkey, the Android keystore/alias/passwords validate, and the version is newer than every published release and existing tag |
+| `tag` | ubuntu-latest | the one gate the build and publish jobs wait on (skipped in `preflight` mode); in manual `release` mode it also creates and pushes the annotated tag on the validated commit |
 | `build-macos` | macos-latest | starts right after the preflight (and tag); `tauri build --config src-tauri/tauri.updater.conf.json` (signing secrets); asserts the binary is arm64, the DMG is `ice-box_<ver>_aarch64.dmg`, and the bundle signature; uploads DMG + `*.app.tar.gz` + `.sig` |
 | `build-windows` | windows-latest | in parallel with macOS; NSIS (`npm run build:win -- --config src-tauri/tauri.updater.conf.json`, stacked on `tauri.windows.conf.json`); asserts the `ice-box_<ver>_x64-setup.exe` name and payload; uploads EXE + `.exe.sig` |
 | `build-android` | ubuntu-latest | in parallel; signed `arm64-v8a` APK (`scripts/build-android-apk.sh release arm64`) → `scripts/verify-android-apk.sh --release --version <ver>` → upload `ice-box_<ver>_android_arm64.apk` |
@@ -329,7 +338,7 @@ previous version instead of exposing download links that 404.
 | Situation | Action |
 |-----------|--------|
 | Preflight fails on CI status | Wait for CI on `main` to finish, re-run it if it was cancelled or flaky, and start the release again. |
-| Preflight or a build job fails | Fix the cause and re-run the workflow if the tag can stay. If the tag itself is wrong, cut a new patch version; once a release has been published, the version is never reused. |
+| Preflight or a build job fails | Fix the cause and re-run the workflow if the tag can stay. A manual `release` run whose tag already exists resumes the tag's commit, even after `main` has moved on, so "Re-run all jobs" or a new `release` dispatch for the same tag both work. If the tag itself is wrong, cut a new patch version; once a release has been published, the version is never reused. |
 | `publish` fails before the release is published | Rerun the failed `publish` job. It finds the draft, refreshes the notes, uploads the assets again (removing stale draft assets), and publishes only after the asset list matches. |
 | `publish` fails after the release is published | Rerun the job; it detects the published release before downloading artifacts, verifies the existing assets, and does not overwrite them. Fix the cause and cut a new patch if the assets themselves are wrong. |
 | The tagged workflow itself is broken | A tag-triggered run uses the workflow from the tag, so a fix on `main` does not change a rerun. If the draft already passed asset verification, publish that verified draft by hand (resolve it with GraphQL or `gh release view`, then `PATCH` it with `draft=false`), run `scripts/verify-release-assets.sh`, and fix the pipeline before the next patch. Do not move the tag. |
@@ -350,7 +359,8 @@ GitHub:
   reviewers so `publish` waits for a human after the builds pass. If you add
   deployment branch/tag rules, allow both the `v*` tag pattern and `main` (or
   leave the rules off): tag pushes run on the tag ref, manual `release` and
-  `rehearse` runs on `main`. The workflow
+  `rehearse` runs on `main`. The preflight checks these rules against the
+  run's ref and fails before the builds if `publish` would be rejected. The workflow
   serializes releases in the `release` concurrency group, so a run that is
   waiting for approval keeps the group busy and later tag pushes queue behind
   it; approve or reject promptly, or configure an environment wait timer. The
@@ -388,8 +398,11 @@ for gate coverage, platform splits, and manual live tests is
 
 The Rust toolchain is pinned in `rust-toolchain.toml` (CI-3). The workflows
 pin the same version for `dtolnay/rust-toolchain`;
-`scripts/check-toolchain-pins.sh` (run by both gates) fails when any
-`toolchain:` pin under `.github/` differs, so bump them together. GeoIP rule-set
+`scripts/check-toolchain-pins.sh` (run by both gates) fails when any pin under
+`.github/` differs (a `toolchain:` input, quoted or not, a
+`dtolnay/rust-toolchain@<version>` ref, or a `rustup` install/default), or when
+a `dtolnay/rust-toolchain@stable` step has no `toolchain:` input, so bump them
+together. GeoIP rule-set
 fetches (`scripts/fetch-geoip.sh`) pin `third_party/sing-geoip/REF` and
 verify SHA-256 against `third_party/sing-geoip/CHECKSUMS.sha256` (CI-8);
 the committed checksum file is the trust root, as with

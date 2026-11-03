@@ -18,6 +18,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/version-lib.sh
+source "$ROOT/scripts/version-lib.sh"
 
 VERSION=""
 BUMP_ARGS=()
@@ -39,11 +41,11 @@ for arg in "$@"; do
       echo "release: unexpected argument: $arg" >&2
       exit 2
     fi
-    VERSION="${arg#v}"
+    VERSION="$arg"
     ;;
   esac
 done
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+if [[ -z "$VERSION" ]] || ! VERSION="$(release_version "$VERSION")"; then
   echo "usage: $0 <X.Y.Z[-suffix]> [--no-changelog] [--no-push]" >&2
   exit 2
 fi
@@ -83,8 +85,25 @@ fi
 
 git switch -c "$BRANCH"
 
+# Until the release commit exists, a failure puts the repository back on main
+# and removes the new branch, so the same command can be run again after the
+# fix. The tree was clean at the start, so every change here is the script's.
+COMMITTED=0
+rollback_on_failure() {
+  local status=$?
+  if [[ "$status" != 0 && "$COMMITTED" == 0 ]]; then
+    echo "release: failed; discarding the release changes and returning to main" >&2
+    git reset --quiet --hard HEAD
+    git switch --quiet main
+    git branch --quiet -D "$BRANCH"
+  fi
+  exit "$status"
+}
+trap rollback_on_failure EXIT
+
 echo "== bump version =="
-bash scripts/bump-version.sh "$VERSION" "${BUMP_ARGS[@]}"
+# ${a[@]+...} keeps an empty array working under `set -u` on bash < 4.4 (macOS).
+bash scripts/bump-version.sh "$VERSION" ${BUMP_ARGS[@]+"${BUMP_ARGS[@]}"}
 
 echo "== release preflight (local) =="
 # Without --latest-tag/--existing-tag: the newer-than checks need the release
@@ -108,6 +127,7 @@ fi
 
 git add -- "${RELEASE_FILES[@]}"
 git commit -m "release: $TAG"
+COMMITTED=1
 
 if [[ "$PUSH" == 0 ]]; then
   echo "release: committed on $BRANCH; push it and open a PR to main when ready"

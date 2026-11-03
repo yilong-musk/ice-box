@@ -67,11 +67,17 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
   echo "== merge-updater-latest fixtures =="
   bash "$ROOT/scripts/test-merge-updater-latest.sh"
 
+  echo "== toolchain pin fixtures =="
+  bash "$ROOT/scripts/test-check-toolchain-pins.sh"
+
   echo "== changelog release fixtures =="
   bash "$ROOT/scripts/test-changelog-release.sh"
 
   echo "== CI status fixtures =="
   bash "$ROOT/scripts/test-verify-ci-status.sh"
+
+  echo "== release environment fixtures =="
+  bash "$ROOT/scripts/test-verify-release-environment.sh"
 
   echo "== release preflight fixtures =="
   bash "$ROOT/scripts/test-release-preflight.sh"
