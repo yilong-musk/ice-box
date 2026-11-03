@@ -89,6 +89,7 @@ export const api = {
   requestBatteryExemption: async () => {},
   openNetworkSettings: async () => {},
   openVpnSettings: async () => {},
+  exportCoreLog: async () => "cancelled" as const,
   listenAppUpdateProgress: (
     handler: (payload: UpdateProgressPayload) => void,
   ) =>

@@ -11,7 +11,7 @@ use ice_subscription::{
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
-use tauri_plugin_tunnel::{InstalledApp, Tunnel, TunnelError};
+use tauri_plugin_tunnel::{ExportKind, InstalledApp, Tunnel, TunnelError};
 use uuid::Uuid;
 
 use crate::config::PLATFORM;
@@ -69,6 +69,11 @@ pub struct SubscriptionShareRequest {
 pub struct SaveTextDocumentRequest {
     pub filename: String,
     pub content: String,
+}
+
+#[derive(Deserialize)]
+pub struct ExportCoreLogRequest {
+    pub filename: String,
 }
 
 #[derive(Deserialize)]
@@ -336,6 +341,29 @@ pub fn save_text_document(
     let tunnel = app.state::<Tunnel<Wry>>();
     tunnel
         .save_text_document(&filename, &req.content)
+        .map_err(map_tunnel)
+}
+
+/// Save the core log through the system save dialog as a `.log` text file.
+/// `"cancelled"` when the dialog is dismissed. The host lock is released
+/// before the dialog opens; like [`save_text_document`], the dialog runs on
+/// the command thread.
+#[tauri::command]
+pub fn export_core_log(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+    req: ExportCoreLogRequest,
+) -> Result<String, AppError> {
+    let content = ready(&app, &host, &tunnel)?.core_log_export()?;
+    let filename = req.filename.trim();
+    let filename = if filename.is_empty() {
+        "ice-box-core.log".to_string()
+    } else {
+        bounded_export_filename(filename)
+    };
+    tunnel
+        .save_document(&filename, &content, ExportKind::Log)
         .map_err(map_tunnel)
 }
 

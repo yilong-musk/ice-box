@@ -105,6 +105,46 @@ pub(crate) fn install_geoip_rule_sets(target: &Path, source: &Path) -> std::io::
     Ok(copied)
 }
 
+/// The `:tunnel` process keeps `sing-box.log` at or under this size
+/// (`CORE_LOG_MAX_BYTES` in TunnelFiles.kt). An export never reads more.
+pub const CORE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// The exported core log: a header naming the app version, then the newest
+/// `max_bytes` of the log starting at a line boundary. A missing log exports
+/// just the header, so the user still gets a file that says the log is empty.
+pub fn core_log_export(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut text = format!(
+        "# ice-box {} Android core log (sing-box warnings and errors)\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            text.push_str("# no log yet\n");
+            return Ok(text);
+        }
+        Err(err) => return Err(err),
+    };
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut bytes)?;
+    if start > 0 {
+        // The tail starts mid-line; drop that partial first line.
+        match bytes.iter().position(|&b| b == b'\n') {
+            Some(newline) => {
+                bytes.drain(..=newline);
+            }
+            None => bytes.clear(),
+        }
+    }
+    text.push_str(&String::from_utf8_lossy(&bytes));
+    Ok(text)
+}
+
 pub fn core_log_path(paths: &AppPaths) -> PathBuf {
     // The generator writes `log.output` to `shared/sing-box.log` whenever a
     // shared root is passed, including when that root equals the private root.
@@ -136,6 +176,33 @@ mod tests {
         assert_eq!(cfg["inbounds"][0]["type"], "tun");
         let log = cfg["log"]["output"].as_str().unwrap();
         assert_eq!(log, core_log_path(&paths).to_string_lossy());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn core_log_export_keeps_the_newest_whole_lines_under_the_cap() {
+        let root = temp_root("core-log-export");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("sing-box.log");
+
+        let missing = core_log_export(&path, 64).unwrap();
+        assert!(missing.starts_with("# ice-box "), "{missing}");
+        assert!(missing.ends_with("# no log yet\n"), "{missing}");
+
+        let lines: String = (0..20).map(|i| format!("WARN line {i:02}\n")).collect();
+        std::fs::write(&path, &lines).unwrap();
+        let whole = core_log_export(&path, CORE_LOG_MAX_BYTES).unwrap();
+        assert!(whole.ends_with(&lines), "a small log is exported whole");
+
+        // Lines are 13 bytes. A 40-byte tail starts on the newline ending
+        // line 16, so lines 17-19 are kept whole; 30 bytes starts inside
+        // line 17, which is dropped.
+        let body = |max| {
+            let text = core_log_export(&path, max).unwrap();
+            text.split_once('\n').unwrap().1.to_string()
+        };
+        assert_eq!(body(40), "WARN line 17\nWARN line 18\nWARN line 19\n");
+        assert_eq!(body(30), "WARN line 18\nWARN line 19\n");
         let _ = std::fs::remove_dir_all(root);
     }
 

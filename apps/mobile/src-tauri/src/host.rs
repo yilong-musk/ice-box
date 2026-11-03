@@ -374,6 +374,13 @@ impl MobileHost {
         Ok(self.traffic.snapshot_since(cursor))
     }
 
+    /// The core log as exported from Settings (see [`config::core_log_export`]).
+    pub fn core_log_export(&self) -> Result<String, AppError> {
+        let path = config::core_log_path(self.paths()?);
+        config::core_log_export(&path, config::CORE_LOG_MAX_BYTES)
+            .map_err(|err| AppError::new(ErrorCode::ConfigInvalid, format!("read core log: {err}")))
+    }
+
     pub fn log_view(&self, n: usize) -> Result<Vec<String>, AppError> {
         let path = config::core_log_path(self.paths()?);
         Ok(tail_lines(&path, n.min(2000)))

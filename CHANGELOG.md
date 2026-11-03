@@ -36,6 +36,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows a readable summary instead of raw JSON.
 - Android: Settings no longer shows the Data card. Its debug-logs switch only
   filters the desktop Logs page, which the phone does not have.
+- Android: the sing-box core log keeps warnings and errors only (was one
+  line per connection) and is capped at 5 MiB, checked at every start and
+  every 10 minutes while the VPN runs; nothing limited it before. Settings
+  gains a Logs card that exports it as a `.log` file through the system save
+  dialog, for bug reports.
 
 ### Fixed
 

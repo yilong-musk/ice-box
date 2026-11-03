@@ -25,6 +25,7 @@ import { t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
 import { AndroidSystemCard } from "./settings/Android";
+import { PhoneLogsCard } from "./settings/PhoneLogs";
 import { AppearanceCard } from "./settings/Appearance";
 import { DataCard } from "./settings/Data";
 import { Ipv6Card } from "./settings/Ipv6";
@@ -776,7 +777,10 @@ export function Settings({
               Logs page and its button opens the data folder, and the phone
               has neither. */}
           {isPhoneShell() ? (
-            <AndroidSystemCard status={status} />
+            <>
+              <AndroidSystemCard status={status} />
+              <PhoneLogsCard />
+            </>
           ) : (
             <DataCard
               form={form}
