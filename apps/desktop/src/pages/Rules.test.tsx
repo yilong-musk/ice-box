@@ -6,6 +6,12 @@ import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
 import { Rules } from "./Rules";
 
+const phoneShell = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/shell", () => ({
+  isPhoneShell: () => phoneShell.value,
+}));
+
 const getRuleOverview = vi.fn();
 const listRules = vi.fn();
 const setRuleDisabled = vi.fn();
@@ -92,6 +98,7 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
 describe("Rules", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    phoneShell.value = false;
     getRuleOverview.mockResolvedValue(sampleOverview());
     listRules.mockResolvedValue(sampleList());
     setRuleDisabled.mockResolvedValue({ ok: true, disabled: true });
@@ -103,6 +110,45 @@ describe("Rules", () => {
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
     ]);
+  });
+
+  it("shows the outbound beside the actions on desktop", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    const outbound = await view.findByTitle("n1");
+    expect(outbound.closest("[data-slot='item-actions']")).not.toBeNull();
+    expect(view.queryAllByTestId("rule-outbound")).toHaveLength(0);
+  });
+
+  it("moves a long outbound under the match on the phone", async () => {
+    phoneShell.value = true;
+    const longOutbound = "🇯🇵 Tokyo / premium-edge-01 (vmess, IPLC, 10x)";
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 1,
+        items: [
+          {
+            index: 0,
+            fingerprint: "fp-long",
+            rule: { domain_suffix: ["googleapis.com"], outbound: longOutbound },
+            custom: false,
+            disabled: false,
+            rule_type: "domain_suffix",
+          },
+        ],
+      }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("googleapis.com");
+
+    // The outbound is on the description line, truncated on its own, so it
+    // no longer takes width from the match in the title.
+    const line = view.getByTestId("rule-outbound");
+    expect(line).toHaveTextContent(ruleTypeLabel("domain_suffix"));
+    const outbound = within(line).getByTitle(longOutbound);
+    expect(outbound).toHaveClass("truncate");
+    expect(container.querySelector("[data-slot='item-actions']")).not.toHaveTextContent(longOutbound);
   });
 
   it("renders rows, type chips and filters", async () => {

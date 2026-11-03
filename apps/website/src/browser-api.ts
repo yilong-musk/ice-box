@@ -276,7 +276,8 @@ const ruleRows = [
   ["domain", "github.com", TOKYO_NODE],
   ["domain_suffix", "googleapis.com", SINGAPORE_NODE],
   ["geoip", "cn", "direct"],
-  ["final", "match all remaining traffic", TOKYO_NODE],
+  // route.final is not a rule, so the backend never lists it; end on a rule set.
+  ["rule_set", "geosite-category-ads-all", "block"],
 ].map(([rule_type, value, outbound], index) => ({
   index,
   fingerprint: `demo-rule-${index}`,
@@ -628,8 +629,8 @@ export const api = {
     saveTextFile(singboxExportFilename(name || sub.name), demoSingboxConfig());
     return "saved";
   },
-  async getRuleOverview(): Promise<RuleOverview> { await delay(); return { total: ruleRows.length, disabled: ruleRows.filter((row) => row.disabled).length, custom: 0, rule_sets: 2, types: [{ rule_type: "domain", count: 2 }, { rule_type: "geoip", count: 1 }] }; },
-  async listRules(req: ListRulesRequest): Promise<ListRulesResponse> { await delay(); const keyword = req.keyword?.toLowerCase() ?? ""; const filtered = ruleRows.filter((row) => JSON.stringify(row.rule).toLowerCase().includes(keyword)); return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) }; },
+  async getRuleOverview(): Promise<RuleOverview> { await delay(); return { total: ruleRows.length, disabled: ruleRows.filter((row) => row.disabled).length, custom: 0, rule_sets: 2, types: [...new Set(ruleRows.map((row) => row.rule_type))].map((rule_type) => ({ rule_type, count: ruleRows.filter((row) => row.rule_type === rule_type).length })) }; },
+  async listRules(req: ListRulesRequest): Promise<ListRulesResponse> { await delay(); const keyword = req.keyword?.toLowerCase() ?? ""; const filtered = ruleRows.filter((row) => (!req.type || row.rule_type === req.type) && JSON.stringify(row.rule).toLowerCase().includes(keyword)); return { total: filtered.length, offset: req.offset, limit: req.limit, items: filtered.slice(req.offset, req.offset + req.limit) }; },
   async setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean }> { const row = ruleRows.find((item) => item.fingerprint === fingerprint); if (row) row.disabled = disabled; return { ok: true, disabled }; },
   async addCustomRule(): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint: "demo-custom-rule" }; },
   async updateCustomRule(fingerprint: string): Promise<{ ok: boolean; fingerprint: string }> { return { ok: true, fingerprint }; },

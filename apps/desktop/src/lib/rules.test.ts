@@ -73,6 +73,23 @@ describe("rule helpers", () => {
     expect(ruleMatchSummary(row({ outbound: "direct" }))).toBe("");
   });
 
+  it("describes rules without a recognized matcher instead of raw JSON", () => {
+    expect(
+      ruleMatchSummary(
+        row({
+          type: "logical",
+          mode: "or",
+          rules: [{ domain: ["a.com"] }, { port: [443] }],
+          outbound: "Proxies",
+        }),
+      ),
+    ).toBe(t("rules.logicalSummary", { mode: "OR", count: 2 }));
+    expect(ruleMatchSummary(row({ action: "sniff" }))).toBe("action: sniff");
+    expect(
+      ruleMatchSummary(row({ ip_version: 6, invert: true, outbound: "block" })),
+    ).toBe("ip_version: 6");
+  });
+
   it("extracts outbound target", () => {
     expect(ruleOutbound(row({ domain: ["x.com"], outbound: "Proxies" }))).toBe("Proxies");
     expect(ruleOutbound(row({ domain: ["x.com"] }))).toBe("");

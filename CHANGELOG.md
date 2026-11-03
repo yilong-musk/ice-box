@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   icons further from the rounded corners, and its Settings page no longer
   shows the desktop-only TUN mode, privileged helper, or launch at login,
   matching the Android app.
+- Rules: on Android the outbound moves under the match (truncated on its own
+  line), so a long node name no longer squeezes the matched domain to a few
+  letters. A rule without a recognized matcher (a logical or action-only rule)
+  shows a readable summary instead of raw JSON.
 
 ### Fixed
 

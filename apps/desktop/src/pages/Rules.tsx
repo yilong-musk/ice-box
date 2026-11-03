@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import {
@@ -74,6 +75,7 @@ const EMPTY_OVERVIEW: RuleOverview = {
 
 export function Rules({ onNavigate, active = true }: Props) {
   useLanguagePreference();
+  const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [overview, setOverview] = useState<RuleOverview>(EMPTY_OVERVIEW);
   const [rows, setRows] = useState<RuleRow[]>([]);
@@ -455,14 +457,37 @@ export function Rules({ onNavigate, active = true }: Props) {
                               </Badge>
                             )}
                           </ItemTitle>
-                          <ItemDescription>
-                            {ruleTypeLabel(row.rule_type)}
-                          </ItemDescription>
+                          {phone ? (
+                            // The phone row is too narrow for an outbound
+                            // badge beside the actions: a long node name would
+                            // squeeze the match itself to a few letters. Show
+                            // it under the match instead, truncated on its own.
+                            <ItemDescription
+                              className="flex min-w-0 items-center gap-1"
+                              data-testid="rule-outbound"
+                            >
+                              <span className="shrink-0">
+                                {ruleTypeLabel(row.rule_type)}
+                              </span>
+                              <span className="shrink-0" aria-hidden="true">
+                                →
+                              </span>
+                              <span className="truncate" title={outboundLabel}>
+                                {outboundLabel}
+                              </span>
+                            </ItemDescription>
+                          ) : (
+                            <ItemDescription>
+                              {ruleTypeLabel(row.rule_type)}
+                            </ItemDescription>
+                          )}
                         </ItemContent>
                         <ItemActions className="flex-wrap">
-                          <Badge variant="outline" title={outboundLabel}>
-                            {outboundLabel}
-                          </Badge>
+                          {phone ? null : (
+                            <Badge variant="outline" title={outboundLabel}>
+                              {outboundLabel}
+                            </Badge>
+                          )}
                           {row.custom ? (
                             <Button
                               type="button"
