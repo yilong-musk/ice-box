@@ -772,15 +772,20 @@ export function Settings({
             />
           </div>
 
-          {isPhoneShell() ? <AndroidSystemCard status={status} /> : null}
-
-          <DataCard
-            form={form}
-            setForm={setForm}
-            busy={busy}
-            loaded={loaded}
-            setError={setError}
-          />
+          {/* The Data card is desktop-only: its debug switch only filters the
+              Logs page and its button opens the data folder, and the phone
+              has neither. */}
+          {isPhoneShell() ? (
+            <AndroidSystemCard status={status} />
+          ) : (
+            <DataCard
+              form={form}
+              setForm={setForm}
+              busy={busy}
+              loaded={loaded}
+              setError={setError}
+            />
+          )}
         </div>
       </ScrollArea>
 

@@ -260,12 +260,13 @@ try {
   await warning.waitFor({ state: "detached", timeout: 8000 });
 
   // Settings must match the Android app: the VPN service is the only capture,
-  // so the desktop TUN mode, privileged helper, and launch at login stay hidden.
+  // so the desktop TUN mode, privileged helper, and launch at login stay
+  // hidden; with no Logs page, so does the debug-logs switch.
   await tabs.nth(4).click();
   const settings = frame.getByTestId("settings-stack");
   await settings.waitFor({ timeout: 15_000 });
   await page.waitForTimeout(600);
-  for (const desktopOnly of ["TUN Mode", "Install Helper", "Launch at login"]) {
+  for (const desktopOnly of ["TUN Mode", "Install Helper", "Launch at login", "Debug logs"]) {
     if ((await settings.getByText(desktopOnly, { exact: true }).count()) !== 0) {
       throw new Error(`phone Settings must not show the desktop-only "${desktopOnly}"`);
     }

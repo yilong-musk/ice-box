@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   line), so a long node name no longer squeezes the matched domain to a few
   letters. A rule without a recognized matcher (a logical or action-only rule)
   shows a readable summary instead of raw JSON.
+- Android: Settings no longer shows the Data card. Its debug-logs switch only
+  filters the desktop Logs page, which the phone does not have.
 
 ### Fixed
 
