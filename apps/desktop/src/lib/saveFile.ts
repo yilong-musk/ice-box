@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** Suggested download name for one subscription's sing-box document. */
 /** `ice-box-core-20261103-153045.log`, in the device's local time. */
 export function coreLogExportFilename(now: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -9,6 +8,7 @@ export function coreLogExportFilename(now: Date): string {
   return `ice-box-core-${date}-${time}.log`;
 }
 
+/** Suggested download name for one subscription's sing-box document. */
 export function singboxExportFilename(name: string): string {
   const cleaned = name
     .replace(/[\\/:*?"<>|]/g, "_")

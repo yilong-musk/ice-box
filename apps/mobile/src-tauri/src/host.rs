@@ -374,11 +374,10 @@ impl MobileHost {
         Ok(self.traffic.snapshot_since(cursor))
     }
 
-    /// The core log as exported from Settings (see [`config::core_log_export`]).
-    pub fn core_log_export(&self) -> Result<String, AppError> {
-        let path = config::core_log_path(self.paths()?);
-        config::core_log_export(&path, config::CORE_LOG_MAX_BYTES)
-            .map_err(|err| AppError::new(ErrorCode::ConfigInvalid, format!("read core log: {err}")))
+    /// Where the core log lives. The export reads it with the host lock
+    /// released (see `commands::export_core_log`).
+    pub fn core_log_path(&self) -> Result<std::path::PathBuf, AppError> {
+        Ok(config::core_log_path(self.paths()?))
     }
 
     pub fn log_view(&self, n: usize) -> Result<Vec<String>, AppError> {

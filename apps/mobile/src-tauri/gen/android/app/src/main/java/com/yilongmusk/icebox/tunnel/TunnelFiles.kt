@@ -68,7 +68,7 @@ private inline fun <T> withStatusFileLock(dir: File, block: () -> T): T {
 /**
  * Size cap for the sing-box log. The phone core logs warnings and errors only
  * (`MOBILE_LOG_LEVEL` in crates/ice-config/src/build.rs), so 5 MiB keeps a
- * long history and always fits the 16 MiB export limit.
+ * long history; the export still checks the 16 MiB limit after decoding.
  */
 const val CORE_LOG_MAX_BYTES = 5L * 1024 * 1024
 
@@ -76,19 +76,47 @@ const val CORE_LOG_MAX_BYTES = 5L * 1024 * 1024
 fun coreLogFile(context: Context): File = File(sharedDir(context), "sing-box.log")
 
 /**
+ * Lock file shared with the host process, which takes the same lock while it
+ * exports the log (`core_log_export` in config.rs). Java file locks are
+ * fcntl locks on Android, so the host must use `fcntl`, not `flock`.
+ */
+const val CORE_LOG_LOCK_FILE = ".sing-box-log.lock"
+
+private val coreLogLock = Any()
+
+/**
  * Keep the sing-box log at or under [CORE_LOG_MAX_BYTES]. Mirrors
  * `ice_core::cap_log_file`: drop at least a quarter from the front, starting
  * at a line boundary, and compact the rest in place. The file keeps its inode,
  * so libbox's `O_APPEND` writer carries on at the new end.
+ *
+ * libbox cannot be paused, so the copy repeats until the length stops
+ * changing and only then truncates. A line appended between that last length
+ * read and the truncate is still lost; the window is a few syscalls wide.
  */
 fun capCoreLog(context: Context) {
     val file = coreLogFile(context)
     if (file.length() <= CORE_LOG_MAX_BYTES) return
+    // A Java file lock is per VM and throws on a second lock from this
+    // process, so take the in-process monitor first.
+    synchronized(coreLogLock) {
+        RandomAccessFile(File(sharedDir(context), CORE_LOG_LOCK_FILE), "rw").use { lockRaf ->
+            val lock = lockRaf.channel.lock()
+            try {
+                compactCoreLog(file)
+            } finally {
+                lock.release()
+            }
+        }
+    }
+}
+
+private fun compactCoreLog(file: File) {
     RandomAccessFile(file, "rw").use { raf ->
         val size = raf.length()
         if (size <= CORE_LOG_MAX_BYTES) return
         val buf = ByteArray(64 * 1024)
-        val drop = maxOf(CORE_LOG_MAX_BYTES / 4, size - CORE_LOG_MAX_BYTES).coerceAtMost(size - 1)
+        val drop = maxOf(CORE_LOG_MAX_BYTES / 4, size - CORE_LOG_MAX_BYTES)
         val start = nextLineStart(raf, drop, size, buf)
         var from = start
         fun copyUntil(end: Long) {
@@ -102,13 +130,22 @@ fun capCoreLog(context: Context) {
             }
         }
         copyUntil(size)
-        // Keep lines appended while the copy ran.
-        copyUntil(raf.length())
+        // Keep lines appended while the copy ran, until no more arrive.
+        while (true) {
+            val end = raf.length()
+            if (end <= from) break
+            copyUntil(end)
+        }
         raf.setLength(from - start)
     }
 }
 
-/** First line start at or after [start]; [start] itself when no newline follows. */
+/**
+ * First line start at or after [start]. When the newline found is the last
+ * byte, everything after [start] is one finished line that crosses the cut,
+ * so nothing is kept ([size]). With no newline at all the tail is one
+ * unfinished over-long line; it is kept from [start] rather than dropped.
+ */
 private fun nextLineStart(raf: RandomAccessFile, start: Long, size: Long, buf: ByteArray): Long {
     raf.seek(start - 1)
     if (raf.read() == '\n'.code) return start
@@ -117,10 +154,7 @@ private fun nextLineStart(raf: RandomAccessFile, start: Long, size: Long, buf: B
         val count = raf.read(buf, 0, minOf(buf.size.toLong(), size - pos).toInt())
         if (count <= 0) break
         for (i in 0 until count) {
-            if (buf[i] == '\n'.code.toByte()) {
-                val next = pos + i + 1
-                return if (next < size) next else start
-            }
+            if (buf[i] == '\n'.code.toByte()) return pos + i + 1
         }
         pos += count
     }
