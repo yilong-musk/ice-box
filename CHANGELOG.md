@@ -27,7 +27,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tests every node; a collapsed group tests only its current exit), so rows no
   longer crowd or overlap. Its header is shorter and its title matches the
   other Home cards. The website Live Demo phone status bar keeps the clock and
-  icons further from the rounded corners.
+  icons further from the rounded corners, and its Settings page no longer
+  shows the desktop-only TUN mode, privileged helper, or launch at login,
+  matching the Android app.
 
 ### Fixed
 
