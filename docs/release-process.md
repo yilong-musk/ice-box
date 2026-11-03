@@ -370,9 +370,13 @@ GitHub:
 - **Tag protection**: create a tag ruleset for `v*` that restricts updates and
   deletions to maintainers. Without it, anyone with write access can push a tag
   that starts the release pipeline. The manual `release` mode creates the tag as
-  GitHub Actions, so if the ruleset also restricts creation, add GitHub Actions
-  to its bypass list (or keep pushing tags by hand). A signed-tag requirement
-  rules out the manual `release` mode, because the workflow's tags are unsigned.
+  GitHub Actions, so the ruleset must not restrict creation: on a user-owned
+  repository GitHub does not offer the Actions integration as a bypass actor
+  (the UI omits it, and the API rejects `Integration 15368` with "Actor GitHub
+  Actions integration must be part of the ruleset source or owner
+  organization"). Leave `creation` out of the ruleset, or keep pushing tags by
+  hand. A signed-tag requirement rules out the manual `release` mode, because
+  the workflow's tags are unsigned.
 - **Branch protection**: keep the required checks (`gate (linux)`,
   `gate + build (macOS dmg)`, `gate + build (Windows nsis)`) on `main`.
 - **Secrets**: set `TAURI_SIGNING_PRIVATE_KEY`,
