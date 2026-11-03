@@ -19,15 +19,15 @@
 #   fixtures  release, updater, signing, and Android script fixtures, plus
 #             `bash -n` on changed shell scripts; also selected by the
 #             version sources and CHANGELOG.md that release preflight reads
-# `cargo fmt --check` runs on every invocation. Docs-only changes run nothing
-# else. A path that matches no bucket, a change to this script, or a missing
-# merge base falls back to --full.
+# `cargo fmt --check` and the Rust toolchain pin check run on every
+# invocation. Docs-only changes run nothing else. A path that matches no
+# bucket, a change to this script, or a missing merge base falls back to
+# --full.
 #
 # GATE_LOCAL_BASE overrides the base ref (default: origin/main, then main).
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, and the
 # Tauri shell crates only when they changed). Documentation screenshots are not
-# part of the gate;
-# refresh them with scripts/capture-docs.sh.
+# part of the gate; refresh them with scripts/capture-docs.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,7 +40,7 @@ for arg in "$@"; do
   --full) full=1 ;;
   --dry-run) dry_run=1 ;;
   -h | --help)
-    sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
@@ -200,6 +200,9 @@ echo "gate-local: scope = ${scope[*]:-fmt only}$([[ "$full" == 1 ]] && echo ' (f
 echo "== cargo fmt --check =="
 cargo fmt --check
 
+echo "== rust toolchain pins =="
+bash scripts/check-toolchain-pins.sh
+
 if [[ "$run_rust" == 1 ]]; then
   echo "== cargo clippy =="
   # Exclude the Tauri shells: they need GTK/webkit system libs that are
@@ -272,6 +275,12 @@ if [[ "$run_fixtures" == 1 ]]; then
 
   echo "== merge-updater-latest fixtures =="
   bash scripts/test-merge-updater-latest.sh
+
+  echo "== changelog release fixtures =="
+  bash scripts/test-changelog-release.sh
+
+  echo "== CI status fixtures =="
+  bash scripts/test-verify-ci-status.sh
 
   echo "== release preflight fixtures =="
   bash scripts/test-release-preflight.sh

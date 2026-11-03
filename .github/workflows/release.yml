@@ -4,14 +4,29 @@ on:
   push:
     tags:
       - "v*"
-  # Dry-run the preflight against main before pushing a tag. This validates the
-  # real signing/Android secrets and keystore without building or publishing.
+  # Manual runs always use the current main commit:
+  #   preflight  validate the tag, version sources, changelog, CI status, and
+  #              the real signing/Android secrets; no build, no tag
+  #   release    the same checks, then create the tag on that commit, build,
+  #              and publish (the alternative to pushing the tag by hand)
+  #   rehearse   build main's current version and stage it as a throwaway draft
+  #              under a rehearsal-<run id> name, run every publish check except
+  #              the final publish, then delete the draft
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to validate against the version on main
-        required: true
+        description: Release tag (vX.Y.Z); ignored by rehearse
+        required: false
         type: string
+      mode:
+        description: What to run
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - release
+          - rehearse
 
 # Least privilege: only the publish job writes to the repository.
 permissions:
@@ -28,8 +43,17 @@ jobs:
     name: Preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # scripts/verify-ci-status.sh reads the CI check runs of the commit.
+      checks: read
     outputs:
       prerelease: ${{ steps.check.outputs.prerelease }}
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      sha: ${{ steps.check.outputs.sha }}
+      mode: ${{ steps.check.outputs.mode }}
+      build: ${{ steps.check.outputs.build }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -45,7 +69,8 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_MODE: ${{ inputs.mode }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -56,30 +81,71 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Tags pushed from an unmerged release branch must not publish. A
-          # workflow_dispatch dry run validates main itself, not a tag.
           git rev-parse --verify --quiet origin/main >/dev/null
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag_commit="$(git rev-parse HEAD)"
-            echo "dry run: validating $TAG against main without building or publishing"
+            mode="$INPUT_MODE"
+            commit="$(git rev-parse HEAD)"
+            if [[ "$mode" == rehearse ]]; then
+              # Rehearse whatever main currently carries; that version is
+              # usually already released, so the newer-than checks are skipped.
+              TAG="v$(python3 -c 'import json; print(json.load(open("apps/desktop/package.json"))["version"])')"
+            else
+              TAG="$INPUT_TAG"
+              if [[ -z "$TAG" ]]; then
+                echo "the $mode mode needs the tag input" >&2
+                exit 1
+              fi
+            fi
+            # "Re-run all jobs" after the tag job succeeded finds its own tag;
+            # anything else means the version is taken.
+            if [[ "$mode" == release ]] && git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+              if [[ "$(git rev-list -n 1 "$TAG")" != "$commit" ]]; then
+                echo "tag $TAG already exists on another commit; versions are never reused" >&2
+                exit 1
+              fi
+              echo "note: tag $TAG already points at $commit (re-run)"
+            fi
+            echo "$mode: validating $TAG against main at $commit"
           else
-            tag_commit="$(git rev-list -n 1 "$TAG")"
+            mode=release
+            TAG="$GITHUB_REF_NAME"
+            # Tags pushed from an unmerged release branch must not publish.
+            commit="$(git rev-list -n 1 "$TAG")"
           fi
-          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
-            echo "$TAG is not reachable from main" >&2
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "$TAG ($commit) is not reachable from main" >&2
             exit 1
           fi
 
-          if [[ "$TAG" == *-* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "mode=$mode"
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "sha=$commit"
+            if [[ "$mode" == preflight ]]; then
+              echo "build=false"
+            else
+              echo "build=true"
+            fi
+            if [[ "$TAG" == *-* ]]; then
+              echo "prerelease=true"
+            else
+              echo "prerelease=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+          # The release builds do not re-run the gate: they rely on the CI run
+          # on main for this exact commit.
+          bash scripts/verify-ci-status.sh "$commit"
 
           # A published release is verification-only on a rerun, so it does
           # not need the signing secrets. A new or draft release still needs
           # them and must be newer than every published release and tag.
-          release_state="$(bash scripts/gh-release-state.sh "$TAG")"
+          if [[ "$mode" == rehearse ]]; then
+            release_state=rehearse
+          else
+            release_state="$(bash scripts/gh-release-state.sh "$TAG")"
+          fi
           args=()
           if [[ "$release_state" == "false" ]]; then
             args+=(--allow-existing)
@@ -100,7 +166,11 @@ jobs:
             # waste the Android build.
             bash scripts/verify-signing-key.sh
             bash scripts/verify-android-keystore.sh
+          fi
 
+          if [[ "$release_state" == rehearse ]]; then
+            args+=(--allow-existing)
+          elif [[ "$release_state" != "false" ]]; then
             latest_tags="$(gh api --paginate \
               "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
               --jq '.[] | select(.draft == false) | .tag_name')"
@@ -131,26 +201,61 @@ jobs:
           fi
           bash scripts/release-preflight.sh "$TAG" "${args[@]}"
 
-  # The full gate (including frontend and website builds) runs once on Linux.
-  # The packaging jobs run only the platform half and then build.
-  gate-linux:
-    name: Gate (linux)
+  # The release does not re-run the gate: the preflight requires the CI run on
+  # main to have passed for the exact commit being released.
+
+  # Manual `release` runs create the tag here, on the commit the preflight
+  # validated. A tag pushed with GITHUB_TOKEN does not start another workflow
+  # run, so this run carries on with the build and publish jobs.
+  tag:
+    name: Create tag
     needs: preflight
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && needs.preflight.outputs.mode == 'release'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.preflight.outputs.tag }}
+      SHA: ${{ needs.preflight.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/gate-linux
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+
+      - name: Create and push the annotated tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            if [[ "$(git rev-list -n 1 "$TAG")" != "$SHA" ]]; then
+              echo "tag $TAG exists on another commit" >&2
+              exit 1
+            fi
+            echo "tag $TAG already points at $SHA (re-run)"
+            exit 0
+          fi
+          git tag -a "$TAG" -m "ice-box $TAG" "$SHA"
+          git push origin "refs/tags/$TAG"
 
   build-macos:
     name: Build macOS (arm64)
-    needs: [preflight, gate-linux]
-    if: github.event_name != 'workflow_dispatch'
+    needs: [preflight, tag]
+    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
+    if: >-
+      !cancelled() && needs.preflight.result == 'success' &&
+      needs.preflight.outputs.build == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: macos-latest
     timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -177,11 +282,6 @@ jobs:
 
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
-
-      - name: Workspace gate (G9.10, rust)
-        env:
-          GATE_SCOPE: rust
-        run: bash scripts/gate.sh
 
       - name: Build app bundle (tauri build)
         env:
@@ -227,7 +327,7 @@ jobs:
           shopt -s nullglob
           dmg=(target/release/bundle/dmg/*.dmg)
           test "${#dmg[@]}" -eq 1
-          expected="ice-box_${GITHUB_REF_NAME#v}_aarch64.dmg"
+          expected="ice-box_${VERSION}_aarch64.dmg"
           case "$(basename "${dmg[0]}")" in
           "$expected") ;;
           *)
@@ -260,15 +360,23 @@ jobs:
 
   build-windows:
     name: Build Windows (NSIS)
-    needs: [preflight, gate-linux]
-    if: github.event_name != 'workflow_dispatch'
+    needs: [preflight, tag]
+    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
+    if: >-
+      !cancelled() && needs.preflight.result == 'success' &&
+      needs.preflight.outputs.build == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: windows-latest
     timeout-minutes: 90
     defaults:
       run:
         shell: bash
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -296,11 +404,6 @@ jobs:
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
-      - name: Workspace gate (G9.10, rust)
-        env:
-          GATE_SCOPE: rust
-        run: bash scripts/gate.sh
-
       - name: Build app bundle (tauri build, NSIS)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -319,7 +422,7 @@ jobs:
           test "${#exe[@]}" -ge 1
           test "${#sig[@]}" -ge 1
           test -s "${sig[0]}"
-          expected="ice-box_${GITHUB_REF_NAME#v}_x64-setup.exe"
+          expected="ice-box_${VERSION}_x64-setup.exe"
           case "$(basename "${exe[0]}")" in
           "$expected") ;;
           *)
@@ -369,12 +472,20 @@ jobs:
 
   build-android:
     name: Build Android (arm64)
-    needs: [preflight, gate-linux]
-    if: github.event_name != 'workflow_dispatch'
+    needs: [preflight, tag]
+    # `tag` is skipped for tag pushes and rehearsals; it must not skip the build.
+    if: >-
+      !cancelled() && needs.preflight.result == 'success' &&
+      needs.preflight.outputs.build == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
 
       - uses: actions/setup-java@v6
         with:
@@ -446,7 +557,7 @@ jobs:
 
       - name: Name and verify the release APK
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$VERSION"
           src="$(find apps/mobile/src-tauri/gen/android/app/build/outputs/apk -type f -path '*/release/*.apk' | head -n 1)"
           test -n "$src"
           cp "$src" "ice-box_${ver}_android_arm64.apk"
@@ -462,8 +573,14 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [preflight, gate-linux, build-macos, build-windows, build-android]
-    if: github.event_name != 'workflow_dispatch'
+    needs: [preflight, tag, build-macos, build-windows, build-android]
+    if: >-
+      !cancelled() && needs.preflight.result == 'success' &&
+      needs.preflight.outputs.build == 'true' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped') &&
+      needs.build-macos.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-android.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Configure required reviewers on this environment to gate publication.
@@ -472,24 +589,36 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
+      # TAG is the version tag; RELEASE_TAG names the GitHub release. They
+      # differ only for a rehearsal, whose draft must never claim the real tag.
+      TAG: ${{ needs.preflight.outputs.tag }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SHA: ${{ needs.preflight.outputs.sha }}
+      REHEARSAL: ${{ needs.preflight.outputs.mode == 'rehearse' }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.mode == 'rehearse' && format('rehearsal-{0}-{1}', github.run_id, github.run_attempt) || needs.preflight.outputs.tag }}
       PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
 
       - name: Detect release state
         id: release
         run: |
           set -euo pipefail
-          state="$(bash scripts/gh-release-state.sh "$TAG")"
+          state="$(bash scripts/gh-release-state.sh "$RELEASE_TAG")"
+          if [[ "$REHEARSAL" == true && "$state" != missing ]]; then
+            echo "rehearsal release $RELEASE_TAG unexpectedly exists ($state)" >&2
+            exit 1
+          fi
           case "$state" in
           true)
-            echo "draft release $TAG already exists"
+            echo "draft release $RELEASE_TAG already exists"
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "exists=true" >> "$GITHUB_OUTPUT"
             ;;
           false)
-            echo "release $TAG is already published; verification only"
+            echo "release $RELEASE_TAG is already published; verification only"
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "exists=true" >> "$GITHUB_OUTPUT"
             ;;
@@ -529,7 +658,7 @@ jobs:
         if: steps.release.outputs.published != 'true'
         run: |
           set -euo pipefail
-          version="${TAG#v}"
+          version="$VERSION"
 
           cp LICENSE NOTICE release-assets/
           cp third_party/sing-box/LICENSE release-assets/sing-box-LICENSE
@@ -567,31 +696,42 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ steps.release.outputs.exists }}" == "true" ]]; then
-            echo "resuming draft release $TAG"
-            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+            echo "resuming draft release $RELEASE_TAG"
+            gh release edit "$RELEASE_TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$TAG" --draft \
-              --title "ice-box $TAG" --notes-file RELEASE_NOTES.md
+            title="ice-box $TAG"
+            [[ "$REHEARSAL" == true ]] && title="Rehearsal of $TAG (run ${{ github.run_id }}) - will be deleted"
+            # A draft does not create its tag until it is published, so a
+            # rehearsal never creates the rehearsal-* tag.
+            gh release create "$RELEASE_TAG" --draft --target "$SHA" \
+              --title "$title" --notes-file RELEASE_NOTES.md
+          fi
+
+          # The same lookup the rerun path depends on must see the new draft.
+          state="$(bash scripts/gh-release-state.sh "$RELEASE_TAG")"
+          if [[ "$state" != true ]]; then
+            echo "draft $RELEASE_TAG not found as a draft after create (state: $state)" >&2
+            exit 1
           fi
 
       - name: Upload draft assets
         if: steps.release.outputs.published != 'true'
-        run: gh release upload "$TAG" release-assets/* --clobber
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber
 
       - name: Verify draft assets
         if: steps.release.outputs.published != 'true'
         run: |
           set -euo pipefail
           expected="$(cd release-assets && find . -maxdepth 1 -type f -printf '%f\n' | sort)"
-          actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          actual="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)"
           extras="$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") |
             grep -v '^$' || true)"
           if [[ -n "$extras" ]]; then
             while IFS= read -r name; do
               echo "removing stale draft asset: $name"
-              gh release delete-asset "$TAG" "$name" --yes
+              gh release delete-asset "$RELEASE_TAG" "$name" --yes
             done <<< "$extras"
-            actual="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+            actual="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)"
           fi
           if [[ "$expected" != "$actual" ]]; then
             echo "draft asset list does not match the prepared assets" >&2
@@ -600,12 +740,12 @@ jobs:
           fi
 
       - name: Publish release
-        if: steps.release.outputs.published != 'true'
+        if: steps.release.outputs.published != 'true' && env.REHEARSAL != 'true'
         run: |
           set -euo pipefail
           # `gh release view` resolves drafts as well; the REST
           # /releases/tags/<tag> endpoint returns 404 for a draft release.
-          id="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+          id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
           test -n "$id"
           if [[ "$PRERELEASE" == "true" ]]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
@@ -616,9 +756,30 @@ jobs:
           fi
 
       - name: Verify published release
+        if: env.REHEARSAL != 'true'
         run: |
           if [[ "$PRERELEASE" == "true" ]]; then
             bash scripts/verify-release-assets.sh --prerelease "$TAG"
           else
             bash scripts/verify-release-assets.sh "$TAG"
           fi
+
+      # Rehearsal: resolve the draft id the same way the publish step does,
+      # then delete the draft. Runs on failure too so no rehearsal draft lingers.
+      - name: Resolve and delete the rehearsal draft
+        if: always() && env.REHEARSAL == 'true'
+        run: |
+          set -euo pipefail
+          state="$(bash scripts/gh-release-state.sh "$RELEASE_TAG")"
+          if [[ "$state" == missing ]]; then
+            echo "no rehearsal draft to delete"
+            exit 0
+          fi
+          if [[ "$state" != true ]]; then
+            echo "rehearsal release $RELEASE_TAG is not a draft ($state); delete it by hand" >&2
+            exit 1
+          fi
+          id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
+          test -n "$id"
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          echo "deleted rehearsal draft $RELEASE_TAG (id $id)"

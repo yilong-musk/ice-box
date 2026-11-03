@@ -173,13 +173,27 @@ match = re.search(r'^version = "([^"]+)"', cargo, re.MULTILINE)
 compare("Cargo.toml", match.group(1) if match else None)
 
 compare("apps/desktop/package.json", read_json("apps/desktop/package.json").get("version"))
-compare(
-    "apps/desktop/src-tauri/tauri.conf.json",
-    read_json("apps/desktop/src-tauri/tauri.conf.json").get("version"),
-)
 compare("apps/mobile/package.json", read_json("apps/mobile/package.json").get("version"))
-mobile_conf = read_json("apps/mobile/src-tauri/tauri.conf.json")
-compare("apps/mobile/src-tauri/tauri.conf.json", mobile_conf.get("version"))
+
+
+def compare_tauri_conf(relative: str) -> dict:
+    """Tauri accepts a semver string or a path (relative to the config) to a
+    package.json; the tracked configs use "../package.json"."""
+    conf = read_json(relative)
+    value = conf.get("version")
+    if isinstance(value, str) and value.endswith("package.json"):
+        target = (root / relative).parent / value
+        if not target.is_file():
+            errors.append(f"{relative}: version path {value!r} does not exist")
+        else:
+            compare(f"{relative} -> {value}", read_json(str(target.relative_to(root))).get("version"))
+    else:
+        compare(relative, value)
+    return conf
+
+
+compare_tauri_conf("apps/desktop/src-tauri/tauri.conf.json")
+mobile_conf = compare_tauri_conf("apps/mobile/src-tauri/tauri.conf.json")
 
 core = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?", expected)
 assert core is not None, expected

@@ -8,7 +8,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests, and clippy plus library tests for a Tauri shell whose sources changed when GTK/WebKit are available; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, a `bash -n` syntax check of the changed scripts and the updater, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
+| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting and the Rust toolchain pin check always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests, and clippy plus library tests for a Tauri shell whose sources changed when GTK/WebKit are available; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, a `bash -n` syntax check of the changed scripts and the updater, changelog-release, CI-status, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
 | `bash scripts/capture-docs.sh` | Not a gate: refreshes the desktop and Android Home captures and recomposes the README hero |
 
@@ -51,10 +51,11 @@ VPN power toggle, and the language and theme bridges from the site into the
 iframe. The Linux CI gate installs Chromium and runs it; `GATE_SCOPE=rust` jobs
 skip it.
 
-CI and the release workflow run the same `.github/actions/gate-linux` action
-(full gate) and `GATE_SCOPE=rust` on macOS/Windows; packaging jobs build
-separately. The release pipeline additionally
-runs `scripts/release-preflight.sh` before any build and
+CI runs the `.github/actions/gate-linux` action (full gate) and
+`GATE_SCOPE=rust` on macOS/Windows; packaging jobs build separately. The release
+workflow does not re-run the gate: its preflight requires those CI checks to
+have passed on the release commit (`scripts/verify-ci-status.sh`), runs
+`scripts/release-preflight.sh` before any build, and runs
 `scripts/verify-release-assets.sh` after publication. `GATE_SCOPE=frontend` runs
 only the frontend half. The [gate scripts](../scripts/gate.sh) and
 [CI workflow](../.github/workflows/ci.yml) define the exact commands.

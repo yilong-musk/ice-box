@@ -117,7 +117,7 @@ cp "$SCRIPT" "$FIXTURE/scripts/release-preflight.sh"
 cp "$ROOT/scripts/release-notes.sh" "$ROOT/scripts/android-version-code.sh" "$FIXTURE/scripts/"
 printf 'version = "%s"\n' "$VERSION" >"$FIXTURE/Cargo.toml"
 printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/desktop/package.json"
-printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
+printf '{"version": "../package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
 printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/mobile/package.json"
 CODE="$(bash "$ROOT/scripts/android-version-code.sh" "$VERSION")"
 printf '{"version": "%s", "bundle": {"android": {"versionCode": %s}}}\n' "$VERSION" "$CODE" \
@@ -144,5 +144,23 @@ fi
 if ! printf '%s\n' "$err" | grep -q "ignoring stale generated tauri.properties"; then
   fail "stale-generated-file: warning missing: $err"
 fi
+
+echo "== tauri.conf.json version paths =="
+# The desktop fixture config above delegates to package.json, the mobile one
+# carries a literal version; both forms pass when they agree.
+printf '{"version": "../package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
+printf '{"version": "0.0.1"}\n' >"$FIXTURE/apps/desktop/package.json"
+if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "tauri-conf-path-mismatch: expected failure"
+fi
+printf '%s\n' "$err" | grep -Fq "tauri.conf.json -> ../package.json" ||
+  fail "tauri-conf-path-mismatch: unexpected error: $err"
+printf '{"version": "%s"}\n' "$VERSION" >"$FIXTURE/apps/desktop/package.json"
+printf '{"version": "../nope/package.json"}\n' >"$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
+if err="$("$FIXTURE/scripts/release-preflight.sh" "$TAG" 2>&1)"; then
+  fail "tauri-conf-missing-path: expected failure"
+fi
+printf '%s\n' "$err" | grep -Fq "does not exist" ||
+  fail "tauri-conf-missing-path: unexpected error: $err"
 
 echo "test-release-preflight: OK"
