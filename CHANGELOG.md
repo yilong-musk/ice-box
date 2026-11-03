@@ -12,6 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--full` for every check and `--dry-run` to print the scope. Documentation
   screenshots moved out of both gates into `scripts/capture-docs.sh`, so a gate
   run no longer rewrites `docs/images/hero*.png`.
+- Release engineering: `scripts/release.sh X.Y.Z` prepares the release PR in
+  one command, and `scripts/bump-version.sh` now moves the CHANGELOG.md
+  Unreleased section to the new version. The `Release` workflow can create the
+  tag itself (manual mode `release`) and rehearse the whole pipeline without
+  publishing (mode `rehearse`). It no longer re-runs the gate; the preflight
+  instead requires the CI checks to have passed on the release commit, and the
+  platform builds start right after it. Both `tauri.conf.json` files read their
+  version from `package.json`, and the gates check that every workflow pins the
+  Rust toolchain from `rust-toolchain.toml`.
 
 ### Fixed
 

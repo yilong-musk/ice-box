@@ -1,15 +1,39 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Bump the ice-box version across every version source and refresh Cargo.lock.
-# Usage: scripts/bump-version.sh 0.1.1
+# Bump the ice-box version across every version source, move the CHANGELOG.md
+# Unreleased section to the new version, and refresh Cargo.lock.
+# Usage: scripts/bump-version.sh <semver, e.g. 0.1.1> [--no-changelog]
+#
+# Both tauri.conf.json files read their version from the sibling package.json
+# ("version": "../package.json"), so they are not rewritten here.
+# --no-changelog leaves CHANGELOG.md alone, e.g. when the section for this
+# version was written by hand.
+#
+# All or nothing: when any step fails, every file it wrote is restored, so the
+# same command can simply be run again after the fix.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/version-lib.sh
+source "$ROOT/scripts/version-lib.sh"
 
-NEW_VERSION="${1:-}"
-if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-  echo "usage: $0 <semver, e.g. 0.1.1>" >&2
+NEW_VERSION=""
+ROLL_CHANGELOG=1
+for arg in "$@"; do
+  case "$arg" in
+  --no-changelog) ROLL_CHANGELOG=0 ;;
+  *)
+    if [[ -n "$NEW_VERSION" ]]; then
+      echo "unexpected argument: $arg" >&2
+      exit 1
+    fi
+    NEW_VERSION="$arg"
+    ;;
+  esac
+done
+if [[ -z "$NEW_VERSION" ]] || ! NEW_VERSION="$(release_version "$NEW_VERSION")"; then
+  echo "usage: $0 <semver, e.g. 0.1.1> [--no-changelog]" >&2
   exit 1
 fi
 
@@ -31,11 +55,56 @@ bump_key() {
     -e 's/^($ENV{PATTERN})"[0-9][^"]*"/$1"$ENV{NEW_VERSION}"/' "$file"
 }
 
+# Fail before touching any file when a tauri.conf.json stopped delegating its
+# version to package.json; preflight would reject the release otherwise.
+for conf in "$TAURI_CONF" "$MOBILE_TAURI_CONF"; do
+  if ! grep -q '^  "version": "\.\./package\.json",$' "$conf"; then
+    echo "$conf must keep \"version\": \"../package.json\"" >&2
+    exit 1
+  fi
+done
+
+# Every file this script may write. On any failure they are restored, so a
+# re-run starts from the same state instead of finding CHANGELOG.md already
+# rolled or the version sources half-bumped.
+TOUCHED=(
+  CHANGELOG.md Cargo.toml Cargo.lock "$PACKAGE_JSON" "$MOBILE_PACKAGE_JSON"
+  "$MOBILE_TAURI_CONF" "$ANDROID_PROPERTIES"
+)
+BACKUP="$(mktemp -d "${TMPDIR:-/tmp}/ice-box-bump-XXXXXX")"
+for file in "${TOUCHED[@]}"; do
+  if [[ -e "$file" ]]; then
+    mkdir -p "$BACKUP/$(dirname "$file")"
+    cp -p "$file" "$BACKUP/$file"
+  fi
+done
+restore_on_failure() {
+  local status=$?
+  if [[ "$status" != 0 ]]; then
+    for file in "${TOUCHED[@]}"; do
+      if [[ -e "$BACKUP/$file" ]]; then
+        cp -p "$BACKUP/$file" "$file"
+      else
+        # tauri.properties is generated and may not have existed.
+        rm -f "$file"
+      fi
+    done
+    echo "bump-version: failed; restored ${TOUCHED[*]}" >&2
+  fi
+  rm -rf "$BACKUP"
+  exit "$status"
+}
+trap restore_on_failure EXIT
+
+# Roll the changelog first: it is the step most likely to fail (empty
+# Unreleased section), so it fails before the slower steps run.
+if [[ "$ROLL_CHANGELOG" == 1 ]]; then
+  bash "$ROOT/scripts/changelog-release.sh" "$NEW_VERSION"
+fi
+
 bump_key "$CARGO_TOML" 'version = '
 bump_key "$PACKAGE_JSON" '  "version": '
-bump_key "$TAURI_CONF" '  "version": '
 bump_key "$MOBILE_PACKAGE_JSON" '  "version": '
-bump_key "$MOBILE_TAURI_CONF" '  "version": '
 
 # Same integer Tauri writes when bundle.android.versionCode is unset:
 # major * 1000000 + minor * 1000 + patch. A pre-release suffix does not
@@ -68,13 +137,14 @@ EOF
 echo "bumped to $NEW_VERSION (Android versionCode $ANDROID_VERSION_CODE):"
 grep -n '^version' "$CARGO_TOML"
 grep -n '"version"' "$PACKAGE_JSON"
-grep -n '"version"' "$TAURI_CONF"
 grep -n '"version"' "$MOBILE_PACKAGE_JSON"
-grep -n '"version"' "$MOBILE_TAURI_CONF"
 grep -n 'versionCode' "$MOBILE_TAURI_CONF"
 grep -n 'tauri.android' "$ANDROID_PROPERTIES"
 
 echo "== refreshing Cargo.lock =="
 cargo check --workspace --quiet
+
+echo "== release notes =="
+bash "$ROOT/scripts/release-notes.sh" "$NEW_VERSION"
 
 echo "bump-version: OK ($NEW_VERSION)"
