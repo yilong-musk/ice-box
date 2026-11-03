@@ -507,6 +507,11 @@ export interface DesktopShellApi {
   openNetworkSettings(): Promise<void>;
   /** Android: open the system VPN screen. No-op on desktop. */
   openVpnSettings(): Promise<void>;
+  /**
+   * Android: save the core log through the system save dialog. Desktop has
+   * the Logs page instead and never calls it.
+   */
+  exportCoreLog(): Promise<"saved" | "cancelled">;
   listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
   setTrayLanguage(language: "zh" | "en"): Promise<void>;
   setTrayUpdateAvailable(version: string | null): Promise<void>;

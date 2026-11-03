@@ -3,7 +3,7 @@
 /** Phone transport. Core commands match the desktop names; desktop-only methods do nothing. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { singboxExportFilename } from "../../desktop/src/lib/saveFile";
+import { coreLogExportFilename, singboxExportFilename } from "../../desktop/src/lib/saveFile";
 import type {
   ApiContract,
   AppErrorPayload,
@@ -163,6 +163,10 @@ export const api = {
   requestBatteryExemption: () => invoke<void>("request_battery_exemption"),
   openNetworkSettings: () => invoke<void>("open_network_settings"),
   openVpnSettings: () => invoke<void>("open_vpn_settings"),
+  exportCoreLog: () =>
+    invoke<"saved" | "cancelled">("export_core_log", {
+      req: { filename: coreLogExportFilename(new Date()) },
+    }),
   listenAppUpdateProgress: (handler: (payload: UpdateProgressPayload) => void) =>
     listen<UpdateProgressPayload>("app-update://progress", (event) =>
       handler(event.payload),

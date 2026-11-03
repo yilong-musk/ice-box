@@ -380,6 +380,9 @@ const zh = {
   "settings.alwaysOnTitle": "始终开启 VPN",
   "settings.alwaysOnAction": "打开 VPN 设置",
   "settings.alwaysOnEnabled": "已设为始终开启的 VPN。",
+  "settings.exportLogs": "导出日志",
+  "settings.exportLogsHint": "核心只记录警告和错误，最多保留 5 MB。反馈问题时可以导出并附上。",
+  "settings.exportLogsSaved": "日志已导出",
   "settings.updateFeedUnavailable":
     "未找到 GitHub 上的更新清单。在带自动更新的版本正式发布之前，检查更新会失败。",
 
@@ -895,6 +898,9 @@ const en: Record<MessageKey, string> = {
   "settings.alwaysOnTitle": "Always-on VPN",
   "settings.alwaysOnAction": "Open VPN settings",
   "settings.alwaysOnEnabled": "This app is the always-on VPN.",
+  "settings.exportLogs": "Export Logs",
+  "settings.exportLogsHint": "The core keeps warnings and errors only, up to 5 MB. Export them to attach to a bug report.",
+  "settings.exportLogsSaved": "Logs exported",
   "settings.updateFeedUnavailable":
     "No update catalog was found on GitHub. Checking for updates fails until an updater-capable release is published.",
 

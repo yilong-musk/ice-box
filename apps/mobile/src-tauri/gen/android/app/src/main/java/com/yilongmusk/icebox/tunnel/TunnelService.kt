@@ -65,6 +65,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile
     private var destroyed = false
     private var memoryTask: java.util.concurrent.ScheduledFuture<*>? = null
+    private var logCapTask: java.util.concurrent.ScheduledFuture<*>? = null
     private var trafficReporter: Thread? = null
     /**
      * Invalidates the current reporter when it is stopped. A new start bumps it
@@ -102,6 +103,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         try {
             val configFile = File(sharedDir(this), "config.json")
             if (!configFile.exists()) error("no config written by the host")
+            runCatching { capCoreLog(this) }
             if (destroyed) return
             val server = server ?: createServer()
             if (destroyed) return
@@ -112,6 +114,7 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
             publish("connected", null)
             Log.i(NetworkMonitor.TAG, "$reason ok (libbox ${Libbox.version()})")
             scheduleMemoryReports()
+            scheduleLogCap()
             startTrafficReports()
         } catch (err: Throwable) {
             if (destroyed) return
@@ -145,6 +148,14 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         }, 5, 5, TimeUnit.SECONDS)
     }
 
+    /** A long-lived tunnel is never restarted, so also cap the log while it runs. */
+    private fun scheduleLogCap() {
+        if (logCapTask != null || destroyed) return
+        logCapTask = worker.scheduleWithFixedDelay({
+            if (!destroyed) runCatching { capCoreLog(this) }
+        }, 10, 10, TimeUnit.MINUTES)
+    }
+
     private fun publish(next: String, message: String?) {
         if (destroyed && (next == "connecting" || next == "connected")) return
         phase = next
@@ -156,6 +167,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         stopTrafficReports()
         memoryTask?.cancel(false)
         memoryTask = null
+        logCapTask?.cancel(false)
+        logCapTask = null
         // Leave the CommandServer in place so the next start can reload it.
         // onDestroy is what closes the object, on this same worker.
         runCatching { server?.closeService() }
@@ -170,6 +183,8 @@ class TunnelService : VpnService(), PlatformInterface, CommandServerHandler {
         stopTrafficReports()
         memoryTask?.cancel(false)
         memoryTask = null
+        logCapTask?.cancel(false)
+        logCapTask = null
         val running = server
         server = null
         runCatching { running?.closeService() }

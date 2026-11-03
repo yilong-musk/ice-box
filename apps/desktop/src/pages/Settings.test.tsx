@@ -39,6 +39,7 @@ const openAppDownload = vi.fn();
 const requestBatteryExemption = vi.fn();
 const openNetworkSettings = vi.fn();
 const openVpnSettings = vi.fn();
+const exportCoreLog = vi.fn();
 const listenCoreStatusChanged = vi.fn().mockResolvedValue(() => {});
 const listenWindowHidden = vi.fn().mockResolvedValue(() => {});
 const listenWindowShown = vi.fn().mockResolvedValue(() => {});
@@ -60,6 +61,7 @@ vi.mock("../api/client", () => ({
       requestBatteryExemption(...args),
     openNetworkSettings: (...args: unknown[]) => openNetworkSettings(...args),
     openVpnSettings: (...args: unknown[]) => openVpnSettings(...args),
+    exportCoreLog: (...args: unknown[]) => exportCoreLog(...args),
     listenAppUpdateProgress: vi.fn().mockResolvedValue(() => {}),
     listenCoreStatusChanged: (...args: unknown[]) =>
       listenCoreStatusChanged(...args),
@@ -620,6 +622,31 @@ describe("Settings", () => {
     expect(view.queryByText(t("settings.data"))).not.toBeInTheDocument();
     expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
     expect(view.queryByLabelText(t("settings.logDebug"))).not.toBeInTheDocument();
+  });
+
+  it("exports the core log from the phone Logs card", async () => {
+    phoneShell.value = true;
+    exportCoreLog.mockResolvedValueOnce("cancelled").mockResolvedValueOnce("saved");
+    const { container } = render(<Settings />);
+    const view = within(container);
+    const button = await view.findByRole("button", { name: t("settings.exportLogs") });
+    expect(view.getByText(t("app.nav.logs"))).toBeInTheDocument();
+
+    // A dismissed save dialog is not reported as exported.
+    fireEvent.click(button);
+    await waitFor(() => expect(exportCoreLog).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(view.queryByText(t("settings.exportLogsSaved"))).not.toBeInTheDocument();
+
+    fireEvent.click(button);
+    expect(await view.findByText(t("settings.exportLogsSaved"))).toBeInTheDocument();
+  });
+
+  it("has no Logs card on the desktop", async () => {
+    const { container } = render(<Settings />);
+    const view = within(container);
+    await view.findByText(t("settings.appearance"));
+    expect(view.queryByRole("button", { name: t("settings.exportLogs") })).not.toBeInTheDocument();
   });
 
   it("offers battery optimization and private DNS actions, and installs the APK", async () => {

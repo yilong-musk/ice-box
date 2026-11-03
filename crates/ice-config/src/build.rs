@@ -17,9 +17,22 @@ use crate::settings::{clash_mode_name, AppProxyMode, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
 use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 
-/// Connection routes are INFO. The Logs page filters to those plus
+/// Connection routes are INFO. The desktop Logs page filters to those plus
 /// important events unless debug mode is on; the 20 MiB cap bounds disk.
 const GENERATED_LOG_LEVEL: &str = "info";
+/// The phone has no Logs page: keep only warnings and errors, which is what an
+/// exported log needs to diagnose a problem, and far less disk than one line
+/// per connection.
+const MOBILE_LOG_LEVEL: &str = "warn";
+
+fn generated_log(platform: HostPlatform) -> Value {
+    let level = if platform.is_mobile() {
+        MOBILE_LOG_LEVEL
+    } else {
+        GENERATED_LOG_LEVEL
+    };
+    json!({ "level": level, "timestamp": true })
+}
 
 /// Clash API listen + Bearer secret. `mode_list` must not be emitted — the
 /// pinned sing-box 1.14.4 rejects it ("unknown field").
@@ -117,7 +130,7 @@ fn build_direct_only_config_with(
     });
 
     let inbounds = capture_inbounds(template, platform, capture_intent, tun_exclude_package)?;
-    let mut log = json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true });
+    let mut log = generated_log(platform);
     let mut experimental = json!({
         "clash_api": clash_api_block(template),
     });
@@ -847,7 +860,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     let mut experimental = json!({
         "clash_api": clash_api_block(&input.template),
     });
-    let mut log = json!({ "level": GENERATED_LOG_LEVEL, "timestamp": true });
+    let mut log = generated_log(input.platform);
     apply_shared_root(
         &mut log,
         &mut experimental,

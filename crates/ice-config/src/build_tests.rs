@@ -2668,6 +2668,29 @@ fn mobile_ignores_diagnostic_intent_and_emits_tun() {
 }
 
 #[test]
+fn mobile_core_logs_warnings_and_desktop_logs_connections() {
+    let mut input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
+    for (platform, level) in [
+        (HostPlatform::MacOs, "info"),
+        (HostPlatform::Windows, "info"),
+        (HostPlatform::Android, "warn"),
+        (HostPlatform::Ios, "warn"),
+    ] {
+        input.platform = platform;
+        let cfg = build_runtime_json(&input).expect("build");
+        assert_eq!(cfg["log"]["level"], level, "{platform:?} with nodes");
+
+        let direct = build_direct_only_config(
+            &LocalTemplate::default(),
+            CaptureIntent::Diagnostic,
+            platform,
+        )
+        .expect("direct-only build");
+        assert_eq!(direct["log"]["level"], level, "{platform:?} direct-only");
+    }
+}
+
+#[test]
 fn android_exclude_package_is_emitted_and_ios_ignores_it() {
     let mut input = build_input_from_nodes(LocalTemplate::default(), vec![socks("a")], None);
     input.platform = HostPlatform::Android;

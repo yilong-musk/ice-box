@@ -23,7 +23,11 @@ import type {
 } from "../../../apps/desktop/src/api/contracts";
 import { formatQuota } from "../../../apps/desktop/src/lib/traffic";
 import { copyText } from "../../../apps/desktop/src/lib/logCopy";
-import { saveTextFile, singboxExportFilename } from "../../../apps/desktop/src/lib/saveFile";
+import {
+  coreLogExportFilename,
+  saveTextFile,
+  singboxExportFilename,
+} from "../../../apps/desktop/src/lib/saveFile";
 
 export type {
   AppErrorPayload,
@@ -419,6 +423,15 @@ export const api = {
   async requestBatteryExemption(): Promise<void> {},
   async openNetworkSettings(): Promise<void> {},
   async openVpnSettings(): Promise<void> {},
+  async exportCoreLog(): Promise<"saved" | "cancelled"> {
+    await delay();
+    saveTextFile(
+      coreLogExportFilename(new Date()),
+      "# ice-box Live Demo core log (sing-box warnings and errors)\n# no log yet\n",
+      "text/plain",
+    );
+    return "saved";
+  },
   async listenAppUpdateProgress(): Promise<() => void> {
     return () => {};
   },

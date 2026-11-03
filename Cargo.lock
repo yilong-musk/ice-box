@@ -1741,6 +1741,7 @@ dependencies = [
  "ice-core",
  "ice-subscription",
  "jni 0.22.4",
+ "libc",
  "log",
  "rustls-platform-verifier",
  "serde",

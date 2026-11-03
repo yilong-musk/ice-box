@@ -39,6 +39,25 @@ struct PathRequest<'a> {
     path: &'a str,
 }
 
+/// File type for the system save dialog: the MIME type it offers and the
+/// extension the saved name gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportKind {
+    /// `application/json`, `.json` (subscription exports).
+    Json,
+    /// `text/plain`, `.log` (the core log).
+    Log,
+}
+
+impl ExportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Log => "log",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TunnelError {
     #[error("the tunnel plugin is only available on Android")]
@@ -264,12 +283,23 @@ impl<R: Runtime> Tunnel<R> {
     /// Show the system save dialog and write `content` to the chosen URI.
     /// `"cancelled"` when the dialog is dismissed. Do not log `content`.
     pub fn save_text_document(&self, filename: &str, content: &str) -> Result<String, TunnelError> {
+        self.save_document(filename, content, ExportKind::Json)
+    }
+
+    /// [`Self::save_text_document`] with the file type the dialog offers.
+    pub fn save_document(
+        &self,
+        filename: &str,
+        content: &str,
+        kind: ExportKind,
+    ) -> Result<String, TunnelError> {
         #[cfg(target_os = "android")]
         {
             #[derive(Serialize)]
             struct SaveTextRequest<'a> {
                 filename: &'a str,
                 content: &'a str,
+                kind: &'a str,
             }
             #[derive(Deserialize)]
             struct SaveTextResponse {
@@ -277,7 +307,14 @@ impl<R: Runtime> Tunnel<R> {
             }
             let response: SaveTextResponse = self
                 .handle
-                .run_mobile_plugin("save_text_document", SaveTextRequest { filename, content })
+                .run_mobile_plugin(
+                    "save_text_document",
+                    SaveTextRequest {
+                        filename,
+                        content,
+                        kind: kind.as_str(),
+                    },
+                )
                 .map_err(|err| TunnelError::Plugin(err.to_string()))?;
             return match response.outcome.as_str() {
                 "saved" | "cancelled" => Ok(response.outcome),
@@ -286,7 +323,7 @@ impl<R: Runtime> Tunnel<R> {
         }
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (filename, content);
+            let _ = (filename, content, kind);
             Err(TunnelError::Unavailable)
         }
     }

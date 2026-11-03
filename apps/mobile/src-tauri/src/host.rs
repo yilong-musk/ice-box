@@ -374,6 +374,12 @@ impl MobileHost {
         Ok(self.traffic.snapshot_since(cursor))
     }
 
+    /// Where the core log lives. The export reads it with the host lock
+    /// released (see `commands::export_core_log`).
+    pub fn core_log_path(&self) -> Result<std::path::PathBuf, AppError> {
+        Ok(config::core_log_path(self.paths()?))
+    }
+
     pub fn log_view(&self, n: usize) -> Result<Vec<String>, AppError> {
         let path = config::core_log_path(self.paths()?);
         Ok(tail_lines(&path, n.min(2000)))

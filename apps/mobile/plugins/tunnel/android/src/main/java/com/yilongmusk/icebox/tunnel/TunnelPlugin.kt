@@ -449,7 +449,12 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
         val args = invoke.getArgs()
-        val filename = exportFilename(args.optString("filename", ""))
+        // "log" saves the core log as text; anything else keeps the JSON export.
+        val log = args.optString("kind", "json") == "log"
+        val filename = exportFilename(
+            args.optString("filename", ""),
+            if (log) "ice-box-core.log" else "sing-box.json",
+        )
         val content = if (args.has("content") && !args.isNull("content")) {
             args.getString("content")
         } else {
@@ -463,7 +468,7 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         pendingExport = bytes
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
+            type = if (log) "text/plain" else "application/json"
             putExtra(Intent.EXTRA_TITLE, filename)
         }
         try {
@@ -503,7 +508,9 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(payload)
     }
 
-    private fun exportFilename(raw: String): String {
+    /** [fallback] is used when [raw] is blank and also sets the extension. */
+    private fun exportFilename(raw: String, fallback: String): String {
+        val extension = fallback.substring(fallback.lastIndexOf('.'))
         val cleaned = buildString(raw.length) {
             for (ch in raw) {
                 if (ch.isISOControl() || ch == '\u007f' || ch in "\\/:*?\"<>|") {
@@ -513,8 +520,8 @@ class TunnelPlugin(private val activity: Activity) : Plugin(activity) {
                 }
             }
         }.trim().trim('.')
-        if (cleaned.isEmpty()) return "sing-box.json"
-        return if (cleaned.endsWith(".json", ignoreCase = true)) cleaned else "$cleaned.json"
+        if (cleaned.isEmpty()) return fallback
+        return if (cleaned.endsWith(extension, ignoreCase = true)) cleaned else "$cleaned$extension"
     }
 
     /**

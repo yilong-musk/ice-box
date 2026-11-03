@@ -11,10 +11,10 @@ use ice_subscription::{
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
-use tauri_plugin_tunnel::{InstalledApp, Tunnel, TunnelError};
+use tauri_plugin_tunnel::{ExportKind, InstalledApp, Tunnel, TunnelError};
 use uuid::Uuid;
 
-use crate::config::PLATFORM;
+use crate::config::{self, PLATFORM};
 use crate::host::{
     stopped_view, tunnel_view, ListRulesRequest, ListRulesResponse, MobileHost, NodeInfo,
     RemoveResult, RuleMutation, RuleOverview,
@@ -69,6 +69,11 @@ pub struct SubscriptionShareRequest {
 pub struct SaveTextDocumentRequest {
     pub filename: String,
     pub content: String,
+}
+
+#[derive(Deserialize)]
+pub struct ExportCoreLogRequest {
+    pub filename: String,
 }
 
 #[derive(Deserialize)]
@@ -332,17 +337,47 @@ pub fn save_text_document(
     if req.content.len() > MAX_EXPORT_BYTES {
         return Err(AppError::new(ErrorCode::SubIo, "export is too large"));
     }
-    let filename = bounded_export_filename(&req.filename);
+    let filename = bounded_export_filename(&req.filename, "sing-box.json");
     let tunnel = app.state::<Tunnel<Wry>>();
     tunnel
         .save_text_document(&filename, &req.content)
         .map_err(map_tunnel)
 }
 
-fn bounded_export_filename(name: &str) -> String {
+/// Save the core log through the system save dialog as a `.log` text file.
+/// `"cancelled"` when the dialog is dismissed. The host lock is released
+/// before the dialog opens; like [`save_text_document`], the dialog runs on
+/// the command thread.
+#[tauri::command]
+pub fn export_core_log(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+    req: ExportCoreLogRequest,
+) -> Result<String, AppError> {
+    // Only the path needs the host lock; read the file after the guard drops.
+    let path = ready(&app, &host, &tunnel)?.core_log_path()?;
+    let content = config::core_log_export(&path, config::CORE_LOG_MAX_BYTES)
+        .map_err(|err| AppError::new(ErrorCode::ConfigInvalid, format!("read core log: {err}")))?;
+    // Invalid UTF-8 decodes to U+FFFD (three bytes each), so the size cap on
+    // the raw log does not bound the text.
+    if content.len() > MAX_EXPORT_BYTES {
+        return Err(AppError::new(
+            ErrorCode::SubIo,
+            "core log is too large to export",
+        ));
+    }
+    let filename = bounded_export_filename(&req.filename, "ice-box-core.log");
+    tunnel
+        .save_document(&filename, &content, ExportKind::Log)
+        .map_err(map_tunnel)
+}
+
+/// `name` trimmed and bounded to 200 characters, or `fallback` when blank.
+fn bounded_export_filename(name: &str, fallback: &str) -> String {
     let trimmed: String = name.trim().chars().take(200).collect();
     if trimmed.is_empty() {
-        "sing-box.json".to_string()
+        fallback.to_string()
     } else {
         trimmed
     }
