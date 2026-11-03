@@ -10,17 +10,23 @@
 #   bash scripts/gate-local.sh --dry-run  print the selected scope and exit
 #
 # Buckets:
-#   rust      fmt, clippy, lib tests, ice-tun-sys integration tests
+#   rust      fmt, clippy, lib tests, ice-tun-sys integration tests; plus
+#             clippy and lib tests for a changed Tauri shell when its GTK /
+#             WebKit build dependencies are available
 #   frontend  desktop/website/mobile typecheck, website installer links,
 #             mobile Live Demo smoke, Vitest
-#   fixtures  release, updater, signing, and Android script fixtures
+#   vitest    Vitest alone, for Rust files the architecture tests read
+#   fixtures  release, updater, signing, and Android script fixtures, plus
+#             `bash -n` on changed shell scripts; also selected by the
+#             version sources and CHANGELOG.md that release preflight reads
 # `cargo fmt --check` runs on every invocation. Docs-only changes run nothing
 # else. A path that matches no bucket, a change to this script, or a missing
 # merge base falls back to --full.
 #
 # GATE_LOCAL_BASE overrides the base ref (default: origin/main, then main).
-# Intentionally lighter than scripts/gate.sh (no desktop vite build, no
-# Tauri shell crates). Documentation screenshots are not part of the gate;
+# Intentionally lighter than scripts/gate.sh (no desktop vite build, and the
+# Tauri shell crates only when they changed). Documentation screenshots are not
+# part of the gate;
 # refresh them with scripts/capture-docs.sh.
 set -euo pipefail
 
@@ -34,7 +40,7 @@ for arg in "$@"; do
   --full) full=1 ;;
   --dry-run) dry_run=1 ;;
   -h | --help)
-    sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
@@ -46,20 +52,48 @@ done
 
 run_rust=0
 run_frontend=0
+run_vitest=0
 run_fixtures=0
+# Tauri shell crates (ice-box, ice-box-mobile) with changed sources.
+shells=()
+# Changed shell scripts, syntax-checked in the fixtures bucket.
+changed_scripts=()
 
 # Classify one repository-relative path into the buckets above. Returns 1 for
 # a path that matches no known area so the caller can fall back to --full.
 classify() {
   local path="$1"
+
+  # Cross-bucket inputs: files one bucket owns but another bucket's checks
+  # read. They add to the primary bucket chosen below.
+  case "$path" in
+  # apps/desktop/src/api/architecture.test.ts (Vitest) scans these.
+  apps/desktop/src-tauri/src/application/* | crates/ice-app/Cargo.toml)
+    run_vitest=1
+    ;;
+  esac
+  case "$path" in
+  # The release preflight fixture checks the real repo: every version source
+  # and the CHANGELOG.md section for the current version.
+  CHANGELOG.md | Cargo.toml | apps/desktop/package.json | apps/mobile/package.json | \
+    apps/desktop/src-tauri/tauri.conf.json | apps/mobile/src-tauri/tauri.conf.json)
+    run_fixtures=1
+    ;;
+  esac
+
   case "$path" in
   scripts/gate-local.sh)
     return 1
     ;;
   *.md | docs/* | LICENSE | NOTICE | .gitignore | .vscode/* | .github/*)
     ;;
-  apps/desktop/src-tauri/* | apps/mobile/src-tauri/* | apps/mobile/plugins/*)
+  apps/desktop/src-tauri/*)
     run_rust=1
+    add_shell ice-box
+    ;;
+  apps/mobile/src-tauri/* | apps/mobile/plugins/*)
+    run_rust=1
+    add_shell ice-box-mobile
     ;;
   crates/* | configs/* | third_party/* | spikes/* | Cargo.toml | Cargo.lock | \
     rust-toolchain.toml | deny.toml | .cargo/*)
@@ -69,12 +103,35 @@ classify() {
     run_frontend=1
     ;;
   scripts/*)
+    # The fixtures exercise the release, updater, signing, and Android
+    # scripts. Build helpers (fetch-singbox, prepare-singbox-resource, ...)
+    # only run inside `tauri build`, which this gate never does; they get a
+    # syntax check here and real coverage from CI's scripts/gate.sh.
     run_fixtures=1
+    if [[ "$path" == *.sh && -f "$path" ]]; then
+      changed_scripts+=("$path")
+    fi
     ;;
   *)
     return 1
     ;;
   esac
+}
+
+add_shell() {
+  local crate
+  for crate in "${shells[@]}"; do
+    [[ "$crate" == "$1" ]] && return 0
+  done
+  shells+=("$1")
+}
+
+# The Tauri shells link GTK/WebKit on Linux; macOS and Windows build them with
+# the system web view.
+shell_deps_available() {
+  [[ "$(uname -s)" != Linux ]] && return 0
+  command -v pkg-config >/dev/null 2>&1 &&
+    pkg-config --exists webkit2gtk-4.1 javascriptcoregtk-4.1 libsoup-3.0
 }
 
 base=""
@@ -95,7 +152,9 @@ fi
 if [[ "$full" == 0 ]]; then
   changed="$(
     {
-      git diff --name-only "$base"
+      # --no-renames lists both sides of a rename, so a file moved out of a
+      # code area still selects that area's checks.
+      git diff --name-only --no-renames "$base"
       git ls-files --others --exclude-standard
     } | sort -u
   )"
@@ -113,11 +172,27 @@ if [[ "$full" == 1 ]]; then
   run_rust=1
   run_frontend=1
   run_fixtures=1
+  shells=(ice-box ice-box-mobile)
+fi
+# The frontend bucket already runs Vitest.
+[[ "$run_frontend" == 1 ]] && run_vitest=0
+
+shells_runnable=0
+if [[ "${#shells[@]}" -gt 0 ]] && shell_deps_available; then
+  shells_runnable=1
 fi
 
 scope=()
 [[ "$run_rust" == 1 ]] && scope+=(rust)
+if [[ "${#shells[@]}" -gt 0 ]]; then
+  if [[ "$shells_runnable" == 1 ]]; then
+    scope+=("shells(${shells[*]})")
+  else
+    scope+=("shells(${shells[*]}: skipped, GTK/WebKit missing)")
+  fi
+fi
 [[ "$run_frontend" == 1 ]] && scope+=(frontend)
+[[ "$run_vitest" == 1 ]] && scope+=(vitest)
 [[ "$run_fixtures" == 1 ]] && scope+=(fixtures)
 echo "gate-local: scope = ${scope[*]:-fmt only}$([[ "$full" == 1 ]] && echo ' (full)')"
 [[ "$dry_run" == 1 ]] && exit 0
@@ -144,6 +219,23 @@ if [[ "$run_rust" == 1 ]]; then
   cargo test -p ice-tun-sys --tests
 fi
 
+if [[ "${#shells[@]}" -gt 0 ]]; then
+  if [[ "$shells_runnable" == 1 ]]; then
+    shell_args=()
+    for crate in "${shells[@]}"; do
+      shell_args+=(-p "$crate")
+    done
+    echo "== cargo clippy (Tauri shells: ${shells[*]}) =="
+    cargo clippy "${shell_args[@]}" --all-targets -- -D warnings
+
+    echo "== cargo test (Tauri shells lib: ${shells[*]}) =="
+    cargo test "${shell_args[@]}" --lib
+  else
+    echo "gate-local: WARNING: ${shells[*]} changed but GTK/WebKit dev packages are missing;"
+    echo "gate-local: WARNING: these crates are not compiled here. CI scripts/gate.sh covers them."
+  fi
+fi
+
 if [[ "$run_frontend" == 1 ]]; then
   echo "== tsc --noEmit =="
   # `npx tsc` resolves the stub npm package `tsc`, not `typescript`.
@@ -165,7 +257,19 @@ if [[ "$run_frontend" == 1 ]]; then
   (cd apps/desktop && npm test)
 fi
 
+if [[ "$run_vitest" == 1 ]]; then
+  echo "== vitest (architecture inputs changed) =="
+  (cd apps/desktop && npm test)
+fi
+
 if [[ "$run_fixtures" == 1 ]]; then
+  if [[ "${#changed_scripts[@]}" -gt 0 ]]; then
+    echo "== bash -n (changed scripts) =="
+    for script in "${changed_scripts[@]}"; do
+      bash -n "$script"
+    done
+  fi
+
   echo "== merge-updater-latest fixtures =="
   bash scripts/test-merge-updater-latest.sh
 

@@ -8,7 +8,7 @@ Run commands from the repository root. Development prerequisites are in the
 
 | Command | Coverage |
 |---------|----------|
-| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, updater, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
+| `bash scripts/gate-local.sh` | Scoped to the files changed on the branch (see below). Formatting always; for Rust changes, clippy and Rust library tests excluding the desktop and mobile Tauri shells (`ice-box`, `ice-box-mobile`) plus TUN integration tests, and clippy plus library tests for a Tauri shell whose sources changed when GTK/WebKit are available; for frontend changes, desktop/website/mobile typechecks, website installer-link tests, the mobile Live Demo smoke test, and Vitest; for script changes, a `bash -n` syntax check of the changed scripts and the updater, release preflight, updater-signature, signing-key, release-asset, release-state, Android-keystore, Android version-code, and APK-signer fixtures. `--full` runs all of them |
 | `bash scripts/gate.sh` | All-crate clippy; non-desktop Rust library/integration/doc tests plus desktop library tests; frontend checks, fixtures, the website production build and mobile Live Demo smoke, and the desktop production build |
 | `bash scripts/capture-docs.sh` | Not a gate: refreshes the desktop and Android Home captures and recomposes the README hero |
 
@@ -18,17 +18,27 @@ untracked files. Each path selects a bucket:
 
 | Changed paths | Checks |
 |---------------|--------|
-| `crates/`, `apps/*/src-tauri/`, `apps/mobile/plugins/`, `configs/`, `third_party/`, `spikes/`, `Cargo.*`, `rust-toolchain.toml`, `deny.toml` | Rust |
+| `crates/`, `apps/*/src-tauri/`, `apps/mobile/plugins/`, `configs/`, `third_party/`, `spikes/`, `Cargo.*`, `rust-toolchain.toml`, `deny.toml`, `.cargo/` | Rust (plus the changed Tauri shell for `apps/*/src-tauri/` and `apps/mobile/plugins/`) |
 | Other files under `apps/desktop/`, `apps/mobile/`, `apps/website/`; root `package*.json` | Frontend (all three apps, since they share sources) |
 | `scripts/` | Script fixtures |
-| `*.md`, `docs/`, `.github/`, `LICENSE`, `NOTICE`, `.gitignore` | Formatting only |
+| `*.md`, `docs/`, `.github/`, `.vscode/`, `LICENSE`, `NOTICE`, `.gitignore` | Formatting only |
 
-Any other path, a change to `scripts/gate-local.sh` itself, or a missing merge
-base runs every check. `--dry-run` prints the selected scope without running
-it.
+Some files also feed another bucket's checks and select it as well:
 
-The local gate omits the desktop and mobile Tauri shells from clippy and Rust
-tests because GTK/WebKit dependencies may be unavailable. Neither gate touches
+| Changed paths | Also runs |
+|---------------|-----------|
+| `apps/desktop/src-tauri/src/application/`, `crates/ice-app/Cargo.toml` | Vitest (the architecture-boundary tests read them) |
+| `CHANGELOG.md`, root `Cargo.toml`, `apps/{desktop,mobile}/package.json`, `apps/{desktop,mobile}/src-tauri/tauri.conf.json` | Script fixtures (release preflight checks the version sources and the changelog section) |
+
+Renames count both the old and the new path. Any other path, a change to
+`scripts/gate-local.sh` itself, or a missing merge base runs every check.
+`--dry-run` prints the selected scope without running it.
+
+The local gate builds the desktop and mobile Tauri shells only when their
+sources change, and skips them with a warning when the GTK/WebKit development
+packages are missing on Linux; CI covers them either way. Build helper scripts
+such as `fetch-singbox.sh` and `prepare-singbox-resource.sh` run only inside
+`tauri build`, so locally they get just the syntax check. Neither gate touches
 tracked files: `scripts/capture-docs.sh` refreshes the desktop and Android Home
 captures when the version or relevant UI files change, or when any capture is
 missing, and recomposes the README hero on every run. Run it when the Live Demo
