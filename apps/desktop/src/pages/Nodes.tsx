@@ -101,6 +101,36 @@ function delayBadge(delay: DelayCell) {
   );
 }
 
+function TestButton({
+  node,
+  disabled,
+  title,
+  onTest,
+}: {
+  node: NodeInfo;
+  disabled: boolean;
+  title: string;
+  onTest: (node: NodeInfo) => void;
+}) {
+  // Same gauge glyph as the phone header's batch test; the label stays as the
+  // accessible name so the icon-only button is still announced.
+  return (
+    <button
+      type="button"
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon" }),
+        "text-muted-foreground",
+      )}
+      disabled={disabled}
+      aria-label={t("nodes.test")}
+      title={title}
+      onClick={() => onTest(node)}
+    >
+      <Gauge className="size-5" aria-hidden="true" />
+    </button>
+  );
+}
+
 function FavoriteButton({
   node,
   pending,
@@ -351,19 +381,16 @@ const NodeRow = memo(function NodeRow({
               {/* The phone row is too narrow for a per-node test; the header's
                   batch test covers it there. */}
               {compact ? null : (
-                <button
-                  type="button"
-                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                <TestButton
+                  node={node}
                   disabled={!running || busy || favoritePending}
                   title={
                     expanded
                       ? t("nodes.testAllMembers")
                       : t("nodes.testCurrent")
                   }
-                  onClick={() => onTest(node)}
-                >
-                  {t("nodes.test")}
-                </button>
+                  onTest={onTest}
+                />
               )}
               <button
                 type="button"
@@ -398,14 +425,12 @@ const NodeRow = memo(function NodeRow({
                 onToggle={onToggleFavorite}
               />
               {compact ? null : (
-                <button
-                  type="button"
-                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                <TestButton
+                  node={node}
                   disabled={!running || busy || favoritePending}
-                  onClick={() => onTest(node)}
-                >
-                  {t("nodes.test")}
-                </button>
+                  title={t("nodes.test")}
+                  onTest={onTest}
+                />
               )}
               <button
                 type="button"
