@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { t } from "../../lib/i18n";
 import { SettingsRow, SettingsSection } from "./SettingsLayout";
 
+type SystemAction = "battery" | "privateDns" | "alwaysOn";
+
 /** System settings the VPN cannot change itself: battery exemption, Private
  * DNS, and always-on. Each row opens the platform screen; none of them is
  * stored in ice-box settings. */
@@ -14,16 +16,20 @@ export function AndroidSystemCard({
 }: {
   status: StatusResponse | null;
 }) {
-  const [error, setError] = useState<string | null>(null);
+  // Each action keeps its own error so a failure shows under the row whose
+  // button caused it.
+  const [errors, setErrors] = useState<Partial<Record<SystemAction, string>>>(
+    {},
+  );
   const [busy, setBusy] = useState(false);
 
-  async function run(action: () => Promise<void>) {
-    setError(null);
+  async function run(key: SystemAction, action: () => Promise<void>) {
+    setErrors({});
     setBusy(true);
     try {
       await action();
     } catch (err) {
-      setError(formatInvokeError(err));
+      setErrors({ [key]: formatInvokeError(err) });
     } finally {
       setBusy(false);
     }
@@ -36,26 +42,32 @@ export function AndroidSystemCard({
   return (
     <SettingsSection title={t("settings.system")}>
       {showBattery ? (
-        <SettingsRow label={t("settings.batteryTitle")}>
+        <SettingsRow
+          label={t("settings.batteryTitle")}
+          error={errors.battery}
+        >
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => void run(() => api.requestBatteryExemption())}
+            onClick={() => void run("battery", () => api.requestBatteryExemption())}
           >
             {t("settings.batteryAction")}
           </Button>
         </SettingsRow>
       ) : null}
       {showPrivateDns ? (
-        <SettingsRow label={t("settings.privateDnsTitle")}>
+        <SettingsRow
+          label={t("settings.privateDnsTitle")}
+          error={errors.privateDns}
+        >
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => void run(() => api.openNetworkSettings())}
+            onClick={() => void run("privateDns", () => api.openNetworkSettings())}
           >
             {t("settings.privateDnsAction")}
           </Button>
@@ -64,7 +76,7 @@ export function AndroidSystemCard({
       <SettingsRow
         label={t("settings.alwaysOnTitle")}
         description={alwaysOn ? t("settings.alwaysOnEnabled") : undefined}
-        error={error}
+        error={errors.alwaysOn}
       >
         {alwaysOn ? null : (
           <Button
@@ -72,7 +84,7 @@ export function AndroidSystemCard({
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => void run(() => api.openVpnSettings())}
+            onClick={() => void run("alwaysOn", () => api.openVpnSettings())}
           >
             {t("settings.alwaysOnAction")}
           </Button>

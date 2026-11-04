@@ -13,7 +13,7 @@ use ice_types::{AppError, AppSettings, ErrorCode};
 ///
 /// Only meaningful while the app's own core is stopped: a live core holds the
 /// port itself and would read as "in use".
-pub fn clash_api_port_usable(settings: &AppSettings) -> bool {
+fn clash_api_port_usable(settings: &AppSettings) -> bool {
     let host = settings.clash_api_listen.as_str();
     let port = settings.clash_api_port;
     port >= 1024

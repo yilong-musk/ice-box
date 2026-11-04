@@ -73,10 +73,17 @@ export function SettingsRow({
       {/* A small floor keeps short labels beside their control on a phone;
           only a label squeezed below it pushes the control onto its own line. */}
       <div className="flex min-w-24 flex-1 flex-col gap-0.5">
-        {label != null ? (
+        {/* Only a row with a form control gets a <label>; a button-only row
+            uses plain text so screen readers do not announce a dangling
+            form label. */}
+        {label != null && htmlFor ? (
           <FieldLabel htmlFor={htmlFor} className="text-sm font-normal">
             {label}
           </FieldLabel>
+        ) : label != null ? (
+          <div data-slot="settings-label" className="text-sm leading-snug">
+            {label}
+          </div>
         ) : null}
         {description != null ? (
           <div className="text-xs/relaxed text-muted-foreground">

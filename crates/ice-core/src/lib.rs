@@ -23,7 +23,7 @@ pub use clash_api::{
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use clash_api::{MockClashApi, RecordedRequest};
-pub use clash_port::{clash_api_port_usable, pick_free_clash_api_port, relocate_clash_api_port};
+pub use clash_port::{pick_free_clash_api_port, relocate_clash_api_port};
 pub use error::CoreError;
 pub use health::{
     tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,

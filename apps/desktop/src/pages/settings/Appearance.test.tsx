@@ -62,7 +62,9 @@ describe("AppearanceCard", () => {
   it("orders language first, then theme, then the menu bar item", () => {
     const labels = (container: HTMLElement) =>
       Array.from(
-        container.querySelectorAll("[data-slot='field-label']"),
+        container.querySelectorAll(
+          "[data-slot='field-label'], [data-slot='settings-label']",
+        ),
       ).map((node) => node.textContent);
 
     expect(labels(renderCard().container)).toEqual([
