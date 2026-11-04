@@ -81,6 +81,24 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // The APK ships from GitHub Releases, not Google Play, so users download
+    // the raw file. With minSdk >= 23 AGP stores .so files uncompressed for
+    // mmap loading, which roughly triples the download (libbox.so alone is
+    // ~62 MB raw, ~20 MB deflated). Compress them and let the installer
+    // extract them instead. Revisit this if the app moves to Play, which
+    // compresses the transfer itself.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+    // Native resources are only the launcher/notification strings; the UI
+    // is localized in the WebView. Drop the dozens of locales that
+    // AndroidX/Material pull into resources.arsc. A bare "zh" matches no
+    // library resources (they are all region-qualified), so list them.
+    androidResources {
+        localeFilters += listOf("en", "zh-rCN", "zh-rTW", "zh-rHK")
+    }
     sourceSets {
         getByName("main") {
             // `third_party/sing-geoip/rule-set/*.srs` is fetched, not committed.

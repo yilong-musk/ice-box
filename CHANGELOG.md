@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Android APK is much smaller to download. Native libraries are now
+  compressed inside the APK (the installer extracts them), the Rust library is
+  built for size, and only English and Chinese Android resources are kept.
+
 ## [0.2.9] - 2026-11-04
 
 ### Changed

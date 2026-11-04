@@ -68,6 +68,13 @@ cd "$ROOT/apps/mobile"
 args=(android build --target "$TAURI_TARGET" --apk --ci)
 if [[ "$MODE" == debug ]]; then
   args+=(--debug)
+else
+  # Optimize the Android Rust library for size. The library is UI glue and
+  # config generation, not a hot path, and the desktop release profile in
+  # Cargo.toml stays speed-optimized. LTO cannot be set per package, so the
+  # override is scoped to this build through Cargo's profile env vars.
+  export CARGO_PROFILE_RELEASE_OPT_LEVEL=s
+  export CARGO_PROFILE_RELEASE_LTO=fat
 fi
 CI=1 npm run tauri -- "${args[@]}"
 
