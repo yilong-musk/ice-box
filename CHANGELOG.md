@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Android APK is much smaller to download (about 76 MB to 28 MB). Native
+  libraries are now compressed inside the APK, the Rust library is built for
+  size, and only English and Chinese Android resources are kept. Because the
+  installer now extracts the native libraries, the installed app uses more
+  storage than before (about 98 MB instead of 76 MB).
+  On devices set to a language other than English or Chinese, the few Android
+  system strings from AndroidX/Material (such as the "Navigate up"
+  accessibility label) are now in English, like the rest of the app.
+
 ## [0.2.9] - 2026-11-04
 
 ### Changed

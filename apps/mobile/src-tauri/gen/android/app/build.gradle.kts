@@ -81,6 +81,32 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // The APK ships from GitHub Releases, not Google Play, so users download
+    // the raw file. With minSdk >= 23 AGP stores .so files uncompressed for
+    // mmap loading, which roughly triples the download (libbox.so alone is
+    // ~62 MB raw, ~20 MB deflated). Compress them and let the installer
+    // extract them instead. Revisit this if the app moves to Play, which
+    // compresses the transfer itself. Tradeoff: the installer extracts the
+    // ~71 MB of libraries next to the ~28 MB APK, so the installed app takes
+    // ~98 MB instead of ~76 MB, while the download drops by ~48 MB.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+    // Native resources are only the launcher/notification strings; the UI
+    // is localized in the WebView. Drop the dozens of locales that
+    // AndroidX/Material pull into resources.arsc. A bare "zh" matches no
+    // library resources (they are all region-qualified), so list them.
+    // Those libraries ship no other Chinese regions, so zh-SG/zh-MO devices
+    // resolve exactly as before (Android 7+ falls back by script: Hans to
+    // zh-CN, Hant to zh-HK/zh-TW). Other languages lose the libraries'
+    // system strings (e.g. "Navigate up", TalkBack labels) and fall back to
+    // English, matching the app UI, which is English and Chinese only.
+    // scripts/verify-android-apk.sh --release checks this list.
+    androidResources {
+        localeFilters += listOf("en", "zh-rCN", "zh-rTW", "zh-rHK")
+    }
     sourceSets {
         getByName("main") {
             // `third_party/sing-geoip/rule-set/*.srs` is fetched, not committed.

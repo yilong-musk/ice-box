@@ -75,20 +75,78 @@ expect_listing_fail() {
   fi
 }
 
+# `unzip -v` rows: Length Method Size Cmpr Date Time CRC-32 Name.
+row() {
+  printf '%10s  %-6s %8s %3s  2026-09-30 00:00 00000000  %s' "$1" "$2" "$3" "$4" "$5"
+}
+header=" Length   Method    Size  Cmpr    Date    Time   CRC-32   Name"
+
 # The arm64 entry is first, then a long tail. A `grep -q` pipeline under
 # pipefail treats that as a missing library because grep closes the pipe.
-arm64_listing="    100  2026-09-30 00:00   lib/arm64-v8a/libice_box_mobile_lib.so"
+arm64_listing="$header"$'\n'"$(row 8858176 Defl:N 3958209 55% lib/arm64-v8a/libice_box_mobile_lib.so)"
 i=0
 while [[ "$i" -lt 4000 ]]; do
-  arm64_listing+=$'\n'"    100  2026-09-30 00:00   assets/rule-set/geoip-${i}.srs"
+  arm64_listing+=$'\n'"$(row 100 Stored 100 0% "assets/rule-set/geoip-${i}.srs")"
   i=$((i + 1))
 done
 expect_listing_ok "arm64-with-long-tail" "$arm64_listing"
-expect_listing_fail "missing-arm64" "    100  2026-09-30 00:00   assets/rule-set/geoip-cn.srs" "missing lib/arm64-v8a"
+expect_listing_ok \
+  "stored-arsc" \
+  "$header"$'\n'"$(row 61721672 Defl:N 19576911 68% lib/arm64-v8a/libbox.so)"$'\n'"$(row 524388 Stored 524388 0% resources.arsc)"
+expect_listing_fail \
+  "missing-arm64" \
+  "$header"$'\n'"$(row 100 Defl:N 50 50% assets/rule-set/geoip-cn.srs)" \
+  "missing lib/arm64-v8a"
 expect_listing_fail \
   "x86_64" \
-  $'    100  2026-09-30 00:00   lib/arm64-v8a/libice.so\n    100  2026-09-30 00:00   lib/x86_64/libice.so' \
+  "$header"$'\n'"$(row 100 Defl:N 50 50% lib/arm64-v8a/libice.so)"$'\n'"$(row 100 Defl:N 50 50% lib/x86_64/libice.so)" \
   "ABI other than arm64-v8a"
+# useLegacyPackaging dropped: AGP stores the .so files for mmap loading.
+expect_listing_fail \
+  "stored-so" \
+  "$header"$'\n'"$(row 8858176 Defl:N 3958209 55% lib/arm64-v8a/libice_box_mobile_lib.so)"$'\n'"$(row 61721672 Stored 61721672 0% lib/arm64-v8a/libbox.so)" \
+  "uncompressed"
+# `unzip -l` has no method column, so compression cannot be checked.
+expect_listing_fail \
+  "unzip-l" \
+  "    100  2026-09-30 00:00   lib/arm64-v8a/libice_box_mobile_lib.so" \
+  "expected unzip -v"
+
+expect_locales_ok() {
+  local name="$1"
+  local text="$2"
+  if ! printf '%s\n' "$text" | "$SCRIPT" --release-locales-text >/dev/null; then
+    echo "verify-android-apk locales $name: expected success" >&2
+    exit 1
+  fi
+}
+
+expect_locales_fail() {
+  local name="$1"
+  local text="$2"
+  local needle="$3"
+  local err
+  if err="$(printf '%s\n' "$text" | "$SCRIPT" --release-locales-text 2>&1)"; then
+    echo "verify-android-apk locales $name: expected failure" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$err" | grep -q "$needle"; then
+    echo "verify-android-apk locales $name: missing '$needle' in:" >&2
+    printf '%s\n' "$err" >&2
+    exit 1
+  fi
+}
+
+pkg="package: name='com.yilongmusk.icebox' versionCode='2009' versionName='0.2.9'"
+# Output of a real filtered release APK (aapt2 35.0.0).
+expect_locales_ok "filtered" "$pkg"$'\n'"locales: '--_--' 'zh-CN' 'zh-HK' 'zh-TW'"
+expect_locales_ok "with-en" "$pkg"$'\n'"locales: '--_--' 'en' 'en-GB' 'zh-CN' 'zh-TW'"
+# localeFilters dropped: AndroidX/Material bring back dozens of locales.
+expect_locales_fail \
+  "unfiltered" \
+  "$pkg"$'\n'"locales: '--_--' 'af' 'am' 'ar' 'zh-CN' 'zh-HK' 'zh-TW'" \
+  "outside en/zh-CN/zh-TW/zh-HK: af am ar"
+expect_locales_fail "no-line" "$pkg" "no locales line"
 
 expect_version_ok() {
   local name="$1"
