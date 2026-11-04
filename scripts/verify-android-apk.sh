@@ -5,15 +5,18 @@
 #
 # Without --release, the APK must verify (the CI debug APK is signed with
 # the Android debug key). With --release, the signer must not be that debug
-# key, and the native libraries must be arm64-v8a only.
+# key, the native libraries must be arm64-v8a only and deflated (not stored
+# for mmap), and resources.arsc must carry only the English and Chinese
+# locales kept by androidResources.localeFilters in app/build.gradle.kts.
 #
 # --version checks the APK manifest versionName and versionCode against the
 # release version (the versionCode comes from scripts/android-version-code.sh).
 #
 # --release-certs-text reads `apksigner verify --print-certs` output on stdin
 # and applies only the release signer checks. --release-listing-text does the
-# same for `unzip -l` output, and --release-badging-text <ver> checks
-# `aapt2 dump badging` output. scripts/test-verify-android-apk.sh uses these
+# same for `unzip -v` output, --release-locales-text checks the locales line
+# of `aapt2 dump badging` output, and --release-badging-text <ver> checks the
+# version in that output. scripts/test-verify-android-apk.sh uses these
 # so the checks stay covered without an SDK.
 set -euo pipefail
 
@@ -48,6 +51,43 @@ check_release_listing() {
   fi
   if [[ "$listing" =~ lib/(x86_64|x86|armeabi-v7a|armeabi)/ ]]; then
     echo "release APK contains an ABI other than arm64-v8a" >&2
+    return 1
+  fi
+  # `unzip -v` columns: Length Method Size Cmpr Date Time CRC-32 Name.
+  # packaging.jniLibs.useLegacyPackaging deflates the .so files; "Stored"
+  # means the block is gone and the download is back to ~3x the size.
+  local stored
+  stored="$(awk '$NF ~ /^lib\/.*\.so$/ && $2 == "Stored" { print $NF }' <<<"$listing")"
+  if [[ -n "$stored" ]]; then
+    echo "release APK stores native libraries uncompressed:" >&2
+    printf '%s\n' "$stored" >&2
+    return 1
+  fi
+  if [[ "$listing" != *"Defl:"* ]]; then
+    echo "release APK listing has no compression method column (expected unzip -v)" >&2
+    return 1
+  fi
+}
+
+# Allowed resource locales. '--_--' is the default (English) configuration.
+check_release_locales() {
+  local badging="$1"
+  local line
+  line="$(awk '/^locales: / { sub(/^locales: /, ""); print; exit }' <<<"$badging")"
+  if [[ -z "$line" ]]; then
+    echo "release APK badging has no locales line" >&2
+    return 1
+  fi
+  local extra=() loc
+  for loc in $line; do
+    loc="${loc//\'/}"
+    case "$loc" in
+    --_-- | en | en-* | zh-CN | zh-TW | zh-HK) ;;
+    *) extra+=("$loc") ;;
+    esac
+  done
+  if ((${#extra[@]} > 0)); then
+    echo "release APK has resource locales outside en/zh-CN/zh-TW/zh-HK: ${extra[*]}" >&2
     return 1
   fi
 }
@@ -88,6 +128,11 @@ fi
 
 if [[ "${1:-}" == "--release-listing-text" ]]; then
   check_release_listing "$(cat)"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--release-locales-text" ]]; then
+  check_release_locales "$(cat)"
   exit 0
 fi
 
@@ -169,18 +214,10 @@ if [[ "$RELEASE" == 1 ]]; then
     exit 1
   fi
   check_release_certs "$certs"
-  check_release_listing "$(unzip -l "$APK")"
+  check_release_listing "$(unzip -v "$APK")"
 fi
 
-if [[ -n "$EXPECT_VERSION" ]]; then
-  if [[ -z "${ANDROID_HOME:-}" ]]; then
-    echo "ANDROID_HOME is not set; cannot locate aapt/aapt2" >&2
-    exit 1
-  fi
-  if [[ ! -d "$ANDROID_HOME/build-tools" ]]; then
-    echo "ANDROID_HOME/build-tools not found: $ANDROID_HOME/build-tools" >&2
-    exit 1
-  fi
+if [[ "$RELEASE" == 1 || -n "$EXPECT_VERSION" ]]; then
   AAPT="$(find_build_tools aapt2 || true)"
   if [[ -z "$AAPT" ]]; then
     AAPT="$(find_build_tools aapt || true)"
@@ -189,7 +226,13 @@ if [[ -n "$EXPECT_VERSION" ]]; then
     echo "aapt/aapt2 not found under $ANDROID_HOME/build-tools" >&2
     exit 1
   fi
-  check_release_version "$("$AAPT" dump badging "$APK")" "$EXPECT_VERSION"
+  badging="$("$AAPT" dump badging "$APK")"
+  if [[ "$RELEASE" == 1 ]]; then
+    check_release_locales "$badging"
+  fi
+  if [[ -n "$EXPECT_VERSION" ]]; then
+    check_release_version "$badging" "$EXPECT_VERSION"
+  fi
 fi
 
 echo "verify-android-apk: OK ($APK)"
