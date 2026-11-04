@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import {
+  Activity,
+  memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -71,10 +74,30 @@ type Tab =
 
 const SIDEBAR_WIDTH = "11rem";
 
+// Every visited page stays mounted inside an <Activity>. Memoized pages with
+// stable props skip the shell re-render on a tab switch: the page coming in
+// renders on the click, and the hidden page leaving catches up at low priority
+// after the frame is painted. Each page subscribes to language changes on its
+// own.
+const HomePage = memo(Home);
+const NodesPage = memo(Nodes);
+const AppsPage = memo(Apps);
+const SubscriptionsPage = memo(Subscriptions);
+const RulesPage = memo(Rules);
+const LogsPage = memo(Logs);
+const SettingsPage = memo(Settings);
+const McpPage = memo(Mcp);
+
 const SIDEBAR_PROVIDER_STYLE = {
   "--sidebar-width": SIDEBAR_WIDTH,
 } as CSSProperties;
 
+/**
+ * A page that stays mounted while its tab is not shown. Hidden, <Activity>
+ * sets `display: none` on the page (title-bar portals included), tears down
+ * its effects, and renders its updates only when nothing else is pending;
+ * state and DOM are kept for the next visit.
+ */
 function TabPane({
   active,
   children,
@@ -83,15 +106,14 @@ function TabPane({
   children: ReactNode;
 }) {
   return (
-    <div
-      className={
-        active ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"
-      }
-      aria-hidden={!active}
-      data-active={active ? "true" : "false"}
-    >
-      {children}
-    </div>
+    <Activity mode={active ? "visible" : "hidden"}>
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        data-active={active ? "true" : "false"}
+      >
+        {children}
+      </div>
+    </Activity>
   );
 }
 
@@ -291,7 +313,7 @@ function AppShell() {
     });
   }, [languageReady, resolved]);
 
-  function selectTab(id: Tab) {
+  const selectTab = useCallback((id: Tab) => {
     setTab(id);
     setVisited((prev) => {
       if (prev.has(id)) return prev;
@@ -299,7 +321,7 @@ function AppShell() {
       next.add(id);
       return next;
     });
-  }
+  }, []);
 
   const phone = isPhoneShell();
   const desktop = isDesktopShell();
@@ -317,7 +339,7 @@ function AppShell() {
     <>
       {visited.has("home") && (
         <TabPane active={tab === "home"}>
-          <Home
+          <HomePage
             onNavigate={selectTab}
             active={tab === "home"}
             onStatus={setGlobalStatus}
@@ -326,32 +348,32 @@ function AppShell() {
       )}
       {!phone && visited.has("nodes") && (
         <TabPane active={tab === "nodes"}>
-          <Nodes onNavigate={selectTab} active={tab === "nodes"} />
+          <NodesPage onNavigate={selectTab} active={tab === "nodes"} />
         </TabPane>
       )}
       {phone && visited.has("apps") && (
         <TabPane active={tab === "apps"}>
-          <Apps active={tab === "apps"} />
+          <AppsPage active={tab === "apps"} />
         </TabPane>
       )}
       {visited.has("subs") && (
         <TabPane active={tab === "subs"}>
-          <Subscriptions active={tab === "subs"} />
+          <SubscriptionsPage active={tab === "subs"} />
         </TabPane>
       )}
       {visited.has("rules") && (
         <TabPane active={tab === "rules"}>
-          <Rules onNavigate={selectTab} active={tab === "rules"} />
+          <RulesPage onNavigate={selectTab} active={tab === "rules"} />
         </TabPane>
       )}
       {!phone && visited.has("logs") && (
         <TabPane active={tab === "logs"}>
-          <Logs active={tab === "logs"} />
+          <LogsPage active={tab === "logs"} />
         </TabPane>
       )}
       {visited.has("settings") && (
         <TabPane active={tab === "settings"}>
-          <Settings
+          <SettingsPage
             active={tab === "settings"}
             availableUpdate={availableUpdate}
             onAvailableUpdate={setAvailableUpdate}
@@ -361,7 +383,7 @@ function AppShell() {
       )}
       {desktop && visited.has("mcp") && (
         <TabPane active={tab === "mcp"}>
-          <Mcp active={tab === "mcp"} />
+          <McpPage active={tab === "mcp"} />
         </TabPane>
       )}
     </>

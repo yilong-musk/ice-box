@@ -117,6 +117,37 @@ function formatSelectedOutbound(outbound: {
   });
 }
 
+/** Structural equality for plain JSON values. Key order does not matter. */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!jsonEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+    if (!jsonEqual(left[key], right[key])) return false;
+  }
+  return true;
+}
+
+/** Keep the current object when a re-read returns the same content, so a
+ * poll or tab reactivation does not re-render Home for nothing. Settings and
+ * MCP status are small plain JSON. */
+function keepIfSame<T>(prev: T | null, next: T): T {
+  return prev != null && jsonEqual(prev, next) ? prev : next;
+}
+
 /** Elapsed time since `since` (epoch ms), re-rendered once a second on its own
  * timer so the parent page does not re-render every tick. */
 function RunUptime({ since }: { since: number }) {
@@ -197,7 +228,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           mcpPromise,
         ]);
         if (gen !== pollGenRef.current || !activeRef.current) return;
-        if (nextMcpStatus) setMcpStatus(nextMcpStatus);
+        if (nextMcpStatus) setMcpStatus((prev) => keepIfSame(prev, nextMcpStatus));
 
         // A node switch may land while this fetch is in flight. Keep the
         // snapshot selection instead of regressing to stale settings.
@@ -208,7 +239,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
               ...nextSettings,
               selected_tag: snap.selectedTag,
             };
-            setSettings(settingsRef.current);
+            const merged = settingsRef.current;
+            setSettings((prev) => keepIfSame(prev, merged));
             setProxyMode(nextSettings.proxy_mode);
           }
           if (s) noteStatus(s);
@@ -223,7 +255,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         if (!nextSettings && !settingsRef.current) return;
         if (nextSettings) {
           settingsRef.current = nextSettings;
-          setSettings(nextSettings);
+          setSettings((prev) => keepIfSame(prev, nextSettings));
           setProxyMode(nextSettings.proxy_mode);
         }
         if (!tunSaveRef.current) {

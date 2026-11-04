@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -121,7 +122,12 @@ function useRuntimeStoreEngine(enabled: boolean): RuntimeStore {
     return () => window.clearInterval(id);
   }, [enabled, visible, refreshStatus]);
 
-  return { status, visible, bumpGeneration, isStale, refreshStatus };
+  // A stable value keeps context consumers from re-rendering on unrelated
+  // provider renders.
+  return useMemo(
+    () => ({ status, visible, bumpGeneration, isStale, refreshStatus }),
+    [status, visible, bumpGeneration, isStale, refreshStatus],
+  );
 }
 
 export function RuntimeStoreProvider({ children }: { children: ReactNode }) {

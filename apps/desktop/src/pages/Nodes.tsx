@@ -42,9 +42,9 @@ import {
   nodesEqual,
   orderNodesByFavorite,
   readNodesSnapshot,
-  releaseNodeMemberLists,
+  sameNodeLineup,
   resolveSelectedTag,
-  withoutGroupMembers,
+  reuseUnchangedNodes,
   writeNodesSnapshot,
   type DelayCell,
 } from "../lib/nodes";
@@ -475,6 +475,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const mountedRef = useRef(true);
   const activeRef = useRef(active);
   const delayRunRef = useRef(0);
+  // Advances when the node lineup changes (another subscription or config).
+  // Delay results and probes from an older lineup are dropped: a reused tag
+  // may now name another server.
+  const lineupRef = useRef(0);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const selectedTagRef = useRef(selectedTag);
@@ -491,6 +495,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
+  // Rows render only while the page is shown. The hidden page catches up at
+  // low priority and drops its rows then; the scroll position is restored from
+  // `viewport` on the next visit.
   const listVisible = active && (runtime?.visible ?? true);
   const orderedNodes = useMemo(() => orderNodesByFavorite(nodes), [nodes]);
   const layout = useMemo(
@@ -545,7 +552,13 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
       const runningNow = status?.core.status === "running";
-      setNodes((prev) => (nodesEqual(prev, n) ? prev : n));
+      const prevNodes = nodesRef.current;
+      if (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n)) {
+        lineupRef.current += 1;
+        setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+        setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
+      }
+      setNodes((prev) => reuseUnchangedNodes(prev, n));
       setSelectedTag((prev) => (prev === selected ? prev : selected));
       setRunning((prev) => (prev === runningNow ? prev : runningNow));
       writeNodesSnapshot({
@@ -586,13 +599,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     };
   }, [refresh]);
 
-  useEffect(() => {
-    if (active) return;
-    setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
-    setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
-    setNodes((prev) => withoutGroupMembers(prev));
-    releaseNodeMemberLists();
-  }, [active]);
+  // Leaving the tab keeps the list, its member lists, the expanded groups and
+  // the delay results; only the rendered rows unmount (`listVisible`). The
+  // delay results and expanded groups reset in `refresh` when the lineup
+  // changes, since a reused tag may then name another server.
 
   useEffect(() => {
     activeRef.current = active;
@@ -652,6 +662,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   async function testTags(tags: string[]) {
     if (tags.length === 0) return;
     const run = ++delayRunRef.current;
+    const lineup = lineupRef.current;
     nextGeneration();
     cancelRef.current = false;
     setBusy(true);
@@ -659,6 +670,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     const multi = tags.length > 1;
     const isCurrent = () =>
       run === delayRunRef.current &&
+      lineup === lineupRef.current &&
       !cancelRef.current &&
       mountedRef.current;
 

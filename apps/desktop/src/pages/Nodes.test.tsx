@@ -276,7 +276,7 @@ describe("Nodes", () => {
     });
   });
 
-  it("drops group member lists when the pane is hidden", async () => {
+  it("keeps member lists and expanded groups while the pane is hidden", async () => {
     const members = Array.from({ length: 40 }, (_, i) => `leaf-${i}`);
     listNodes.mockResolvedValue([
       {
@@ -292,12 +292,125 @@ describe("Nodes", () => {
     await waitFor(() => {
       expect(view.getByText("选择组")).toBeInTheDocument();
     });
-    expect(readNodesSnapshot()?.nodes[0]?.group_all).toHaveLength(40);
+    // The session-wide snapshot never holds member lists; the page does.
+    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
+
+    await expandGroup(view, "选择组");
 
     rerender(<Nodes active={false} />);
-    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
-    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("leaf-0");
+    // The rows unmount, the data stays.
     expect(view.queryByText("选择组")).toBeNull();
+
+    // Coming back renders the expanded group before any refetch lands.
+    listNodes.mockImplementation(() => new Promise(() => {}));
+    rerender(<Nodes active />);
+    expect(
+      view.getByRole("button", { name: "选择组", expanded: true }),
+    ).toBeInTheDocument();
+    expect(
+      view.getByLabelText(t("nodes.membersAria", { group: "选择组" })),
+    ).toBeInTheDocument();
+  });
+
+  it("drops delay results and expanded groups when the lineup changes", async () => {
+    testNodeDelay.mockRejectedValue("probe timed out");
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const rowOf = (tag: string) =>
+      within(nodeList).getAllByText(tag)[0].closest("[data-slot='item']") as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    });
+    await expandGroup(view, "选择组");
+
+    // A refresh with the same lineup (only a group exit moved) keeps both.
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "node-b",
+        group_all: ["node-a", "node-b"],
+      },
+      {
+        tag: "自动组",
+        outbound_type: "urltest",
+        group_now: "node-a",
+        group_all: ["node-a", "node-b"],
+      },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(readNodesSnapshot()?.nodes[3]?.group_now).toBe("node-a");
+    });
+    expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "选择组", expanded: true })).toBeInTheDocument();
+
+    // Another subscription reuses the tags: the old results no longer apply.
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-c", outbound_type: "vmess", group_now: null, group_all: null },
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "node-a",
+        group_all: ["node-a", "node-c"],
+      },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(view.getAllByText("node-c").length).toBeGreaterThan(0);
+    });
+    expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
+    expect(view.getByRole("button", { name: "选择组", expanded: false })).toBeInTheDocument();
+  });
+
+  it("drops results of a delay test that spans a lineup change", async () => {
+    let finish: (value: { tag: string; delay_ms: number }) => void = () => {};
+    testNodeDelay.mockImplementation(
+      () => new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const rowOf = (tag: string) =>
+      within(nodeList).getAllByText(tag)[0].closest("[data-slot='item']") as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-testing")).toBeInTheDocument();
+    });
+
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-c", outbound_type: "vmess", group_now: null, group_all: null },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(view.getAllByText("node-c").length).toBeGreaterThan(0);
+    });
+    expect(within(rowOf("node-a")).queryByTestId("delay-testing")).toBeNull();
+
+    await act(async () => {
+      finish({ tag: "node-a", delay_ms: 42 });
+    });
+    expect(within(rowOf("node-a")).queryByText(/42/)).toBeNull();
+    // The test still ends: the controls are usable again.
+    await waitFor(() => {
+      expect(
+        within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }),
+      ).toBeEnabled();
+    });
   });
 
   it("renders later rows when scrolling a freshly loaded long list", async () => {
@@ -413,31 +526,26 @@ describe("Nodes", () => {
     expect(view.queryByText("cached-node")).toBeNull();
   });
 
-  it("does not mount collapsed strategy-group members", () => {
-    writeNodesSnapshot({
-      nodes: [
-        {
-          tag: "选择组",
-          outbound_type: "selector",
-          group_now: "leaf-0",
-          group_all: Array.from({ length: 90 }, (_, i) => `leaf-${i}`),
-        },
-        {
-          tag: "leaf-0",
-          outbound_type: "trojan",
-          group_now: null,
-          group_all: null,
-        },
-      ],
-      selectedTag: "leaf-0",
-      running: true,
-    });
-    listNodes.mockImplementation(() => new Promise(() => {}));
+  it("does not mount collapsed strategy-group members", async () => {
+    listNodes.mockResolvedValue([
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "leaf-0",
+        group_all: Array.from({ length: 90 }, (_, i) => `leaf-${i}`),
+      },
+      {
+        tag: "leaf-0",
+        outbound_type: "trojan",
+        group_now: null,
+        group_all: null,
+      },
+    ]);
     const { container } = render(<Nodes />);
     const view = within(container);
 
     expect(
-      view.getByRole("button", { name: "选择组", expanded: false }),
+      await view.findByRole("button", { name: "选择组", expanded: false }),
     ).toBeInTheDocument();
     expect(view.queryByLabelText(t("nodes.membersAria", { group: "选择组" }))).not.toBeInTheDocument();
     expect(view.queryByText("leaf-89")).toBeNull();
@@ -445,19 +553,18 @@ describe("Nodes", () => {
 
   it("virtualizes strategy-group members while scrolling", async () => {
     const groupAll = Array.from({ length: 90 }, (_, i) => `leaf-${i}`);
-    writeNodesSnapshot({
-      nodes: [
-        {
-          tag: "选择组",
-          outbound_type: "selector",
-          group_now: "leaf-0",
-          group_all: groupAll,
-        },
-      ],
-      selectedTag: "选择组",
-      running: true,
+    listNodes.mockResolvedValue([
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "leaf-0",
+        group_all: groupAll,
+      },
+    ]);
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      selected_tag: "选择组",
     });
-    listNodes.mockImplementation(() => new Promise(() => {}));
     const { container } = render(<Nodes />);
     const view = within(container);
 

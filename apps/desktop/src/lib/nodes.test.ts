@@ -17,8 +17,9 @@ import {
   nodesSnapshotRevision,
   orderNodesByFavorite,
   readNodesSnapshot,
-  releaseNodeMemberLists,
+  reuseUnchangedNodes,
   resolveSelectedTag,
+  sameNodeLineup,
   subscribeNodesSnapshot,
   withoutGroupMembers,
   writeNodesSnapshot,
@@ -346,9 +347,59 @@ describe("node favorites", () => {
   });
 });
 
-describe("releaseNodeMemberLists", () => {
-  it("drops member lists without looking like a node switch", () => {
+describe("reuseUnchangedNodes", () => {
+  const leaf = (tag: string) => ({
+    tag,
+    outbound_type: "trojan",
+    group_now: null,
+    group_all: null,
+  });
+
+  it("returns the previous list when every node is unchanged", () => {
+    const prev = [leaf("a"), leaf("b")];
+    expect(reuseUnchangedNodes(prev, [leaf("a"), leaf("b")])).toBe(prev);
+  });
+
+  it("keeps unchanged node objects and takes changed ones", () => {
+    const group = {
+      tag: "g",
+      outbound_type: "selector",
+      group_now: "a",
+      group_all: null,
+    };
+    const prev = [group, leaf("a"), leaf("b")];
+    const nextGroup = { ...group, group_all: ["a", "b"] };
+    const merged = reuseUnchangedNodes(prev, [nextGroup, leaf("a"), leaf("b")]);
+    expect(merged).not.toBe(prev);
+    expect(merged[0]).toBe(nextGroup);
+    expect(merged[1]).toBe(prev[1]);
+    expect(merged[2]).toBe(prev[2]);
+  });
+
+  it("follows the new order and drops removed nodes", () => {
+    const prev = [leaf("a"), leaf("b"), leaf("c")];
+    const merged = reuseUnchangedNodes(prev, [leaf("c"), leaf("a")]);
+    expect(merged.map((node) => node.tag)).toEqual(["c", "a"]);
+    expect(merged[0]).toBe(prev[2]);
+    expect(merged[1]).toBe(prev[0]);
+  });
+
+  it("takes a favorite change", () => {
+    const prev = [leaf("a")];
+    const next = [{ ...leaf("a"), favorite: true, favorite_rank: 0 }];
+    expect(reuseUnchangedNodes(prev, next)[0]).toBe(next[0]);
+  });
+});
+
+describe("snapshot member lists", () => {
+  it("stores the list without member lists", () => {
     clearNodesSnapshot();
+    const leafNode = {
+      tag: "a",
+      outbound_type: "socks",
+      group_now: null,
+      group_all: null,
+    };
     writeNodesSnapshot({
       nodes: [
         {
@@ -357,22 +408,68 @@ describe("releaseNodeMemberLists", () => {
           group_now: "a",
           group_all: ["a", "b"],
         },
-        { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+        leafNode,
       ],
       selectedTag: "a",
       running: true,
     });
-    const revision = nodesSnapshotRevision();
-    releaseNodeMemberLists();
-    expect(nodesSnapshotRevision()).toBe(revision);
-    expect(readNodesSnapshot()?.nodes[0]?.group_all).toBeNull();
-    expect(readNodesSnapshot()?.nodes[0]?.group_now).toBe("a");
-    expect(readNodesSnapshot()?.selectedTag).toBe("a");
-    releaseNodeMemberLists();
-    expect(nodesSnapshotRevision()).toBe(revision);
-    expect(withoutGroupMembers(readNodesSnapshot()?.nodes ?? [])).toBe(
-      readNodesSnapshot()?.nodes,
-    );
+    const snap = readNodesSnapshot();
+    expect(snap?.nodes[0]?.group_all).toBeNull();
+    expect(snap?.nodes[0]?.group_now).toBe("a");
+    expect(snap?.nodes[1]).toBe(leafNode);
     clearNodesSnapshot();
+  });
+
+  it("returns the same list when there is nothing to drop", () => {
+    const nodes = [
+      { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+    ];
+    expect(withoutGroupMembers(nodes)).toBe(nodes);
+  });
+});
+
+describe("sameNodeLineup", () => {
+  const leaf = (tag: string, type = "trojan") => ({
+    tag,
+    outbound_type: type,
+    group_now: null,
+    group_all: null,
+  });
+  const group = (tag: string, members: string[] | null, now = "a") => ({
+    tag,
+    outbound_type: "selector",
+    group_now: now,
+    group_all: members,
+  });
+
+  it("ignores order, group exits and favorites", () => {
+    expect(
+      sameNodeLineup(
+        [group("g", ["a", "b"]), leaf("a"), leaf("b")],
+        [
+          { ...leaf("b"), favorite: true, favorite_rank: 0 },
+          group("g", ["a", "b"], "b"),
+          leaf("a"),
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it("matches a group whose members are unknown on one side", () => {
+    expect(sameNodeLineup([group("g", null), leaf("a")], [group("g", ["a"]), leaf("a")])).toBe(
+      true,
+    );
+  });
+
+  it("detects another set of tags, types or members", () => {
+    expect(sameNodeLineup([leaf("a")], [leaf("b")])).toBe(false);
+    expect(sameNodeLineup([leaf("a")], [leaf("a"), leaf("b")])).toBe(false);
+    expect(sameNodeLineup([leaf("a")], [leaf("a", "vmess")])).toBe(false);
+    expect(
+      sameNodeLineup(
+        [group("g", ["a", "b"]), leaf("a")],
+        [group("g", ["a", "c"]), leaf("a")],
+      ),
+    ).toBe(false);
   });
 });
