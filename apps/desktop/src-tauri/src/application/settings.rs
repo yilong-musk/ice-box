@@ -222,7 +222,14 @@ pub(super) fn save_settings_inner_with_autostart(
     // Home start/stop own `proxy_service_enabled`; Settings omits it so a
     // form save cannot clobber on/off. An explicit patch field exists for
     // dedicated callers.
-    let settings = previous.apply_patch(&patch);
+    let mut settings = previous.apply_patch(&patch);
+    // The Clash API port has no Settings field; when a new mixed port lands
+    // on it, move the Clash API instead of rejecting a value the user cannot
+    // see. The apply below then restarts the core on the new pair.
+    if settings.mixed_port == settings.clash_api_port {
+        settings.clash_api_port =
+            ice_core::pick_free_clash_api_port(&settings.clash_api_listen, settings.mixed_port)?;
+    }
     settings.validate_for(host_platform())?;
     // The login item is an OS registration independent of the sing-box runtime
     // config. Handle it before every save path, including patches that also

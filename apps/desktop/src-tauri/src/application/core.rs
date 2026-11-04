@@ -17,10 +17,13 @@ fn ensure_start_is_allowed(state: &AppState) -> Result<(), AppError> {
 /// the orchestrate lock.
 pub(crate) fn start_core_inner(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
     ensure_start_is_allowed(state)?;
-    let settings = current_settings(&state.paths)?;
+    let mut settings = current_settings(&state.paths)?;
     {
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         if core.state().status != CoreStatus::Running {
+            // The Clash API port is app-owned: hop off a port another
+            // program grabbed before the core tries (and fails) to bind it.
+            settings = ensure_clash_api_port_available(&state.paths, settings)?;
             // Do not hold `proxy` across spawn + healthcheck; start never applies OS proxy.
             let binary = binary_for(app)?;
             let _ = orchestrate_start_with_cache(
@@ -44,10 +47,13 @@ pub(crate) fn start_core_inner(app: &impl AppHost, state: &AppState) -> Result<(
 pub(crate) fn start_service(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
     let _orch = lock_orchestrate(state)?;
     ensure_start_is_allowed(state)?;
-    let settings = current_settings(&state.paths)?;
+    let mut settings = current_settings(&state.paths)?;
     {
         let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         if core.state().status != CoreStatus::Running {
+            // The Clash API port is app-owned: hop off a port another
+            // program grabbed before the core tries (and fails) to bind it.
+            settings = ensure_clash_api_port_available(&state.paths, settings)?;
             let binary = binary_for(app)?;
             let _ = orchestrate_start_with_cache(
                 &state.paths,

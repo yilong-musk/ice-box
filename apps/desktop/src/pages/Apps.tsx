@@ -141,9 +141,6 @@ export function Apps({ active = true }: Props) {
 
   return (
     <div className="apps-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="apps-panel">
-      <p className="shrink-0 text-xs leading-relaxed text-muted-foreground">
-        {t("apps.desc")}
-      </p>
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
 
       <div className="relative shrink-0">

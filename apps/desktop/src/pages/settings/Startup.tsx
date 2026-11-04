@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { t } from "../../lib/i18n";
+import { SettingsRow, SettingsSection } from "./SettingsLayout";
 
 /** Login item. The shell owns the OS registration (macOS LaunchAgent plist /
  * Windows per-user `Run` value), so the card only reports the persisted
@@ -26,28 +20,19 @@ export function StartupCard({
   onChange: (enabled: boolean) => void;
 }) {
   return (
-    <Card
-      size="sm"
-      className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-    >
-      <CardHeader>
-        <CardTitle>{t("settings.startup")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Field orientation="horizontal" className="w-auto gap-2">
-          <Switch
-            id="settings-launch-at-login"
-            size="sm"
-            checked={enabled}
-            disabled={busy || !loaded}
-            aria-label={t("settings.launchAtLogin")}
-            onCheckedChange={(checked) => onChange(checked === true)}
-          />
-          <FieldLabel htmlFor="settings-launch-at-login">
-            {t("settings.launchAtLogin")}
-          </FieldLabel>
-        </Field>
-      </CardContent>
-    </Card>
+    <SettingsSection title={t("settings.startup")}>
+      <SettingsRow
+        label={t("settings.launchAtLogin")}
+        htmlFor="settings-launch-at-login"
+      >
+        <Switch
+          id="settings-launch-at-login"
+          checked={enabled}
+          disabled={busy || !loaded}
+          aria-label={t("settings.launchAtLogin")}
+          onCheckedChange={(checked) => onChange(checked === true)}
+        />
+      </SettingsRow>
+    </SettingsSection>
   );
 }

@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
-import { t } from "./i18n";
 import {
   formatListenValidationError,
   formatPortValidationError,
-  formatPortsConflictError,
   isLoopbackListenHost,
   parsePortInput,
-  portsConflict,
 } from "./listenValidation";
 describe("listenValidation", () => {
   it("parsePortInput accepts valid ports", () => {
@@ -43,11 +40,5 @@ describe("listenValidation", () => {
 
   it("formatListenValidationError is readable", () => {
     expect(formatListenValidationError("Mixed 监听")).toContain("loopback");
-  });
-
-  it("portsConflict matches backend port equality rule", () => {
-    expect(portsConflict(17890, 17890)).toBe(true);
-    expect(portsConflict(17890, 19090)).toBe(false);
-    expect(formatPortsConflictError()).toBe(t("validation.portsConflict"));
   });
 });

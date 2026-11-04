@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { t } from "../../lib/i18n";
 import type { StatusResponse } from "../../api/client";
+import { SettingsRow } from "./SettingsLayout";
 
 export function HelperActions({
   status,
@@ -17,7 +18,7 @@ export function HelperActions({
 }) {
   if (status?.helper_supported !== true) return null;
   return (
-    <div className="flex flex-wrap gap-2">
+    <SettingsRow label={t("settings.helper")}>
       <Button
         type="button"
         size="sm"
@@ -49,6 +50,6 @@ export function HelperActions({
       >
         {t("settings.uninstallHelper")}
       </Button>
-    </div>
+    </SettingsRow>
   );
 }

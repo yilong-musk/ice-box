@@ -179,8 +179,6 @@ const zh = {
 
   // --- apps page (Android) ---
   "apps.title": "应用代理",
-  "apps.desc":
-    "为每个应用选择单独的分流方式；未设置的应用跟随当前规则和代理模式。",
   "apps.searchPlaceholder": "搜索应用名称或包名",
   "apps.searchAria": "搜索应用",
   "apps.loading": "正在读取应用列表…",
@@ -344,8 +342,11 @@ const zh = {
   "settings.inbound": "入站",
   "settings.mixedListen": "Mixed 监听",
   "settings.mixedPort": "Mixed 端口",
-  "settings.clashListen": "Clash API 监听",
-  "settings.clashPort": "Clash API 端口",
+  "settings.mixedProxy": "Mixed 代理",
+  "settings.mixedProxyHint": "HTTP 与 SOCKS 共用的本地入站",
+  "settings.allowLanHint": "开启后 Mixed 代理监听所有网卡，局域网设备可以连接",
+  "settings.helper": "辅助组件",
+  "settings.dataDir": "数据目录",
   "settings.allowLan": "允许局域网共享（Allow LAN）",
   "settings.ipv6": "IPv6",
   "settings.ipv6Enable": "启用 IPv6 支持",
@@ -438,7 +439,6 @@ const zh = {
   // --- validation (field name is prefixed by the caller) ---
   "validation.listen": "必须是 loopback 地址（127.0.0.1、localhost 或 ::1）",
   "validation.port": "必须是 1024–65535 之间的整数",
-  "validation.portsConflict": "Mixed 端口与 Clash API 端口不能相同",
 
   // --- rule type labels ---
   "ruleType.domain": "域名",
@@ -696,8 +696,6 @@ const en: Record<MessageKey, string> = {
 
   // --- apps page (Android) ---
   "apps.title": "App Proxy",
-  "apps.desc":
-    "Choose a routing mode for individual apps. Apps without a choice follow the active rules and proxy mode.",
   "apps.searchPlaceholder": "Search app names or package ids",
   "apps.searchAria": "Search apps",
   "apps.loading": "Loading installed apps…",
@@ -862,8 +860,11 @@ const en: Record<MessageKey, string> = {
   "settings.inbound": "Inbound",
   "settings.mixedListen": "Mixed Listen",
   "settings.mixedPort": "Mixed Port",
-  "settings.clashListen": "Clash API Listen",
-  "settings.clashPort": "Clash API Port",
+  "settings.mixedProxy": "Mixed proxy",
+  "settings.mixedProxyHint": "Local inbound shared by HTTP and SOCKS",
+  "settings.allowLanHint": "Binds the mixed proxy on all interfaces so devices on your LAN can connect",
+  "settings.helper": "Helper",
+  "settings.dataDir": "Data folder",
   "settings.allowLan": "Allow LAN Sharing (Allow LAN)",
   "settings.ipv6": "IPv6",
   "settings.ipv6Enable": "Enable IPv6 support",
@@ -958,7 +959,6 @@ const en: Record<MessageKey, string> = {
   // --- validation ---
   "validation.listen": "must be a loopback address (127.0.0.1, localhost or ::1)",
   "validation.port": "must be an integer between 1024 and 65535",
-  "validation.portsConflict": "Mixed and Clash API ports cannot be the same",
 
   // --- rule type labels ---
   "ruleType.domain": "Domain",

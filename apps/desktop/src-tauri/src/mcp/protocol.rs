@@ -361,8 +361,6 @@ fn settings_patch_schema() -> Value {
         "properties": {
             "mixed_listen": {"type": "string"},
             "mixed_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
-            "clash_api_listen": {"type": "string"},
-            "clash_api_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
             "selected_tag": {"type": ["string", "null"]},
             "auto_set_system_proxy": {"type": "boolean"},
             "allow_lan": {"type": "boolean"},

@@ -4,6 +4,7 @@
 
 mod binary;
 mod clash_api;
+mod clash_port;
 mod error;
 mod health;
 mod log_rotate;
@@ -22,6 +23,7 @@ pub use clash_api::{
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use clash_api::{MockClashApi, RecordedRequest};
+pub use clash_port::{clash_api_port_usable, pick_free_clash_api_port, relocate_clash_api_port};
 pub use error::CoreError;
 pub use health::{
     tcp_bind_available, tcp_port_is_in_use, wait_tcp_ready, wait_tcp_ready_until,
@@ -1044,8 +1046,15 @@ fn ensure_listen_ports_free(paths: &CorePaths) -> Result<(), CoreError> {
     ];
     for (label, host, port) in checks {
         if tcp_port_is_in_use(host, port) {
+            // Only the mixed port is a Settings field; the desktop shell moves
+            // the Clash API port itself before starting the core.
+            let hint = if label == "mixed" {
+                "quit the program holding it (e.g. another proxy app) or change the port in Settings"
+            } else {
+                "quit the program holding it (e.g. another proxy app) and try again"
+            };
             return Err(CoreError::SpawnFailed(format!(
-                "{label} port {host}:{port} is already in use; quit the program holding it (e.g. another proxy app) or change the port in Settings"
+                "{label} port {host}:{port} is already in use; {hint}"
             )));
         }
     }

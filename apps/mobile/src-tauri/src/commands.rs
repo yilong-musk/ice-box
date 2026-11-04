@@ -253,6 +253,19 @@ pub fn start(
         }
     }
     let package = package_name(&tunnel).or(current.package_name);
+    // Our own core holds the Clash API port while the tunnel is connecting,
+    // connected or still disconnecting; only once it is fully down can a
+    // listener there be told apart as another app's.
+    let core_down = match tunnel.status() {
+        Ok(snapshot) => matches!(
+            TunnelPhase::parse(&snapshot.phase),
+            TunnelPhase::Stopped | TunnelPhase::Error
+        ),
+        Err(_) => false,
+    };
+    if core_down {
+        host.ensure_clash_api_port()?;
+    }
     host.rewrite_config(package.as_deref())?;
     tunnel.start().map_err(map_tunnel)?;
     drop(host);

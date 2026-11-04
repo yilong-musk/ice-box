@@ -31,12 +31,3 @@ export function formatListenValidationError(field: string): string {
 export function formatPortValidationError(field: string): string {
   return `${field} ${t("validation.port")}`;
 }
-
-/** True when mixed and Clash API ports would conflict (matches backend validation). */
-export function portsConflict(mixedPort: number, clashApiPort: number): boolean {
-  return mixedPort === clashApiPort;
-}
-
-export function formatPortsConflictError(): string {
-  return t("validation.portsConflict");
-}
