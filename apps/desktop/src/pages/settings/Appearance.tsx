@@ -1,19 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import {
-  Field,
-  FieldLabel,
-} from "@/components/ui/field";
-import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   t,
@@ -22,6 +12,7 @@ import {
 } from "../../lib/i18n";
 import type { TrayDisplayMode } from "../../api/client";
 import type { ThemePreference } from "../../lib/theme";
+import { SettingsRow, SettingsSection } from "./SettingsLayout";
 
 const APPEARANCE_OPTIONS = [
   ["system", "settings.appearance.system"],
@@ -64,95 +55,78 @@ export function AppearanceCard({
   onTrayModeChange: (value: TrayDisplayMode) => void;
 }) {
   return (
-    <Card
-      size="sm"
-      className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-    >
-      <CardHeader>
-        <CardTitle>{t("settings.appearance")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-3">
-          <Field>
-            <FieldLabel htmlFor="settings-language">
-              {t("settings.language")}
-            </FieldLabel>
-            <NativeSelect
-              id="settings-language"
-              aria-label={t("settings.language")}
-              size="sm"
-              className="w-full max-w-60"
-              value={language}
-              disabled={busy || !loaded}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (value === "system" || value === "zh" || value === "en") {
-                  onLanguageChange(value);
-                }
-              }}
-            >
-              {LANGUAGE_OPTIONS.map(([value, labelKey]) => (
-                <NativeSelectOption key={value} value={value}>
-                  {t(labelKey)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </Field>
-          <Field>
-            <FieldLabel>{t("settings.theme")}</FieldLabel>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              spacing={2}
-              value={themePreference}
-              onValueChange={(value) => {
-                if (value === "system" || value === "light" || value === "dark") {
-                  setThemePreference(value);
-                }
-              }}
-              className="w-full"
-              aria-label={t("settings.theme")}
-            >
-              {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
-                <ToggleGroupItem key={value} value={value} className="flex-1">
-                  {t(labelKey)}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </Field>
-          {trayMode !== null && (
-            <Field>
-              <FieldLabel>{t("settings.tray")}</FieldLabel>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                spacing={2}
-                value={trayMode}
-                disabled={busy || !loaded}
-                onValueChange={(value) => {
-                  if (
-                    value === "icon_and_speed" ||
-                    value === "icon" ||
-                    value === "speed"
-                  ) {
-                    onTrayModeChange(value);
-                  }
-                }}
-                className="w-full"
-                aria-label={t("settings.tray")}
-              >
-                {TRAY_MODES.map(([value, labelKey]) => (
-                  <ToggleGroupItem key={value} value={value} className="flex-1">
-                    {t(labelKey)}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </Field>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+    <SettingsSection title={t("settings.appearance")}>
+      <SettingsRow label={t("settings.language")} htmlFor="settings-language">
+        <NativeSelect
+          id="settings-language"
+          aria-label={t("settings.language")}
+          size="sm"
+          className="w-40"
+          value={language}
+          disabled={busy || !loaded}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === "system" || value === "zh" || value === "en") {
+              onLanguageChange(value);
+            }
+          }}
+        >
+          {LANGUAGE_OPTIONS.map(([value, labelKey]) => (
+            <NativeSelectOption key={value} value={value}>
+              {t(labelKey)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </SettingsRow>
+      <SettingsRow label={t("settings.theme")} htmlFor="settings-theme">
+        <NativeSelect
+          id="settings-theme"
+          aria-label={t("settings.theme")}
+          size="sm"
+          className="w-40"
+          value={themePreference}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === "system" || value === "light" || value === "dark") {
+              setThemePreference(value);
+            }
+          }}
+        >
+          {APPEARANCE_OPTIONS.map(([value, labelKey]) => (
+            <NativeSelectOption key={value} value={value}>
+              {t(labelKey)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </SettingsRow>
+      {trayMode !== null && (
+        <SettingsRow label={t("settings.tray")}>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            spacing={0}
+            value={trayMode}
+            disabled={busy || !loaded}
+            onValueChange={(value) => {
+              if (
+                value === "icon_and_speed" ||
+                value === "icon" ||
+                value === "speed"
+              ) {
+                onTrayModeChange(value);
+              }
+            }}
+            aria-label={t("settings.tray")}
+          >
+            {TRAY_MODES.map(([value, labelKey]) => (
+              <ToggleGroupItem key={value} value={value} className="px-3">
+                {t(labelKey)}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </SettingsRow>
+      )}
+    </SettingsSection>
   );
 }

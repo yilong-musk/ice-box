@@ -306,18 +306,14 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByLabelText(t("settings.theme"))).toBeInTheDocument();
     });
-    const appearance = view.getByLabelText(t("settings.theme"));
+    const theme = view.getByLabelText(t("settings.theme"));
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.dark") }));
+    fireEvent.change(theme, { target: { value: "dark" } });
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));
+    fireEvent.change(theme, { target: { value: "light" } });
     expect(document.documentElement.classList.contains("dark")).toBe(false);
-    fireEvent.click(
-      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
-    );
-    expect(
-      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
-    ).toHaveAttribute("data-state", "on");
+    fireEvent.change(theme, { target: { value: "system" } });
+    expect(theme).toHaveValue("system");
   });
 
   it("places the app brand at the bottom of the sidebar", () => {

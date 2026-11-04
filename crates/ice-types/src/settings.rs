@@ -557,12 +557,6 @@ impl AppSettings {
         if let Some(v) = patch.mixed_port {
             next.mixed_port = v;
         }
-        if let Some(v) = patch.clash_api_listen.clone() {
-            next.clash_api_listen = v;
-        }
-        if let Some(v) = patch.clash_api_port {
-            next.clash_api_port = v;
-        }
         if let Some(v) = patch.selected_tag.clone() {
             next.selected_tag = v;
         }
@@ -626,16 +620,15 @@ impl AppSettings {
 
 /// Partial `settings.json` write (ORCH-3). Every field is optional; `null`
 /// on `selected_tag` / TUN `interface_name` clears the value.
+///
+/// The Clash API endpoint is deliberately absent: the app owns that port and
+/// moves it when it is taken, so a patch carrying `clash_api_*` is ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_listen: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_port: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clash_api_listen: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clash_api_port: Option<u16>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

@@ -34,11 +34,9 @@ describe("AppearanceCard", () => {
     const { container, setThemePreference, onLanguageChange, onTrayModeChange } =
       renderCard();
 
-    fireEvent.click(
-      within(container).getByRole("radio", {
-        name: t("settings.appearance.dark"),
-      }),
-    );
+    fireEvent.change(within(container).getByLabelText(t("settings.theme")), {
+      target: { value: "dark" },
+    });
     expect(setThemePreference).toHaveBeenCalledWith("dark");
 
     fireEvent.change(within(container).getByLabelText(t("settings.language")), {
@@ -64,7 +62,9 @@ describe("AppearanceCard", () => {
   it("orders language first, then theme, then the menu bar item", () => {
     const labels = (container: HTMLElement) =>
       Array.from(
-        container.querySelectorAll("[data-slot='field-label']"),
+        container.querySelectorAll(
+          "[data-slot='field-label'], [data-slot='settings-label']",
+        ),
       ).map((node) => node.textContent);
 
     expect(labels(renderCard().container)).toEqual([

@@ -3,14 +3,8 @@
 import { useState } from "react";
 import { api, formatInvokeError } from "../../api/client";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field";
 import { t } from "../../lib/i18n";
+import { SettingsRow, SettingsSection } from "./SettingsLayout";
 
 /** Phone only: the phone has no Logs page, so the core log (warnings and
  * errors, capped at 5 MiB by the tunnel process) is exported as a file for a
@@ -34,37 +28,30 @@ export function PhoneLogsCard() {
   }
 
   return (
-    <Card
-      size="sm"
-      className="w-full shrink-0 data-[size=sm]:[--card-spacing:--spacing(2)]"
-    >
-      <CardHeader>
-        <CardTitle>{t("app.nav.logs")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-2">
-          <p className="text-xs text-muted-foreground">
+    <SettingsSection title={t("app.nav.logs")}>
+      <SettingsRow
+        description={
+          <>
             {t("settings.exportLogsHint")}
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => void exportLog()}
-            >
-              {t("settings.exportLogs")}
-            </Button>
             {saved ? (
-              <span className="text-xs text-muted-foreground" role="status">
+              <span className="mt-0.5 block text-foreground" role="status">
                 {t("settings.exportLogsSaved")}
               </span>
             ) : null}
-          </div>
-          {error ? <FieldError>{error}</FieldError> : null}
-        </div>
-      </CardContent>
-    </Card>
+          </>
+        }
+        error={error}
+      >
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => void exportLog()}
+        >
+          {t("settings.exportLogs")}
+        </Button>
+      </SettingsRow>
+    </SettingsSection>
   );
 }

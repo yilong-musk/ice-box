@@ -132,6 +132,20 @@ impl MobileHost {
         Ok(SubscriptionPaths::from_app(self.paths()?))
     }
 
+    /// Move the app-owned Clash API port off a port another app holds and
+    /// persist the pick, so the next `config.json` and every later Clash API
+    /// read agree. Android loopback is shared by all apps, so any of them can
+    /// take it. Call only while the tunnel is down: a live core holds the port
+    /// itself and would read as "in use".
+    pub fn ensure_clash_api_port(&mut self) -> Result<(), AppError> {
+        let paths = self.paths()?.clone();
+        let settings = load_settings(&paths.settings())?;
+        if let Some(updated) = ice_core::relocate_clash_api_port(&settings)? {
+            save_settings_for(&paths.settings(), &updated, PLATFORM)?;
+        }
+        Ok(())
+    }
+
     /// Rewrite `config.json` from disk state. Callers reload the tunnel when it is live.
     pub fn rewrite_config(&mut self, package_name: Option<&str>) -> Result<(), AppError> {
         let paths = self.paths()?.clone();

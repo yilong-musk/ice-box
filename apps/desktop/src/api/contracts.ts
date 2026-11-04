@@ -320,8 +320,6 @@ export type TrafficDelta = {
 export type SettingsPatch = {
   mixed_listen?: string;
   mixed_port?: number;
-  clash_api_listen?: string;
-  clash_api_port?: number;
   selected_tag?: string | null;
   auto_set_system_proxy?: boolean;
   /** Home start/stop owns this; Settings omits it. */

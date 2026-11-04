@@ -357,12 +357,10 @@ fn no_args() -> Value {
 fn settings_patch_schema() -> Value {
     json!({
         "type": "object",
-        "description": "Partial AppSettings object. Omitted fields are unchanged. proxy_service_enabled is managed by start_proxy_service and stop_proxy_service.",
+        "description": "Partial settings patch; get_settings returns more fields than this accepts. Omitted fields are unchanged. proxy_service_enabled is managed by start_proxy_service and stop_proxy_service. clash_api_listen and clash_api_port are app-owned and read-only.",
         "properties": {
             "mixed_listen": {"type": "string"},
             "mixed_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
-            "clash_api_listen": {"type": "string"},
-            "clash_api_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
             "selected_tag": {"type": ["string", "null"]},
             "auto_set_system_proxy": {"type": "boolean"},
             "allow_lan": {"type": "boolean"},

@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Settings is redesigned as grouped lists: each section is a captioned card of
+  rows with the label and hint on the left and the control on the right. Theme
+  is now a dropdown next to language, the mixed proxy address and port share
+  one row, and rows stay on one line at phone width. The Android Apps page
+  drops its description line.
+- The Clash API endpoint is now owned by the app and no longer appears in
+  Settings. Before the core starts, if another program holds the stored port
+  (or it equals the mixed port), the endpoint moves to a free loopback port and
+  the new port is saved; saving a mixed port equal to it moves the Clash API
+  instead of failing. External tools that hard-code port 19090 should read
+  `clash_api_port` from `get_settings` or `settings.json`. MCP
+  `update_settings` no longer accepts `clash_api_listen` or `clash_api_port`.
 - Tab switches are faster, most of all between Home and Nodes. A switch now
   renders only the page that comes in; hidden pages sit in React `<Activity>`,
   which pauses their effects and renders their updates after the frame is

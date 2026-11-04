@@ -229,13 +229,11 @@ describe("Settings", () => {
     fireEvent.click(view.getByLabelText(t("settings.allowLan")));
 
     await waitFor(() => {
-      const listenInputs = view.getAllByDisplayValue("127.0.0.1");
-      expect(listenInputs[0]).toBeDisabled();
-      expect(listenInputs[1]).not.toBeDisabled();
+      expect(view.getByLabelText(t("settings.mixedListen"))).toBeDisabled();
     });
 
-    fireEvent.change(view.getByDisplayValue("19090"), {
-      target: { value: "19190" },
+    fireEvent.change(view.getByLabelText(t("settings.mixedPort")), {
+      target: { value: "17990" },
     });
 
     await waitFor(
@@ -243,7 +241,7 @@ describe("Settings", () => {
         expect(saveSettings).toHaveBeenCalledWith(
           expect.objectContaining({
             allow_lan: true,
-            clash_api_port: 19190,
+            mixed_port: 17990,
           }),
         );
         expect(container.textContent).not.toContain("loopback");
@@ -390,21 +388,21 @@ describe("Settings", () => {
     expect(toggle).toBeChecked();
   });
 
-  it("blocks save when mixed and clash api ports conflict", async () => {
+  it("leaves the app-owned Clash API port out of the form and the patch", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByDisplayValue("19090")).toBeInTheDocument();
+      expect(view.getByLabelText(t("settings.mixedPort"))).toBeInTheDocument();
     });
+    expect(view.queryByDisplayValue("19090")).toBeNull();
 
-    const clashPort = view.getByDisplayValue("19090");
-    fireEvent.change(clashPort, { target: { value: "17890" } });
-
+    // A mixed port equal to the hidden Clash API port is not a form error:
+    // the backend moves the Clash API off it.
+    fireEvent.change(view.getByLabelText(t("settings.mixedPort")), {
+      target: { value: "19090" },
+    });
     await waitFor(
-      () => {
-        expect(container.textContent).toContain(t("validation.portsConflict"));
-        expect(saveSettings).not.toHaveBeenCalled();
-      },
+      () => expect(saveSettings).toHaveBeenCalledWith({ mixed_port: 19090 }),
       { timeout: 2000 },
     );
   });
@@ -511,34 +509,25 @@ describe("Settings", () => {
     const view = within(container);
 
     await waitFor(() => {
-      const appearance = view.getByLabelText(t("settings.theme"));
-      expect(
-        within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
-      ).toHaveAttribute("data-state", "on");
+      expect(view.getByLabelText(t("settings.theme"))).toHaveValue("system");
     });
     // The card keeps a section title next to the per-control field labels.
     expect(view.getByText(t("settings.appearance"))).toBeInTheDocument();
-    const appearance = view.getByLabelText(t("settings.theme"));
+    const theme = view.getByLabelText(t("settings.theme"));
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.light") }));
-    expect(
-      within(appearance).getByRole("radio", { name: t("settings.appearance.light") }),
-    ).toHaveAttribute("data-state", "on");
+    fireEvent.change(theme, { target: { value: "light" } });
+    expect(theme).toHaveValue("light");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(within(appearance).getByRole("radio", { name: t("settings.appearance.dark") }));
+    fireEvent.change(theme, { target: { value: "dark" } });
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(saveSettings).not.toHaveBeenCalled();
 
-    fireEvent.click(
-      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
-    );
-    expect(
-      within(appearance).getByRole("radio", { name: t("settings.appearance.system") }),
-    ).toHaveAttribute("data-state", "on");
+    fireEvent.change(theme, { target: { value: "system" } });
+    expect(theme).toHaveValue("system");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
     expect(saveSettings).not.toHaveBeenCalled();
   });

@@ -224,6 +224,24 @@ pub fn reconcile_selected_tag_in_settings(
     Ok(updated)
 }
 
+/// Move the app-owned Clash API port off a taken port (see
+/// [`ice_core::relocate_clash_api_port`]) and persist the pick.
+///
+/// Call only while the app-managed core is stopped: a live core holds the port
+/// itself and would read as "in use".
+pub(crate) fn ensure_clash_api_port_available(
+    app_paths: &AppPaths,
+    settings: AppSettings,
+) -> Result<AppSettings, AppError> {
+    match ice_core::relocate_clash_api_port(&settings)? {
+        Some(updated) => {
+            save_settings_for(&app_paths.settings(), &updated, host_platform())?;
+            Ok(updated)
+        }
+        None => Ok(settings),
+    }
+}
+
 /// Resolve `selected_tag` against the active profile **without** writing disk.
 ///
 /// The capture controller uses this to pre-reconcile a transition candidate so
@@ -938,6 +956,51 @@ mod tests {
         let paths = AppPaths::new(&dir);
         paths.ensure_dirs().unwrap();
         paths
+    }
+
+    #[test]
+    fn clash_api_port_kept_when_free() {
+        let paths = temp_app("clash-port-free");
+        let settings = test_settings();
+        let resolved = ensure_clash_api_port_available(&paths, settings.clone()).unwrap();
+        assert_eq!(resolved.clash_api_port, settings.clash_api_port);
+        // Nothing to move, so nothing is written.
+        assert!(!paths.settings().exists());
+    }
+
+    #[test]
+    fn clash_api_port_moves_off_a_taken_port_and_persists() {
+        let paths = temp_app("clash-port-taken");
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = holder.local_addr().unwrap().port();
+        let settings = AppSettings {
+            clash_api_port: taken,
+            ..test_settings()
+        };
+        let resolved = ensure_clash_api_port_available(&paths, settings.clone()).unwrap();
+        assert_ne!(resolved.clash_api_port, taken);
+        assert_ne!(resolved.clash_api_port, settings.mixed_port);
+        assert!(resolved.clash_api_port >= 1024);
+        resolved.validate().unwrap();
+        // Later readers (traffic stream, health probe) load the moved port.
+        assert_eq!(
+            current_settings(&paths).unwrap().clash_api_port,
+            resolved.clash_api_port
+        );
+        drop(holder);
+    }
+
+    #[test]
+    fn clash_api_port_moves_off_the_mixed_port() {
+        let paths = temp_app("clash-port-mixed");
+        let base = test_settings();
+        let settings = AppSettings {
+            clash_api_port: base.mixed_port,
+            ..base
+        };
+        let resolved = ensure_clash_api_port_available(&paths, settings.clone()).unwrap();
+        assert_ne!(resolved.clash_api_port, settings.mixed_port);
+        resolved.validate().unwrap();
     }
 
     fn marker_bin(paths: &AppPaths) -> PathBuf {

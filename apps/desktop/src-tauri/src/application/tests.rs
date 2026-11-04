@@ -2144,3 +2144,52 @@ fn remove_subscription_use_case_purges_that_subscriptions_favorites() {
     );
     let _ = fs::remove_dir_all(state.paths.root());
 }
+
+#[test]
+fn mixed_port_on_the_clash_api_port_moves_the_clash_api() {
+    use crate::application::settings::save_settings_inner_with_autostart;
+    use std::path::PathBuf;
+
+    struct Host {
+        resources: PathBuf,
+    }
+
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<PathBuf> {
+            Some(self.resources.clone())
+        }
+    }
+
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_node("mixed-on-clash-port");
+    let resources = state.paths.root().join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    let binary_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+    fs::write(resources.join(binary_name), b"test binary").unwrap();
+    let host = Host { resources };
+
+    let clash_port = current_settings(&state.paths).unwrap().clash_api_port;
+    save_settings_inner_with_autostart(
+        &host,
+        &state,
+        SettingsPatch {
+            mixed_port: Some(clash_port),
+            ..SettingsPatch::default()
+        },
+        |_| Ok(()),
+    )
+    .expect("a mixed port on the hidden clash API port must not be rejected");
+    let saved = current_settings(&state.paths).unwrap();
+    assert_eq!(saved.mixed_port, clash_port);
+    assert_ne!(saved.clash_api_port, clash_port);
+    saved.validate().unwrap();
+
+    let _ = fs::remove_dir_all(state.paths.root());
+}

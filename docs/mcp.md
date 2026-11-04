@@ -141,7 +141,10 @@ is unchanged.
 
 `update_settings` rejects `proxy_service_enabled`; use
 `start_proxy_service` or `stop_proxy_service` so the live capture backend and
-the persisted next-launch preference change together. A successful
+the persisted next-launch preference change together. It also rejects
+`clash_api_listen` and `clash_api_port`: `get_settings` still returns them, but
+the app owns the Clash API endpoint and moves it to a free loopback port when
+the stored one is taken, so the read and write shapes differ on purpose. A successful
 `stop_core` records that the proxy service should remain off after the core
 and capture backend have stopped.
 

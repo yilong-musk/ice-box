@@ -12,10 +12,8 @@ import {
 import {
   formatListenValidationError,
   formatPortValidationError,
-  formatPortsConflictError,
   isLoopbackListenHost,
   parsePortInput,
-  portsConflict,
 } from "../lib/listenValidation";
 import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
@@ -83,12 +81,6 @@ function settingsDiffPatch(
   }
   if (form.mixed_port !== previous.mixed_port) {
     patch.mixed_port = form.mixed_port;
-  }
-  if (form.clash_api_listen !== previous.clash_api_listen) {
-    patch.clash_api_listen = form.clash_api_listen;
-  }
-  if (form.clash_api_port !== previous.clash_api_port) {
-    patch.clash_api_port = form.clash_api_port;
   }
   if (form.auto_set_system_proxy !== previous.auto_set_system_proxy) {
     patch.auto_set_system_proxy = form.auto_set_system_proxy;
@@ -547,25 +539,8 @@ export function Settings({
     if (!next.allow_lan && !isLoopbackListenHost(next.mixed_listen)) {
       errs.mixed_listen = formatListenValidationError(t("settings.mixedListen"));
     }
-    if (!isLoopbackListenHost(next.clash_api_listen)) {
-      errs.clash_api_listen = formatListenValidationError(
-        t("settings.clashListen"),
-      );
-    }
     if (parsePortInput(String(next.mixed_port)) === undefined) {
       errs.mixed_port = formatPortValidationError(t("settings.mixedPort"));
-    }
-    if (parsePortInput(String(next.clash_api_port)) === undefined) {
-      errs.clash_api_port = formatPortValidationError(t("settings.clashPort"));
-    }
-    if (
-      parsePortInput(String(next.mixed_port)) !== undefined &&
-      parsePortInput(String(next.clash_api_port)) !== undefined &&
-      portsConflict(next.mixed_port, next.clash_api_port)
-    ) {
-      const msg = formatPortsConflictError();
-      errs.mixed_port = msg;
-      errs.clash_api_port = msg;
     }
     return errs;
   }
@@ -681,7 +656,7 @@ export function Settings({
         {/* data-loaded lets browser smoke tests wait for the settings and
             status reads instead of guessing with a timeout. */}
         <div
-          className="flex w-full flex-col gap-3"
+          className="mx-auto flex w-full max-w-3xl flex-col gap-5 pb-4"
           data-testid="settings-stack"
           data-loaded={loaded ? "true" : "false"}
         >
