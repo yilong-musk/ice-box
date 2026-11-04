@@ -39,74 +39,6 @@ function useChart() {
   return context
 }
 
-function roundedSize(width: number, height: number) {
-  return { width: Math.round(width), height: Math.round(height) }
-}
-
-/**
- * Same box as Recharts' percent-sized ResponsiveContainer, but it keeps the
- * last real size while an ancestor is `display: none`. Pages stay mounted on
- * hidden tabs; the stock container would drop the chart to 0x0 on every tab
- * switch and rebuild the whole SVG when the tab comes back.
- */
-function StickySizeContainer({
-  initialDimension,
-  children,
-}: {
-  initialDimension: { width: number; height: number }
-  children: React.ComponentProps<
-    typeof RechartsPrimitive.ResponsiveContainer
-  >["children"]
-}) {
-  const ref = React.useRef<HTMLDivElement>(null)
-  const [size, setSize] = React.useState(() =>
-    roundedSize(initialDimension.width, initialDimension.height)
-  )
-
-  React.useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const apply = (width: number, height: number, force = false) => {
-      const next = roundedSize(width, height)
-      // A hidden ancestor reports 0x0. Keep the last size; the next real
-      // measurement (or a visible resize) replaces it.
-      if (!force && (next.width <= 0 || next.height <= 0)) return
-      setSize((prev) =>
-        prev.width === next.width && prev.height === next.height ? prev : next
-      )
-    }
-    const rect = el.getBoundingClientRect()
-    // The first read is taken as is, matching the stock container on mount.
-    apply(rect.width, rect.height, true)
-    if (typeof ResizeObserver === "undefined") return
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry) apply(entry.contentRect.width, entry.contentRect.height)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <div
-      ref={ref}
-      className="recharts-responsive-container"
-      style={{ width: "100%", height: "100%", minWidth: 0 }}
-    >
-      {/* A zero-size box with visible overflow, as in Recharts, so the chart
-          never feeds back into the container's own size. */}
-      <div style={{ width: 0, height: 0, overflow: "visible" }}>
-        <RechartsPrimitive.ResponsiveContainer
-          width={size.width}
-          height={size.height}
-        >
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
-      </div>
-    </div>
-  )
-}
-
 function ChartContainer({
   id,
   className,
@@ -139,9 +71,11 @@ function ChartContainer({
         {...props}
       >
         <ChartStyle id={chartId} config={config} />
-        <StickySizeContainer initialDimension={initialDimension}>
+        <RechartsPrimitive.ResponsiveContainer
+          initialDimension={initialDimension}
+        >
           {children}
-        </StickySizeContainer>
+        </RechartsPrimitive.ResponsiveContainer>
       </div>
     </ChartContext.Provider>
   )

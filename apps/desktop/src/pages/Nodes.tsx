@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Gauge, Star } from "lucide-react";
 import {
   api,
@@ -8,7 +8,7 @@ import {
   type NodeInfo,
 } from "../api/client";
 import { EmptyState } from "../components/EmptyState";
-import { PaneVisibleContext, TitlebarActions } from "../components/TitlebarActions";
+import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -42,6 +42,7 @@ import {
   nodesEqual,
   orderNodesByFavorite,
   readNodesSnapshot,
+  sameNodeLineup,
   resolveSelectedTag,
   reuseUnchangedNodes,
   writeNodesSnapshot,
@@ -474,6 +475,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const mountedRef = useRef(true);
   const activeRef = useRef(active);
   const delayRunRef = useRef(0);
+  // Advances when the node lineup changes (another subscription or config).
+  // Delay results and probes from an older lineup are dropped: a reused tag
+  // may now name another server.
+  const lineupRef = useRef(0);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const selectedTagRef = useRef(selectedTag);
@@ -490,12 +495,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
-  // The pane hides on the click itself, while `active` may turn false a frame
-  // later. Unmount the rows with the pane: a scroll viewport left mounted
-  // under `display: none` reads 0 for its size and offset and would overwrite
-  // the saved position.
-  const paneVisible = useContext(PaneVisibleContext);
-  const listVisible = active && paneVisible && (runtime?.visible ?? true);
+  // Rows render only while the page is shown. The hidden page catches up at
+  // low priority and drops its rows then; the scroll position is restored from
+  // `viewport` on the next visit.
+  const listVisible = active && (runtime?.visible ?? true);
   const orderedNodes = useMemo(() => orderNodesByFavorite(nodes), [nodes]);
   const layout = useMemo(
     () => (listVisible ? nodeLayout(orderedNodes, expandedGroups) : EMPTY_LAYOUT),
@@ -549,6 +552,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
       const runningNow = status?.core.status === "running";
+      const prevNodes = nodesRef.current;
+      if (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n)) {
+        lineupRef.current += 1;
+        setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+        setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
+      }
       setNodes((prev) => reuseUnchangedNodes(prev, n));
       setSelectedTag((prev) => (prev === selected ? prev : selected));
       setRunning((prev) => (prev === runningNow ? prev : runningNow));
@@ -591,10 +600,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, [refresh]);
 
   // Leaving the tab keeps the list, its member lists, the expanded groups and
-  // the delay results; only the rendered rows unmount (`listVisible`). Dropping
-  // the member lists here did not free them: closures React keeps from earlier
-  // renders still held the full list, while every return paid for a refetch
-  // before the groups could expand again.
+  // the delay results; only the rendered rows unmount (`listVisible`). The
+  // delay results and expanded groups reset in `refresh` when the lineup
+  // changes, since a reused tag may then name another server.
 
   useEffect(() => {
     activeRef.current = active;
@@ -654,6 +662,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   async function testTags(tags: string[]) {
     if (tags.length === 0) return;
     const run = ++delayRunRef.current;
+    const lineup = lineupRef.current;
     nextGeneration();
     cancelRef.current = false;
     setBusy(true);
@@ -661,6 +670,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     const multi = tags.length > 1;
     const isCurrent = () =>
       run === delayRunRef.current &&
+      lineup === lineupRef.current &&
       !cancelRef.current &&
       mountedRef.current;
 

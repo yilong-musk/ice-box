@@ -19,7 +19,9 @@ import {
   readNodesSnapshot,
   reuseUnchangedNodes,
   resolveSelectedTag,
+  sameNodeLineup,
   subscribeNodesSnapshot,
+  withoutGroupMembers,
   writeNodesSnapshot,
 } from "./nodes";
 
@@ -386,5 +388,88 @@ describe("reuseUnchangedNodes", () => {
     const prev = [leaf("a")];
     const next = [{ ...leaf("a"), favorite: true, favorite_rank: 0 }];
     expect(reuseUnchangedNodes(prev, next)[0]).toBe(next[0]);
+  });
+});
+
+describe("snapshot member lists", () => {
+  it("stores the list without member lists", () => {
+    clearNodesSnapshot();
+    const leafNode = {
+      tag: "a",
+      outbound_type: "socks",
+      group_now: null,
+      group_all: null,
+    };
+    writeNodesSnapshot({
+      nodes: [
+        {
+          tag: "组",
+          outbound_type: "selector",
+          group_now: "a",
+          group_all: ["a", "b"],
+        },
+        leafNode,
+      ],
+      selectedTag: "a",
+      running: true,
+    });
+    const snap = readNodesSnapshot();
+    expect(snap?.nodes[0]?.group_all).toBeNull();
+    expect(snap?.nodes[0]?.group_now).toBe("a");
+    expect(snap?.nodes[1]).toBe(leafNode);
+    clearNodesSnapshot();
+  });
+
+  it("returns the same list when there is nothing to drop", () => {
+    const nodes = [
+      { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
+    ];
+    expect(withoutGroupMembers(nodes)).toBe(nodes);
+  });
+});
+
+describe("sameNodeLineup", () => {
+  const leaf = (tag: string, type = "trojan") => ({
+    tag,
+    outbound_type: type,
+    group_now: null,
+    group_all: null,
+  });
+  const group = (tag: string, members: string[] | null, now = "a") => ({
+    tag,
+    outbound_type: "selector",
+    group_now: now,
+    group_all: members,
+  });
+
+  it("ignores order, group exits and favorites", () => {
+    expect(
+      sameNodeLineup(
+        [group("g", ["a", "b"]), leaf("a"), leaf("b")],
+        [
+          { ...leaf("b"), favorite: true, favorite_rank: 0 },
+          group("g", ["a", "b"], "b"),
+          leaf("a"),
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it("matches a group whose members are unknown on one side", () => {
+    expect(sameNodeLineup([group("g", null), leaf("a")], [group("g", ["a"]), leaf("a")])).toBe(
+      true,
+    );
+  });
+
+  it("detects another set of tags, types or members", () => {
+    expect(sameNodeLineup([leaf("a")], [leaf("b")])).toBe(false);
+    expect(sameNodeLineup([leaf("a")], [leaf("a"), leaf("b")])).toBe(false);
+    expect(sameNodeLineup([leaf("a")], [leaf("a", "vmess")])).toBe(false);
+    expect(
+      sameNodeLineup(
+        [group("g", ["a", "b"]), leaf("a")],
+        [group("g", ["a", "c"]), leaf("a")],
+      ),
+    ).toBe(false);
   });
 });

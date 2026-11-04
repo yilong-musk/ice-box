@@ -24,7 +24,7 @@ export function readNodesSnapshot(): NodesSnapshot | undefined {
 
 /** Monotonic selection revision; advances when the snapshot is cleared or
  * its selected tag changes. Content-only updates (favorites, group exits,
- * member lists, running state) notify subscribers without bumping it, so Home
+ * running state) notify subscribers without bumping it, so Home
  * does not mistake them for a node switch. */
 export function nodesSnapshotRevision(): number {
   return snapshotRevision;
@@ -54,7 +54,25 @@ function snapshotsEqual(
   );
 }
 
-export function writeNodesSnapshot(next: NodesSnapshot): void {
+/** Drop strategy-group member lists. Tags and the live exit stay. */
+export function withoutGroupMembers(nodes: NodeInfo[]): NodeInfo[] {
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.group_all == null) return node;
+    changed = true;
+    return { ...node, group_all: null };
+  });
+  return changed ? next : nodes;
+}
+
+/**
+ * Publish the last node list. The snapshot keeps no member lists: it lives for
+ * the whole session, and large selector/urltest groups can list thousands of
+ * members. A Nodes page that mounts from it fetches the members on its first
+ * refresh.
+ */
+export function writeNodesSnapshot(snapshot: NodesSnapshot): void {
+  const next = { ...snapshot, nodes: withoutGroupMembers(snapshot.nodes) };
   if (snapshotsEqual(nodesSnapshot, next)) return;
   if (nodesSnapshot === undefined || nodesSnapshot.selectedTag !== next.selectedTag) {
     snapshotRevision += 1;
@@ -88,13 +106,8 @@ function nodeEqual(left: NodeInfo, right: NodeInfo): boolean {
   const leftMembers = left.group_all;
   const rightMembers = right.group_all;
   if (leftMembers === rightMembers) return true;
-  if (!leftMembers || !rightMembers || leftMembers.length !== rightMembers.length) {
-    return false;
-  }
-  for (let j = 0; j < leftMembers.length; j++) {
-    if (leftMembers[j] !== rightMembers[j]) return false;
-  }
-  return true;
+  if (!leftMembers || !rightMembers) return false;
+  return sameMembers(leftMembers, rightMembers);
 }
 
 export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
@@ -102,6 +115,42 @@ export function nodesEqual(a: NodeInfo[], b: NodeInfo[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (!nodeEqual(a[i], b[i])) return false;
+  }
+  return true;
+}
+
+function sameMembers(left: string[], right: string[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether two lists describe the same set of outbounds: the same tags with the
+ * same types, and every strategy group with the same members. Order and live
+ * state (group exits, favorites) are ignored, and a group whose members are
+ * unknown on either side (`group_all` null) matches. A different lineup means
+ * another subscription or config, so a tag may now name another server.
+ */
+export function sameNodeLineup(a: NodeInfo[], b: NodeInfo[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  const byTag = new Map<string, NodeInfo>();
+  for (const node of a) byTag.set(node.tag, node);
+  if (byTag.size !== a.length) return false;
+  for (const node of b) {
+    const old = byTag.get(node.tag);
+    if (old === undefined || old.outbound_type !== node.outbound_type) return false;
+    if (
+      old.group_all != null &&
+      node.group_all != null &&
+      !sameMembers(old.group_all, node.group_all)
+    ) {
+      return false;
+    }
   }
   return true;
 }
