@@ -120,7 +120,9 @@ classify() {
 
 add_shell() {
   local crate
-  for crate in "${shells[@]}"; do
+  # `${shells[@]+...}` keeps the first call (empty array) from tripping
+  # `set -u` on bash 3.2 (macOS /bin/bash); bash 4.4+ on Linux accepts both.
+  for crate in ${shells[@]+"${shells[@]}"}; do
     [[ "$crate" == "$1" ]] && return 0
   done
   shells+=("$1")
