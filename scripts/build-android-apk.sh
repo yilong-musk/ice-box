@@ -75,11 +75,14 @@ fi
 CI=1 npm run tauri -- "${args[@]}"
 
 apk_dir="$ROOT/apps/mobile/src-tauri/gen/android/app/build/outputs/apk"
-apk="$(
-  find "$apk_dir" -type f -path "*/${MODE}/*.apk" -printf '%T@ %p\n' |
-    sort -nr |
-    awk 'NR == 1 { print $2 }'
-)"
+# Pick the newest APK with `-nt` rather than GNU `find -printf`, which BSD
+# find on macOS does not support. Works on bash 3.2 and on Linux.
+apk=""
+while IFS= read -r candidate; do
+  if [[ -z "$apk" || "$candidate" -nt "$apk" ]]; then
+    apk="$candidate"
+  fi
+done < <(find "$apk_dir" -type f -path "*/${MODE}/*.apk")
 if [[ -z "$apk" || ! -f "$apk" ]]; then
   echo "no ${MODE} APK under $apk_dir" >&2
   exit 1
