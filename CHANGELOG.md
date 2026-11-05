@@ -13,8 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `category-ads-all`, `google`, `netflix` and `openai`), about 380 KB in all.
   A rule whose category is not bundled is still skipped. Rule-sets are only
   updated with the app; the app never downloads them.
+- sing-box subscriptions keep the provider's split routing (domestic direct,
+  ad blocking). Remote rule-sets that are copies of a bundled file now use
+  that file: SagerNet/sing-geosite sets and Loyalsoldier/geoip country sets,
+  from GitHub or jsDelivr. Other remote rule-sets are still skipped with a
+  warning; nothing is downloaded.
 
 ### Changed
+
+- The bundled GeoIP rule-sets now come from Loyalsoldier/geoip instead of
+  SagerNet/sing-geoip. Its mainland China ranges come from operator BGP data
+  and cover more addresses, notably IPv6, and it is published weekly.
 
 - The Android APK is much smaller to download (about 76 MB to 28 MB). Native
   libraries are now compressed inside the APK, the Rust library is built for
@@ -32,6 +41,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for the node in use, replacing the "In use" label.
 
 ### Fixed
+
+- On desktop, an app update now replaces the bundled GeoIP / GeoSite files in
+  the data directory. Before, the copies from the first install were kept, so
+  rule-set data never changed after an update.
+- A sing-box subscription without `route.final` sent unmatched traffic
+  direct. It now goes to the config's first outbound, as in sing-box.
+- A subscription with its own rules but no usable DNS now gets the built-in
+  split DNS (domestic resolver for domestic domains, the rest through the
+  proxy) instead of a single resolver for everything.
+- `sniff` and `hijack-dns` rules from a sing-box subscription are no longer
+  emitted next to the app's own; on Windows TUN a second DNS hijack could
+  send STUN, mDNS and LLMNR traffic into the DNS engine.
 
 - Switching the UI language no longer leaves previously opened pages in the
   old language, and opening one of those pages no longer switches the

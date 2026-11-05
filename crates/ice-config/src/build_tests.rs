@@ -3045,7 +3045,7 @@ fn share_singbox_config_is_a_portable_document() {
             && set["url"]
                 .as_str()
                 .unwrap()
-                .contains("sing-geoip/rule-set/geoip-cn.srs")
+                .contains("Loyalsoldier/geoip/release/srs/cn.srs")
     }));
     assert!(sets.iter().any(|set| {
         set["tag"] == "geosite-cn"
@@ -3456,7 +3456,7 @@ fn share_rewrites_dns_geo_rules_and_keeps_inverted_predicates() {
 
     let sets = value["route"]["rule_set"].as_array().unwrap();
     assert!(sets.iter().any(|set| {
-        set["tag"] == "geoip-cn" && set["url"].as_str().unwrap().ends_with("/geoip-cn.srs")
+        set["tag"] == "geoip-cn" && set["url"].as_str().unwrap().ends_with("/srs/cn.srs")
     }));
     assert!(sets.iter().any(|set| {
         set["tag"] == "geosite-cn" && set["url"].as_str().unwrap().ends_with("/geosite-cn.srs")

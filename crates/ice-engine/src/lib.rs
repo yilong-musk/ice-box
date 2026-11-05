@@ -315,6 +315,66 @@ proxies:
     }
 
     #[test]
+    fn panel_singbox_rule_sets_resolve_to_bundled_files() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(
+            manifest
+                .join("../..")
+                .join("configs/examples/subscription-singbox-panel.json"),
+        )
+        .expect("fixture");
+        let rule_set_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let json = subscription_to_config(
+            &raw,
+            LocalTemplate::default(),
+            Some(rule_set_dir.clone()),
+            CaptureIntent::Diagnostic,
+            HostPlatform::Windows,
+        )
+        .expect("pipeline");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let sets = value["route"]["rule_set"].as_array().expect("rule sets");
+        for (tag, file) in [
+            ("geosite-cn", "geosite-cn.srs"),
+            ("geosite-category-ads-all", "geosite-category-ads-all.srs"),
+            ("geoip-cn", "geoip-cn.srs"),
+        ] {
+            let set = sets
+                .iter()
+                .find(|s| s["tag"] == tag)
+                .unwrap_or_else(|| panic!("{tag}: {sets:?}"));
+            assert_eq!(set["type"], "local");
+            assert_eq!(
+                set["path"],
+                serde_json::Value::String(rule_set_dir.join(file).to_string_lossy().into())
+            );
+        }
+        let rules = value["route"]["rules"].as_array().expect("rules");
+        assert!(rules.iter().any(|r| {
+            r["rule_set"] == serde_json::json!(["geosite-cn", "geoip-cn"])
+                && r["outbound"] == "direct"
+        }));
+        assert!(rules.iter().any(|r| {
+            r["rule_set"] == serde_json::json!(["geosite-category-ads-all"])
+                && r["action"] == "reject"
+        }));
+        // The builder owns sniff and DNS hijack (none in this capture shape);
+        // the panel's copies are not emitted.
+        assert!(
+            rules
+                .iter()
+                .all(|r| r["action"] != "sniff" && r["action"] != "hijack-dns"),
+            "{rules:?}"
+        );
+        assert_eq!(value["route"]["final"], "节点选择");
+        assert!(value["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["tag"] == "remote-dns"));
+    }
+
+    #[test]
     fn uri_list_windows_pipeline_moves_the_resolver_off_the_proxy_dns() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let raw = std::fs::read_to_string(

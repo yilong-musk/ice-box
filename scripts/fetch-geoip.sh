@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Fetch the bundled sing-box rule-sets: GeoIP (SagerNet/sing-geoip) and
-# GeoSite (SagerNet/sing-geosite). Each source pins a git ref, and its
-# committed CHECKSUMS.sha256 is the trust root (CI-8); reviewing a checksums
-# change is the trust decision, as with scripts/fetch-singbox.sh.
+# Fetch the bundled sing-box rule-sets: GeoIP (Loyalsoldier/geoip, whose
+# mainland China ranges come from operator BGP data) and GeoSite
+# (SagerNet/sing-geosite). Each source pins a git ref, and its committed
+# CHECKSUMS.sha256 is the trust root (CI-8); reviewing a checksums change is
+# the trust decision, as with scripts/fetch-singbox.sh.
 #
 # Both sources land in third_party/sing-geoip/rule-set, the single bundled
 # rule-set directory every packaging path copies from. The app only ever
@@ -42,10 +43,12 @@ else
   exit 1
 fi
 
-# fetch_source <repo> <third_party dir> <asset prefix> <names...>
+# fetch_source <repo> <third_party dir> <remote path pattern> <local prefix> <names...>
+# The remote path pattern has one %s for the name; files are saved as
+# <local prefix>-<name>.srs, the names the config builder looks up.
 fetch_source() {
-  local repo="$1" dir="$2" prefix="$3"
-  shift 3
+  local repo="$1" dir="$2" pattern="$3" prefix="$4"
+  shift 4
   local ref_file="$dir/REF" checksums="$dir/CHECKSUMS.sha256"
 
   if [[ ! -f "$ref_file" ]]; then
@@ -66,10 +69,12 @@ fetch_source() {
     : >"$checksums.tmp"
   fi
 
-  local name asset url actual expected
+  local name asset remote url actual expected
   for name in "$@"; do
     asset="${prefix}-${name}.srs"
-    url="https://raw.githubusercontent.com/${repo}/${ref}/${asset}"
+    # shellcheck disable=SC2059
+    remote="$(printf "$pattern" "$name")"
+    url="https://raw.githubusercontent.com/${repo}/${ref}/${remote}"
     curl -fsSL -o "$OUT/$asset" "$url"
     # shellcheck disable=SC2086
     actual="$($SHA256_CMD "$OUT/$asset" | awk '{ print $1 }')"
@@ -98,11 +103,11 @@ fetch_source() {
 }
 
 cleanup() {
-  rm -f "$ROOT"/third_party/sing-geoip/CHECKSUMS.sha256.tmp \
+  rm -f "$ROOT"/third_party/loyalsoldier-geoip/CHECKSUMS.sha256.tmp \
     "$ROOT"/third_party/sing-geosite/CHECKSUMS.sha256.tmp
 }
 trap cleanup EXIT
 
 mkdir -p "$OUT"
-fetch_source SagerNet/sing-geoip "$ROOT/third_party/sing-geoip" geoip "${GEOIP_CODES[@]}"
-fetch_source SagerNet/sing-geosite "$ROOT/third_party/sing-geosite" geosite "${GEOSITE_CATEGORIES[@]}"
+fetch_source Loyalsoldier/geoip "$ROOT/third_party/loyalsoldier-geoip" 'srs/%s.srs' geoip "${GEOIP_CODES[@]}"
+fetch_source SagerNet/sing-geosite "$ROOT/third_party/sing-geosite" 'geosite-%s.srs' geosite "${GEOSITE_CATEGORIES[@]}"

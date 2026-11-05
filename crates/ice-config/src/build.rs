@@ -711,6 +711,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .rules
             .iter()
             .filter(|r| !input.rule_overrides.is_rule_disabled(r))
+            .filter(|r| !is_builder_owned_action(r))
             .cloned()
             .collect();
         let (mut sub_rules, mut sub_sets) = expand_geoip_rules(
@@ -1469,6 +1470,18 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
     inbound
 }
 
+/// Subscription rules whose action the builder emits itself, in the place
+/// each capture shape needs: `sniff`, and `hijack-dns` (on Windows TUN a
+/// second DNS hijack after sniff sends STUN / mDNS / LLMNR into the DNS
+/// engine, see [`tun_reserved_rules`]). Provider sing-box configs carry both,
+/// so they are dropped instead of emitted a second time.
+fn is_builder_owned_action(rule: &Value) -> bool {
+    matches!(
+        rule.get("action").and_then(Value::as_str),
+        Some("sniff" | "hijack-dns")
+    )
+}
+
 /// Cached listing of the bundled rule-set directory: dir, mtime, entry count, names.
 type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
 
@@ -1638,7 +1651,8 @@ fn legacy_geo_codes(value: &Value) -> Vec<&str> {
     }
 }
 
-/// Expand legacy `geoip` / `geosite` matchers into local rule-set references
+/// Resolve `bundled` profile rule-sets to the bundled directory, and expand
+/// legacy `geoip` / `geosite` matchers into local rule-set references
 /// to the bundled `geoip-{code}.srs` / `geosite-{category}.srs` files (sing-box
 /// 1.13 removed both rule options). A rule is dropped (counted via tracing
 /// warn) instead of failing the build when a file it needs is missing, or when
@@ -1650,9 +1664,33 @@ fn expand_geoip_rules(
     geoip_rule_set_dir: Option<&Path>,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut kept = Vec::with_capacity(rules.len());
-    let mut sets = rule_sets.to_vec();
     let mut dropped: Vec<String> = Vec::new();
     let present = geoip_rule_set_dir.map(bundled_rule_set_names);
+    // `bundled` profile sets name a bundled file; point them at this app's
+    // copy, or drop them (and, later, the rules that reference them) when the
+    // file is not there.
+    let mut sets = Vec::with_capacity(rule_sets.len());
+    for set in rule_sets {
+        if set.get("type").and_then(Value::as_str) != Some(crate::BUNDLED_RULE_SET_TYPE) {
+            sets.push(set.clone());
+            continue;
+        }
+        let name = crate::bundled_rule_set_name(set);
+        let tag = set.get("tag").and_then(Value::as_str);
+        match (name, tag, geoip_rule_set_dir) {
+            (Some(name), Some(tag), Some(dir))
+                if present.as_ref().is_some_and(|names| names.contains(name)) =>
+            {
+                sets.push(json!({
+                    "type": "local",
+                    "tag": tag,
+                    "format": "binary",
+                    "path": dir.join(format!("{name}.srs")),
+                }));
+            }
+            _ => dropped.push(name.unwrap_or("bundled").to_string()),
+        }
+    }
 
     for rule in rules {
         let (kind, value) = match (rule.get("geoip"), rule.get("geosite")) {

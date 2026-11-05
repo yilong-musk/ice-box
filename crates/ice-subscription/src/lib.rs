@@ -473,20 +473,17 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         }
         NormalizedRoute {
             rules,
+            // sing-box routes unmatched traffic to the first outbound when
+            // `final` is unset; panels rely on that (their first outbound is
+            // the main selector). A tag the parser dropped falls back in
+            // `prune_dangling_refs`.
             final_outbound: r
                 .get("final")
                 .and_then(|v| v.as_str())
+                .or_else(|| first_outbound_tag(&value))
                 .unwrap_or("direct")
                 .to_string(),
-            rule_sets: {
-                let mut sets = r
-                    .get("rule_set")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                ice_config_guard::retain_local_rule_sets(&mut sets);
-                sets
-            },
+            rule_sets: provider_rule_sets(r.get("rule_set")),
         }
     } else {
         NormalizedRoute {
@@ -510,6 +507,36 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         crate::prune::prune_dangling_refs(&mut profile);
         profile
     })
+}
+
+fn first_outbound_tag(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("outbounds")?
+        .as_array()?
+        .first()?
+        .get("tag")?
+        .as_str()
+}
+
+/// The provider's rule-sets ice-box can load: local sets, and remote copies
+/// of a bundled file, rewritten to a `bundled` marker. Other remote sets are
+/// dropped (never downloaded); rules that reference them are pruned with a
+/// warning.
+fn provider_rule_sets(raw: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    let Some(sets) = raw.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut bundled = Vec::new();
+    let mut other = Vec::new();
+    for set in sets {
+        match ice_config::bundled_marker_for_remote(set) {
+            Some(marker) => bundled.push(marker),
+            None => other.push(set.clone()),
+        }
+    }
+    ice_config_guard::retain_local_rule_sets(&mut other);
+    other.extend(bundled);
+    other
 }
 
 /// The provider's DNS block with disallowed servers removed, or `None` when

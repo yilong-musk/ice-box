@@ -8,6 +8,7 @@
 
 mod atomic;
 mod build;
+mod bundled_rule_set;
 mod clash_secret;
 mod custom_rule;
 mod error;
@@ -27,6 +28,10 @@ pub use build::{
     share_singbox_config, share_singbox_document, tun_dns_hijack_rule, tun_reserved_rules,
     validate_config, validate_config_for_intent, validate_template, write_runtime_config_bytes,
     write_runtime_config_file, ConfigError,
+};
+pub use bundled_rule_set::{
+    bundled_marker_for_remote, bundled_name_for_url, bundled_rule_set_name, is_bundled_rule_set,
+    BUNDLED_RULE_SETS, BUNDLED_RULE_SET_TYPE,
 };
 pub use clash_secret::ensure_clash_api_secret;
 pub use custom_rule::validate_custom_rule_value;

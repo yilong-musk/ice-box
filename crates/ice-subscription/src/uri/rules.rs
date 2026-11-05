@@ -291,11 +291,14 @@ pub fn default_uri_list_dns(detour: &str, windows: bool) -> Value {
 /// Attach the built-in split-routing defaults to a profile that carries no
 /// rules of its own; the profile's own DNS block (if any) is kept.
 ///
-/// A profile that has rules is left alone, except when parsing dropped some
-/// of them for referencing rule sets ice-box never downloads. Providers keep
-/// their domestic-direct routing in exactly those rules, so what survives
-/// would send domestic traffic through the proxy. The built-in rules are then
-/// appended after the provider's own, and the provider's `final` and DNS stay.
+/// A profile that has rules keeps them and its `final`. It gets the built-in
+/// DNS when it has none (no block, or one whose servers were all filtered
+/// out): the core's fallback would resolve every domain through one plain
+/// resolver, with no domestic / proxied split. When parsing dropped some of
+/// its rules for referencing rule sets ice-box does not bundle, the built-in
+/// rules are also appended after the provider's own: providers keep their
+/// domestic-direct routing in exactly those rules, so what survives would
+/// send domestic traffic through the proxy.
 ///
 /// Flat (group-less) profiles route through the injected `proxy` selector so
 /// node selection takes effect; grouped profiles keep their top group as the
@@ -304,12 +307,15 @@ pub fn apply_builtin_default_rules(profile: &mut NormalizedProfile, platform: Ho
     if !profile.route.rules.is_empty() {
         if crate::lost_rule_set_rules(&profile.parse_stats.warnings) {
             profile.route.rules.extend(default_uri_list_rules());
-            if profile.dns.is_none() {
-                profile.dns = Some(default_uri_list_dns(
-                    &profile.route.final_outbound,
-                    platform.is_windows(),
-                ));
-            }
+        }
+        // The remote resolver goes through the proxy: the profile's `final`,
+        // or its top group when `final` sends traffic direct or blocks it.
+        let detour = match profile.route.final_outbound.as_str() {
+            "direct" | "block" => profile.groups.first().map(|g| g.tag.clone()),
+            tag => Some(tag.to_string()),
+        };
+        if let (None, Some(detour)) = (&profile.dns, detour) {
+            profile.dns = Some(default_uri_list_dns(&detour, platform.is_windows()));
         }
         return;
     }

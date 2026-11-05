@@ -2274,3 +2274,94 @@ fn a_kept_lossy_singbox_config_is_not_pinned_by_a_304() {
         vec![(FetchClient::SingBox, None), (FetchClient::Generic, None)]
     );
 }
+
+// --- Panel sing-box config whose remote rule sets are bundled ---------------
+
+/// Shape of a real panel's sing-box answer (nodes replaced).
+fn panel_fixture() -> String {
+    fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/examples/subscription-singbox-panel.json"),
+    )
+    .expect("fixture")
+}
+
+#[test]
+fn panel_singbox_config_keeps_its_routing_through_bundled_rule_sets() {
+    let profile = parse_singbox_profile(&panel_fixture()).expect("parse");
+    assert!(
+        !super::lost_rule_set_rules(&profile.parse_stats.warnings),
+        "every remote set maps onto a bundled file: {:?}",
+        profile.parse_stats.warnings
+    );
+    assert_eq!(profile.route.rules.len(), 7, "provider rules are kept");
+    let names: Vec<(&str, &str)> = profile
+        .route
+        .rule_sets
+        .iter()
+        .map(|s| (s["tag"].as_str().unwrap(), s["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("geosite-cn", "geosite-cn"),
+            ("geosite-category-ads-all", "geosite-category-ads-all"),
+            ("geoip-cn", "geoip-cn"),
+        ]
+    );
+    assert!(profile
+        .route
+        .rule_sets
+        .iter()
+        .all(|s| s["type"] == "bundled" && s.get("url").is_none()));
+    // No `final`: sing-box uses the first outbound, the panel's main selector.
+    assert_eq!(profile.route.final_outbound, "节点选择");
+    // Legacy-format DNS servers are filtered out; the built-in DNS fills in.
+    assert!(profile.dns.is_none());
+    let mut profile = profile;
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::Windows);
+    assert_eq!(profile.route.rules.len(), 7, "no built-in rules appended");
+    let dns = profile.dns.expect("built-in DNS");
+    assert!(dns["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["tag"] == "remote-dns" && s["detour"] == "节点选择"));
+}
+
+#[test]
+fn panel_singbox_answer_is_used_over_the_generic_one() {
+    let paths = temp_subs("ua-panel");
+    let body: &'static str = Box::leak(panel_fixture().into_boxed_str());
+    let fetcher = ClientAwareFetcher::new(
+        Reply::Body(body, quota(), None),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::SingBox);
+    assert_eq!(meta.group_count, 2);
+    assert_eq!(meta.rule_count, 7);
+    assert!(meta.parse_warnings.is_empty(), "{:?}", meta.parse_warnings);
+    assert_eq!(fetcher.take_calls(), vec![(FetchClient::SingBox, None)]);
+}
+
+#[test]
+fn builtin_dns_detours_through_a_group_when_final_is_direct() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"selector","tag":"select","outbounds":["n"]},
+            {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
+        ],
+        "route": {"final": "direct", "rules": [{"domain_suffix":["x.com"],"outbound":"select"}]}
+    }"#;
+    let mut profile = parse_singbox_profile(raw).expect("parse");
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::MacOs);
+    let dns = profile.dns.expect("built-in DNS");
+    assert!(dns["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["tag"] == "remote-dns" && s["detour"] == "select"));
+    assert_eq!(profile.route.final_outbound, "direct", "final is kept");
+}
