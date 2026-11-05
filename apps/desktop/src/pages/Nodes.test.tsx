@@ -197,6 +197,20 @@ describe("Nodes", () => {
     });
   });
 
+  it("shows selection as an icon toggle without an in-use text label", async () => {
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await view.findByRole("list", { name: t("nodes.listAria") });
+    const current = view.getByRole("button", { name: t("nodes.inUse") });
+    expect(current).toBeDisabled();
+    expect(current).toHaveAttribute("aria-current", "true");
+    expect(current).toHaveTextContent("");
+    for (const button of view.getAllByRole("button", { name: t("nodes.select") })) {
+      expect(button).toHaveTextContent("");
+    }
+    expect(view.queryByText(t("nodes.inUse"))).not.toBeInTheDocument();
+  });
+
   it("re-reads the active exit after an out-of-window switch", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
