@@ -99,11 +99,13 @@ pub(crate) fn tls_client_config() -> Result<Arc<ClientConfig>, SubscriptionError
     Ok(Arc::clone(CONFIG.get_or_init(|| Arc::new(built))))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tls_get_pinned(
     host: &str,
     port: u16,
     ip: IpAddr,
     path_query: &str,
+    user_agent: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
     deadline: Instant,
@@ -113,6 +115,7 @@ pub(crate) fn tls_get_pinned(
         port,
         ip,
         path_query,
+        user_agent,
         conditional,
         log_url,
         deadline,
@@ -126,6 +129,7 @@ fn tls_get_pinned_with_config(
     port: u16,
     ip: IpAddr,
     path_query: &str,
+    user_agent: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
     deadline: Instant,
@@ -206,8 +210,9 @@ fn tls_get_pinned_with_config(
     // without it (HTTP 403) regardless of TLS/HTTP version.
     // `Accept-Encoding: gzip, identity` plus gzip decode (below) covers
     // servers that ignore identity-only requests.
+    let user_agent = sanitize_http_header_value(user_agent)?;
     let mut req = format!(
-        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\nAccept-Encoding: gzip, identity\r\n"
+        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: {user_agent}\r\nAccept: */*\r\nAccept-Encoding: gzip, identity\r\n"
     );
     for (k, v) in conditional {
         let safe = sanitize_http_header_value(v)?;
@@ -237,9 +242,7 @@ fn tls_get_pinned_with_config(
             Ok(n) => {
                 raw.extend_from_slice(&buf[..n]);
                 if raw.len() > MAX_RAW_RESPONSE_BYTES {
-                    return Err(SubscriptionError::FetchFailed(format!(
-                        "body exceeds {MAX_BODY_BYTES} bytes"
-                    )));
+                    return Err(SubscriptionError::BodyRejected(body_too_large()));
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -260,8 +263,12 @@ fn tls_get_pinned_with_config(
             }
         }
     }
-    parse_http_response(&raw)
-        .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {e}")))
+    parse_http_response(&raw).map_err(|e| match e {
+        ResponseError::TooLarge => SubscriptionError::BodyRejected(e.to_string()),
+        ResponseError::Malformed(message) => {
+            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {message}"))
+        }
+    })
 }
 
 pub(crate) enum DownloadHop {
@@ -472,7 +479,37 @@ fn body_too_large() -> String {
     format!("body exceeds {MAX_BODY_BYTES} bytes")
 }
 
-fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
+/// Why a raw HTTP response could not be turned into a body. Over-limit bodies
+/// are a kind of their own so callers can report them as
+/// [`SubscriptionError::BodyRejected`] without matching on message text.
+#[derive(Debug, PartialEq, Eq)]
+enum ResponseError {
+    TooLarge,
+    Malformed(String),
+}
+
+impl From<String> for ResponseError {
+    fn from(message: String) -> Self {
+        Self::Malformed(message)
+    }
+}
+
+impl From<&str> for ResponseError {
+    fn from(message: &str) -> Self {
+        Self::Malformed(message.to_string())
+    }
+}
+
+impl std::fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str(&body_too_large()),
+            Self::Malformed(message) => f.write_str(message),
+        }
+    }
+}
+
+fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, ResponseError> {
     let mut out = Vec::new();
     let mut rest = raw_body;
     loop {
@@ -489,7 +526,7 @@ fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
             break;
         }
         if out.len().saturating_add(size) > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         if rest.len() < size + 2 {
             return Err("chunked body: truncated chunk data".into());
@@ -500,7 +537,7 @@ fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>, ResponseError> {
     if header_value(headers, "Transfer-Encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
     {
         return decode_chunked_body(raw_body);
@@ -511,24 +548,28 @@ fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>
             .parse()
             .map_err(|_| format!("invalid Content-Length: {cl}"))?;
         if len > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         if raw_body.len() < len {
             return Err(format!(
                 "response truncated: expected {len} bytes, got {}",
                 raw_body.len()
-            ));
+            )
+            .into());
         }
         return Ok(raw_body[..len].to_vec());
     }
 
     if raw_body.len() > MAX_BODY_BYTES {
-        return Err(body_too_large());
+        return Err(ResponseError::TooLarge);
     }
     Ok(raw_body.to_vec())
 }
 
-fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+fn decode_content_encoding(
+    body: Vec<u8>,
+    headers: &[(String, String)],
+) -> Result<Vec<u8>, ResponseError> {
     let Some(raw) = header_value(headers, "Content-Encoding") else {
         return Ok(body);
     };
@@ -543,14 +584,14 @@ fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Resul
             .read_to_end(&mut out)
             .map_err(|e| format!("gzip decode: {e}"))?;
         if out.len() > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         return Ok(out);
     }
-    Err(format!("unsupported Content-Encoding: {encoding}"))
+    Err(format!("unsupported Content-Encoding: {encoding}").into())
 }
 
-fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
+fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, ResponseError> {
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -634,7 +675,7 @@ mod tests {
             "x".repeat(MAX_BODY_BYTES + 1)
         );
         let err = parse_http_response(raw.as_bytes()).unwrap_err();
-        assert!(err.contains("exceeds"));
+        assert_eq!(err, ResponseError::TooLarge);
     }
 
     #[test]
@@ -642,7 +683,7 @@ mod tests {
         let body = "x".repeat(MAX_BODY_BYTES + 1);
         let raw = format!("HTTP/1.1 200 OK\r\n\r\n{body}");
         let err = parse_http_response(raw.as_bytes()).unwrap_err();
-        assert!(err.contains("exceeds"));
+        assert_eq!(err, ResponseError::TooLarge);
     }
 
     #[test]
@@ -702,18 +743,20 @@ mod tests {
             let (mut tcp, _) = listener.accept().expect("accept");
             let mut conn =
                 rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
-            {
+            let request = {
                 let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
                 let mut req = [0u8; 1024];
-                let _ = tls.read(&mut req);
+                let n = tls.read(&mut req).unwrap_or(0);
                 tls.write_all(&response).expect("write");
                 tls.flush().expect("flush");
-            }
+                String::from_utf8_lossy(&req[..n]).into_owned()
+            };
             // rustls clients treat TCP EOF without close_notify as an error.
             conn.send_close_notify();
             while conn.wants_write() {
                 conn.write_tls(&mut tcp).expect("close_notify");
             }
+            request
         });
 
         let mut roots = rustls::RootCertStore::empty();
@@ -726,6 +769,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "sing-box/1.14.4",
             &[],
             "https://localhost/",
             Instant::now() + FETCH_TOTAL_TIMEOUT,
@@ -734,7 +778,11 @@ mod tests {
         .expect("pinned GET");
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, br#"{"outbounds":[]}"#);
-        server.join().expect("server");
+        let request = server.join().expect("server");
+        assert!(
+            request.contains("\r\nUser-Agent: sing-box/1.14.4\r\n"),
+            "{request}"
+        );
     }
 
     #[test]
@@ -804,6 +852,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "ice-box/0.1",
             &[],
             "https://localhost/",
             Instant::now() + std::time::Duration::from_millis(500),
@@ -888,6 +937,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "ice-box/0.1",
             &[],
             "https://localhost/",
             Instant::now() + std::time::Duration::from_millis(500),
