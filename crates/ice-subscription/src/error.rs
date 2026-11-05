@@ -19,6 +19,11 @@ pub enum SubscriptionError {
     /// client from a network failure.
     #[error("fetch failed: GET {url}: HTTP {status}")]
     HttpStatus { url: String, status: u16 },
+    /// The response arrived but its body was refused: over
+    /// [`crate::MAX_BODY_BYTES`] or not UTF-8. Another client may get a
+    /// smaller or differently encoded body, so a fetch can retry it.
+    #[error("fetch failed: {0}")]
+    BodyRejected(String),
     #[error("parse failed: {0}")]
     ParseFailed(String),
     #[error("no active subscription")]
@@ -38,7 +43,9 @@ impl SubscriptionError {
         match self {
             Self::UnknownFormat => ErrorCode::SubUnknownFormat,
             Self::EmptyNodes => ErrorCode::SubEmpty,
-            Self::FetchFailed(_) | Self::HttpStatus { .. } => ErrorCode::SubFetchFailed,
+            Self::FetchFailed(_) | Self::HttpStatus { .. } | Self::BodyRejected(_) => {
+                ErrorCode::SubFetchFailed
+            }
             Self::InvalidSingBox(_) | Self::ParseFailed(_) | Self::Json(_) => {
                 ErrorCode::SubParseFailed
             }
@@ -58,7 +65,9 @@ impl SubscriptionError {
         let key = match self {
             Self::UnknownFormat => "error.sub.unknown_format",
             Self::EmptyNodes => "error.sub.empty",
-            Self::FetchFailed(_) | Self::HttpStatus { .. } => "error.sub.fetch_failed",
+            Self::FetchFailed(_) | Self::HttpStatus { .. } | Self::BodyRejected(_) => {
+                "error.sub.fetch_failed"
+            }
             Self::InvalidSingBox(_) | Self::ParseFailed(_) | Self::Json(_) => {
                 "error.sub.parse_failed"
             }

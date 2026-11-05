@@ -242,9 +242,7 @@ fn tls_get_pinned_with_config(
             Ok(n) => {
                 raw.extend_from_slice(&buf[..n]);
                 if raw.len() > MAX_RAW_RESPONSE_BYTES {
-                    return Err(SubscriptionError::FetchFailed(format!(
-                        "body exceeds {MAX_BODY_BYTES} bytes"
-                    )));
+                    return Err(SubscriptionError::BodyRejected(body_too_large()));
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -265,8 +263,12 @@ fn tls_get_pinned_with_config(
             }
         }
     }
-    parse_http_response(&raw)
-        .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {e}")))
+    parse_http_response(&raw).map_err(|e| match e {
+        ResponseError::TooLarge => SubscriptionError::BodyRejected(e.to_string()),
+        ResponseError::Malformed(message) => {
+            SubscriptionError::FetchFailed(format!("GET {log_url} via {ip}: parse: {message}"))
+        }
+    })
 }
 
 pub(crate) enum DownloadHop {
@@ -477,7 +479,37 @@ fn body_too_large() -> String {
     format!("body exceeds {MAX_BODY_BYTES} bytes")
 }
 
-fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
+/// Why a raw HTTP response could not be turned into a body. Over-limit bodies
+/// are a kind of their own so callers can report them as
+/// [`SubscriptionError::BodyRejected`] without matching on message text.
+#[derive(Debug, PartialEq, Eq)]
+enum ResponseError {
+    TooLarge,
+    Malformed(String),
+}
+
+impl From<String> for ResponseError {
+    fn from(message: String) -> Self {
+        Self::Malformed(message)
+    }
+}
+
+impl From<&str> for ResponseError {
+    fn from(message: &str) -> Self {
+        Self::Malformed(message.to_string())
+    }
+}
+
+impl std::fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str(&body_too_large()),
+            Self::Malformed(message) => f.write_str(message),
+        }
+    }
+}
+
+fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, ResponseError> {
     let mut out = Vec::new();
     let mut rest = raw_body;
     loop {
@@ -494,7 +526,7 @@ fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
             break;
         }
         if out.len().saturating_add(size) > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         if rest.len() < size + 2 {
             return Err("chunked body: truncated chunk data".into());
@@ -505,7 +537,7 @@ fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>, ResponseError> {
     if header_value(headers, "Transfer-Encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
     {
         return decode_chunked_body(raw_body);
@@ -516,24 +548,28 @@ fn extract_body(raw_body: &[u8], headers: &[(String, String)]) -> Result<Vec<u8>
             .parse()
             .map_err(|_| format!("invalid Content-Length: {cl}"))?;
         if len > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         if raw_body.len() < len {
             return Err(format!(
                 "response truncated: expected {len} bytes, got {}",
                 raw_body.len()
-            ));
+            )
+            .into());
         }
         return Ok(raw_body[..len].to_vec());
     }
 
     if raw_body.len() > MAX_BODY_BYTES {
-        return Err(body_too_large());
+        return Err(ResponseError::TooLarge);
     }
     Ok(raw_body.to_vec())
 }
 
-fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+fn decode_content_encoding(
+    body: Vec<u8>,
+    headers: &[(String, String)],
+) -> Result<Vec<u8>, ResponseError> {
     let Some(raw) = header_value(headers, "Content-Encoding") else {
         return Ok(body);
     };
@@ -548,14 +584,14 @@ fn decode_content_encoding(body: Vec<u8>, headers: &[(String, String)]) -> Resul
             .read_to_end(&mut out)
             .map_err(|e| format!("gzip decode: {e}"))?;
         if out.len() > MAX_BODY_BYTES {
-            return Err(body_too_large());
+            return Err(ResponseError::TooLarge);
         }
         return Ok(out);
     }
-    Err(format!("unsupported Content-Encoding: {encoding}"))
+    Err(format!("unsupported Content-Encoding: {encoding}").into())
 }
 
-fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, String> {
+fn parse_http_response(raw: &[u8]) -> Result<RawHttpResponse, ResponseError> {
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -639,7 +675,7 @@ mod tests {
             "x".repeat(MAX_BODY_BYTES + 1)
         );
         let err = parse_http_response(raw.as_bytes()).unwrap_err();
-        assert!(err.contains("exceeds"));
+        assert_eq!(err, ResponseError::TooLarge);
     }
 
     #[test]
@@ -647,7 +683,7 @@ mod tests {
         let body = "x".repeat(MAX_BODY_BYTES + 1);
         let raw = format!("HTTP/1.1 200 OK\r\n\r\n{body}");
         let err = parse_http_response(raw.as_bytes()).unwrap_err();
-        assert!(err.contains("exceeds"));
+        assert_eq!(err, ResponseError::TooLarge);
     }
 
     #[test]

@@ -27,6 +27,30 @@ use crate::{
     SubscriptionSource, MAX_BODY_BYTES, MAX_FETCH_CONCURRENCY,
 };
 
+/// How usable a sing-box client response is.
+enum SingBoxAnswer {
+    Usable,
+    /// A sing-box config that parses but loses route rules to rule sets
+    /// ice-box never downloads.
+    Lossy,
+    Unusable,
+}
+
+/// Whether a failed sing-box request is worth repeating as the generic
+/// client. A 4xx can be a panel refusing an unknown client, and a rejected
+/// body may be the sing-box config alone. 408 / 429 and 5xx are about the
+/// server or the timing, not the client, so a retry would only add load and
+/// wait.
+fn retry_as_generic(err: &SubscriptionError) -> bool {
+    match err {
+        SubscriptionError::HttpStatus { status, .. } => {
+            (400..500).contains(status) && !matches!(status, 408 | 429)
+        }
+        SubscriptionError::BodyRejected(_) => true,
+        _ => false,
+    }
+}
+
 /// Disk-backed subscription manager.
 pub struct SubscriptionManager<F: HttpFetcher = DirectFetcher> {
     paths: SubscriptionPaths,
@@ -43,6 +67,8 @@ pub struct SubscriptionManager<F: HttpFetcher = DirectFetcher> {
 pub struct FetchedUpdate {
     pub meta: SubscriptionMeta,
     pub fetched: FetchResponse,
+    /// Client that produced `fetched`.
+    pub fetched_as: FetchClient,
     pub(crate) spooled: Option<SpooledBody>,
 }
 
@@ -109,6 +135,8 @@ pub struct FetchedAdd {
     pub auto_update_interval: Option<AutoUpdateInterval>,
     pub source: SubscriptionSource,
     pub fetched: FetchResponse,
+    /// Client that produced `fetched`; `None` for a file import.
+    pub fetched_as: Option<FetchClient>,
 }
 
 impl SubscriptionManager<DirectFetcher> {
@@ -205,24 +233,32 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
     }
 
     /// GET a subscription as the sing-box client first, which makes provider
-    /// panels send a full sing-box config and their traffic counters. Falls
-    /// back to the generic client when the provider refuses the sing-box
-    /// request (HTTP error status) or answers with a body ice-box cannot use.
-    /// Transport failures are returned as they are: another `User-Agent`
-    /// cannot fix them, and a retry would double the wait.
+    /// panels send a full sing-box config and their traffic counters, and
+    /// return the response with the client it came from.
     ///
-    /// Validators from `cached` go only to the client whose body is cached
-    /// (told apart by its format), so a validator issued for one client's
-    /// response can never turn into a 304 for the other and pin the old body.
+    /// Falls back to the generic client when the sing-box request is refused
+    /// (a 4xx status other than 408 / 429), its body is rejected (too large,
+    /// not UTF-8) or unusable, or its config loses route rules to rule sets
+    /// ice-box cannot load. In the last case the generic answer is kept only
+    /// when it parses; otherwise the sing-box config is still better than
+    /// failing. Transport failures and 5xx are returned as they are: another
+    /// `User-Agent` cannot fix them, and a retry would double the wait.
+    ///
+    /// Validators from `cached` go only to the client that issued them, so a
+    /// validator for one client's body can never turn into a 304 for the
+    /// other and pin the old body.
     fn fetch_preferring_singbox(
         &self,
         url: &str,
         cached: Option<&SubscriptionMeta>,
-    ) -> Result<FetchResponse, SubscriptionError> {
+    ) -> Result<(FetchResponse, FetchClient), SubscriptionError> {
+        // A cached sing-box config kept only because the generic client
+        // failed must be judged again, so a 304 cannot pin it.
         let validators = |client: FetchClient| match cached {
             Some(meta)
-                if (meta.format == SubscriptionFormat::SingBox)
-                    == (client == FetchClient::SingBox) =>
+                if meta.fetched_as.unwrap_or(FetchClient::Generic) == client
+                    && !(client == FetchClient::SingBox
+                        && crate::lost_rule_set_rules(&meta.parse_warnings)) =>
             {
                 (meta.etag.as_deref(), meta.last_modified.as_deref())
             }
@@ -231,44 +267,89 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         let redacted = crate::redact_subscription_url_for_log(url);
 
         let (etag, last_modified) = validators(FetchClient::SingBox);
-        let singbox_userinfo = match self.fetcher.get_as(
+        let (singbox_userinfo, lossy) = match self.fetcher.get_as(
             url,
             etag,
             last_modified,
             FetchClient::SingBox,
         ) {
-            Ok(resp) if resp.not_modified => return Ok(resp),
-            Ok(resp) => match normalize_raw_body(&resp.body, self.platform) {
-                Ok(_) => return Ok(resp),
-                Err(err) => {
+            Ok(resp) => match self.judge_singbox_answer(&resp) {
+                SingBoxAnswer::Usable => return Ok((resp, FetchClient::SingBox)),
+                SingBoxAnswer::Lossy => {
                     tracing::info!(
                         url = %redacted,
-                        error = %err.redacted_display(),
+                        "subscription fetch: sing-box config depends on rule sets ice-box cannot load; trying the generic client"
+                    );
+                    (resp.userinfo, Some(resp))
+                }
+                SingBoxAnswer::Unusable => {
+                    tracing::info!(
+                        url = %redacted,
                         "subscription fetch: sing-box response unusable; retrying as generic client"
                     );
-                    resp.userinfo
+                    (resp.userinfo, None)
                 }
             },
-            Err(SubscriptionError::HttpStatus { status, .. }) => {
+            Err(err) if retry_as_generic(&err) => {
                 tracing::info!(
                     url = %redacted,
-                    status,
+                    error = %err.redacted_display(),
                     "subscription fetch: sing-box request refused; retrying as generic client"
                 );
-                None
+                (None, None)
             }
             Err(err) => return Err(err),
         };
 
         let (etag, last_modified) = validators(FetchClient::Generic);
-        let mut resp = self
+        let generic = self
             .fetcher
-            .get_as(url, etag, last_modified, FetchClient::Generic)?;
+            .get_as(url, etag, last_modified, FetchClient::Generic);
+        if let Some(lossy) = lossy {
+            // Parsed in full: a generic body that fails in the apply phase
+            // must not replace a sing-box config that works.
+            let generic_usable = matches!(
+                &generic,
+                Ok(resp) if resp.not_modified
+                    || normalize_raw_body(&resp.body, self.platform).is_ok()
+            );
+            if !generic_usable {
+                tracing::info!(
+                    url = %redacted,
+                    "subscription fetch: generic response unusable; keeping the sing-box config"
+                );
+                return Ok((lossy, FetchClient::SingBox));
+            }
+        }
+        let mut resp = generic?;
         // Some panels send traffic counters only to clients they recognize.
         if resp.userinfo.is_none() {
             resp.userinfo = singbox_userinfo;
         }
-        Ok(resp)
+        Ok((resp, FetchClient::Generic))
+    }
+
+    /// Classify a sing-box client response. Only a body that is a sing-box
+    /// config is parsed here: a provider that ignores the `User-Agent` and
+    /// sends share links or Clash would send the generic client the same body,
+    /// so that body is used as it is and parsed once, in the apply phase.
+    /// The parse is transient (each fetch worker drops it before spooling),
+    /// so it costs CPU but does not keep a profile per batch entry in memory.
+    fn judge_singbox_answer(&self, resp: &FetchResponse) -> SingBoxAnswer {
+        if resp.not_modified {
+            return SingBoxAnswer::Usable;
+        }
+        match crate::sniff_format(&resp.body) {
+            SubscriptionFormat::Unknown => SingBoxAnswer::Unusable,
+            SubscriptionFormat::SingBox => match normalize_raw_body(&resp.body, self.platform) {
+                Ok((_, profile)) if crate::lost_rule_set_rules(&profile.parse_stats.warnings) => {
+                    SingBoxAnswer::Lossy
+                }
+                Ok(_) => SingBoxAnswer::Usable,
+                Err(_) => SingBoxAnswer::Unusable,
+            },
+            _ => SingBoxAnswer::Usable,
+        }
     }
 
     /// Network fetch phase of an add: validate URL, GET (no disk writes).
@@ -282,7 +363,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         self.validate_fetch_url(url)?;
 
         let id = Uuid::new_v4();
-        let fetched = self.fetch_preferring_singbox(url, None)?;
+        let (fetched, fetched_as) = self.fetch_preferring_singbox(url, None)?;
         Ok(FetchedAdd {
             id,
             url: url.to_string(),
@@ -291,6 +372,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             auto_update_interval,
             source: SubscriptionSource::Remote,
             fetched,
+            fetched_as: Some(fetched_as),
         })
     }
 
@@ -325,6 +407,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             auto_update: false,
             auto_update_interval: None,
             source: SubscriptionSource::File,
+            fetched_as: None,
             fetched: FetchResponse {
                 body: body.to_string(),
                 not_modified: false,
@@ -355,6 +438,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
             auto_update_interval,
             source,
             fetched,
+            fetched_as,
         } = add;
         match normalize_raw_body(&fetched.body, self.platform) {
             Ok((format, mut profile)) => {
@@ -383,6 +467,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                     auto_update_interval,
                 );
                 meta.source = source;
+                meta.fetched_as = fetched_as;
                 if source == SubscriptionSource::File {
                     meta.auto_update = false;
                     meta.auto_update_interval = None;
@@ -428,10 +513,11 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
         self.validate_fetch_url(&meta.url)?;
 
-        let fetched = self.fetch_preferring_singbox(&meta.url, Some(&meta))?;
+        let (fetched, fetched_as) = self.fetch_preferring_singbox(&meta.url, Some(&meta))?;
         Ok(FetchedUpdate {
             meta,
             fetched,
+            fetched_as,
             spooled: None,
         })
     }
@@ -454,8 +540,13 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         }
         match normalize_raw_body(&upd.fetched.body, self.platform) {
             Ok((format, mut profile)) => {
-                let updated =
-                    meta_from_fetched_profile(&current, &upd.fetched, format, &mut profile);
+                let updated = meta_from_fetched_profile(
+                    &current,
+                    &upd.fetched,
+                    upd.fetched_as,
+                    format,
+                    &mut profile,
+                );
                 write_subscription_success(&self.paths, &updated, &upd.fetched.body, &profile)?;
                 Ok(updated)
             }
@@ -604,6 +695,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
                             let updated = meta_from_fetched_profile(
                                 &current,
                                 &upd.fetched,
+                                upd.fetched_as,
                                 format,
                                 &mut profile,
                             );
@@ -716,6 +808,7 @@ impl MemorySubscriptionManager {
             last_error: None,
             etag: None,
             last_modified: None,
+            fetched_as: None,
             userinfo: None,
             provider_info: vec![],
             auto_update: false,

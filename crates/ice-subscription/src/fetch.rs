@@ -80,7 +80,8 @@ pub struct FetchResponse {
 /// Which client a subscription request identifies itself as. Provider panels
 /// choose the body format, and whether to send `subscription-userinfo`, from
 /// the `User-Agent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FetchClient {
     /// `sing-box/<bundled core version>`: panels that recognize it answer with
     /// a full sing-box config and traffic counters. The real core version lets
@@ -485,7 +486,7 @@ fn read_limited_body(reader: impl Read) -> Result<Vec<u8>, SubscriptionError> {
             }
         })?;
     if body.len() > MAX_BODY_BYTES {
-        return Err(SubscriptionError::FetchFailed(format!(
+        return Err(SubscriptionError::BodyRejected(format!(
             "body exceeds {MAX_BODY_BYTES} bytes"
         )));
     }
@@ -759,7 +760,7 @@ fn fetch_response_with_deadline(
     }
 
     let body = String::from_utf8(hop.body)
-        .map_err(|e| SubscriptionError::FetchFailed(format!("body not utf-8: {e}")))?;
+        .map_err(|e| SubscriptionError::BodyRejected(format!("body not utf-8: {e}")))?;
 
     Ok(FetchResponse {
         body,
@@ -856,7 +857,7 @@ impl HttpFetcher for MockFetcher {
             MockFetchMode::Timeout => Err(SubscriptionError::FetchFailed(
                 "mock timeout after 20s".into(),
             )),
-            MockFetchMode::TooLarge => Err(SubscriptionError::FetchFailed(format!(
+            MockFetchMode::TooLarge => Err(SubscriptionError::BodyRejected(format!(
                 "body exceeds {MAX_BODY_BYTES} bytes"
             ))),
             MockFetchMode::Fail(msg) => Err(SubscriptionError::FetchFailed(msg.clone())),

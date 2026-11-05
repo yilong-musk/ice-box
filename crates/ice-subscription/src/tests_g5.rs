@@ -315,6 +315,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                 Ok(FetchedUpdate {
                     meta: a_meta,
                     spooled: None,
+                    fetched_as: FetchClient::Generic,
                     fetched: FetchResponse {
                         body: r#"{"outbounds":[{"type":"socks","tag":"x","server":"1.1.1.1","server_port":1},{"type":"socks","tag":"y","server":"2.2.2.2","server_port":2}]}"#
                             .into(),
@@ -331,6 +332,7 @@ fn apply_all_commits_index_once_across_mixed_results() {
                 Ok(FetchedUpdate {
                     meta: b_meta,
                     spooled: None,
+                    fetched_as: FetchClient::Generic,
                     fetched: FetchResponse {
                         body: String::new(),
                         not_modified: true,
@@ -1167,6 +1169,7 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
         "route": {
             "final": "n",
             "rules": [
+                {"rule_set":["evil"],"outbound":"n"},
                 {"domain_suffix":["keep.com"],"outbound":"n"}
             ],
             "rule_set": [
@@ -1185,7 +1188,11 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
     let profile = parse_singbox_profile(raw).expect("parse");
     assert!(profile.route.rule_sets.iter().all(|s| s["tag"] != "evil"));
     assert!(profile.route.rule_sets.iter().any(|s| s["tag"] == "ok"));
-    assert_eq!(profile.route.rules.len(), 1);
+    assert!(profile
+        .route
+        .rules
+        .iter()
+        .all(|r| r.get("rule_set") != Some(&serde_json::json!(["evil"]))));
     assert!(profile.dns.as_ref().unwrap()["servers"]
         .as_array()
         .unwrap()
@@ -1759,32 +1766,66 @@ const PANEL_SINGBOX_BODY: &str = r#"{
 }"#;
 
 #[test]
-fn singbox_profile_ignores_provider_routing_that_lost_remote_rule_sets() {
+fn singbox_profile_keeps_provider_rules_that_do_not_need_remote_rule_sets() {
     let profile = parse_singbox_profile(PANEL_SINGBOX_BODY).expect("parse");
     assert_eq!(profile.nodes.len(), 2);
-    assert_eq!(profile.groups.len(), 2, "groups are kept");
-    assert!(profile.route.rules.is_empty());
-    assert!(profile.route.rule_sets.is_empty());
-    assert_eq!(profile.route.final_outbound, "select");
-    assert!(profile.dns.is_none());
-    let keys: Vec<&str> = profile
+    assert_eq!(profile.groups.len(), 2);
+    // Only the rule that needs the remote sets is dropped, with a warning.
+    assert_eq!(
+        profile.route.rules,
+        vec![
+            serde_json::json!({"action":"sniff"}),
+            serde_json::json!({"ip_is_private":true,"outbound":"direct"}),
+        ]
+    );
+    assert!(profile
         .parse_stats
         .warnings
         .iter()
-        .map(|w| w.key.as_str())
-        .collect();
-    assert!(
-        !keys.contains(&"parse.routeRuleSetMissing"),
-        "ignored provider routing is logged, not shown: {keys:?}"
-    );
+        .any(|w| w.key == "parse.routeRuleSetMissing"));
+    // Legacy-format servers are filtered out, so no DNS block is left.
+    assert!(profile.dns.is_none());
+}
 
-    // With no rules left, the built-in split routing applies, as it does for a
-    // share-link subscription.
-    let mut profile = profile;
-    super::apply_builtin_default_rules(&mut profile, HostPlatform::Windows);
-    assert!(!profile.route.rules.is_empty());
+#[test]
+fn singbox_profile_drops_a_dns_block_without_servers() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
+        ],
+        "dns": {"rules": [{"domain_suffix":["example.cn"],"server":"x"}], "final": "x"}
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert!(profile.dns.is_none());
+}
+
+#[test]
+fn singbox_profile_keeps_provider_route_final_and_dns_next_to_a_dropped_rule() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"selector","tag":"select","outbounds":["n"]},
+            {"type":"selector","tag":"media","outbounds":["n"]},
+            {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
+        ],
+        "route": {
+            "final": "media",
+            "rules": [
+                {"rule_set":["geosite-ads"],"action":"reject"},
+                {"domain_suffix":["example.cn"],"outbound":"direct"}
+            ],
+            "rule_set": [
+                {"type":"remote","tag":"geosite-ads","url":"https://example.com/ads.srs"}
+            ]
+        },
+        "dns": {
+            "servers": [{"type":"udp","tag":"cn","server":"223.5.5.5"}],
+            "final": "cn"
+        }
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert_eq!(profile.route.final_outbound, "media");
+    assert_eq!(profile.route.rules.len(), 1);
     assert!(profile.dns.is_some());
-    assert_eq!(profile.route.final_outbound, "select");
 }
 
 #[test]
@@ -1814,6 +1855,19 @@ fn singbox_profile_keeps_complete_provider_rules_but_drops_serverless_dns() {
 
 const URI_LIST_BODY: &str = "trojan://secret@1.2.3.4:443?sni=example.com#n1\n";
 
+/// A sing-box answer whose routing needs no remote rule set.
+const COMPLETE_SINGBOX_BODY: &str = r#"{
+    "outbounds": [
+        {"type":"selector","tag":"select","outbounds":["n1","n2"]},
+        {"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1080},
+        {"type":"socks","tag":"n2","server":"1.1.1.2","server_port":1080}
+    ],
+    "route": {
+        "final": "select",
+        "rules": [{"domain_suffix":["example.cn"],"outbound":"direct"}]
+    }
+}"#;
+
 #[derive(Clone)]
 enum Reply {
     Body(
@@ -1822,6 +1876,8 @@ enum Reply {
         Option<&'static str>,
     ),
     Status(u16),
+    NotModified,
+    TooLarge,
     Transport,
 }
 
@@ -1883,6 +1939,15 @@ impl HttpFetcher for ClientAwareFetcher {
                 url: url.into(),
                 status: *status,
             }),
+            Reply::NotModified => Ok(FetchResponse {
+                body: String::new(),
+                not_modified: true,
+                etag: None,
+                last_modified: None,
+                userinfo: None,
+                content_disposition: None,
+            }),
+            Reply::TooLarge => Err(SubscriptionError::BodyRejected("body exceeds".into())),
             Reply::Transport => Err(SubscriptionError::FetchFailed("connect: timed out".into())),
         }
     }
@@ -1903,13 +1968,14 @@ const SUB_URL: &str = "https://example.com/sub";
 fn fetch_uses_the_singbox_answer_when_it_is_usable() {
     let paths = temp_subs("ua-singbox");
     let fetcher = ClientAwareFetcher::new(
-        Reply::Body(PANEL_SINGBOX_BODY, quota(), None),
+        Reply::Body(COMPLETE_SINGBOX_BODY, quota(), None),
         Reply::Body(URI_LIST_BODY, None, None),
     );
     let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
     let meta = mgr.add(SUB_URL, None, false, None).unwrap();
     assert_eq!(meta.format, SubscriptionFormat::SingBox);
-    assert_eq!(meta.group_count, 2);
+    assert_eq!(meta.fetched_as, Some(FetchClient::SingBox));
+    assert_eq!(meta.group_count, 1);
     assert_eq!(meta.userinfo, quota());
     assert_eq!(fetcher.take_calls(), vec![(FetchClient::SingBox, None)]);
 }
@@ -1995,7 +2061,7 @@ fn fetch_sends_validators_only_to_the_client_whose_body_is_cached() {
     // validator is not sent to it, so the cached list cannot be pinned by a
     // 304, and the subscription switches to the sing-box config.
     let both = ClientAwareFetcher::new(
-        Reply::Body(PANEL_SINGBOX_BODY, None, Some("singbox-v1")),
+        Reply::Body(COMPLETE_SINGBOX_BODY, None, Some("singbox-v1")),
         Reply::Body(URI_LIST_BODY, None, Some("generic-v2")),
     );
     let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), both.clone());
@@ -2018,4 +2084,193 @@ fn singbox_client_user_agent_names_the_bundled_core() {
         format!("sing-box/{}", ice_config::ENGINE_COMPAT_CORE_VERSION)
     );
     assert_eq!(FetchClient::Generic.user_agent(), "ice-box/0.1");
+}
+
+#[test]
+fn fetch_prefers_the_generic_answer_when_the_singbox_config_loses_rules() {
+    let paths = temp_subs("ua-lossy");
+    let fetcher = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, quota(), None),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::UriList);
+    assert_eq!(meta.fetched_as, Some(FetchClient::Generic));
+    assert_eq!(meta.userinfo, quota());
+    let clients: Vec<FetchClient> = fetcher.take_calls().into_iter().map(|c| c.0).collect();
+    assert_eq!(clients, vec![FetchClient::SingBox, FetchClient::Generic]);
+}
+
+#[test]
+fn fetch_keeps_a_lossy_singbox_config_when_the_generic_answer_is_unusable() {
+    let paths = temp_subs("ua-lossy-keep");
+    for generic in [
+        Reply::Status(403),
+        Reply::Body("<html>nope</html>", None, None),
+    ] {
+        let fetcher = ClientAwareFetcher::new(Reply::Body(PANEL_SINGBOX_BODY, None, None), generic);
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+        let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+        assert_eq!(meta.format, SubscriptionFormat::SingBox);
+        assert_eq!(meta.fetched_as, Some(FetchClient::SingBox));
+    }
+}
+
+#[test]
+fn fetch_does_not_retry_server_errors_or_rate_limits() {
+    for status in [500, 502, 503, 408, 429] {
+        let paths = temp_subs("ua-5xx");
+        let fetcher = ClientAwareFetcher::new(
+            Reply::Status(status),
+            Reply::Body(URI_LIST_BODY, None, None),
+        );
+        let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+        let err = mgr.add(SUB_URL, None, false, None).expect_err("no retry");
+        assert!(
+            matches!(err, SubscriptionError::HttpStatus { status: s, .. } if s == status),
+            "{err:?}"
+        );
+        assert_eq!(fetcher.take_calls().len(), 1, "HTTP {status}");
+    }
+}
+
+#[test]
+fn fetch_retries_a_rejected_singbox_body_as_the_generic_client() {
+    let paths = temp_subs("ua-too-large");
+    let fetcher = ClientAwareFetcher::new(Reply::TooLarge, Reply::Body(URI_LIST_BODY, None, None));
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::UriList);
+    assert_eq!(fetcher.take_calls().len(), 2);
+}
+
+#[test]
+fn fetch_keeps_conditional_requests_for_providers_that_ignore_the_user_agent() {
+    let paths = temp_subs("ua-ignored");
+    // A subscription saved before the sing-box client existed: its validator
+    // was issued for the generic client.
+    let legacy = ClientAwareFetcher::new(
+        Reply::Status(403),
+        Reply::Body(URI_LIST_BODY, None, Some("v1")),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), legacy);
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.fetched_as, Some(FetchClient::Generic));
+
+    // The provider sends the same share links to every client.
+    let same = ClientAwareFetcher::new(
+        Reply::Body(URI_LIST_BODY, None, Some("v2")),
+        Reply::Body(URI_LIST_BODY, None, Some("v2")),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), same.clone());
+    let updated = mgr.update(meta.id).unwrap();
+    assert_eq!(updated.fetched_as, Some(FetchClient::SingBox));
+    assert_eq!(updated.etag.as_deref(), Some("v2"));
+    assert_eq!(same.take_calls(), vec![(FetchClient::SingBox, None)]);
+
+    // From now on the validator goes with the sing-box request, so a 304
+    // ends the update without a second request or a full download.
+    let unchanged =
+        ClientAwareFetcher::new(Reply::NotModified, Reply::Body(URI_LIST_BODY, None, None));
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), unchanged.clone());
+    mgr.update(meta.id).unwrap();
+    assert_eq!(
+        unchanged.take_calls(),
+        vec![(FetchClient::SingBox, Some("v2".into()))]
+    );
+}
+
+#[test]
+fn switching_clients_does_not_carry_the_old_validator_over() {
+    let paths = temp_subs("ua-switch");
+    let generic = ClientAwareFetcher::new(
+        Reply::Status(403),
+        Reply::Body(URI_LIST_BODY, None, Some("generic-v1")),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), generic);
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+
+    // The sing-box answer carries no validator of its own.
+    let singbox = ClientAwareFetcher::new(
+        Reply::Body(COMPLETE_SINGBOX_BODY, None, None),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), singbox);
+    let updated = mgr.update(meta.id).unwrap();
+    assert_eq!(updated.fetched_as, Some(FetchClient::SingBox));
+    assert_eq!(updated.etag, None);
+}
+
+#[test]
+fn builtin_rules_are_appended_when_provider_rules_were_lost_to_rule_sets() {
+    let mut profile = parse_singbox_profile(PANEL_SINGBOX_BODY).expect("parse");
+    let provider_rules = profile.route.rules.clone();
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::Windows);
+    assert_eq!(
+        &profile.route.rules[..provider_rules.len()],
+        provider_rules.as_slice(),
+        "the provider's own rules keep their priority"
+    );
+    assert!(
+        profile.route.rules.len() > provider_rules.len(),
+        "domestic-direct defaults fill the gap"
+    );
+    assert!(profile.route.rules.iter().any(|r| r.get("geoip").is_some()));
+    assert!(
+        profile.dns.is_some(),
+        "built-in DNS replaces the filtered one"
+    );
+}
+
+#[test]
+fn builtin_rules_leave_a_complete_provider_route_alone() {
+    let mut profile = parse_singbox_profile(COMPLETE_SINGBOX_BODY).expect("parse");
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::Windows);
+    assert_eq!(profile.route.rules.len(), 1);
+    assert_eq!(profile.route.final_outbound, "select");
+}
+
+#[test]
+fn fetch_keeps_a_lossy_singbox_config_over_a_generic_body_that_does_not_parse() {
+    let paths = temp_subs("ua-lossy-bad-generic");
+    // Detected as Clash, but no proxy survives parsing.
+    let fetcher = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, None, None),
+        Reply::Body(
+            "proxies:\n  - {name: x, type: not-a-protocol}\n",
+            None,
+            None,
+        ),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::SingBox);
+}
+
+#[test]
+fn a_kept_lossy_singbox_config_is_not_pinned_by_a_304() {
+    let paths = temp_subs("ua-lossy-304");
+    let first = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, None, Some("sb-v1")),
+        Reply::Status(403),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), first);
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.fetched_as, Some(FetchClient::SingBox));
+    assert_eq!(meta.etag.as_deref(), Some("sb-v1"));
+
+    // The generic client works again: the sing-box request carries no
+    // validator, so the lossy config is judged again and replaced.
+    let later = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, None, Some("sb-v1")),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), later.clone());
+    let updated = mgr.update(meta.id).unwrap();
+    assert_eq!(updated.format, SubscriptionFormat::UriList);
+    assert_eq!(
+        later.take_calls(),
+        vec![(FetchClient::SingBox, None), (FetchClient::Generic, None)]
+    );
 }

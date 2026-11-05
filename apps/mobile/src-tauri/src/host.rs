@@ -1254,6 +1254,7 @@ mod favorite_tests {
             last_error: None,
             etag: None,
             last_modified: None,
+            fetched_as: None,
             userinfo: None,
             provider_info: vec![],
             auto_update: false,

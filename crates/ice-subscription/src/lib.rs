@@ -151,6 +151,12 @@ pub struct SubscriptionMeta {
     pub etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
+    /// Client whose response `etag` / `last_modified` were issued for; they
+    /// are sent only on that client's request. `None` on subscriptions saved
+    /// before the sing-box client existed, which were always fetched as
+    /// [`FetchClient::Generic`], and on file imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_as: Option<FetchClient>,
     /// Provider traffic counters (`subscription-userinfo` header) as of the
     /// last successful fetch; `None` when the provider never sent any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -228,6 +234,22 @@ pub fn parse_subscription(
             }
         }
     }
+}
+
+/// Format of a raw body after base64 decoding, without parsing it.
+pub(crate) fn sniff_format(raw: &str) -> SubscriptionFormat {
+    decode_body(raw).map_or(SubscriptionFormat::Unknown, |decoded| {
+        detect_format(&decoded)
+    })
+}
+
+/// Whether parsing dropped route rules that reference rule sets ice-box
+/// never downloads. The warning is persisted with the profile, so this also
+/// holds for a profile read back from disk.
+pub(crate) fn lost_rule_set_rules(warnings: &[UiMessage]) -> bool {
+    warnings
+        .iter()
+        .any(|w| w.key == "parse.routeRuleSetMissing")
 }
 
 /// Decode optional base64 wrapper, detect format, parse full profile.
@@ -318,6 +340,7 @@ pub(crate) fn meta_from_profile(
         last_error: None,
         etag,
         last_modified,
+        fetched_as: None,
         userinfo: None,
         provider_info,
         auto_update,
@@ -329,9 +352,13 @@ pub(crate) fn meta_from_profile(
 pub(crate) fn meta_from_fetched_profile(
     current: &SubscriptionMeta,
     fetched: &FetchResponse,
+    fetched_as: FetchClient,
     format: SubscriptionFormat,
     profile: &mut NormalizedProfile,
 ) -> SubscriptionMeta {
+    // Cached validators carry over only while the same client answers: one
+    // issued for the other client's body must never be sent with this one.
+    let same_client = current.fetched_as.unwrap_or(FetchClient::Generic) == fetched_as;
     let mut meta = meta_from_profile(
         current.id,
         current.name.clone(),
@@ -339,14 +366,18 @@ pub(crate) fn meta_from_fetched_profile(
         format,
         profile,
         current.active,
-        fetched.etag.clone().or_else(|| current.etag.clone()),
+        fetched
+            .etag
+            .clone()
+            .or_else(|| current.etag.clone().filter(|_| same_client)),
         fetched
             .last_modified
             .clone()
-            .or_else(|| current.last_modified.clone()),
+            .or_else(|| current.last_modified.clone().filter(|_| same_client)),
         current.auto_update,
         current.auto_update_interval,
     );
+    meta.fetched_as = Some(fetched_as);
     // A successful fetch that omits the header keeps the last counters the
     // provider reported; a conditional (304) response may still refresh them.
     meta.userinfo = fetched.userinfo.or(current.userinfo);
@@ -477,64 +508,23 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
             parse_stats,
         };
         crate::prune::prune_dangling_refs(&mut profile);
-        drop_incomplete_provider_routing(&mut profile);
         profile
     })
 }
 
 /// The provider's DNS block with disallowed servers removed, or `None` when
-/// none of its servers survive. A block left with rules but no servers cannot
-/// resolve anything; `None` lets the built-in DNS apply instead. Panels still
-/// emitting the legacy server format (`address` without `type`) end up here.
+/// no server is left. A block without servers cannot resolve anything; `None`
+/// lets the built-in DNS apply instead. Panels still emitting the legacy
+/// server format (`address` without `type`) end up here.
 fn provider_dns(mut dns: serde_json::Value) -> Option<serde_json::Value> {
-    let had_servers = dns_server_count(&dns) > 0;
     ice_config_guard::retain_allowed_dns_servers(&mut dns);
-    (!had_servers || dns_server_count(&dns) > 0).then_some(dns)
+    (dns_server_count(&dns) > 0).then_some(dns)
 }
 
 fn dns_server_count(dns: &serde_json::Value) -> usize {
     dns.get("servers")
         .and_then(serde_json::Value::as_array)
         .map_or(0, Vec::len)
-}
-
-/// Drop the provider's route rules and DNS when some rules were removed for
-/// referencing a rule_set ice-box cannot load (remote sets are never fetched).
-///
-/// Providers put their split routing (`geosite-cn` / `geoip-cn` direct, ad
-/// blocking) in exactly those rules, so what survives is not the provider's
-/// routing any more: typically only sniffing and private-IP rules, which would
-/// send all domestic traffic through the proxy. An empty rule list lets the
-/// built-in split routing apply instead, as for a share-link subscription.
-/// Nodes and groups are kept. This is expected for most panels, so it is
-/// logged rather than shown as a parse warning.
-fn drop_incomplete_provider_routing(profile: &mut NormalizedProfile) {
-    let mut missing_sets = Vec::new();
-    profile.parse_stats.warnings.retain(|warning| {
-        if warning.key != "parse.routeRuleSetMissing" {
-            return true;
-        }
-        if let Some(sets) = warning.params.get("rule_set") {
-            missing_sets.push(sets.clone());
-        }
-        false
-    });
-    if missing_sets.is_empty() {
-        return;
-    }
-    tracing::info!(
-        rule_sets = %missing_sets.join(","),
-        "subscription: provider routing depends on remote rule sets; ignoring its rules and DNS"
-    );
-    profile.route = NormalizedRoute {
-        final_outbound: profile
-            .groups
-            .first()
-            .map(|g| g.tag.clone())
-            .unwrap_or_else(|| "proxy".into()),
-        ..Default::default()
-    };
-    profile.dns = None;
 }
 
 pub fn parse_singbox(raw: &str) -> Result<Vec<NormalizedOutbound>, SubscriptionError> {
