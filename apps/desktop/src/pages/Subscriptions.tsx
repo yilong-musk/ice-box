@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Share } from "lucide-react";
+import { Plus, RefreshCw, Share, Trash2 } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -48,7 +48,8 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
-import { t, useLanguagePreference } from "../lib/i18n";
+import { cn } from "@/lib/utils";
+import { formatLocale, t, useLanguagePreference } from "../lib/i18n";
 import { isPhoneShell } from "@platform/shell";
 
 const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
@@ -63,6 +64,25 @@ function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
   return t(`subs.interval.${interval}`);
 }
 
+/** Anything interactive: native controls, labels, and any element that is
+ * focusable or carries an ARIA role (custom widgets, Radix triggers, fields). */
+const INTERACTIVE_SELECTOR =
+  "button, a[href], input, select, textarea, label, summary, [role], [tabindex], [contenteditable]";
+
+/** True when a click inside `row` landed on an interactive descendant rather
+ * than on the row's bare surface. Checks by kind, not by a list of known
+ * row controls, so controls added to the row later are covered too. */
+function isInsideRowControl(target: EventTarget, row: Element): boolean {
+  for (
+    let el = target instanceof Element ? target : null;
+    el && el !== row;
+    el = el.parentElement
+  ) {
+    if (el.matches(INTERACTIVE_SELECTOR)) return true;
+  }
+  return false;
+}
+
 function activeSubscriptionId(items: SubscriptionMeta[]): string | null {
   return items.find((item) => item.active)?.id ?? null;
 }
@@ -73,7 +93,8 @@ type Props = {
 };
 
 export function Subscriptions({ active = true }: Props) {
-  useLanguagePreference();
+  const { resolved: lang } = useLanguagePreference();
+  const dateLocale = formatLocale(lang);
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
@@ -192,7 +213,13 @@ export function Subscriptions({ active = true }: Props) {
     }
   }
 
-  function subscriptionSummary(s: SubscriptionMeta): string {
+  function activateSubscription(s: SubscriptionMeta) {
+    if (busy || s.active) return;
+    void run(() => api.setSubscriptionActive(s.id, true));
+  }
+
+  /** `dateOnly` drops the time of day so the phone summary fits one line. */
+  function subscriptionSummary(s: SubscriptionMeta, dateOnly = false): string {
     const parts = [
       s.format,
       t("subs.summaryNodes", { n: s.node_count }),
@@ -201,7 +228,12 @@ export function Subscriptions({ active = true }: Props) {
     ];
     if (s.has_dns) parts.push(t("subs.hasDns"));
     if (s.last_updated) {
-      parts.push(new Date(s.last_updated).toLocaleString());
+      const updated = new Date(s.last_updated);
+      parts.push(
+        dateOnly
+          ? updated.toLocaleDateString(dateLocale)
+          : updated.toLocaleString(dateLocale),
+      );
     }
     return parts.join(" · ");
   }
@@ -286,42 +318,74 @@ export function Subscriptions({ active = true }: Props) {
                       key={s.id}
                       size="sm"
                       variant="outline"
-                      className={
-                        s.active ? "border-foreground/30 bg-muted" : "bg-muted"
-                      }
+                      className={cn(
+                        "relative bg-muted",
+                        s.active
+                          ? "border-ok"
+                          : "cursor-pointer hover:border-foreground/30 has-[[data-row-activate]:focus-visible]:border-ring has-[[data-row-activate]:focus-visible]:ring-[3px] has-[[data-row-activate]:focus-visible]:ring-ring/50",
+                      )}
+                      aria-current={s.active ? "true" : undefined}
+                      onClick={(event) => {
+                        // Controls inside the row keep their own behavior;
+                        // only clicks on the row's bare surface activate it.
+                        if (isInsideRowControl(event.target, event.currentTarget)) {
+                          return;
+                        }
+                        // A drag that selects text (e.g. to copy a warning)
+                        // also ends in a click; it must not switch profiles.
+                        if (window.getSelection()?.isCollapsed === false) {
+                          return;
+                        }
+                        activateSubscription(s);
+                      }}
                     >
-                      <ItemHeader className={phone ? "flex-wrap" : undefined}>
-                        <ItemTitle title={s.name}>
+                      {s.active ? null : (
+                        // Keyboard and screen-reader path: a real, named
+                        // button; the row shows its focus ring instead.
+                        <button
+                          type="button"
+                          data-row-activate
+                          className="sr-only"
+                          disabled={busy}
+                          aria-label={t("subs.activateRow", { name: s.name })}
+                          onClick={() => activateSubscription(s)}
+                        />
+                      )}
+                      <ItemHeader className="flex-nowrap">
+                        <ItemTitle title={s.name} className="min-w-0">
                           <span className="truncate">{s.name}</span>
                           {s.source === "file" ? (
                             <Label className="shrink-0 text-muted-foreground">
                               {t("subs.fileBadge")}
                             </Label>
                           ) : null}
-                          {s.active ? <Label className="shrink-0 text-ok">{t("subs.activeBadge")}</Label> : null}
                         </ItemTitle>
-                        <ItemActions
-                          className={
-                            phone
-                              ? "w-full flex-nowrap justify-end"
-                              : "flex-nowrap"
-                          }
-                        >
+                        {/* The phone row is too narrow for labelled buttons:
+                            icons keep the actions on the title line, and the
+                            labels stay as accessible names. */}
+                        <ItemActions className="shrink-0 flex-nowrap">
                           <Button
                             type="button"
-                            size="sm"
+                            size={phone ? "icon-sm" : "sm"}
                             variant="outline"
+                            aria-label={t("subs.share")}
                             title={t("subs.share")}
                             onClick={() => setShareTarget(s)}
                           >
                             <Share />
-                            {t("subs.share")}
+                            {phone ? null : t("subs.share")}
                           </Button>
                           {s.source === "file" ? null : (
                             <Button
                               type="button"
-                              size="sm"
+                              size={phone ? "icon-sm" : "sm"}
                               disabled={busy}
+                              aria-label={
+                                updatingId === s.id
+                                  ? t("common.updating")
+                                  : t("common.update")
+                              }
+                              title={phone ? t("common.update") : undefined}
                               onClick={() =>
                                 void run(() => api.updateSubscription(s.id), {
                                   updatingId: s.id,
@@ -329,25 +393,38 @@ export function Subscriptions({ active = true }: Props) {
                                 })
                               }
                             >
-                              {updatingId === s.id
-                                ? t("common.updating")
-                                : t("common.update")}
+                              {phone ? (
+                                <RefreshCw
+                                  className={cn(
+                                    updatingId === s.id && "animate-spin",
+                                  )}
+                                />
+                              ) : updatingId === s.id ? (
+                                t("common.updating")
+                              ) : (
+                                t("common.update")
+                              )}
                             </Button>
                           )}
                           <Button
                             type="button"
-                            size="sm"
+                            size={phone ? "icon-sm" : "sm"}
                             variant="destructive"
                             disabled={busy}
+                            aria-label={t("common.delete")}
+                            title={phone ? t("common.delete") : undefined}
                             onClick={() => setPendingDelete(s)}
                           >
-                            {t("common.delete")}
+                            {phone ? <Trash2 /> : t("common.delete")}
                           </Button>
                         </ItemActions>
                       </ItemHeader>
                       <ItemContent className="min-w-0">
-                        <ItemDescription>
-                          {subscriptionSummary(s)}
+                        <ItemDescription
+                          className={phone ? "truncate" : undefined}
+                          title={phone ? subscriptionSummary(s) : undefined}
+                        >
+                          {subscriptionSummary(s, phone)}
                         </ItemDescription>
                         {traffic ? (
                           <ItemDescription
@@ -375,28 +452,8 @@ export function Subscriptions({ active = true }: Props) {
                           </ItemDescription>
                         ) : null}
                       </ItemContent>
-                      <ItemFooter>
-                        <Field orientation="horizontal" className="w-auto gap-1.5">
-                          <Switch
-                            id={`sub-active-${s.id}`}
-                            size="sm"
-                            checked={!!s.active}
-                            disabled={busy}
-                            aria-label={t("common.activate")}
-                            onCheckedChange={(checked) =>
-                              void run(() =>
-                                api.setSubscriptionActive(s.id, checked),
-                              )
-                            }
-                          />
-                          <FieldLabel
-                            htmlFor={`sub-active-${s.id}`}
-                            className="text-muted-foreground"
-                          >
-                            {t("common.activate")}
-                          </FieldLabel>
-                        </Field>
-                        {phone || s.source === "file" ? null : (
+                      {phone || s.source === "file" ? null : (
+                        <ItemFooter>
                           <Field orientation="horizontal" className="w-auto gap-1.5">
                             <Switch
                               id={`sub-auto-${s.id}`}
@@ -447,8 +504,8 @@ export function Subscriptions({ active = true }: Props) {
                               ))}
                             </NativeSelect>
                           </Field>
-                        )}
-                      </ItemFooter>
+                        </ItemFooter>
+                      )}
                     </Item>
                   );
                 })}

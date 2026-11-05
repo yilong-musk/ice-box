@@ -228,8 +228,12 @@ try {
 
   // Switching profiles must load that subscription's node list: the Work
   // profile advertises 12 nodes, while the Personal profile has 18.
-  await subItems.nth(1).getByRole("switch", { name: "Activate" }).click();
-  await subItems.nth(1).getByText("Active", { exact: true }).waitFor({ timeout: 8000 });
+  // A row is activated by clicking its surface (here, its title).
+  await subItems.nth(1).locator('[data-slot="item-title"]').click();
+  await frame
+    .locator('[data-testid="subs-panel"] [data-slot="item"][aria-current="true"]')
+    .getByText("Work profile", { exact: true })
+    .waitFor({ timeout: 8000 });
   await tabs.nth(0).click();
   const homeNodeRows = frame
     .getByTestId("home-panel")

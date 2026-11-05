@@ -209,7 +209,8 @@ describe("App", () => {
     });
     expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
     expect(document.documentElement.lang).toBe("en");
-    expect(setTrayLanguage).toHaveBeenCalledWith("en");
+    // The tray follows once the startup read marks the language ready.
+    await waitFor(() => expect(setTrayLanguage).toHaveBeenCalledWith("en"));
     expect(restoreLaunchProxy).toHaveBeenCalled();
   });
 

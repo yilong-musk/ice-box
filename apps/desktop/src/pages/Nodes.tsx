@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Gauge, Star } from "lucide-react";
+import { ChevronRight, Circle, CircleCheck, Gauge, Star } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -21,7 +21,6 @@ import {
   ItemGroup,
   ItemTitle,
 } from "@/components/ui/item";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { isPhoneShell } from "@platform/shell";
@@ -159,6 +158,42 @@ function FavoriteButton({
   );
 }
 
+function SelectButton({
+  tag,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  tag: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: (tag: string) => void;
+}) {
+  // Icon-only radio-style control: a hollow ring when idle, a check when this
+  // node is the active one. The label keeps the button announced either way.
+  const label = t(selected ? "nodes.inUse" : "nodes.select");
+  return (
+    <button
+      type="button"
+      className={cn(
+        buttonVariants({ variant: "ghost", size: "icon" }),
+        selected ? "text-ok disabled:opacity-100" : "text-muted-foreground",
+      )}
+      disabled={disabled || selected}
+      aria-current={selected ? "true" : undefined}
+      aria-label={label}
+      title={label}
+      onClick={() => onSelect(tag)}
+    >
+      {selected ? (
+        <CircleCheck className="size-5" aria-hidden="true" />
+      ) : (
+        <Circle className="size-5" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 const EMPTY_DELAYS: Record<string, DelayCell> = {};
 const EMPTY_LAYOUT: ReturnType<typeof nodeLayout> = { rows: [], height: 0 };
 /** Probes in flight during one delay test: a few nodes at a time keeps a long
@@ -245,7 +280,11 @@ const GroupMembers = memo(function GroupMembers({
               </span>
             )}
             {isExit ? (
-              <Label className="shrink-0 text-ok">{t("nodes.inUse")}</Label>
+              <CircleCheck
+                className="size-4 shrink-0 text-ok"
+                role="img"
+                aria-label={t("nodes.inUse")}
+              />
             ) : null}
             {delayBadge(delays[member] ?? null)}
           </div>
@@ -346,11 +385,6 @@ const NodeRow = memo(function NodeRow({
                     />
                     <span className="truncate">{node.tag}</span>
                   </span>
-                  {selected ? (
-                    <Label className="shrink-0 text-ok">
-                      {t("nodes.inUse")}
-                    </Label>
-                  ) : null}
                 </ItemTitle>
                 <ItemDescription className="line-clamp-1 leading-4">
                   {typeLabel}
@@ -392,14 +426,12 @@ const NodeRow = memo(function NodeRow({
                   onTest={onTest}
                 />
               )}
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm" })}
-                disabled={busy || selected || favoritePending}
-                onClick={() => onSelect(node.tag)}
-              >
-                {t("nodes.select")}
-              </button>
+              <SelectButton
+                tag={node.tag}
+                selected={selected}
+                disabled={busy || favoritePending}
+                onSelect={onSelect}
+              />
             </ItemActions>
           </>
         ) : (
@@ -407,11 +439,6 @@ const NodeRow = memo(function NodeRow({
             <ItemContent className="min-w-0 gap-0">
               <ItemTitle title={node.tag}>
                 <span className="truncate">{node.tag}</span>
-                {selected ? (
-                  <Label className="shrink-0 text-ok">
-                    {t("nodes.inUse")}
-                  </Label>
-                ) : null}
               </ItemTitle>
               <ItemDescription className="line-clamp-1 leading-4">
                 {typeLabel}
@@ -432,14 +459,12 @@ const NodeRow = memo(function NodeRow({
                   onTest={onTest}
                 />
               )}
-              <button
-                type="button"
-                className={buttonVariants({ size: "sm" })}
-                disabled={busy || selected || favoritePending}
-                onClick={() => onSelect(node.tag)}
-              >
-                {t("nodes.select")}
-              </button>
+              <SelectButton
+                tag={node.tag}
+                selected={selected}
+                disabled={busy || favoritePending}
+                onSelect={onSelect}
+              />
             </ItemActions>
           </>
         )}
