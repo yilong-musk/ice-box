@@ -251,8 +251,9 @@ pub struct BuildInput {
     pub profile: Arc<NormalizedProfile>,
     /// Optional selected outbound / selector tag.
     pub selected_tag: Option<String>,
-    /// Directory containing bundled `geoip-{code}.srs` rule-set files (app resources).
-    /// GEOIP rules whose code has no file here are dropped at build time.
+    /// Directory containing the bundled `geoip-{code}.srs` and
+    /// `geosite-{category}.srs` rule-set files (app resources). `geoip` /
+    /// `geosite` rules whose file is missing here are dropped at build time.
     pub geoip_rule_set_dir: Option<PathBuf>,
     /// Persisted per-group member selections, applied as selector `default`s.
     #[serde(default)]

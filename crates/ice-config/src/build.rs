@@ -755,9 +755,9 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
                 "custom rules reference outbounds / rule-sets missing from the active subscription; skipped"
             );
         }
-        // Custom rules are expanded the same way (they are persisted verbatim, so a
-        // rule written before the add-time validation may still carry `geoip`), and
-        // `geosite` is dropped in both paths.
+        // Custom rules are expanded the same way: they are persisted verbatim, so a
+        // rule written before the add-time validation may still carry `geoip` or
+        // `geosite`.
         let (custom_rules, mut all_sets) = expand_geoip_rules(
             &custom_rules,
             &sub_sets,
@@ -1469,10 +1469,7 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
     inbound
 }
 
-/// Expand profile `geoip` rules into local rule-set references (sing-box 1.13 removed the
-/// `geoip` rule option). Rules whose `geoip-{code}.srs` file is missing from
-/// `geoip_rule_set_dir` are dropped (counted via tracing warn) instead of failing the build.
-/// Rules using the removed `geosite` option are dropped the same way.
+/// Cached listing of the bundled rule-set directory: dir, mtime, entry count, names.
 type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
 
 /// Whether a local rule-set is known to contain only `ip_cidr` entries.
@@ -1594,35 +1591,37 @@ fn geoip_code_cache() -> &'static Mutex<GeoipCodeCache> {
     &CACHE
 }
 
-fn geoip_codes_present(dir: &Path) -> HashSet<String> {
+/// File stems (`geoip-cn`, `geosite-netflix`) of the bundled `.srs` rule-sets
+/// in `dir`. Only these names can become rule-set paths, so a rule value can
+/// never point outside the bundled directory.
+fn bundled_rule_set_names(dir: &Path) -> HashSet<String> {
     let mtime = fs::metadata(dir).and_then(|m| m.modified()).ok();
     let count = fs::read_dir(dir)
         .map(|entries| entries.count())
         .unwrap_or(0);
     let mut cache = geoip_code_cache().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((cached_dir, cached_mtime, cached_count, codes)) = cache.as_ref() {
+    if let Some((cached_dir, cached_mtime, cached_count, names)) = cache.as_ref() {
         if cached_dir == dir && *cached_mtime == mtime && *cached_count == count {
-            return codes.clone();
+            return names.clone();
         }
     }
-    let mut codes = HashSet::new();
+    let mut names = HashSet::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(code) = name
-                .strip_prefix("geoip-")
-                .and_then(|rest| rest.strip_suffix(".srs"))
-            {
-                codes.insert(code.to_string());
+            if let Some(stem) = name.strip_suffix(".srs") {
+                if stem.starts_with("geoip-") || stem.starts_with("geosite-") {
+                    names.insert(stem.to_string());
+                }
             }
         }
     }
-    *cache = Some((dir.to_path_buf(), mtime, count, codes.clone()));
-    codes
+    *cache = Some((dir.to_path_buf(), mtime, count, names.clone()));
+    names
 }
 
-/// Drop the GeoIP directory listing cache (call after copying rule-sets).
+/// Drop the bundled rule-set listing cache (call after copying rule-sets).
 pub fn invalidate_geoip_code_cache() {
     geoip_code_cache()
         .lock()
@@ -1630,6 +1629,21 @@ pub fn invalidate_geoip_code_cache() {
         .take();
 }
 
+/// Codes of a legacy `geoip` / `geosite` value: one string or a list.
+fn legacy_geo_codes(value: &Value) -> Vec<&str> {
+    match value {
+        Value::String(code) => vec![code.as_str()],
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Expand legacy `geoip` / `geosite` matchers into local rule-set references
+/// to the bundled `geoip-{code}.srs` / `geosite-{category}.srs` files (sing-box
+/// 1.13 removed both rule options). A rule is dropped (counted via tracing
+/// warn) instead of failing the build when a file it needs is missing, or when
+/// it combines `geoip` with `geosite`: one `rule_set` list would turn their
+/// AND into an OR.
 fn expand_geoip_rules(
     rules: &[Value],
     rule_sets: &[Value],
@@ -1638,36 +1652,39 @@ fn expand_geoip_rules(
     let mut kept = Vec::with_capacity(rules.len());
     let mut sets = rule_sets.to_vec();
     let mut dropped: Vec<String> = Vec::new();
-    let present = geoip_rule_set_dir.map(geoip_codes_present);
+    let present = geoip_rule_set_dir.map(bundled_rule_set_names);
 
     for rule in rules {
-        // sing-box 1.13 also removed the `geosite` rule option; emitting it verbatim
-        // would make the core exit FATAL on reload.
-        if rule.get("geosite").is_some() {
-            dropped.push("geosite".into());
-            continue;
-        }
-        let Some(codes) = rule.get("geoip").and_then(|v| v.as_array()) else {
-            kept.push(rule.clone());
-            continue;
-        };
-        let codes: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
-
-        let mut resolvable = true;
-        for code in &codes {
-            if present.as_ref().is_none_or(|set| !set.contains(*code)) {
-                dropped.push(code.to_string());
-                resolvable = false;
-                break;
+        let (kind, value) = match (rule.get("geoip"), rule.get("geosite")) {
+            (None, None) => {
+                kept.push(rule.clone());
+                continue;
             }
+            (Some(value), None) => ("geoip", value),
+            (None, Some(value)) => ("geosite", value),
+            (Some(_), Some(_)) => {
+                dropped.push("geoip+geosite".into());
+                continue;
+            }
+        };
+        let tags: Vec<String> = legacy_geo_codes(value)
+            .into_iter()
+            .map(|code| format!("{kind}-{code}"))
+            .collect();
+        if tags.is_empty() {
+            dropped.push(kind.into());
+            continue;
         }
-        if !resolvable {
+        if let Some(missing) = tags
+            .iter()
+            .find(|tag| present.as_ref().is_none_or(|names| !names.contains(*tag)))
+        {
+            dropped.push(missing.clone());
             continue;
         }
 
         let dir = geoip_rule_set_dir.expect("resolvable implies dir");
-        for code in &codes {
-            let tag = format!("geoip-{code}");
+        for tag in &tags {
             if !sets
                 .iter()
                 .any(|e| e.get("tag").and_then(|v| v.as_str()) == Some(tag.as_str()))
@@ -1676,21 +1693,16 @@ fn expand_geoip_rules(
                     "type": "local",
                     "tag": tag,
                     "format": "binary",
-                    "path": dir.join(format!("geoip-{code}.srs")),
+                    "path": dir.join(format!("{tag}.srs")),
                 }));
             }
         }
         let mut converted = rule.clone();
-        let obj = converted.as_object_mut().expect("geoip rule is object");
-        obj.remove("geoip");
+        let obj = converted.as_object_mut().expect("geo rule is object");
+        obj.remove(kind);
         obj.insert(
             "rule_set".into(),
-            Value::Array(
-                codes
-                    .iter()
-                    .map(|c| Value::String(format!("geoip-{c}")))
-                    .collect(),
-            ),
+            Value::Array(tags.into_iter().map(Value::String).collect()),
         );
         kept.push(converted);
     }
@@ -1700,7 +1712,7 @@ fn expand_geoip_rules(
         dropped.dedup();
         tracing::warn!(
             items = %dropped.join(","),
-            "GEOIP rule-set files missing or removed geoip/geosite matchers; rules dropped"
+            "bundled GeoIP/GeoSite rule-set files missing for geoip/geosite matchers; rules dropped"
         );
     }
     (kept, sets)
