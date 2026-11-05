@@ -32,9 +32,9 @@ pub use clash::{
 pub use decode::maybe_decode_base64;
 pub use error::SubscriptionError;
 pub use fetch::{
-    download_direct, DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher, MockFetchMode,
-    MockFetcher, PanicOnceMode, SubscriptionProxy, FETCH_TIMEOUT, FETCH_TOTAL_TIMEOUT,
-    MAX_BODY_BYTES,
+    download_direct, DefaultFetcher, DirectFetcher, FetchClient, FetchResponse, HttpFetcher,
+    MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionProxy, FETCH_TIMEOUT,
+    FETCH_TOTAL_TIMEOUT, MAX_BODY_BYTES,
 };
 pub use manager::{FetchedAdd, FetchedUpdate, MemorySubscriptionManager, SubscriptionManager};
 pub use merge::{
@@ -472,16 +472,69 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
             nodes,
             groups,
             route,
-            dns: value.get("dns").cloned().map(|mut dns| {
-                ice_config_guard::retain_allowed_dns_servers(&mut dns);
-                dns
-            }),
+            dns: value.get("dns").cloned().and_then(provider_dns),
             default_outbound,
             parse_stats,
         };
         crate::prune::prune_dangling_refs(&mut profile);
+        drop_incomplete_provider_routing(&mut profile);
         profile
     })
+}
+
+/// The provider's DNS block with disallowed servers removed, or `None` when
+/// none of its servers survive. A block left with rules but no servers cannot
+/// resolve anything; `None` lets the built-in DNS apply instead. Panels still
+/// emitting the legacy server format (`address` without `type`) end up here.
+fn provider_dns(mut dns: serde_json::Value) -> Option<serde_json::Value> {
+    let had_servers = dns_server_count(&dns) > 0;
+    ice_config_guard::retain_allowed_dns_servers(&mut dns);
+    (!had_servers || dns_server_count(&dns) > 0).then_some(dns)
+}
+
+fn dns_server_count(dns: &serde_json::Value) -> usize {
+    dns.get("servers")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+/// Drop the provider's route rules and DNS when some rules were removed for
+/// referencing a rule_set ice-box cannot load (remote sets are never fetched).
+///
+/// Providers put their split routing (`geosite-cn` / `geoip-cn` direct, ad
+/// blocking) in exactly those rules, so what survives is not the provider's
+/// routing any more: typically only sniffing and private-IP rules, which would
+/// send all domestic traffic through the proxy. An empty rule list lets the
+/// built-in split routing apply instead, as for a share-link subscription.
+/// Nodes and groups are kept. This is expected for most panels, so it is
+/// logged rather than shown as a parse warning.
+fn drop_incomplete_provider_routing(profile: &mut NormalizedProfile) {
+    let mut missing_sets = Vec::new();
+    profile.parse_stats.warnings.retain(|warning| {
+        if warning.key != "parse.routeRuleSetMissing" {
+            return true;
+        }
+        if let Some(sets) = warning.params.get("rule_set") {
+            missing_sets.push(sets.clone());
+        }
+        false
+    });
+    if missing_sets.is_empty() {
+        return;
+    }
+    tracing::info!(
+        rule_sets = %missing_sets.join(","),
+        "subscription: provider routing depends on remote rule sets; ignoring its rules and DNS"
+    );
+    profile.route = NormalizedRoute {
+        final_outbound: profile
+            .groups
+            .first()
+            .map(|g| g.tag.clone())
+            .unwrap_or_else(|| "proxy".into()),
+        ..Default::default()
+    };
+    profile.dns = None;
 }
 
 pub fn parse_singbox(raw: &str) -> Result<Vec<NormalizedOutbound>, SubscriptionError> {

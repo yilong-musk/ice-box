@@ -77,18 +77,54 @@ pub struct FetchResponse {
     pub content_disposition: Option<String>,
 }
 
+/// Which client a subscription request identifies itself as. Provider panels
+/// choose the body format, and whether to send `subscription-userinfo`, from
+/// the `User-Agent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchClient {
+    /// `sing-box/<bundled core version>`: panels that recognize it answer with
+    /// a full sing-box config and traffic counters. The real core version lets
+    /// a panel pick a config template that matches the bundled core.
+    SingBox,
+    /// `ice-box/0.1`: panels answer with their default share-link list.
+    Generic,
+}
+
+impl FetchClient {
+    pub fn user_agent(self) -> &'static str {
+        static SING_BOX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        match self {
+            Self::SingBox => SING_BOX
+                .get_or_init(|| format!("sing-box/{}", ice_config::ENGINE_COMPAT_CORE_VERSION)),
+            Self::Generic => "ice-box/0.1",
+        }
+    }
+}
+
 pub trait HttpFetcher: Send {
     /// True when this fetcher ignores OS / env proxies and connects directly
     /// (G5.12). [`DefaultFetcher`] reports false while it routes through a
     /// configured proxy.
     fn bypasses_system_proxy(&self) -> bool;
 
+    /// GET `url` identifying as `client`.
+    fn get_as(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+        client: FetchClient,
+    ) -> Result<FetchResponse, SubscriptionError>;
+
+    /// GET `url` as the generic client.
     fn get(
         &self,
         url: &str,
         etag: Option<&str>,
         last_modified: Option<&str>,
-    ) -> Result<FetchResponse, SubscriptionError>;
+    ) -> Result<FetchResponse, SubscriptionError> {
+        self.get_as(url, etag, last_modified, FetchClient::Generic)
+    }
 }
 
 /// One process-wide direct agent (no system proxy, no auto-redirects; the
@@ -262,13 +298,14 @@ impl HttpFetcher for DefaultFetcher {
         self.proxy.is_empty()
     }
 
-    fn get(
+    fn get_as(
         &self,
         url: &str,
         etag: Option<&str>,
         last_modified: Option<&str>,
+        client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
-        fetch_response(&self.agents, url, etag, last_modified)
+        fetch_response(&self.agents, url, etag, last_modified, client)
     }
 }
 
@@ -320,12 +357,19 @@ fn url_port(url: &str) -> Result<u16, SubscriptionError> {
         .ok_or_else(|| SubscriptionError::FetchFailed("subscription URL missing port".into()))
 }
 
-fn apply_conditional_headers(
-    mut req: ureq::Request,
+/// `User-Agent`, `Accept` and, on the first hop, the conditional headers.
+/// `Accept` must be present: some subscription frontends WAF-reject requests
+/// without it.
+fn apply_request_headers(
+    req: ureq::Request,
+    user_agent: &str,
     hop: u32,
     etag: Option<&str>,
     last_modified: Option<&str>,
 ) -> Result<ureq::Request, SubscriptionError> {
+    let mut req = req
+        .set("User-Agent", &sanitize_http_header_value(user_agent)?)
+        .set("Accept", "*/*");
     if hop == 0 {
         if let Some(etag) = etag {
             req = req.set("If-None-Match", &sanitize_http_header_value(etag)?);
@@ -342,6 +386,7 @@ struct FetchAttempt<'a> {
     connect_url: &'a str,
     host_header: &'a str,
     hop: u32,
+    user_agent: &'a str,
     etag: Option<&'a str>,
     last_modified: Option<&'a str>,
     log_url: &'a str,
@@ -356,7 +401,13 @@ fn try_request(attempt: FetchAttempt<'_>) -> Result<ureq::Response, Subscription
         .get(attempt.connect_url)
         .timeout(attempt.timeout)
         .set("Host", attempt.host_header);
-    let req = apply_conditional_headers(req, attempt.hop, attempt.etag, attempt.last_modified)?;
+    let req = apply_request_headers(
+        req,
+        attempt.user_agent,
+        attempt.hop,
+        attempt.etag,
+        attempt.last_modified,
+    )?;
     req.call().map_err(|e| {
         if let Some(ip) = attempt.via_ip {
             SubscriptionError::FetchFailed(format!("GET {} via {ip}: {e}", attempt.log_url))
@@ -369,21 +420,19 @@ fn try_request(attempt: FetchAttempt<'_>) -> Result<ureq::Response, Subscription
 /// Forward an absolute URL through the configured proxy. The proxy derives
 /// the `Host` header (including a non-default port) instead of being pinned to
 /// a pre-resolved IP.
+#[allow(clippy::too_many_arguments)]
 fn proxied_request(
     agent: &ureq::Agent,
     url: &str,
     hop: u32,
+    user_agent: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
     log_url: &str,
     timeout: Duration,
 ) -> Result<ureq::Response, SubscriptionError> {
-    let req = agent
-        .get(url)
-        .timeout(timeout)
-        .set("User-Agent", "ice-box/0.1")
-        .set("Accept", "*/*");
-    let req = apply_conditional_headers(req, hop, etag, last_modified)?;
+    let req = agent.get(url).timeout(timeout);
+    let req = apply_request_headers(req, user_agent, hop, etag, last_modified)?;
     req.call()
         .map_err(|e| SubscriptionError::FetchFailed(format!("GET {log_url}: {e}")))
 }
@@ -462,10 +511,12 @@ fn hop_from_ureq(response: ureq::Response) -> Result<HopResponse, SubscriptionEr
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hop_from_tls(
     url: &str,
     host_header: &str,
     hop: u32,
+    user_agent: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
     ip: std::net::IpAddr,
@@ -480,6 +531,7 @@ fn hop_from_tls(
         port,
         ip,
         &path_query,
+        user_agent,
         &header_refs,
         url,
         deadline,
@@ -543,6 +595,7 @@ fn handle_hop(
 fn fetch_get(
     agents: &FetchAgents,
     url: &str,
+    user_agent: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
     deadline: Instant,
@@ -566,6 +619,7 @@ fn fetch_get(
                 agent,
                 &current,
                 hop,
+                user_agent,
                 etag,
                 last_modified,
                 &current,
@@ -600,6 +654,7 @@ fn fetch_get(
                     &current,
                     &host_header,
                     hop,
+                    user_agent,
                     etag,
                     last_modified,
                     addr.ip(),
@@ -612,6 +667,7 @@ fn fetch_get(
                     connect_url: &pinned,
                     host_header: &host_header,
                     hop,
+                    user_agent,
                     etag,
                     last_modified,
                     log_url: &current,
@@ -656,12 +712,14 @@ fn fetch_response(
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
+    client: FetchClient,
 ) -> Result<FetchResponse, SubscriptionError> {
     fetch_response_with_deadline(
         agents,
         url,
         etag,
         last_modified,
+        client,
         Instant::now() + FETCH_TOTAL_TIMEOUT,
     )
 }
@@ -672,11 +730,12 @@ fn fetch_response_with_deadline(
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
+    client: FetchClient,
     deadline: Instant,
 ) -> Result<FetchResponse, SubscriptionError> {
     let redacted = crate::redact_subscription_url_for_log(url);
-    tracing::debug!(url = %redacted, proxied = agents.any(), "subscription fetch: start");
-    let hop = fetch_get(agents, url, etag, last_modified, deadline).inspect_err(
+    tracing::debug!(url = %redacted, proxied = agents.any(), ?client, "subscription fetch: start");
+    let hop = fetch_get(agents, url, client.user_agent(), etag, last_modified, deadline).inspect_err(
         |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "subscription fetch: failed"),
     )?;
     tracing::debug!(url = %redacted, status = hop.status, bytes = hop.body.len(), "subscription fetch: response");
@@ -693,10 +752,10 @@ fn fetch_response_with_deadline(
     }
 
     if !(200..300).contains(&hop.status) {
-        return Err(SubscriptionError::FetchFailed(format!(
-            "GET {url}: HTTP {}",
-            hop.status
-        )));
+        return Err(SubscriptionError::HttpStatus {
+            url: url.to_string(),
+            status: hop.status,
+        });
     }
 
     let body = String::from_utf8(hop.body)
@@ -721,13 +780,14 @@ impl HttpFetcher for DirectFetcher {
         true
     }
 
-    fn get(
+    fn get_as(
         &self,
         url: &str,
         etag: Option<&str>,
         last_modified: Option<&str>,
+        client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
-        fetch_response(&FetchAgents::direct(), url, etag, last_modified)
+        fetch_response(&FetchAgents::direct(), url, etag, last_modified, client)
     }
 }
 
@@ -776,11 +836,12 @@ impl HttpFetcher for MockFetcher {
         self.bypasses_proxy
     }
 
-    fn get(
+    fn get_as(
         &self,
         _url: &str,
         _etag: Option<&str>,
         _last_modified: Option<&str>,
+        _client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
         match &self.mode {
             MockFetchMode::Ok(r) => Ok(r.clone()),
@@ -952,8 +1013,15 @@ mod tests {
     fn https_fetch_succeeds() {
         let agents = FetchAgents::direct();
         let deadline = Instant::now() + FETCH_TOTAL_TIMEOUT;
-        let hop = fetch_get(&agents, "https://example.com/", None, None, deadline)
-            .expect("HTTPS subscription-style fetch");
+        let hop = fetch_get(
+            &agents,
+            "https://example.com/",
+            "ice-box/0.1",
+            None,
+            None,
+            deadline,
+        )
+        .expect("HTTPS subscription-style fetch");
         assert_eq!(hop.status, 200);
     }
 
@@ -1215,6 +1283,7 @@ mod tests {
             "http://example.com/sub",
             None,
             None,
+            FetchClient::Generic,
             Instant::now() + Duration::from_millis(500),
         )
         .expect_err("a dripping body must not outlive the overall fetch deadline");

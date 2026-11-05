@@ -99,11 +99,13 @@ pub(crate) fn tls_client_config() -> Result<Arc<ClientConfig>, SubscriptionError
     Ok(Arc::clone(CONFIG.get_or_init(|| Arc::new(built))))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tls_get_pinned(
     host: &str,
     port: u16,
     ip: IpAddr,
     path_query: &str,
+    user_agent: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
     deadline: Instant,
@@ -113,6 +115,7 @@ pub(crate) fn tls_get_pinned(
         port,
         ip,
         path_query,
+        user_agent,
         conditional,
         log_url,
         deadline,
@@ -126,6 +129,7 @@ fn tls_get_pinned_with_config(
     port: u16,
     ip: IpAddr,
     path_query: &str,
+    user_agent: &str,
     conditional: &[(&str, &str)],
     log_url: &str,
     deadline: Instant,
@@ -206,8 +210,9 @@ fn tls_get_pinned_with_config(
     // without it (HTTP 403) regardless of TLS/HTTP version.
     // `Accept-Encoding: gzip, identity` plus gzip decode (below) covers
     // servers that ignore identity-only requests.
+    let user_agent = sanitize_http_header_value(user_agent)?;
     let mut req = format!(
-        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: ice-box/0.1\r\nAccept: */*\r\nAccept-Encoding: gzip, identity\r\n"
+        "GET {path_query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: {user_agent}\r\nAccept: */*\r\nAccept-Encoding: gzip, identity\r\n"
     );
     for (k, v) in conditional {
         let safe = sanitize_http_header_value(v)?;
@@ -702,18 +707,20 @@ mod tests {
             let (mut tcp, _) = listener.accept().expect("accept");
             let mut conn =
                 rustls::ServerConnection::new(Arc::new(server_config)).expect("server conn");
-            {
+            let request = {
                 let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
                 let mut req = [0u8; 1024];
-                let _ = tls.read(&mut req);
+                let n = tls.read(&mut req).unwrap_or(0);
                 tls.write_all(&response).expect("write");
                 tls.flush().expect("flush");
-            }
+                String::from_utf8_lossy(&req[..n]).into_owned()
+            };
             // rustls clients treat TCP EOF without close_notify as an error.
             conn.send_close_notify();
             while conn.wants_write() {
                 conn.write_tls(&mut tcp).expect("close_notify");
             }
+            request
         });
 
         let mut roots = rustls::RootCertStore::empty();
@@ -726,6 +733,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "sing-box/1.14.4",
             &[],
             "https://localhost/",
             Instant::now() + FETCH_TOTAL_TIMEOUT,
@@ -734,7 +742,11 @@ mod tests {
         .expect("pinned GET");
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, br#"{"outbounds":[]}"#);
-        server.join().expect("server");
+        let request = server.join().expect("server");
+        assert!(
+            request.contains("\r\nUser-Agent: sing-box/1.14.4\r\n"),
+            "{request}"
+        );
     }
 
     #[test]
@@ -804,6 +816,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "ice-box/0.1",
             &[],
             "https://localhost/",
             Instant::now() + std::time::Duration::from_millis(500),
@@ -888,6 +901,7 @@ mod tests {
             addr.port(),
             addr.ip(),
             "/",
+            "ice-box/0.1",
             &[],
             "https://localhost/",
             Instant::now() + std::time::Duration::from_millis(500),

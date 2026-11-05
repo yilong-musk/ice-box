@@ -10,7 +10,9 @@ use ice_config::{HostPlatform, NormalizedProfile};
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
-use crate::fetch::{DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher, SubscriptionProxy};
+use crate::fetch::{
+    DefaultFetcher, DirectFetcher, FetchClient, FetchResponse, HttpFetcher, SubscriptionProxy,
+};
 use crate::merge::load_active_profile;
 use crate::store::{
     apply_error_to_index, apply_success_to_index, commit_subscription_success, load_index,
@@ -202,6 +204,73 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         }
     }
 
+    /// GET a subscription as the sing-box client first, which makes provider
+    /// panels send a full sing-box config and their traffic counters. Falls
+    /// back to the generic client when the provider refuses the sing-box
+    /// request (HTTP error status) or answers with a body ice-box cannot use.
+    /// Transport failures are returned as they are: another `User-Agent`
+    /// cannot fix them, and a retry would double the wait.
+    ///
+    /// Validators from `cached` go only to the client whose body is cached
+    /// (told apart by its format), so a validator issued for one client's
+    /// response can never turn into a 304 for the other and pin the old body.
+    fn fetch_preferring_singbox(
+        &self,
+        url: &str,
+        cached: Option<&SubscriptionMeta>,
+    ) -> Result<FetchResponse, SubscriptionError> {
+        let validators = |client: FetchClient| match cached {
+            Some(meta)
+                if (meta.format == SubscriptionFormat::SingBox)
+                    == (client == FetchClient::SingBox) =>
+            {
+                (meta.etag.as_deref(), meta.last_modified.as_deref())
+            }
+            _ => (None, None),
+        };
+        let redacted = crate::redact_subscription_url_for_log(url);
+
+        let (etag, last_modified) = validators(FetchClient::SingBox);
+        let singbox_userinfo = match self.fetcher.get_as(
+            url,
+            etag,
+            last_modified,
+            FetchClient::SingBox,
+        ) {
+            Ok(resp) if resp.not_modified => return Ok(resp),
+            Ok(resp) => match normalize_raw_body(&resp.body, self.platform) {
+                Ok(_) => return Ok(resp),
+                Err(err) => {
+                    tracing::info!(
+                        url = %redacted,
+                        error = %err.redacted_display(),
+                        "subscription fetch: sing-box response unusable; retrying as generic client"
+                    );
+                    resp.userinfo
+                }
+            },
+            Err(SubscriptionError::HttpStatus { status, .. }) => {
+                tracing::info!(
+                    url = %redacted,
+                    status,
+                    "subscription fetch: sing-box request refused; retrying as generic client"
+                );
+                None
+            }
+            Err(err) => return Err(err),
+        };
+
+        let (etag, last_modified) = validators(FetchClient::Generic);
+        let mut resp = self
+            .fetcher
+            .get_as(url, etag, last_modified, FetchClient::Generic)?;
+        // Some panels send traffic counters only to clients they recognize.
+        if resp.userinfo.is_none() {
+            resp.userinfo = singbox_userinfo;
+        }
+        Ok(resp)
+    }
+
     /// Network fetch phase of an add: validate URL, GET (no disk writes).
     pub fn fetch_add(
         &self,
@@ -213,7 +282,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         self.validate_fetch_url(url)?;
 
         let id = Uuid::new_v4();
-        let fetched = self.fetcher.get(url, None, None)?;
+        let fetched = self.fetch_preferring_singbox(url, None)?;
         Ok(FetchedAdd {
             id,
             url: url.to_string(),
@@ -359,11 +428,7 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
 
         self.validate_fetch_url(&meta.url)?;
 
-        let fetched = self.fetcher.get(
-            &meta.url,
-            meta.etag.as_deref(),
-            meta.last_modified.as_deref(),
-        )?;
+        let fetched = self.fetch_preferring_singbox(&meta.url, Some(&meta))?;
         Ok(FetchedUpdate {
             meta,
             fetched,

@@ -5,10 +5,10 @@ use super::{
     normalize_raw_body, parse_clash_with_stats, parse_singbox, parse_singbox_profile,
     parse_uri_list_profile, read_profile, resolve_selected_tag, set_active, set_auto_update,
     subscription_share_text, write_subscription_error, AutoUpdateInterval, DefaultFetcher,
-    DirectFetcher, FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode, MockFetcher,
-    PanicOnceMode, SubscriptionError, SubscriptionFormat, SubscriptionManager, SubscriptionMeta,
-    SubscriptionPaths, SubscriptionShareKind, SubscriptionSource, SubscriptionUserInfo,
-    CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
+    DirectFetcher, FetchClient, FetchResponse, FetchedUpdate, HttpFetcher, MockFetchMode,
+    MockFetcher, PanicOnceMode, SubscriptionError, SubscriptionFormat, SubscriptionManager,
+    SubscriptionMeta, SubscriptionPaths, SubscriptionShareKind, SubscriptionSource,
+    SubscriptionUserInfo, CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -57,11 +57,12 @@ impl HttpFetcher for ConcurrencyFetcher {
         true
     }
 
-    fn get(
+    fn get_as(
         &self,
         _url: &str,
         _etag: Option<&str>,
         _last_modified: Option<&str>,
+        _client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         loop {
@@ -1166,7 +1167,6 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
         "route": {
             "final": "n",
             "rules": [
-                {"rule_set":["evil"],"outbound":"n"},
                 {"domain_suffix":["keep.com"],"outbound":"n"}
             ],
             "rule_set": [
@@ -1185,11 +1185,7 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
     let profile = parse_singbox_profile(raw).expect("parse");
     assert!(profile.route.rule_sets.iter().all(|s| s["tag"] != "evil"));
     assert!(profile.route.rule_sets.iter().any(|s| s["tag"] == "ok"));
-    assert!(profile
-        .route
-        .rules
-        .iter()
-        .all(|r| r.get("rule_set") != Some(&serde_json::json!(["evil"]))));
+    assert_eq!(profile.route.rules.len(), 1);
     assert!(profile.dns.as_ref().unwrap()["servers"]
         .as_array()
         .unwrap()
@@ -1727,4 +1723,299 @@ fn file_import_persists_a_singbox_document_and_skips_refresh() {
     let old: SubscriptionMeta = serde_json::from_value(legacy).unwrap();
     assert_eq!(old.source, SubscriptionSource::Remote);
     let _ = fs::remove_dir_all(paths.root());
+}
+
+// --- Provider routing that depends on remote rule sets ---------------------
+
+/// Shape of a panel's sing-box answer: split routing through remote rule
+/// sets, legacy-format DNS servers.
+const PANEL_SINGBOX_BODY: &str = r#"{
+    "outbounds": [
+        {"type":"selector","tag":"select","outbounds":["auto","n1","n2"]},
+        {"type":"urltest","tag":"auto","outbounds":["n1","n2"]},
+        {"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1080},
+        {"type":"socks","tag":"n2","server":"1.1.1.2","server_port":1080},
+        {"type":"direct","tag":"direct"}
+    ],
+    "route": {
+        "rules": [
+            {"action":"sniff"},
+            {"rule_set":["geosite-cn","geoip-cn"],"outbound":"direct"},
+            {"ip_is_private":true,"outbound":"direct"}
+        ],
+        "rule_set": [
+            {"type":"remote","tag":"geosite-cn","format":"binary","url":"https://example.com/geosite-cn.srs"},
+            {"type":"remote","tag":"geoip-cn","format":"binary","url":"https://example.com/geoip-cn.srs"}
+        ]
+    },
+    "dns": {
+        "servers": [
+            {"tag":"remote","address":"1.1.1.1","detour":"select"},
+            {"tag":"local","address":"https://223.5.5.5/dns-query","detour":"direct"}
+        ],
+        "rules": [{"rule_set":["geosite-cn"],"server":"local"}],
+        "final": "remote"
+    }
+}"#;
+
+#[test]
+fn singbox_profile_ignores_provider_routing_that_lost_remote_rule_sets() {
+    let profile = parse_singbox_profile(PANEL_SINGBOX_BODY).expect("parse");
+    assert_eq!(profile.nodes.len(), 2);
+    assert_eq!(profile.groups.len(), 2, "groups are kept");
+    assert!(profile.route.rules.is_empty());
+    assert!(profile.route.rule_sets.is_empty());
+    assert_eq!(profile.route.final_outbound, "select");
+    assert!(profile.dns.is_none());
+    let keys: Vec<&str> = profile
+        .parse_stats
+        .warnings
+        .iter()
+        .map(|w| w.key.as_str())
+        .collect();
+    assert!(
+        !keys.contains(&"parse.routeRuleSetMissing"),
+        "ignored provider routing is logged, not shown: {keys:?}"
+    );
+
+    // With no rules left, the built-in split routing applies, as it does for a
+    // share-link subscription.
+    let mut profile = profile;
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::Windows);
+    assert!(!profile.route.rules.is_empty());
+    assert!(profile.dns.is_some());
+    assert_eq!(profile.route.final_outbound, "select");
+}
+
+#[test]
+fn singbox_profile_keeps_complete_provider_rules_but_drops_serverless_dns() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
+        ],
+        "route": {
+            "final": "n",
+            "rules": [{"domain_suffix":["example.cn"],"outbound":"direct"}]
+        },
+        "dns": {
+            "servers": [{"tag":"remote","address":"1.1.1.1"}],
+            "final": "remote"
+        }
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert_eq!(profile.route.rules.len(), 1, "complete rules stay");
+    assert!(
+        profile.dns.is_none(),
+        "a DNS block whose servers were all filtered out is dropped"
+    );
+}
+
+// --- sing-box-first fetch with generic fallback -----------------------------
+
+const URI_LIST_BODY: &str = "trojan://secret@1.2.3.4:443?sni=example.com#n1\n";
+
+#[derive(Clone)]
+enum Reply {
+    Body(
+        &'static str,
+        Option<SubscriptionUserInfo>,
+        Option<&'static str>,
+    ),
+    Status(u16),
+    Transport,
+}
+
+/// One recorded request: the client and the `If-None-Match` it sent.
+type Call = (FetchClient, Option<String>);
+
+/// Answers each client with its own scripted reply and records every request.
+#[derive(Clone)]
+struct ClientAwareFetcher {
+    singbox: Reply,
+    generic: Reply,
+    calls: Arc<std::sync::Mutex<Vec<Call>>>,
+}
+
+impl ClientAwareFetcher {
+    fn new(singbox: Reply, generic: Reply) -> Self {
+        Self {
+            singbox,
+            generic,
+            calls: Arc::default(),
+        }
+    }
+
+    fn take_calls(&self) -> Vec<Call> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+impl HttpFetcher for ClientAwareFetcher {
+    fn bypasses_system_proxy(&self) -> bool {
+        false
+    }
+
+    fn get_as(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        _last_modified: Option<&str>,
+        client: FetchClient,
+    ) -> Result<FetchResponse, SubscriptionError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((client, etag.map(str::to_string)));
+        let reply = match client {
+            FetchClient::SingBox => &self.singbox,
+            FetchClient::Generic => &self.generic,
+        };
+        match reply {
+            Reply::Body(body, userinfo, new_etag) => Ok(FetchResponse {
+                body: (*body).into(),
+                not_modified: false,
+                etag: new_etag.map(str::to_string),
+                last_modified: None,
+                userinfo: *userinfo,
+                content_disposition: None,
+            }),
+            Reply::Status(status) => Err(SubscriptionError::HttpStatus {
+                url: url.into(),
+                status: *status,
+            }),
+            Reply::Transport => Err(SubscriptionError::FetchFailed("connect: timed out".into())),
+        }
+    }
+}
+
+fn quota() -> Option<SubscriptionUserInfo> {
+    Some(SubscriptionUserInfo {
+        upload: 1,
+        download: 2,
+        total: 100,
+        expire: None,
+    })
+}
+
+const SUB_URL: &str = "https://example.com/sub";
+
+#[test]
+fn fetch_uses_the_singbox_answer_when_it_is_usable() {
+    let paths = temp_subs("ua-singbox");
+    let fetcher = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, quota(), None),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::SingBox);
+    assert_eq!(meta.group_count, 2);
+    assert_eq!(meta.userinfo, quota());
+    assert_eq!(fetcher.take_calls(), vec![(FetchClient::SingBox, None)]);
+}
+
+#[test]
+fn fetch_falls_back_when_the_singbox_answer_is_unusable() {
+    let paths = temp_subs("ua-html");
+    let fetcher = ClientAwareFetcher::new(
+        Reply::Body("<!doctype html><html>login</html>", quota(), None),
+        Reply::Body(URI_LIST_BODY, None, None),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::UriList);
+    assert_eq!(
+        meta.userinfo,
+        quota(),
+        "counters sent only to the sing-box client are kept"
+    );
+    let clients: Vec<FetchClient> = fetcher.take_calls().into_iter().map(|c| c.0).collect();
+    assert_eq!(clients, vec![FetchClient::SingBox, FetchClient::Generic]);
+}
+
+#[test]
+fn fetch_falls_back_when_the_singbox_request_is_refused() {
+    let paths = temp_subs("ua-403");
+    let fetcher =
+        ClientAwareFetcher::new(Reply::Status(403), Reply::Body(URI_LIST_BODY, None, None));
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.format, SubscriptionFormat::UriList);
+    assert_eq!(fetcher.take_calls().len(), 2);
+}
+
+#[test]
+fn fetch_does_not_retry_a_transport_failure() {
+    let paths = temp_subs("ua-transport");
+    let fetcher = ClientAwareFetcher::new(Reply::Transport, Reply::Body(URI_LIST_BODY, None, None));
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher.clone());
+    let err = mgr
+        .add(SUB_URL, None, false, None)
+        .expect_err("transport failure");
+    assert!(matches!(err, SubscriptionError::FetchFailed(_)), "{err:?}");
+    assert_eq!(fetcher.take_calls(), vec![(FetchClient::SingBox, None)]);
+}
+
+#[test]
+fn fetch_reports_the_generic_error_when_both_clients_fail() {
+    let paths = temp_subs("ua-both");
+    let fetcher = ClientAwareFetcher::new(Reply::Status(403), Reply::Status(404));
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), fetcher);
+    let err = mgr
+        .add(SUB_URL, None, false, None)
+        .expect_err("both refused");
+    assert!(
+        matches!(err, SubscriptionError::HttpStatus { status: 404, .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn fetch_sends_validators_only_to_the_client_whose_body_is_cached() {
+    let paths = temp_subs("ua-validators");
+    // Cached as a share-link list from the generic client.
+    let generic_only = ClientAwareFetcher::new(
+        Reply::Status(403),
+        Reply::Body(URI_LIST_BODY, None, Some("generic-v1")),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), generic_only.clone());
+    let meta = mgr.add(SUB_URL, None, false, None).unwrap();
+    assert_eq!(meta.etag.as_deref(), Some("generic-v1"));
+    generic_only.take_calls();
+    mgr.update(meta.id).unwrap();
+    assert_eq!(
+        generic_only.take_calls(),
+        vec![
+            (FetchClient::SingBox, None),
+            (FetchClient::Generic, Some("generic-v1".into())),
+        ]
+    );
+
+    // The provider starts answering the sing-box client: the generic
+    // validator is not sent to it, so the cached list cannot be pinned by a
+    // 304, and the subscription switches to the sing-box config.
+    let both = ClientAwareFetcher::new(
+        Reply::Body(PANEL_SINGBOX_BODY, None, Some("singbox-v1")),
+        Reply::Body(URI_LIST_BODY, None, Some("generic-v2")),
+    );
+    let mgr = SubscriptionManager::with_fetcher(clone_paths(&paths), both.clone());
+    let updated = mgr.update(meta.id).unwrap();
+    assert_eq!(updated.format, SubscriptionFormat::SingBox);
+    assert_eq!(both.take_calls(), vec![(FetchClient::SingBox, None)]);
+
+    // Cached as sing-box now: its validator goes to the sing-box client only.
+    mgr.update(meta.id).unwrap();
+    assert_eq!(
+        both.take_calls(),
+        vec![(FetchClient::SingBox, Some("singbox-v1".into()))]
+    );
+}
+
+#[test]
+fn singbox_client_user_agent_names_the_bundled_core() {
+    assert_eq!(
+        FetchClient::SingBox.user_agent(),
+        format!("sing-box/{}", ice_config::ENGINE_COMPAT_CORE_VERSION)
+    );
+    assert_eq!(FetchClient::Generic.user_agent(), "ice-box/0.1");
 }
