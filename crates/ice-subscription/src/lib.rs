@@ -38,7 +38,7 @@ pub use fetch::{
 };
 pub use manager::{FetchedAdd, FetchedUpdate, MemorySubscriptionManager, SubscriptionManager};
 pub use merge::{
-    active_subscription, list_profile_outbounds, load_active_profile,
+    active_subscription, drop_ineffective_rules, list_profile_outbounds, load_active_profile,
     load_active_profile_with_default_rules, resolve_selected_tag, short_id, ProfileCache,
 };
 pub use share::{subscription_share_text, SubscriptionShareKind};

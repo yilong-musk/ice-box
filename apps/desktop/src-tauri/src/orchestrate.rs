@@ -38,7 +38,8 @@ pub fn repo_third_party_singbox() -> PathBuf {
 
 pub fn repo_geoip_rule_sets() -> PathBuf {
     // apps/desktop/src-tauri → repo root
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-geoip/rule-set")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../third_party/bundled-rule-sets/rule-set")
 }
 
 /// Geoip rule-sets are copied into the app data dir only by the app itself and

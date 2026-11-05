@@ -233,8 +233,8 @@ describe("Rules", () => {
     expect(view.getByRole("radio", { name: t("rules.typeAll") })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` })).toBeInTheDocument();
     const chips = view.getByLabelText(t("rules.filtersAria"));
-    const customFilter = view.getByRole("button", { name: t("rules.customCount", { count: 1 }) });
-    const disabledFilter = view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) });
+    const customFilter = view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) });
+    const disabledFilter = view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) });
     expect(chips).toContainElement(customFilter);
     expect(chips).toContainElement(disabledFilter);
     expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
@@ -322,7 +322,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) }).click();
+    view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
@@ -338,13 +338,48 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("rules.customCount", { count: 1 }) }).click();
+    view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
       const call = calls[calls.length - 1]?.[0] as { custom: boolean | null };
       expect(call.custom).toBe(true);
     });
+  });
+
+  it("keeps quick filters exclusive so they never combine into an empty list", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    const lastCall = () => {
+      const calls = listRules.mock.calls;
+      return calls[calls.length - 1]?.[0] as {
+        type: string | null;
+        custom: boolean | null;
+        disabled: string;
+      };
+    };
+    const geoip = view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` });
+    const custom = view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) });
+    const disabled = view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) });
+
+    fireEvent.click(geoip);
+    await waitFor(() => expect(lastCall().type).toBe("geoip"));
+
+    fireEvent.click(custom);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: null, custom: true, disabled: "all" }));
+    expect(geoip).toHaveAttribute("aria-checked", "false");
+    expect(custom).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(disabled);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: null, custom: null, disabled: "disabled" }));
+    expect(custom).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(geoip);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: "geoip", custom: null, disabled: "all" }));
+    expect(disabled).toHaveAttribute("aria-checked", "false");
   });
 
   it("debounces keyword search and sends server-side filters", async () => {

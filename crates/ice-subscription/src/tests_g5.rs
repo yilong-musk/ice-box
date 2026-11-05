@@ -1398,10 +1398,8 @@ fn g5_16_uri_list_import_and_manager() {
     assert_eq!(profile.nodes.len(), 14);
     // Load-time defaults: 3 split-routing rules + built-in DNS.
     assert_eq!(profile.route.rules.len(), 3);
-    assert_eq!(profile.route.rules[1]["geoip"][0], "cn");
-    assert!(profile.route.rules[2]["domain_suffix"]
-        .as_array()
-        .is_some_and(|a| a.len() > 100));
+    assert_eq!(profile.route.rules[1]["geosite"][0], "cn");
+    assert_eq!(profile.route.rules[2]["geoip"][0], "cn");
     assert_eq!(profile.route.final_outbound, "proxy");
     let dns = profile.dns.clone().expect("built-in dns block");
     let dns_tags: Vec<&str> = dns["servers"]

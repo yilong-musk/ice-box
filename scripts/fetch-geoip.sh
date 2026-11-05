@@ -6,7 +6,7 @@
 # CHECKSUMS.sha256 is the trust root (CI-8); reviewing a checksums change is
 # the trust decision, as with scripts/fetch-singbox.sh.
 #
-# Both sources land in third_party/sing-geoip/rule-set, the single bundled
+# Both sources land in third_party/bundled-rule-sets/rule-set, the single bundled
 # rule-set directory every packaging path copies from. The app only ever
 # loads these files; it never downloads a rule-set at runtime.
 #
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/third_party/sing-geoip/rule-set"
+OUT="$ROOT/third_party/bundled-rule-sets/rule-set"
 
 GEOIP_CODES=(cn us jp hk sg kr tw ru gb de fr ca au in nl ch se it es br mx id th vn ph tr ua pl il ae)
 # GeoSite categories (v2fly domain-list-community names). Keep this list to

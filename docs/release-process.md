@@ -412,7 +412,7 @@ fetches (`scripts/fetch-geoip.sh`) pin a ref per source
 `third_party/sing-geosite/REF` for GeoSite) and verify SHA-256 against that
 source's `CHECKSUMS.sha256` (CI-8); the committed checksum files are the trust
 root, as with `third_party/sing-box/CHECKSUMS.sha256`. Both sources are
-written to `third_party/sing-geoip/rule-set`, the directory every package
+written to `third_party/bundled-rule-sets/rule-set`, the directory every package
 copies from.
 
 ## Known issues and workarounds

@@ -32,7 +32,6 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { isPhoneShell } from "@platform/shell";
@@ -51,6 +50,10 @@ const MAX_KEYWORD_DEBOUNCE_MS = 300;
 const PAGER_BOTTOM_THRESHOLD_PX = 32;
 
 type StatusFilter = "all" | "disabled" | "enabled";
+
+/** Quick-filter values beside the rule types; rule types never contain ":". */
+const QUICK_FILTER_CUSTOM = ":custom";
+const QUICK_FILTER_DISABLED = ":disabled";
 
 type Filters = {
   keyword: string;
@@ -383,10 +386,27 @@ export function Rules({ onNavigate, active = true }: Props) {
               variant="outline"
               size="sm"
               spacing={2}
-              value={filters.type || "all"}
+              // Quick filters are exclusive: the server ANDs type, custom and
+              // disabled, so combining a type chip with Custom or Disabled
+              // could match nothing and leave the list empty.
+              value={
+                filters.custom
+                  ? QUICK_FILTER_CUSTOM
+                  : filters.status === "disabled"
+                    ? QUICK_FILTER_DISABLED
+                    : filters.type || "all"
+              }
               onValueChange={(value) => {
                 changeFilters({
-                  type: !value || value === "all" ? "" : value,
+                  type:
+                    !value ||
+                    value === "all" ||
+                    value === QUICK_FILTER_CUSTOM ||
+                    value === QUICK_FILTER_DISABLED
+                      ? ""
+                      : value,
+                  custom: value === QUICK_FILTER_CUSTOM,
+                  status: value === QUICK_FILTER_DISABLED ? "disabled" : "all",
                 });
               }}
               // On the phone the group box is dissolved (display: contents)
@@ -406,28 +426,12 @@ export function Rules({ onNavigate, active = true }: Props) {
                   {ruleTypeLabel(t.rule_type)} {t.count}
                 </ToggleGroupItem>
               ))}
-              <Toggle
-                variant="outline"
-                size="sm"
-                pressed={filters.custom}
-                onPressedChange={(pressed) =>
-                  changeFilters({ custom: pressed })
-                }
-              >
+              <ToggleGroupItem value={QUICK_FILTER_CUSTOM}>
                 {t("rules.customCount", { count: overview.custom })}
-              </Toggle>
-              <Toggle
-                variant="outline"
-                size="sm"
-                pressed={filters.status === "disabled"}
-                onPressedChange={(pressed) =>
-                  changeFilters({
-                    status: pressed ? "disabled" : "all",
-                  })
-                }
-              >
+              </ToggleGroupItem>
+              <ToggleGroupItem value={QUICK_FILTER_DISABLED}>
                 {t("rules.disabledCount", { count: overview.disabled })}
-              </Toggle>
+              </ToggleGroupItem>
             </ToggleGroup>
             {phone ? addCustomButton : null}
           </div>

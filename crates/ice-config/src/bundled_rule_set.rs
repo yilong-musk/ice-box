@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn the_list_matches_the_fetched_directory() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../third_party/sing-geoip/rule-set");
+            .join("../../third_party/bundled-rule-sets/rule-set");
         let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
             .expect("run scripts/fetch-geoip.sh")
             .filter_map(|entry| {

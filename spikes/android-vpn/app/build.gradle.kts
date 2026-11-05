@@ -27,7 +27,7 @@ android {
         }
     }
 
-    sourceSets["main"].assets.srcDirs("../../../third_party/sing-geoip")
+    sourceSets["main"].assets.srcDirs("../../../third_party/bundled-rule-sets")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

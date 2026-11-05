@@ -24,6 +24,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The bundled GeoIP rule-sets now come from Loyalsoldier/geoip instead of
   SagerNet/sing-geoip. Its mainland China ranges come from operator BGP data
   and cover more addresses, notably IPv6, and it is published weekly.
+- The built-in split routing for rule-less subscriptions now sends Chinese
+  domains direct with the bundled `geosite-cn` rule-set, in both routing and
+  DNS, instead of a hand-written list of about 150 domains. Its DNS split now
+  resolves every domain in `geosite-cn` with the domestic server. A `geosite`
+  matcher in a subscription's own DNS rules also uses the bundled files now.
+- Subscription rules that can never take effect are dropped when the profile
+  loads, so the Rules page no longer lists them: `sniff` and `hijack-dns`
+  (ice-box adds its own), and `clash_mode` rules for any mode other than Rule
+  (ice-box's own Global and Direct rules come first, and a panel's mode names
+  such as "全局代理" are never set). A subscription left with no rules then
+  gets the built-in split routing when that setting is on.
+- The bundled rule-set directory moved from `third_party/sing-geoip` to
+  `third_party/bundled-rule-sets`, since it now holds GeoIP and GeoSite files
+  from more than one source.
 
 - The Android APK is much smaller to download (about 76 MB to 28 MB). Native
   libraries are now compressed inside the APK, the Rust library is built for
@@ -42,6 +56,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Rules page: a rule such as `ip_is_private: true` is titled by what it
+  matches ("Private IP") instead of a bare "true"; a `false` flag reads as
+  "NOT (Private IP)".
+- Rules page: the quick filters are now exclusive. Custom and Disabled could
+  be pressed together with a type chip, and the list then showed only rules
+  matching all of them, often none.
 - On desktop, an app update now replaces the bundled GeoIP / GeoSite files in
   the data directory. Before, the copies from the first install were kept, so
   rule-set data never changed after an update.

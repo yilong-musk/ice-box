@@ -25,9 +25,9 @@ pub use atomic::{write_bytes_atomic, write_json_atomic};
 pub use build::{
     build_direct_only_config, build_mobile_config, build_runtime_config, config_to_pretty_json,
     invalidate_geoip_code_cache, minimal_dns_block, restore_runtime_config_from_bak,
-    share_singbox_config, share_singbox_document, tun_dns_hijack_rule, tun_reserved_rules,
-    validate_config, validate_config_for_intent, validate_template, write_runtime_config_bytes,
-    write_runtime_config_file, ConfigError,
+    rule_never_takes_effect, share_singbox_config, share_singbox_document, tun_dns_hijack_rule,
+    tun_reserved_rules, validate_config, validate_config_for_intent, validate_template,
+    write_runtime_config_bytes, write_runtime_config_file, ConfigError,
 };
 pub use bundled_rule_set::{
     bundled_marker_for_remote, bundled_name_for_url, bundled_rule_set_name, is_bundled_rule_set,

@@ -600,6 +600,119 @@ fn geosite_categories_with_a_bang_expand() {
 }
 
 #[test]
+fn rules_that_never_take_effect() {
+    use crate::rule_never_takes_effect as never;
+    assert!(never(&json!({ "action": "sniff" })));
+    assert!(never(&json!({ "action": "hijack-dns", "protocol": "dns" })));
+    // Shadowed by the builder's own Global / Direct rules, or never set.
+    assert!(never(&json!({ "clash_mode": "Global", "outbound": "a" })));
+    assert!(never(
+        &json!({ "clash_mode": "direct", "outbound": "direct" })
+    ));
+    assert!(never(&json!({ "clash_mode": "全局代理", "outbound": "a" })));
+    // Matches in Rule mode.
+    assert!(!never(&json!({ "clash_mode": "Rule", "outbound": "a" })));
+    assert!(!never(
+        &json!({ "clash_mode": "rule", "domain": ["x.example"], "outbound": "a" })
+    ));
+    assert!(!never(
+        &json!({ "action": "reject", "rule_set": ["geosite-category-ads-all"] })
+    ));
+    assert!(!never(
+        &json!({ "ip_is_private": true, "outbound": "direct" })
+    ));
+}
+
+fn build_with_dns(dir: &std::path::Path, rules: Vec<Value>, dns: Value) -> Value {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rules = rules;
+    profile.dns = Some(dns);
+    build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(dir.to_path_buf()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap()
+}
+
+fn split_dns(rules: Vec<Value>) -> Value {
+    json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+        ],
+        "rules": rules,
+        "final": "local",
+    })
+}
+
+#[test]
+fn dns_geosite_rule_defines_its_bundled_set_without_a_route_rule() {
+    let dir = temp_rule_set_dir("dns-geosite", &["geosite-cn.srs"]);
+    // The profile's own route rules do not mention geosite-cn.
+    let cfg = build_with_dns(
+        &dir,
+        vec![json!({ "domain": ["keep.example"], "outbound": "a" })],
+        split_dns(vec![json!({ "geosite": ["cn"], "server": "cn-dns" })]),
+    );
+    let dns_rule = cfg["dns"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["server"] == "cn-dns")
+        .expect("dns geosite rule kept");
+    assert_eq!(dns_rule["rule_set"], json!(["geosite-cn"]));
+    assert!(dns_rule.get("geosite").is_none());
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0]["tag"], "geosite-cn");
+    assert_eq!(sets[0]["type"], "local");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_geosite_rule_shares_the_set_a_route_rule_declared() {
+    let dir = temp_rule_set_dir("dns-geosite-shared", &["geosite-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![json!({ "geosite": ["cn"], "outbound": "direct" })],
+        split_dns(vec![json!({ "geosite": ["cn"], "server": "cn-dns" })]),
+    );
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(sets.len(), 1, "one definition for route and DNS");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_geosite_rule_dropped_when_unusable() {
+    let dir = temp_rule_set_dir("dns-geosite-missing", &["geosite-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![],
+        split_dns(vec![
+            json!({ "geosite": ["not-bundled"], "server": "cn-dns" }),
+            // Merging into an existing list would turn AND into OR.
+            json!({ "geosite": ["cn"], "rule_set": ["other"], "server": "cn-dns" }),
+            json!({ "domain": ["keep.example"], "server": "cn-dns" }),
+        ]),
+    );
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert!(rules
+        .iter()
+        .all(|rule| rule.get("geosite").is_none() && rule.get("rule_set").is_none()));
+    assert!(rules.iter().any(|rule| rule["domain"][0] == "keep.example"));
+    assert!(cfg["route"].get("rule_set").is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dns_block_present() {
     let cfg = build_runtime_json(&build_input_from_nodes(
         LocalTemplate::default(),
@@ -3503,8 +3616,8 @@ fn generated_configs_pass_pinned_core_check() {
 
     let profile = || Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")]));
     // The real bundled files, as fetched by scripts/fetch-geoip.sh.
-    let bundled_dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../third_party/sing-geoip/rule-set");
+    let bundled_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../third_party/bundled-rule-sets/rule-set");
     let mut bundled_geo = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     bundled_geo.route.rules = vec![
         json!({ "geosite": ["category-ads-all"], "action": "reject" }),
@@ -3512,6 +3625,15 @@ fn generated_configs_pass_pinned_core_check() {
         json!({ "geosite": ["geolocation-!cn"], "outbound": "a" }),
         json!({ "geoip": ["cn"], "outbound": "direct" }),
     ];
+    // Same shape as the built-in split DNS for rule-less subscriptions.
+    bundled_geo.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+        ],
+        "rules": [{ "geosite": ["cn"], "server": "cn-dns" }],
+        "final": "local",
+    }));
     let mut legacy = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     legacy.dns = Some(json!({
         "servers": [

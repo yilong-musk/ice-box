@@ -686,7 +686,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // Disabled (fingerprint-matched) subscription rules are dropped; custom rules are
     // prepended after the `clash_mode` rules so a custom / subscription rule can never
     // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
-    let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
+    let (final_rules, mut rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         // Reserved bypass rules precede `clash_mode` (`docs/tun.md`): the
         // control path stays direct even in
@@ -711,7 +711,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .rules
             .iter()
             .filter(|r| !input.rule_overrides.is_rule_disabled(r))
-            .filter(|r| !is_builder_owned_action(r))
+            .filter(|r| !rule_never_takes_effect(r))
             .cloned()
             .collect();
         let (mut sub_rules, mut sub_sets) = expand_geoip_rules(
@@ -775,21 +775,6 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .unwrap()
             .insert("rules".into(), Value::Array(final_rules));
     }
-    // DNS rules can only be kept in legacy mode when they reference a set
-    // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
-    // so; GeoSite and other local sets may be domain-only.
-    let legacy_dns_rule_set_tags: HashSet<String> = rule_sets
-        .iter()
-        .filter(|set| rule_set_is_known_ip_cidr(set))
-        .filter_map(|set| set.get("tag").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    if !rule_sets.is_empty() {
-        route
-            .as_object_mut()
-            .unwrap()
-            .insert("rule_set".into(), Value::Array(rule_sets));
-    }
-
     let mut dns = input
         .profile
         .dns
@@ -804,6 +789,27 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     ice_config_guard::retain_allowed_dns_servers(&mut dns);
     if !dns_block_is_usable(&dns) {
         dns = minimal_dns_block(input.platform);
+    }
+    // DNS `geosite` matchers resolve to the same bundled files as route rules,
+    // adding a set definition when no route rule declared it.
+    expand_dns_geosite_rules(
+        &mut dns,
+        &mut rule_sets,
+        input.geoip_rule_set_dir.as_deref(),
+    );
+    // DNS rules can only be kept in legacy mode when they reference a set
+    // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
+    // so; GeoSite and other local sets may be domain-only.
+    let legacy_dns_rule_set_tags: HashSet<String> = rule_sets
+        .iter()
+        .filter(|set| rule_set_is_known_ip_cidr(set))
+        .filter_map(|set| set.get("tag").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if !rule_sets.is_empty() {
+        route
+            .as_object_mut()
+            .unwrap()
+            .insert("rule_set".into(), Value::Array(rule_sets));
     }
     apply_dns_strategy(
         &mut dns,
@@ -1470,16 +1476,30 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
     inbound
 }
 
-/// Subscription rules whose action the builder emits itself, in the place
-/// each capture shape needs: `sniff`, and `hijack-dns` (on Windows TUN a
-/// second DNS hijack after sniff sends STUN / mDNS / LLMNR into the DNS
-/// engine, see [`tun_reserved_rules`]). Provider sing-box configs carry both,
-/// so they are dropped instead of emitted a second time.
-fn is_builder_owned_action(rule: &Value) -> bool {
-    matches!(
+/// Whether a subscription rule can never take effect in a generated config,
+/// so it is neither emitted nor listed on the Rules page.
+///
+/// - `sniff` and `hijack-dns` actions: the builder emits its own, in the place
+///   each capture shape needs (on Windows TUN a second DNS hijack after sniff
+///   sends STUN / mDNS / LLMNR into the DNS engine, see
+///   [`tun_reserved_rules`]). Provider sing-box configs carry both.
+/// - A top-level `clash_mode` rule for any mode but `rule`: ice-box only ever
+///   switches between Rule, Global and Direct, and its own Global and Direct
+///   rules come before every subscription rule, so such a rule is either
+///   shadowed or names a mode that is never set (a panel's "全局代理").
+///   sing-box compares modes case-insensitively. A `clash_mode: rule` rule
+///   does match in Rule mode and is kept.
+pub fn rule_never_takes_effect(rule: &Value) -> bool {
+    if matches!(
         rule.get("action").and_then(Value::as_str),
         Some("sniff" | "hijack-dns")
-    )
+    ) {
+        return true;
+    }
+    match rule.get("clash_mode") {
+        Some(Value::String(mode)) => !mode.eq_ignore_ascii_case("rule"),
+        _ => false,
+    }
 }
 
 /// Cached listing of the bundled rule-set directory: dir, mtime, entry count, names.
@@ -1754,6 +1774,80 @@ fn expand_geoip_rules(
         );
     }
     (kept, sets)
+}
+
+/// Expand legacy `geosite` matchers in top-level DNS rules into references to
+/// the bundled `geosite-{category}.srs` files, adding each set to `rule_sets`
+/// when no route rule declared it. A rule is dropped when a file it needs is
+/// missing, when it also has `geoip`, or when it already lists `rule_set`
+/// (merging the lists would turn their AND into an OR). `geoip` DNS rules are
+/// left as they are.
+fn expand_dns_geosite_rules(
+    dns: &mut Value,
+    rule_sets: &mut Vec<Value>,
+    geoip_rule_set_dir: Option<&Path>,
+) {
+    let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if !rules.iter().any(|rule| rule.get("geosite").is_some()) {
+        return;
+    }
+    let present = geoip_rule_set_dir.map(bundled_rule_set_names);
+    let mut dropped: Vec<String> = Vec::new();
+    rules.retain_mut(|rule| {
+        let Some(value) = rule.get("geosite") else {
+            return true;
+        };
+        if rule.get("geoip").is_some() || rule.get("rule_set").is_some() {
+            dropped.push("geosite+rule_set".into());
+            return false;
+        }
+        let tags: Vec<String> = legacy_geo_codes(value)
+            .into_iter()
+            .map(|code| format!("geosite-{code}"))
+            .collect();
+        if tags.is_empty() {
+            dropped.push("geosite".into());
+            return false;
+        }
+        let (Some(dir), Some(names)) = (geoip_rule_set_dir, present.as_ref()) else {
+            dropped.push(tags[0].clone());
+            return false;
+        };
+        if let Some(missing) = tags.iter().find(|tag| !names.contains(*tag)) {
+            dropped.push(missing.clone());
+            return false;
+        }
+        for tag in &tags {
+            if !rule_sets
+                .iter()
+                .any(|set| set.get("tag").and_then(Value::as_str) == Some(tag.as_str()))
+            {
+                rule_sets.push(json!({
+                    "type": "local",
+                    "tag": tag,
+                    "format": "binary",
+                    "path": dir.join(format!("{tag}.srs")),
+                }));
+            }
+        }
+        let obj = rule.as_object_mut().expect("geosite rule is object");
+        obj.remove("geosite");
+        obj.insert(
+            "rule_set".into(),
+            Value::Array(tags.into_iter().map(Value::String).collect()),
+        );
+        true
+    });
+    if !dropped.is_empty() {
+        dropped.sort();
+        dropped.dedup();
+        tracing::warn!(
+            items = %dropped.join(","),
+            "bundled GeoSite rule-set files missing for DNS geosite matchers; DNS rules dropped"
+        );
+    }
 }
 
 pub(crate) fn ensure_builtin_outbound(

@@ -73,8 +73,8 @@ pub fn active_profile(
 /// name that is not there yet, which is what host-side tests use. Existing
 /// files stay; the asset extractor decides when to replace them.
 fn ensure_geoip_rule_sets(target: &Path) {
-    let source =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-geoip/rule-set");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../third_party/bundled-rule-sets/rule-set");
     if let Err(err) = install_geoip_rule_sets(target, &source) {
         log::warn!(
             "geoip rule-sets were not copied from {}: {err}",
