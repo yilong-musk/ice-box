@@ -706,6 +706,8 @@ describe("Nodes", () => {
     const view = within(container);
 
     await expandGroup(view, "选择组");
+    // The current exit member is announced, not only shown as a check icon.
+    expect(view.getByRole("img", { name: t("nodes.inUse") })).toBeInTheDocument();
     fireEvent.click(view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })));
 
     await waitFor(() => {

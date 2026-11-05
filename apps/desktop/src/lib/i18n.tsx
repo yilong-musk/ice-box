@@ -219,6 +219,7 @@ const zh = {
   "subs.importFileReadFailed": "无法读取该文件。",
   "subs.fileBadge": "本地文件",
   "subs.autoUpdate": "自动更新",
+  "subs.activateRow": "激活订阅 {name}",
   "subs.interval": "更新间隔",
   "subs.interval.one_hour": "1 小时",
   "subs.interval.three_hours": "3 小时",
@@ -734,6 +735,7 @@ const en: Record<MessageKey, string> = {
   "subs.importFileReadFailed": "Could not read that file.",
   "subs.fileBadge": "Local file",
   "subs.autoUpdate": "Auto update",
+  "subs.activateRow": "Activate subscription {name}",
   "subs.interval": "Update interval",
   "subs.interval.one_hour": "1 hour",
   "subs.interval.three_hours": "3 hours",
@@ -1096,6 +1098,14 @@ function currentSnapshot(): LanguageSnapshot {
   return snapshot;
 }
 
+/** BCP 47 locale for formatting dates and numbers in the app language rather
+ * than the OS locale, so a Chinese UI on an English system stays consistent. */
+export function formatLocale(
+  lang: ResolvedLanguage = currentSnapshot().resolved,
+): string {
+  return lang === "zh" ? "zh-CN" : "en-US";
+}
+
 /** Translate a message key; `{name}` placeholders are replaced from params. */
 export function t(
   key: MessageKey,
@@ -1112,9 +1122,6 @@ export function t(
  * document `lang` attribute, and re-renders every subscribed component.
  * Returns the resolved language. */
 export function applyLanguage(preference: LanguagePreference): ResolvedLanguage {
-  // A settings file written before `language` existed reports nothing; keep
-  // the stored preference rather than poisoning the store.
-  if (!isLanguagePreference(preference)) preference = readLanguagePreference();
   const resolved = resolveLanguage(preference);
   document.documentElement.lang = resolved;
   const prev = snapshot;

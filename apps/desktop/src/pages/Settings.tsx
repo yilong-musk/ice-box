@@ -19,7 +19,7 @@ import { ErrorAlert, OkAlert } from "../components/StatusAlert";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isPhoneShell } from "@platform/shell";
-import { t, useLanguagePreference } from "../lib/i18n";
+import { readLanguagePreference, t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
 import { AndroidSystemCard } from "./settings/Android";
@@ -168,7 +168,7 @@ export function Settings({
    * re-apply the runtime config and flash "saved" over a refused OS write). */
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const tunInstall = useTunInstallDialog(installHelperThenEnableTun);
-  const { preference, setPreference } = useLanguagePreference();
+  const { setPreference } = useLanguagePreference();
   const { preference: themePreference, setPreference: setThemePreference } =
     useThemePreference();
   const runtime = useRuntimeStore();
@@ -387,6 +387,9 @@ export function Settings({
     setLoaded(false);
     skipInitialSaveRef.current = true;
     let cancelled = false;
+    // Read the store fresh (not the render-time `preference`) so a language
+    // change made while this load is in flight is not reverted below.
+    const languageAtLoad = readLanguagePreference();
     void (async () => {
       try {
         await waitForSaveIdle();
@@ -410,8 +413,10 @@ export function Settings({
           setLoaded(true);
           // settings.json is the authoritative language preference; re-apply
           // it when it differs from the cached one (e.g. first launch after a
-          // storage reset, or a manual edit of the settings file).
-          if (settings.language !== preference) {
+          // storage reset, or a manual edit of the settings file), unless the
+          // language changed elsewhere while the load was in flight.
+          const current = readLanguagePreference();
+          if (current === languageAtLoad && settings.language !== current) {
             setPreference(settings.language);
           }
         }
@@ -424,8 +429,6 @@ export function Settings({
     return () => {
       cancelled = true;
     };
-    // Only consulted when settings are (re)loaded, so `preference` is
-    // intentionally not a dependency.
   }, [active, reloadNonce]);
 
   function clearFieldError(key: string) {

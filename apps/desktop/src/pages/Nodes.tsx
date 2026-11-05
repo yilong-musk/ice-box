@@ -280,7 +280,11 @@ const GroupMembers = memo(function GroupMembers({
               </span>
             )}
             {isExit ? (
-              <CircleCheck className="size-4 shrink-0 text-ok" aria-hidden="true" />
+              <CircleCheck
+                className="size-4 shrink-0 text-ok"
+                role="img"
+                aria-label={t("nodes.inUse")}
+              />
             ) : null}
             {delayBadge(delays[member] ?? null)}
           </div>

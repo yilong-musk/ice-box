@@ -49,7 +49,7 @@ import {
 } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { t, useLanguagePreference } from "../lib/i18n";
+import { formatLocale, t, useLanguagePreference } from "../lib/i18n";
 import { isPhoneShell } from "@platform/shell";
 
 const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
@@ -64,10 +64,24 @@ function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
   return t(`subs.interval.${interval}`);
 }
 
-/** Interactive elements inside a subscription row that must not double as a
- * click on the row itself. */
-const ROW_CONTROL_SELECTOR =
-  "button, a, input, select, textarea, [role=switch], [data-slot=field]";
+/** Anything interactive: native controls, labels, and any element that is
+ * focusable or carries an ARIA role (custom widgets, Radix triggers, fields). */
+const INTERACTIVE_SELECTOR =
+  "button, a[href], input, select, textarea, label, summary, [role], [tabindex], [contenteditable]";
+
+/** True when a click inside `row` landed on an interactive descendant rather
+ * than on the row's bare surface. Checks by kind, not by a list of known
+ * row controls, so controls added to the row later are covered too. */
+function isInsideRowControl(target: EventTarget, row: Element): boolean {
+  for (
+    let el = target instanceof Element ? target : null;
+    el && el !== row;
+    el = el.parentElement
+  ) {
+    if (el.matches(INTERACTIVE_SELECTOR)) return true;
+  }
+  return false;
+}
 
 function activeSubscriptionId(items: SubscriptionMeta[]): string | null {
   return items.find((item) => item.active)?.id ?? null;
@@ -80,9 +94,7 @@ type Props = {
 
 export function Subscriptions({ active = true }: Props) {
   const { resolved: lang } = useLanguagePreference();
-  // Dates follow the app language, not the OS locale, so a Chinese UI on an
-  // English system does not mix in "11/5/2026, 9:42 AM".
-  const dateLocale = lang === "zh" ? "zh-CN" : "en-US";
+  const dateLocale = formatLocale(lang);
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
@@ -307,28 +319,38 @@ export function Subscriptions({ active = true }: Props) {
                       size="sm"
                       variant="outline"
                       className={cn(
-                        "bg-muted",
+                        "relative bg-muted",
                         s.active
                           ? "border-ok"
-                          : "cursor-pointer hover:border-foreground/30",
+                          : "cursor-pointer hover:border-foreground/30 has-[[data-row-activate]:focus-visible]:border-ring has-[[data-row-activate]:focus-visible]:ring-[3px] has-[[data-row-activate]:focus-visible]:ring-ring/50",
                       )}
                       aria-current={s.active ? "true" : undefined}
-                      tabIndex={s.active ? undefined : 0}
                       onClick={(event) => {
                         // Controls inside the row keep their own behavior;
                         // only clicks on the row's bare surface activate it.
-                        const target = event.target as Element;
-                        if (target.closest(ROW_CONTROL_SELECTOR)) return;
+                        if (isInsideRowControl(event.target, event.currentTarget)) {
+                          return;
+                        }
+                        // A drag that selects text (e.g. to copy a warning)
+                        // also ends in a click; it must not switch profiles.
+                        if (window.getSelection()?.isCollapsed === false) {
+                          return;
+                        }
                         activateSubscription(s);
                       }}
-                      onKeyDown={(event) => {
-                        if (event.target !== event.currentTarget) return;
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          activateSubscription(s);
-                        }
-                      }}
                     >
+                      {s.active ? null : (
+                        // Keyboard and screen-reader path: a real, named
+                        // button; the row shows its focus ring instead.
+                        <button
+                          type="button"
+                          data-row-activate
+                          className="sr-only"
+                          disabled={busy}
+                          aria-label={t("subs.activateRow", { name: s.name })}
+                          onClick={() => activateSubscription(s)}
+                        />
+                      )}
                       <ItemHeader className="flex-nowrap">
                         <ItemTitle title={s.name} className="min-w-0">
                           <span className="truncate">{s.name}</span>

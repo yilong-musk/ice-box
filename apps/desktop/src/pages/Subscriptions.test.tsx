@@ -871,7 +871,7 @@ describe("Subscriptions", () => {
     expect(setActive).toHaveBeenCalledTimes(1);
   });
 
-  it("activates a focused subscription row with the keyboard", async () => {
+  it("activates an inactive row through its named activate button", async () => {
     const setActive = vi.fn().mockResolvedValue({});
     vi.mocked(api.setSubscriptionActive).mockImplementation(setActive);
     listSubscriptions.mockResolvedValue([
@@ -883,15 +883,55 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
-    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
-    expect(rowB).toHaveAttribute("tabindex", "0");
-    fireEvent.keyDown(rowB, { key: "Enter" });
+    const activate = view.getByRole("button", {
+      name: t("subs.activateRow", { name: "b" }),
+    });
+    fireEvent.click(activate);
     await waitFor(() => {
       expect(setActive).toHaveBeenCalledWith(
         "22222222-2222-2222-2222-222222222222",
         true,
       );
     });
+    expect(setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the active row no activate button", async () => {
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "a", active: true }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("a")).toBeInTheDocument();
+    });
+    expect(
+      view.queryByRole("button", { name: t("subs.activateRow", { name: "a" }) }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not activate a row when the click ends a text selection", async () => {
+    const setActive = vi.fn().mockResolvedValue({});
+    vi.mocked(api.setSubscriptionActive).mockImplementation(setActive);
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "b", active: false }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("b")).toBeInTheDocument();
+    });
+    const name = view.getByText("b");
+    const range = document.createRange();
+    range.selectNodeContents(name);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+
+    fireEvent.click(name);
+    expect(setActive).not.toHaveBeenCalled();
+    window.getSelection()?.removeAllRanges();
   });
 
   it("copies the subscription link and the sing-box config from the share dialog", async () => {

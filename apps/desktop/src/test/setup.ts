@@ -4,7 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
-import { applyLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
+import { applyStoredLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
 
 function ensureLocalStorage() {
   try {
@@ -49,6 +49,7 @@ ensureLocalStorage();
 
 // jsdom reports "en-US" by default; the test suite asserts the zh UI strings,
 // so resolve the "system" language preference as zh in tests.
+let seedStoredLanguage = false;
 try {
   Object.defineProperty(window.navigator, "language", {
     configurable: true,
@@ -57,6 +58,7 @@ try {
 } catch {
   // Some environments expose navigator.language as a non-configurable getter;
   // fall back to seeding the stored preference instead.
+  seedStoredLanguage = true;
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh");
 }
 
@@ -87,8 +89,12 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
+  // Reset storage and the in-memory language store together so the next test
+  // starts from the same preference that storage reports.
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
-  applyLanguage("zh");
+  if (seedStoredLanguage)
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh");
+  applyStoredLanguage();
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
 });
