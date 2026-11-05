@@ -5,7 +5,10 @@
  *
  * `t()` is module-global: it reads the currently active language, so plain
  * (non-component) helpers can call it directly. Components re-render on
- * language change through `useLanguagePreference()`. The preference follows
+ * language change through `useLanguagePreference()`, which subscribes to a
+ * single module-level store instead of keeping per-component state: pages
+ * hidden inside `<Activity>` drop their effects, and a per-component copy
+ * would come back stale and re-apply the old language. The preference follows
  * the theme module's pattern: localStorage cache for an instant boot apply,
  * plus an app-level custom event for cross-component sync. The Settings page
  * additionally persists `language` in `settings.json` (authoritative) and
@@ -13,7 +16,7 @@
  * resolution helpers themselves live in `./language`, shared with the website.
  */
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import {
   isLanguagePreference,
   readLanguagePreference,
@@ -49,7 +52,6 @@ const zh = {
   "common.update": "更新",
   "common.refresh": "刷新",
   "common.retry": "重试",
-  "common.activate": "激活",
   "common.enable": "启用",
   "common.disable": "禁用",
   "common.all": "全部",
@@ -232,7 +234,6 @@ const zh = {
     "打开软件会自动启动内核；需要时在主页用大按钮接管系统代理，也可导入订阅链接或 sing-box 配置文件。",
   "subs.loadFailedTitle": "无法加载订阅",
   "subs.listAria": "订阅列表",
-  "subs.activeBadge": "已激活",
   "subs.summaryNodes": "{n} 节点",
   "subs.summaryGroups": "{n} 策略组",
   "subs.summaryRules": "{n} 规则",
@@ -564,7 +565,6 @@ const en: Record<MessageKey, string> = {
   "common.update": "Update",
   "common.refresh": "Refresh",
   "common.retry": "Retry",
-  "common.activate": "Activate",
   "common.enable": "Enable",
   "common.disable": "Disable",
   "common.all": "All",
@@ -750,7 +750,6 @@ const en: Record<MessageKey, string> = {
     "The app starts the core automatically; capture the system proxy from Home when needed, or import a subscription URL or a sing-box config file.",
   "subs.loadFailedTitle": "Could not load subscriptions",
   "subs.listAria": "Subscription list",
-  "subs.activeBadge": "Active",
   "subs.summaryNodes": "{n} nodes",
   "subs.summaryGroups": "{n} groups",
   "subs.summaryRules": "{n} rules",
@@ -1078,18 +1077,31 @@ const dictionaries: Record<ResolvedLanguage, Record<MessageKey, string>> = {
   en,
 };
 
-/** Currently active language used by `t()`. Initialized lazily so the module
- * can be imported before the environment's locale is fully available (e.g.
- * test setup files), then kept in sync by `applyLanguage`. */
-let activeLanguage: ResolvedLanguage | undefined;
+type LanguageSnapshot = {
+  preference: LanguagePreference;
+  resolved: ResolvedLanguage;
+};
+
+/** The one language state for the whole document. Initialized lazily so the
+ * module can be imported before the environment's locale is fully available
+ * (e.g. test setup files), then replaced by `applyLanguage`. */
+let snapshot: LanguageSnapshot | undefined;
+const listeners = new Set<() => void>();
+
+function currentSnapshot(): LanguageSnapshot {
+  if (!snapshot) {
+    const preference = readLanguagePreference();
+    snapshot = { preference, resolved: resolveLanguage(preference) };
+  }
+  return snapshot;
+}
 
 /** Translate a message key; `{name}` placeholders are replaced from params. */
 export function t(
   key: MessageKey,
   params?: Record<string, string | number>,
 ): string {
-  if (!activeLanguage) activeLanguage = resolveLanguage(readLanguagePreference());
-  const template = dictionaries[activeLanguage][key];
+  const template = dictionaries[currentSnapshot().resolved][key];
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
     params[name] !== undefined ? String(params[name]) : match,
@@ -1097,17 +1109,45 @@ export function t(
 }
 
 /** Apply a preference: resolves it, updates the active dictionary and the
- * document `lang` attribute. Returns the resolved language. */
+ * document `lang` attribute, and re-renders every subscribed component.
+ * Returns the resolved language. */
 export function applyLanguage(preference: LanguagePreference): ResolvedLanguage {
+  // A settings file written before `language` existed reports nothing; keep
+  // the stored preference rather than poisoning the store.
+  if (!isLanguagePreference(preference)) preference = readLanguagePreference();
   const resolved = resolveLanguage(preference);
-  activeLanguage = resolved;
   document.documentElement.lang = resolved;
+  const prev = snapshot;
+  if (prev?.preference !== preference || prev.resolved !== resolved) {
+    snapshot = { preference, resolved };
+    for (const listener of listeners) listener();
+  }
   return resolved;
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+if (typeof window !== "undefined") {
+  // Changes made elsewhere (another component, the website's storage bridge)
+  // arrive as this event; one module-level listener keeps the store current
+  // even while every subscribed page is hidden.
+  window.addEventListener(LANGUAGE_CHANGE_EVENT, (event) => {
+    const next = (event as CustomEvent<unknown>).detail;
+    if (isLanguagePreference(next)) applyLanguage(next);
+  });
+  // Re-resolve when the OS locale changes while following the system.
+  window.addEventListener("languagechange", () => {
+    if (currentSnapshot().preference === "system") applyLanguage("system");
+  });
 }
 
 export function persistLanguagePreference(
   preference: LanguagePreference,
 ): void {
+  if (!isLanguagePreference(preference)) return;
   try {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
   } catch {
@@ -1125,42 +1165,13 @@ export function applyStoredLanguage(): void {
 }
 
 export function useLanguagePreference() {
-  const [preference, setPreferenceState] = useState<LanguagePreference>(
-    readLanguagePreference,
+  const { preference, resolved } = useSyncExternalStore(
+    subscribe,
+    currentSnapshot,
   );
-  const [resolved, setResolved] = useState<ResolvedLanguage>(() =>
-    resolveLanguage(readLanguagePreference()),
-  );
-
-  useEffect(() => {
-    setResolved(applyLanguage(preference));
-    if (preference !== "system") return;
-    // Re-resolve when the OS locale changes while following the system.
-    const onLocaleChange = () => setResolved(applyLanguage("system"));
-    window.addEventListener("languagechange", onLocaleChange);
-    return () => window.removeEventListener("languagechange", onLocaleChange);
-  }, [preference]);
-
-  useEffect(() => {
-    const onCustom = (event: Event) => {
-      const next = (event as CustomEvent<LanguagePreference>).detail;
-      if (!isLanguagePreference(next)) return;
-      setPreferenceState(next);
-      setResolved(applyLanguage(next));
-    };
-    window.addEventListener(LANGUAGE_CHANGE_EVENT, onCustom);
-    return () => window.removeEventListener(LANGUAGE_CHANGE_EVENT, onCustom);
-  }, []);
-
-  function setPreference(next: LanguagePreference) {
-    persistLanguagePreference(next);
-    setPreferenceState(next);
-    setResolved(applyLanguage(next));
-  }
-
   return {
     preference,
     resolved,
-    setPreference,
+    setPreference: persistLanguagePreference,
   };
 }

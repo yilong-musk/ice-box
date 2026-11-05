@@ -15,6 +15,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   On devices set to a language other than English or Chinese, the few Android
   system strings from AndroidX/Material (such as the "Navigate up"
   accessibility label) are now in English, like the rest of the app.
+- A subscription is now activated by clicking its row instead of a switch; the
+  active row has a green border and no longer shows an "Active" label. On the
+  phone, the row's share, update, and delete actions are icon buttons on the
+  title line, and the summary shows the update date without the time.
+- In the node list, the "Select" button is now a ring that turns into a check
+  for the node in use, replacing the "In use" label.
+
+### Fixed
+
+- Switching the UI language no longer leaves previously opened pages in the
+  old language, and opening one of those pages no longer switches the
+  language back.
+- Subscription update times follow the app language instead of the system
+  locale.
 
 ## [0.2.9] - 2026-11-04
 

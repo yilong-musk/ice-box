@@ -79,7 +79,10 @@ type Props = {
 };
 
 export function Subscriptions({ active = true }: Props) {
-  useLanguagePreference();
+  const { resolved: lang } = useLanguagePreference();
+  // Dates follow the app language, not the OS locale, so a Chinese UI on an
+  // English system does not mix in "11/5/2026, 9:42 AM".
+  const dateLocale = lang === "zh" ? "zh-CN" : "en-US";
   const phone = isPhoneShell();
   const { nextGeneration, isStale } = useGenerationGuard();
   const [items, setItems] = useState<SubscriptionMeta[]>([]);
@@ -214,7 +217,11 @@ export function Subscriptions({ active = true }: Props) {
     if (s.has_dns) parts.push(t("subs.hasDns"));
     if (s.last_updated) {
       const updated = new Date(s.last_updated);
-      parts.push(dateOnly ? updated.toLocaleDateString() : updated.toLocaleString());
+      parts.push(
+        dateOnly
+          ? updated.toLocaleDateString(dateLocale)
+          : updated.toLocaleString(dateLocale),
+      );
     }
     return parts.join(" · ");
   }
