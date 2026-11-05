@@ -4,7 +4,6 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   t,
   type LanguagePreference,
@@ -100,15 +99,16 @@ export function AppearanceCard({
         </NativeSelect>
       </SettingsRow>
       {trayMode !== null && (
-        <SettingsRow label={t("settings.tray")}>
-          <ToggleGroup
-            type="single"
-            variant="outline"
+        <SettingsRow label={t("settings.tray")} htmlFor="settings-tray">
+          <NativeSelect
+            id="settings-tray"
+            aria-label={t("settings.tray")}
             size="sm"
-            spacing={0}
+            className="w-40"
             value={trayMode}
             disabled={busy || !loaded}
-            onValueChange={(value) => {
+            onChange={(e) => {
+              const value = e.target.value;
               if (
                 value === "icon_and_speed" ||
                 value === "icon" ||
@@ -117,14 +117,13 @@ export function AppearanceCard({
                 onTrayModeChange(value);
               }
             }}
-            aria-label={t("settings.tray")}
           >
             {TRAY_MODES.map(([value, labelKey]) => (
-              <ToggleGroupItem key={value} value={value} className="px-3">
+              <NativeSelectOption key={value} value={value}>
                 {t(labelKey)}
-              </ToggleGroupItem>
+              </NativeSelectOption>
             ))}
-          </ToggleGroup>
+          </NativeSelect>
         </SettingsRow>
       )}
     </SettingsSection>

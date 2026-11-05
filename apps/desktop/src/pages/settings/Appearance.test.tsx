@@ -45,12 +45,8 @@ describe("AppearanceCard", () => {
     expect(onLanguageChange).toHaveBeenCalledWith("en");
 
     const tray = within(container).getByLabelText(t("settings.tray"));
-    expect(
-      within(tray).getByRole("radio", { name: t("settings.trayIconAndSpeed") }),
-    ).toHaveAttribute("data-state", "on");
-    fireEvent.click(
-      within(tray).getByRole("radio", { name: t("settings.traySpeedOnly") }),
-    );
+    expect(tray).toHaveValue("icon_and_speed");
+    fireEvent.change(tray, { target: { value: "speed" } });
     expect(onTrayModeChange).toHaveBeenCalledWith("speed");
   });
 
@@ -78,13 +74,10 @@ describe("AppearanceCard", () => {
     ]);
   });
 
-  it("ignores menu-bar picks before settings load and while a save runs", () => {
+  it("locks the menu-bar picker before settings load and while a save runs", () => {
     const { container, rerender, onTrayModeChange } = renderCard();
-    const group = () => within(container).getByLabelText(t("settings.tray"));
-    const pickSpeed = () =>
-      fireEvent.click(
-        within(group()).getByRole("radio", { name: t("settings.traySpeedOnly") }),
-      );
+    const tray = () => within(container).getByLabelText(t("settings.tray"));
+    expect(tray()).toBeEnabled();
 
     rerender(
       <AppearanceCard
@@ -98,8 +91,8 @@ describe("AppearanceCard", () => {
         onTrayModeChange={onTrayModeChange}
       />,
     );
-    pickSpeed();
-    expect(onTrayModeChange).not.toHaveBeenCalled();
+    expect(tray()).toBeDisabled();
+    expect(tray()).toHaveValue("icon");
 
     rerender(
       <AppearanceCard
@@ -113,7 +106,7 @@ describe("AppearanceCard", () => {
         onTrayModeChange={onTrayModeChange}
       />,
     );
-    pickSpeed();
-    expect(onTrayModeChange).not.toHaveBeenCalled();
+    expect(tray()).toBeDisabled();
+    expect(tray()).toHaveValue("icon");
   });
 });

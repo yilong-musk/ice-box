@@ -551,13 +551,9 @@ describe("Settings", () => {
       expect(view.getByLabelText(t("settings.tray"))).toBeInTheDocument(),
     );
     const tray = view.getByLabelText(t("settings.tray"));
-    expect(
-      within(tray).getByRole("radio", { name: t("settings.trayIconAndSpeed") }),
-    ).toHaveAttribute("data-state", "on");
+    expect(tray).toHaveValue("icon_and_speed");
 
-    fireEvent.click(
-      within(tray).getByRole("radio", { name: t("settings.traySpeedOnly") }),
-    );
+    fireEvent.change(tray, { target: { value: "speed" } });
     await waitFor(
       () =>
         expect(saveSettings).toHaveBeenCalledWith(

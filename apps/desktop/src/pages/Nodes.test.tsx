@@ -148,7 +148,10 @@ describe("Nodes", () => {
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
 
-    expect(view.getAllByRole("button", { name: t("nodes.test") })[0]).toHaveTextContent(t("nodes.test"));
+    // The per-node test is the phone header's gauge icon, named for a11y.
+    const rowTest = view.getAllByRole("button", { name: t("nodes.test") })[0];
+    expect(rowTest.textContent).toBe("");
+    expect(rowTest.querySelector("svg")).not.toBeNull();
     expect(view.getByRole("button", { name: t("nodes.batchTest") })).toHaveTextContent(t("nodes.batchTest"));
   });
 
