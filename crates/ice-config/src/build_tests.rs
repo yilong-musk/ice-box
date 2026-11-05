@@ -468,38 +468,37 @@ fn geoip_rules_dropped_when_rule_set_file_missing() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn custom_geoip_expanded_and_geosite_dropped_at_build() {
+fn temp_rule_set_dir(name: &str, files: &[&str]) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "ice-box-custom-geo-{}",
+        "ice-box-{name}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("geoip-cn.srs"), b"srs").unwrap();
+    for file in files {
+        fs::write(dir.join(file), b"srs").unwrap();
+    }
+    dir
+}
 
+fn build_with_rules(
+    dir: &std::path::Path,
+    rules: Vec<serde_json::Value>,
+    custom: Vec<serde_json::Value>,
+) -> serde_json::Value {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
-    profile.route.rules = vec![
-        json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
-        json!({ "geosite": ["google"], "outbound": "direct" }),
-    ];
-    let mut overrides = RuleOverrides::default();
-    // A custom geoip rule persisted before add-time validation existed.
-    overrides
-        .custom
-        .push(json!({ "geoip": ["cn"], "outbound": "direct" }));
-    // A custom geosite rule is dropped too.
-    overrides
-        .custom
-        .push(json!({ "geosite": ["netflix"], "outbound": "direct" }));
-
-    let cfg = build_runtime_json(&BuildInput {
+    profile.route.rules = rules;
+    let overrides = RuleOverrides {
+        custom,
+        ..RuleOverrides::default()
+    };
+    build_runtime_json(&BuildInput {
         template: LocalTemplate::default(),
         profile: Arc::new(profile),
         selected_tag: None,
-        geoip_rule_set_dir: Some(dir.clone()),
+        geoip_rule_set_dir: Some(dir.to_path_buf()),
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
@@ -507,24 +506,95 @@ fn custom_geoip_expanded_and_geosite_dropped_at_build() {
         shared_root: None,
         platform: HostPlatform::MacOs,
     })
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn custom_and_subscription_geo_rules_expand_to_bundled_rule_sets() {
+    let dir = temp_rule_set_dir(
+        "custom-geo",
+        &["geoip-cn.srs", "geosite-google.srs", "geosite-netflix.srs"],
+    );
+    let cfg = build_with_rules(
+        &dir,
+        vec![
+            json!({ "domain_suffix": ["keep.com"], "outbound": "direct" }),
+            json!({ "geosite": ["google"], "outbound": "direct" }),
+        ],
+        // Custom rules persisted before add-time validation existed.
+        vec![
+            json!({ "geoip": ["cn"], "outbound": "direct" }),
+            json!({ "geosite": "netflix", "outbound": "direct" }),
+        ],
+    );
 
     let rules = cfg["route"]["rules"].as_array().unwrap();
     assert_eq!(
         rules.len(),
-        4,
-        "2 clash_mode rules + custom geoip + subscription domain rule survive"
+        6,
+        "2 clash_mode rules + 2 custom + 2 subscription"
     );
     let all = serde_json::to_string(rules).unwrap();
     assert!(
-        !all.contains("geosite"),
-        "geosite rules must be dropped: {all}"
+        !all.contains("\"geosite\"") && !all.contains("\"geoip\""),
+        "legacy matchers must be removed: {all}"
     );
-    assert!(
-        cfg["route"]["rule_set"]
-            .as_array()
-            .is_some_and(|s| s.iter().any(|e| e["tag"] == "geoip-cn")),
-        "custom geoip must materialize its rule-set"
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    for tag in ["geoip-cn", "geosite-google", "geosite-netflix"] {
+        let set = sets
+            .iter()
+            .find(|e| e["tag"] == tag)
+            .unwrap_or_else(|| panic!("{tag} must materialize: {sets:?}"));
+        assert_eq!(set["type"], "local");
+        assert_eq!(
+            set["path"],
+            serde_json::Value::String(dir.join(format!("{tag}.srs")).to_string_lossy().into())
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geosite_rules_dropped_when_the_category_is_not_bundled() {
+    let dir = temp_rule_set_dir("geosite-missing", &["geosite-cn.srs"]);
+    let cfg = build_with_rules(
+        &dir,
+        vec![
+            json!({ "geosite": ["cn", "not-bundled"], "outbound": "direct" }),
+            // A traversal attempt only ever names a file that is not listed.
+            json!({ "geosite": ["../../etc/passwd"], "outbound": "direct" }),
+        ],
+        vec![],
+    );
+    let rules = cfg["route"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "only the clash_mode rules survive");
+    assert!(cfg["route"].get("rule_set").is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rule_combining_geoip_and_geosite_is_dropped() {
+    let dir = temp_rule_set_dir("geo-both", &["geoip-cn.srs", "geosite-cn.srs"]);
+    let cfg = build_with_rules(
+        &dir,
+        vec![json!({ "geoip": ["cn"], "geosite": ["cn"], "outbound": "direct" })],
+        vec![],
+    );
+    assert_eq!(cfg["route"]["rules"].as_array().unwrap().len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geosite_categories_with_a_bang_expand() {
+    let dir = temp_rule_set_dir("geo-bang", &["geosite-geolocation-!cn.srs"]);
+    let cfg = build_with_rules(
+        &dir,
+        vec![json!({ "geosite": ["geolocation-!cn"], "outbound": "a" })],
+        vec![],
+    );
+    assert_eq!(
+        cfg["route"]["rule_set"][0]["tag"],
+        "geosite-geolocation-!cn"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -3432,6 +3502,16 @@ fn generated_configs_pass_pinned_core_check() {
     fs::create_dir_all(&dir).unwrap();
 
     let profile = || Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")]));
+    // The real bundled files, as fetched by scripts/fetch-geoip.sh.
+    let bundled_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../third_party/sing-geoip/rule-set");
+    let mut bundled_geo = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    bundled_geo.route.rules = vec![
+        json!({ "geosite": ["category-ads-all"], "action": "reject" }),
+        json!({ "geosite": ["cn"], "outbound": "direct" }),
+        json!({ "geosite": ["geolocation-!cn"], "outbound": "a" }),
+        json!({ "geoip": ["cn"], "outbound": "direct" }),
+    ];
     let mut legacy = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     legacy.dns = Some(json!({
         "servers": [
@@ -3621,6 +3701,22 @@ fn generated_configs_pass_pinned_core_check() {
                 platform: HostPlatform::MacOs,
             })
             .expect("hysteria2"),
+        ),
+        (
+            "bundled-geosite",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate::default(),
+                profile: Arc::new(bundled_geo),
+                selected_tag: None,
+                geoip_rule_set_dir: Some(bundled_dir.clone()),
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("bundled geosite"),
         ),
         (
             "mobile-android",

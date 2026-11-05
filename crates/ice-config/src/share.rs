@@ -993,12 +993,17 @@ fn geo_codes(value: &Value) -> Vec<String> {
     }
 }
 
+/// A country code or GeoSite category. `!` is allowed only right after a
+/// `-`, as in the `geolocation-!cn` category; a leading `!` (invert) is
+/// stripped by the caller.
 fn geo_code_ok(code: &str) -> bool {
     !code.is_empty()
         && code.len() <= 64
-        && code
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        && code.char_indices().all(|(i, ch)| {
+            ch.is_ascii_alphanumeric()
+                || ch == '-'
+                || (ch == '!' && i > 0 && code.as_bytes()[i - 1] == b'-')
+        })
 }
 
 fn share_outbound_ok(rule: &Value, tags: &HashSet<String>) -> bool {

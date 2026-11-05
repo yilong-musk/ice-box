@@ -1,5 +1,5 @@
 # S3 fixture — minimal coverage of every supported Clash rule type.
-# MATCH maps to route.final; GEOIP / RULE-SET are skipped with warnings.
+# MATCH maps to route.final; GEOIP / GEOSITE resolve to bundled rule-sets at build; RULE-SET is skipped with a warning.
 mode: rule
 proxies:
   - name: "n1"
@@ -47,6 +47,7 @@ rules:
   - IP-CIDR,198.18.0.0/15,Proxies,no-resolve
   - IP-CIDR6,2001:db8::/32,Proxies
   - GEOIP,CN,DIRECT
+  - GEOSITE,netflix,Proxies
   - PROCESS-NAME,ssh,Proxies
   - RULE-SET,cn-domains,Proxies
   - MATCH,Proxies

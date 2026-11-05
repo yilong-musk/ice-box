@@ -175,7 +175,19 @@ fn parse_rule_line(
             "process_name": [payload],
             "outbound": target,
         }))),
-        "RULE-SET" | "GEOSITE" => Err(RuleSkip::Unsupported(ty)),
+        // Resolved to a bundled `geosite-{category}.srs` at config build; a
+        // category that is not bundled is dropped there.
+        "GEOSITE" => {
+            let category = payload.trim().to_ascii_lowercase();
+            if category.is_empty() {
+                return Err(RuleSkip::Unsupported(ty));
+            }
+            Ok(RuleOutcome::Rule(json!({
+                "geosite": [category],
+                "outbound": target,
+            })))
+        }
+        "RULE-SET" => Err(RuleSkip::Unsupported(ty)),
         _ => Err(RuleSkip::Unsupported(ty)),
     }
 }

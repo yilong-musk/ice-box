@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Clash `GEOSITE` rules and `geosite` matchers in sing-box subscriptions now
+  take effect instead of being skipped. The app ships 22 common GeoSite
+  rule-sets from SagerNet/sing-geosite (such as `cn`, `geolocation-!cn`,
+  `category-ads-all`, `google`, `netflix` and `openai`), about 380 KB in all.
+  A rule whose category is not bundled is still skipped. Rule-sets are only
+  updated with the app; the app never downloads them.
+
 ### Changed
 
 - The Android APK is much smaller to download (about 76 MB to 28 MB). Native

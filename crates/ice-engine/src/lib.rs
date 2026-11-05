@@ -271,6 +271,50 @@ proxies:
     }
 
     #[test]
+    fn clash_geosite_rule_resolves_to_the_bundled_rule_set() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(
+            manifest
+                .join("../..")
+                .join("configs/examples/subscription-clash-rules-min.yaml"),
+        )
+        .expect("fixture");
+        let rule_set_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let json = subscription_to_config(
+            &raw,
+            LocalTemplate::default(),
+            Some(rule_set_dir.clone()),
+            CaptureIntent::Diagnostic,
+            HostPlatform::MacOs,
+        )
+        .expect("pipeline");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let rules = value["route"]["rules"].as_array().expect("rules");
+        assert!(
+            rules
+                .iter()
+                .any(|r| r["rule_set"] == serde_json::json!(["geosite-netflix"])
+                    && r["outbound"] == "Proxies"),
+            "GEOSITE,netflix must survive as a rule-set rule: {rules:?}"
+        );
+        let sets = value["route"]["rule_set"].as_array().expect("rule sets");
+        let set = sets
+            .iter()
+            .find(|s| s["tag"] == "geosite-netflix")
+            .expect("bundled geosite set");
+        assert_eq!(set["type"], "local");
+        assert_eq!(
+            set["path"],
+            serde_json::Value::String(
+                rule_set_dir
+                    .join("geosite-netflix.srs")
+                    .to_string_lossy()
+                    .into()
+            )
+        );
+    }
+
+    #[test]
     fn uri_list_windows_pipeline_moves_the_resolver_off_the_proxy_dns() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let raw = std::fs::read_to_string(

@@ -228,6 +228,7 @@ mod fixture_tests {
             "ip_cidr",
             "process_name",
             "geoip",
+            "geosite",
         ] {
             assert!(rule_types.contains(&t.to_string()), "missing {t}");
         }
