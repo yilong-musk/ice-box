@@ -104,7 +104,6 @@ describe("Subscriptions", () => {
     });
     expect(view.queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
     expect(view.queryByLabelText(t("subs.interval"))).not.toBeInTheDocument();
-    expect(view.getByLabelText(t("common.activate"))).toBeInTheDocument();
   });
 
   it("opens the import dialog from the subscription list", async () => {
@@ -156,8 +155,8 @@ describe("Subscriptions", () => {
 
     await waitFor(() => {
       expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
-      const title = view.getByText("sub-b").closest("[data-slot=item-title]");
-      expect(title).toHaveTextContent(t("subs.activeBadge"));
+      const row = view.getByText("sub-b").closest("[data-slot=item]");
+      expect(row).toHaveClass("border-ok");
     });
     expect(clearNodesSnapshot).toHaveBeenCalled();
   });
@@ -182,11 +181,11 @@ describe("Subscriptions", () => {
     const rows = list.querySelectorAll("[data-slot=item]");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveAttribute("data-variant", "outline");
-    expect(rows[0]).toHaveClass("bg-muted", "border-foreground/30");
+    expect(rows[0]).toHaveClass("bg-muted", "border-ok");
     expect(rows[0]).not.toHaveClass("border-border");
     expect(rows[1]).toHaveAttribute("data-variant", "outline");
     expect(rows[1]).toHaveClass("bg-muted", "border-border");
-    expect(rows[1]).not.toHaveClass("border-foreground/30");
+    expect(rows[1]).not.toHaveClass("border-ok");
   });
 
   it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {
@@ -520,8 +519,8 @@ describe("Subscriptions", () => {
     expect(view.queryByText(t("subs.loadFailedTitle"))).not.toBeInTheDocument();
   });
 
-  it("shows a capsule toast when toggling a subscription fails", async () => {
-    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a" })]);
+  it("shows a capsule toast when activating a subscription fails", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta({ name: "a", active: false })]);
     vi.mocked(api.setSubscriptionActive).mockRejectedValueOnce(
       new Error("activate failed"),
     );
@@ -531,10 +530,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("a")).toBeInTheDocument();
     });
-    const row = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
-    fireEvent.click(
-      within(row).getByRole("switch", { name: t("common.activate") }),
-    );
+    fireEvent.click(view.getByText("a").closest("[data-slot=item]") as HTMLElement);
 
     await waitFor(() => {
       expect(view.getByTestId("error-toast")).toHaveTextContent(
@@ -838,7 +834,7 @@ describe("Subscriptions", () => {
     });
   });
 
-  it("marks active subscription and switches via setSubscriptionActive", async () => {
+  it("activates a subscription by clicking the row surface only", async () => {
     const setActive = vi.fn().mockResolvedValue({});
     vi.mocked(api.setSubscriptionActive).mockImplementation(setActive);
     listSubscriptions.mockResolvedValue([
@@ -851,10 +847,45 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
+    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
     const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
-    const toggle = within(rowB).getByRole("switch", { name: t("common.activate") });
-    expect(toggle).not.toBeChecked();
-    toggle.click();
+    // The only switch left in a row is auto-update; activation has none.
+    expect(within(rowB).getAllByRole("switch")).toHaveLength(1);
+    expect(rowA).toHaveAttribute("aria-current", "true");
+    expect(rowB).not.toHaveAttribute("aria-current");
+
+    // Clicking the already-active row or a control inside a row does nothing.
+    fireEvent.click(rowA);
+    const autoSwitch = within(rowB).getByRole("switch", { name: t("subs.autoUpdate") });
+    fireEvent.click(autoSwitch);
+    await waitFor(() => expect(autoSwitch).toBeEnabled());
+    expect(setActive).not.toHaveBeenCalled();
+
+    fireEvent.click(within(rowB).getByText("b"));
+    await waitFor(() => {
+      expect(setActive).toHaveBeenCalledWith(
+        "22222222-2222-2222-2222-222222222222",
+        true,
+      );
+    });
+    expect(setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates a focused subscription row with the keyboard", async () => {
+    const setActive = vi.fn().mockResolvedValue({});
+    vi.mocked(api.setSubscriptionActive).mockImplementation(setActive);
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({ name: "b", active: false, id: "22222222-2222-2222-2222-222222222222" }),
+    ]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("b")).toBeInTheDocument();
+    });
+    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
+    expect(rowB).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(rowB, { key: "Enter" });
     await waitFor(() => {
       expect(setActive).toHaveBeenCalledWith(
         "22222222-2222-2222-2222-222222222222",
