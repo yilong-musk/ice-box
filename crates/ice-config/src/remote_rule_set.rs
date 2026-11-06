@@ -135,45 +135,105 @@ pub fn rule_set_cache_meta_path(cache_dir: &Path, url: &str) -> PathBuf {
     rule_set_cache_path(cache_dir, url).with_extension("meta.json")
 }
 
+/// Legacy matchers the config builder expands into rule-set references:
+/// both kinds in route rules, only `geosite` in DNS rules (`geoip` DNS rules
+/// are left as they are).
+pub(crate) const ROUTE_GEO_KINDS: &[&str] = &["geoip", "geosite"];
+pub(crate) const DNS_GEO_KINDS: &[&str] = &["geosite"];
+
+/// How the builder treats a rule's legacy `geoip` / `geosite` matcher.
+pub(crate) enum GeoMatcher<'a> {
+    /// Nothing to expand; the rule is kept as it is.
+    None,
+    /// Expand `kind` (`geoip` / `geosite`) with these codes.
+    Expand {
+        kind: &'static str,
+        codes: Vec<&'a str>,
+    },
+    /// The rule cannot be expanded safely and is dropped.
+    Invalid(&'static str),
+}
+
+/// Classify `rule` for the builder. `kinds` are the matchers expanded in
+/// this rule list. A rule that combines `geoip` with `geosite`, or a geo
+/// matcher with an existing `rule_set`, is invalid: one `rule_set` list
+/// would turn their AND into an OR.
+pub(crate) fn geo_matcher<'a>(rule: &'a Value, kinds: &[&str]) -> GeoMatcher<'a> {
+    let (kind, value) = match (rule.get("geoip"), rule.get("geosite")) {
+        (None, None) => return GeoMatcher::None,
+        (Some(_), Some(_)) => return GeoMatcher::Invalid("geoip+geosite"),
+        (Some(value), None) => ("geoip", value),
+        (None, Some(value)) => ("geosite", value),
+    };
+    if !kinds.contains(&kind) {
+        return GeoMatcher::None;
+    }
+    if rule.get("rule_set").is_some() {
+        return GeoMatcher::Invalid(if kind == "geoip" {
+            "geoip+rule_set"
+        } else {
+            "geosite+rule_set"
+        });
+    }
+    let codes: Vec<&str> = match value {
+        Value::String(code) => vec![code.as_str()],
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if codes.is_empty() {
+        return GeoMatcher::Invalid(kind);
+    }
+    GeoMatcher::Expand { kind, codes }
+}
+
+/// Rule-set names (`geoip-ir`, `geosite-category-ru`) the builder resolves
+/// for the legacy matchers in `rules` and `dns`. Sorted, without duplicates.
+pub fn legacy_geo_rule_set_names(rules: &[Value], dns: Option<&Value>) -> Vec<String> {
+    let dns_rules = dns
+        .and_then(|d| d.get("rules"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let route = rules.iter().map(|rule| (rule, ROUTE_GEO_KINDS));
+    let dns = dns_rules.iter().map(|rule| (rule, DNS_GEO_KINDS));
+    let mut names: Vec<String> = route
+        .chain(dns)
+        .filter_map(|(rule, kinds)| match geo_matcher(rule, kinds) {
+            GeoMatcher::Expand { kind, codes } => {
+                Some(codes.into_iter().map(move |code| format!("{kind}-{code}")))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Every URL a profile's rule-sets need downloaded: `download` markers plus
-/// legacy `geoip` / `geosite` codes (in route and DNS rules) that have no
-/// bundled file. Sorted, without duplicates.
+/// legacy geo names (see [`legacy_geo_rule_set_names`]) whose file is not in
+/// `bundled_dir`. Presence is checked on disk, as the builder does, so a
+/// bundled file that is missing is downloaded instead. Sorted, without
+/// duplicates.
 pub fn required_rule_set_urls(
     rule_sets: &[Value],
     rules: &[Value],
     dns: Option<&Value>,
+    bundled_dir: Option<&Path>,
 ) -> Vec<String> {
     let mut urls: Vec<String> = rule_sets
         .iter()
         .filter_map(download_rule_set_url)
         .map(str::to_string)
         .collect();
-    let mut add_codes = |rule: &Value| {
-        for kind in ["geoip", "geosite"] {
-            let codes: Vec<&str> = match rule.get(kind) {
-                Some(Value::String(code)) => vec![code.as_str()],
-                Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect(),
-                _ => Vec::new(),
-            };
-            for code in codes {
-                let name = format!("{kind}-{code}");
-                if is_bundled_rule_set(&name) {
-                    continue;
-                }
-                if let Some(url) = upstream_url_for_name(&name) {
-                    urls.push(url);
-                }
-            }
-        }
-    };
-    for rule in rules {
-        add_codes(rule);
-    }
-    if let Some(dns_rules) = dns.and_then(|d| d.get("rules")).and_then(Value::as_array) {
-        for rule in dns_rules {
-            add_codes(rule);
-        }
-    }
+    let present = bundled_dir.map(crate::build::bundled_rule_set_names);
+    urls.extend(
+        legacy_geo_rule_set_names(rules, dns)
+            .into_iter()
+            .filter(|name| !present.as_ref().is_some_and(|names| names.contains(name)))
+            .filter_map(|name| upstream_url_for_name(&name)),
+    );
     urls.sort();
     urls.dedup();
     urls
@@ -254,8 +314,23 @@ mod tests {
             .ends_with(".meta.json"));
     }
 
+    fn bundled_dir(tag: &str, names: &[&str]) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ice-required-urls-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in names {
+            std::fs::write(dir.join(format!("{name}.srs")), b"x").unwrap();
+        }
+        dir
+    }
+
+    const SAGERNET: &str = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
+    const LOYALSOLDIER: &str = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/srs";
+
     #[test]
     fn required_urls_cover_markers_and_unbundled_codes() {
+        let dir = bundled_dir("cover", &["geoip-cn", "geosite-cn"]);
         let sets = vec![
             json!({"type": "download", "tag": "x", "url": "https://e.org/x.srs"}),
             json!({"type": "bundled", "tag": "cn", "name": "geosite-cn"}),
@@ -266,16 +341,44 @@ mod tests {
             json!({"geoip": "cn", "outbound": "direct"}),
         ];
         let dns = json!({"rules": [{"geosite": "category-gov-ru", "server": "local"}]});
-        let urls = required_rule_set_urls(&sets, &rules, Some(&dns));
+        let urls = required_rule_set_urls(&sets, &rules, Some(&dns), Some(&dir));
         assert_eq!(
             urls,
             vec![
                 "https://e.org/x.srs".to_string(),
-                "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/srs/ir.srs".into(),
-                "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-gov-ru.srs".into(),
-                "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs".into(),
+                format!("{LOYALSOLDIER}/ir.srs"),
+                format!("{SAGERNET}/geosite-category-gov-ru.srs"),
+                format!("{SAGERNET}/geosite-category-ru.srs"),
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_bundled_file_is_downloaded_instead() {
+        // `geosite-cn` is on the bundled list, but its file is not on disk.
+        let dir = bundled_dir("missing", &["geoip-cn"]);
+        let rules = vec![
+            json!({"geosite": "cn", "outbound": "direct"}),
+            json!({"geoip": "cn", "outbound": "direct"}),
+        ];
+        let urls = required_rule_set_urls(&[], &rules, None, Some(&dir));
+        assert_eq!(urls, vec![format!("{SAGERNET}/geosite-cn.srs")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_expandable_matchers_need_downloads() {
+        let rules = vec![
+            // Dropped by the builder: geoip and geosite together, or a geo
+            // matcher next to `rule_set`.
+            json!({"geoip": "ir", "geosite": "category-ir", "outbound": "direct"}),
+            json!({"geosite": "category-ru", "rule_set": "x", "outbound": "direct"}),
+        ];
+        // `geoip` DNS rules are not expanded.
+        let dns = json!({"rules": [{"geoip": "ir", "server": "local"}]});
+        assert!(required_rule_set_urls(&[], &rules, Some(&dns), None).is_empty());
+        assert!(legacy_geo_rule_set_names(&rules, Some(&dns)).is_empty());
     }
 
     #[test]

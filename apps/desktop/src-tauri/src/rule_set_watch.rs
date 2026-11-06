@@ -28,6 +28,10 @@ const POLL: Duration = Duration::from_secs(3);
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 static FORCE: AtomicBool = AtomicBool::new(false);
+/// New content was downloaded but not applied yet (Apply was busy). Kept
+/// apart from the download result: the retry finds every URL fresh and
+/// would otherwise never apply.
+static APPLY_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Ask the worker for a pass soon. `force` re-checks URLs that are still
 /// within their refresh interval (a manual "refresh rule-sets").
@@ -55,6 +59,7 @@ fn required_urls(state: &AppState) -> Option<Vec<String>> {
         &profile.route.rule_sets,
         &rules,
         profile.dns.as_ref(),
+        Some(&state.paths.geoip_dir()),
     ))
 }
 
@@ -70,6 +75,8 @@ pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, force: bool) -> bo
     let cache_dir = state.paths.rule_set_cache_dir();
     ice_engine::prune_rule_set_cache(&cache_dir, &urls, ice_engine::RULE_SET_CACHE_MAX_IDLE);
     if urls.is_empty() {
+        // No set is needed any more (the profile changed and was applied).
+        APPLY_PENDING.store(false, Ordering::SeqCst);
         return true;
     }
     let Ok(mgr) = application::subscription_manager(state) else {
@@ -88,7 +95,10 @@ pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, force: bool) -> bo
         .filter(|r| matches!(r.outcome, ice_engine::RuleSetRefresh::Failed(_)))
         .count();
     tracing::info!(total = reports.len(), changed, failed, "rule-set refresh");
-    if changed == 0 {
+    if changed > 0 {
+        APPLY_PENDING.store(true, Ordering::SeqCst);
+    }
+    if !APPLY_PENDING.load(Ordering::SeqCst) {
         return true;
     }
     let Ok(_orch) = state.orchestrate.try_lock() else {
@@ -98,6 +108,9 @@ pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, force: bool) -> bo
     if state.workers.is_paused_or_stopping() {
         return true;
     }
+    // Cleared before Apply reads the cache, so content downloaded meanwhile
+    // sets it again and is applied by a later pass.
+    APPLY_PENDING.store(false, Ordering::SeqCst);
     let settings = current_settings(&state.paths).unwrap_or_default();
     if let Some(warning) = application::apply_after_subscription_change(app, state, &settings) {
         tracing::warn!(code = %warning.code, error = %warning.message, "rule-set refresh: apply warning");

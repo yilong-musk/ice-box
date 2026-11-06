@@ -7,8 +7,9 @@
 # the trust decision, as with scripts/fetch-singbox.sh.
 #
 # Both sources land in third_party/bundled-rule-sets/rule-set, the single bundled
-# rule-set directory every packaging path copies from. The app only ever
-# loads these files; it never downloads a rule-set at runtime.
+# rule-set directory every packaging path copies from. These are the offline
+# copies: the app downloads newer or missing sets itself at runtime (sanitized
+# before use), and the sing-box core never fetches a rule-set.
 #
 # Usage: fetch-geoip.sh [--init]
 #   --init  write CHECKSUMS.sha256 for every source instead of verifying.

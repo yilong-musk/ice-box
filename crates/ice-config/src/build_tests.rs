@@ -4236,3 +4236,60 @@ fn unbundled_geosite_code_resolves_to_its_downloaded_upstream() {
     let _ = fs::remove_dir_all(&bundled);
     let _ = fs::remove_dir_all(&cache);
 }
+
+#[test]
+fn dns_rule_on_a_missing_download_set_is_dropped() {
+    let bundled = temp_rule_set_dir("dns-missing", &[]);
+    let cache = temp_rule_set_dir("dns-missing-cache", &[]);
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({ "type": "download", "tag": "ru", "url": DOWNLOAD_URL })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "udp", "tag": "remote", "server": "8.8.8.8" },
+            { "type": "local", "tag": "local" }
+        ],
+        "rules": [
+            { "rule_set": "ru", "server": "local" },
+            { "domain_suffix": ["example.org"], "server": "local" }
+        ],
+        "final": "remote"
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(bundled.clone()),
+        rule_set_cache_dir: Some(cache.clone()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+    let dns_rules = serde_json::to_string(&cfg["dns"]["rules"]).unwrap();
+    assert!(
+        !dns_rules.contains("\"ru\""),
+        "a DNS rule on an unavailable set would stop the core: {dns_rules}"
+    );
+    assert!(dns_rules.contains("example.org"), "{dns_rules}");
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn route_geo_rule_with_rule_set_is_dropped_not_widened() {
+    let bundled = temp_rule_set_dir("geo-and-set", &["geosite-cn.srs"]);
+    let cache = temp_rule_set_dir("geo-and-set-cache", &[]);
+    let cfg = build_with_downloads(
+        &bundled,
+        &cache,
+        vec![json!({ "geosite": "cn", "rule_set": ["other"], "outbound": "direct" })],
+        vec![],
+    );
+    let rules = serde_json::to_string(&cfg["route"]["rules"]).unwrap();
+    assert!(!rules.contains("geosite-cn"), "{rules}");
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}

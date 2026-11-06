@@ -24,11 +24,12 @@ mod share;
 
 pub use atomic::{write_bytes_atomic, write_json_atomic};
 pub use build::{
-    build_direct_only_config, build_mobile_config, build_runtime_config, config_to_pretty_json,
-    invalidate_geoip_code_cache, minimal_dns_block, restore_runtime_config_from_bak,
-    rule_never_takes_effect, share_singbox_config, share_singbox_document, tun_dns_hijack_rule,
-    tun_reserved_rules, validate_config, validate_config_for_intent, validate_template,
-    write_runtime_config_bytes, write_runtime_config_file, ConfigError,
+    build_direct_only_config, build_mobile_config, build_runtime_config,
+    bundled_rule_set_is_present, config_to_pretty_json, invalidate_geoip_code_cache,
+    minimal_dns_block, restore_runtime_config_from_bak, rule_never_takes_effect,
+    share_singbox_config, share_singbox_document, tun_dns_hijack_rule, tun_reserved_rules,
+    validate_config, validate_config_for_intent, validate_template, write_runtime_config_bytes,
+    write_runtime_config_file, ConfigError,
 };
 pub use bundled_rule_set::{
     bundled_marker_for_remote, bundled_name_for_url, bundled_rule_set_name, is_bundled_rule_set,
@@ -50,8 +51,9 @@ pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
 pub use redact::{redact_config_json, redact_config_str};
 pub use remote_rule_set::{
     download_marker_for_remote, download_rule_set_fallback, download_rule_set_url,
-    is_downloadable_rule_set_url, portable_remote_for_download, required_rule_set_urls,
-    rule_set_cache_meta_path, rule_set_cache_path, upstream_url_for_name, DOWNLOAD_RULE_SET_TYPE,
+    is_downloadable_rule_set_url, legacy_geo_rule_set_names, portable_remote_for_download,
+    required_rule_set_urls, rule_set_cache_meta_path, rule_set_cache_path, upstream_url_for_name,
+    DOWNLOAD_RULE_SET_TYPE,
 };
 pub use rule_overrides::{
     load_rule_overrides, rule_fingerprint, rule_matches_fingerprint, rule_type_of,

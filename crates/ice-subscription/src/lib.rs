@@ -250,7 +250,7 @@ pub(crate) fn sniff_format(raw: &str) -> SubscriptionFormat {
 }
 
 /// Whether parsing dropped route rules that reference rule sets ice-box
-/// never downloads. The warning is persisted with the profile, so this also
+/// cannot load (plain-`http` or otherwise unusable). The warning is persisted with the profile, so this also
 /// holds for a profile read back from disk.
 pub(crate) fn lost_rule_set_rules(warnings: &[UiMessage]) -> bool {
     warnings

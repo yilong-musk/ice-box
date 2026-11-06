@@ -3,13 +3,14 @@
 //! Rule-sets shipped with the app, and the mapping from well-known remote
 //! rule-set URLs onto them.
 //!
-//! ice-box never downloads a rule-set. A subscription's `remote` rule-set is
-//! kept only when its URL names a file the app bundles; it is stored in the
-//! profile as a `bundled` marker that carries the file name, not a path, and
-//! the config builder resolves the marker to the bundled directory of the
-//! running app. Recognition is strict: an exact host and path layout of a
-//! known upstream, no query string, binary format, and a name on
-//! [`BUNDLED_RULE_SETS`]. Anything else stays unsupported.
+//! A remote rule-set URL that names a file the app bundles maps onto that
+//! file by name, not path, and the config builder resolves it to the bundled
+//! directory of the running app. Recognition is strict: an exact host and
+//! path layout of a known upstream, no query string, binary format, and a
+//! name on [`BUNDLED_RULE_SETS`]. A subscription's `remote` set becomes a
+//! `download` marker (`remote_rule_set.rs`) that the app downloads itself
+//! and that uses the bundled file only until a sanitized copy is cached; the
+//! sing-box core never fetches a rule-set.
 
 use serde_json::{json, Value};
 

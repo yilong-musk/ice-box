@@ -31,7 +31,7 @@ use crate::{
 enum SingBoxAnswer {
     Usable,
     /// A sing-box config that parses but loses route rules to rule sets
-    /// ice-box never downloads.
+    /// ice-box cannot load (plain-`http` or otherwise unusable).
     Lossy,
     Unusable,
 }

@@ -4,6 +4,7 @@
 //! registered; the phone transport does not invoke them.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use ice_config::{AppError, AppPaths, AppProxyMode, ErrorCode, ProxyMode, SettingsPatch};
 use ice_subscription::{
@@ -146,6 +147,11 @@ fn ready<'a>(
 ) -> Result<std::sync::MutexGuard<'a, MobileHost>, AppError> {
     let mut guard = lock(host)?;
     if guard.paths_ready() {
+        // A long-lived process re-checks its rule-sets now and then; each
+        // URL is still fetched at most once per refresh interval.
+        if rule_set_check_due() {
+            spawn_rule_set_refresh(app, false);
+        }
         return Ok(guard);
     }
     let private = app
@@ -160,8 +166,27 @@ fn ready<'a>(
     guard.ensure_paths(AppPaths::new(private), shared)?;
     // First use in this process: bring downloaded rule-sets up to date. The
     // task waits for this guard before it reads anything.
+    rule_set_check_due();
     spawn_rule_set_refresh(app, false);
     Ok(guard)
+}
+
+/// How often a running process re-checks its rule-sets (the desktop worker
+/// uses the same tick).
+const RULE_SET_CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+
+static LAST_RULE_SET_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether a background rule-set check is due; records the check when it is.
+fn rule_set_check_due() -> bool {
+    let mut last = LAST_RULE_SET_CHECK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last.is_some_and(|at| at.elapsed() < RULE_SET_CHECK_EVERY) {
+        return false;
+    }
+    *last = Some(Instant::now());
+    true
 }
 
 fn read_tunnel(tunnel: &Tunnel<Wry>) -> Result<TunnelRead, AppError> {

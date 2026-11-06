@@ -11,14 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   take effect instead of being skipped. The app ships 22 common GeoSite
   rule-sets from SagerNet/sing-geosite (such as `cn`, `geolocation-!cn`,
   `category-ads-all`, `google`, `netflix` and `openai`), about 380 KB in all.
-  A category or country that is not bundled is downloaded from the same
-  upstream (see below).
+  A category or country that is not bundled, or whose bundled file is
+  missing, is downloaded from the same upstream (see below).
 - sing-box subscriptions keep the provider's split routing (domestic direct,
   ad blocking). The app now downloads a subscription's remote rule-sets itself
   (any `https` URL, `.srs` or JSON), over the same connection rules as
   subscription updates, and refreshes them once a day. Until a set has been
   downloaded, a copy of a bundled file (SagerNet/sing-geosite sets and
-  Loyalsoldier/geoip country sets, from GitHub or jsDelivr) uses that file.
+  Loyalsoldier/geoip country sets, from GitHub or jsDelivr) uses that file;
+  otherwise the route and DNS rules that need it are skipped until it is.
   A plain-`http` rule-set is still skipped with a warning.
 - Every downloaded rule-set is decoded and re-encoded before use: only known
   matcher fields are kept, values are checked, sizes are bounded, and a set

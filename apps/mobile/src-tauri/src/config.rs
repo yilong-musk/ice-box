@@ -64,12 +64,17 @@ fn profile_and_rules(
 }
 
 /// URLs of the remote rule-sets the active profile and custom rules need.
+/// Bundled files are checked on disk, so they are installed first: a
+/// bundled set is downloaded only when its file really is missing.
 pub fn required_rule_set_urls(paths: &AppPaths) -> Result<Vec<String>, AppError> {
     let (profile, rules) = profile_and_rules(paths)?;
+    ensure_geoip_rule_sets(&paths.geoip_dir());
+    invalidate_geoip_code_cache();
     Ok(ice_config::required_rule_set_urls(
         &profile.route.rule_sets,
         &rules,
         profile.dns.as_ref(),
+        Some(&paths.geoip_dir()),
     ))
 }
 

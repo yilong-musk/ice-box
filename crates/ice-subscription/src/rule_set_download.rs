@@ -246,7 +246,8 @@ pub struct RuleSetStatus {
 }
 
 /// Status of every rule-set a profile needs: its `route.rule_set` entries
-/// plus the `geoip` / `geosite` codes its route, DNS and custom rules use.
+/// plus the legacy geo names the builder expands
+/// ([`ice_config::legacy_geo_rule_set_names`]).
 /// `rules` should include custom rules. Sorted by tag.
 pub fn rule_set_statuses(
     rule_sets: &[serde_json::Value],
@@ -256,9 +257,9 @@ pub fn rule_set_statuses(
     cache_dir: &Path,
 ) -> Vec<RuleSetStatus> {
     use serde_json::Value;
+    // Same on-disk check as the config builder and `required_rule_set_urls`.
     let bundled_present = |name: &str| {
-        ice_config::is_bundled_rule_set(name)
-            && bundled_dir.is_some_and(|dir| dir.join(format!("{name}.srs")).is_file())
+        bundled_dir.is_some_and(|dir| ice_config::bundled_rule_set_is_present(dir, name))
     };
     let status = |tag: &str, source: &'static str, url: Option<&str>, fallback: Option<&str>| {
         let cached = url.and_then(|url| read_rule_set_cache_meta(cache_dir, url));
@@ -323,24 +324,7 @@ pub fn rule_set_statuses(
         };
         out.push(entry);
     }
-    let dns_rules = dns
-        .and_then(|d| d.get("rules"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let mut names: Vec<String> = Vec::new();
-    for rule in rules.iter().chain(dns_rules) {
-        for kind in ["geoip", "geosite"] {
-            let codes: Vec<&str> = match rule.get(kind) {
-                Some(Value::String(code)) => vec![code.as_str()],
-                Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect(),
-                _ => Vec::new(),
-            };
-            names.extend(codes.into_iter().map(|code| format!("{kind}-{code}")));
-        }
-    }
-    names.sort();
-    names.dedup();
+    let names = ice_config::legacy_geo_rule_set_names(rules, dns);
     for name in names {
         if out.iter().any(|s| s.tag == name) {
             continue;
