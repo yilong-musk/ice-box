@@ -2486,6 +2486,19 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&staged)
         );
+        // Source JSON input is staged in its canonical form.
+        let json_set = dir.join("geoip").join("cn.json");
+        fs::write(&json_set, RULE_SET).unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "cn",
+            "format": "source",
+            "path": json_set.to_string_lossy(),
+        }]);
+        let after = sanitize(cfg, &ctx(&dir)).expect("source input");
+        let path = after["route"]["rule_set"][0]["path"].as_str().unwrap();
+        assert_eq!(fs::read(path).unwrap(), STAGED);
         let _ = fs::remove_dir_all(&dir);
     }
 
