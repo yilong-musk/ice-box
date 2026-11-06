@@ -445,16 +445,16 @@ pub(crate) fn rule_overview(state: &AppState) -> Result<RuleOverview, AppError> 
 
 /// Where each rule-set the active profile (and the custom rules) needs comes
 /// from: a downloaded copy, a bundled file, or nothing yet.
+///
+/// Reads the full profile: the resident cache has no `route.rules` or `dns`,
+/// and legacy `geosite` / `geoip` matchers there (the built-in defaults of a
+/// share-link subscription, Clash `GEOSITE` rules) name rule-sets too.
 pub(crate) fn rule_set_status(
     state: &AppState,
 ) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
-    let cached = cached_profile(state)?;
-    let empty = NormalizedProfile::from_nodes_only(vec![]);
-    let profile = cached
-        .as_ref()
-        .map(|entry| entry.profile.as_ref())
-        .unwrap_or(&empty);
-    let mut rules = profile.route.rules.clone();
+    let mut profile =
+        read_full_profile(state)?.unwrap_or_else(|| NormalizedProfile::from_nodes_only(vec![]));
+    let mut rules = std::mem::take(&mut profile.route.rules);
     rules.extend(load_overrides(state).custom);
     Ok(ice_engine::rule_set_statuses(
         &profile.route.rule_sets,

@@ -234,6 +234,14 @@ impl Decoder<'_, '_> {
         };
         // Each nested rule takes at least two bytes (type and terminator).
         let count = self.cur.count(2)?;
+        // A `Rule` is hundreds of bytes in memory, so the byte check above
+        // does not bound the reservation: charge the rule budget first.
+        if count > self.limits.max_rules.saturating_sub(self.rules) {
+            return Err(RuleSetError::TooLarge(format!(
+                "more than {} rules",
+                self.limits.max_rules
+            )));
+        }
         let mut rules = Vec::with_capacity(count);
         for _ in 0..count {
             rules.push(self.rule(depth + 1)?);

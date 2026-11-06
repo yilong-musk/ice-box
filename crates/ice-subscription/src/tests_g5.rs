@@ -2360,7 +2360,14 @@ fn panel_singbox_answer_is_used_over_the_generic_one() {
     let meta = mgr.add(SUB_URL, None, false, None).unwrap();
     assert_eq!(meta.format, SubscriptionFormat::SingBox);
     assert_eq!(meta.group_count, 2);
-    assert_eq!(meta.rule_count, 7);
+    // Of the fixture's 7 rules, `sniff`, `hijack-dns` and the two non-`rule`
+    // `clash_mode` rules never take effect; the card counts what the Rules
+    // page lists.
+    assert_eq!(meta.rule_count, 3);
+    assert_eq!(
+        meta.rule_count,
+        mgr.active_profile().unwrap().route.rules.len()
+    );
     assert!(meta.parse_warnings.is_empty(), "{:?}", meta.parse_warnings);
     assert_eq!(fetcher.take_calls(), vec![(FetchClient::SingBox, None)]);
 }

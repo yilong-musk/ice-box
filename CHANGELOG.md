@@ -47,7 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (ice-box adds its own), and `clash_mode` rules for any mode other than Rule
   (ice-box's own Global and Direct rules come first, and a panel's mode names
   such as "全局代理" are never set). A subscription left with no rules then
-  gets the built-in split routing when that setting is on.
+  gets the built-in split routing when that setting is on. The rule count on
+  the subscription card leaves them out too.
+- A subscription DNS rule with a `geoip` matcher is now dropped. The sing-box
+  core no longer supports the field and refused to start with it.
 - The bundled rule-set directory moved from `third_party/sing-geoip` to
   `third_party/bundled-rule-sets`, since it now holds GeoIP and GeoSite files
   from more than one source.

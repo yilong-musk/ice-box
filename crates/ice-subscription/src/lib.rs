@@ -339,7 +339,14 @@ pub(crate) fn meta_from_profile(
         format,
         node_count: profile.nodes.len(),
         group_count: profile.groups.len(),
-        rule_count: profile.route.rules.len(),
+        // Same count the Rules page shows: loading drops the rules that can
+        // never take effect (`merge::drop_ineffective_rules`).
+        rule_count: profile
+            .route
+            .rules
+            .iter()
+            .filter(|rule| !ice_config::rule_never_takes_effect(rule))
+            .count(),
         has_dns: profile.dns.is_some(),
         parse_warnings: profile.parse_stats.warnings.clone(),
         last_updated: Some(Utc::now()),

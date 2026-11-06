@@ -719,6 +719,30 @@ fn dns_geosite_rule_dropped_when_unusable() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The core rejects the legacy `geoip` DNS field, and a `rule_set` would
+/// change what it matches, so such a rule is dropped and the rest stay.
+#[test]
+fn dns_geoip_rule_is_dropped() {
+    let dir = temp_rule_set_dir("dns-geoip", &["geosite-cn.srs", "geoip-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![],
+        split_dns(vec![
+            json!({ "geoip": ["cn"], "server": "cn-dns" }),
+            json!({ "geosite": ["cn"], "server": "cn-dns" }),
+        ]),
+    );
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().all(|rule| rule.get("geoip").is_none()),
+        "{rules:?}"
+    );
+    assert!(rules
+        .iter()
+        .any(|rule| rule["rule_set"] == json!(["geosite-cn"])));
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn dns_block_present() {
     let cfg = build_runtime_json(&build_input_from_nodes(

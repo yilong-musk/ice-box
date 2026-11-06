@@ -1814,8 +1814,12 @@ fn expand_geoip_rules(
 /// the bundled `geosite-{category}.srs` files, adding each set to `rule_sets`
 /// when no route rule declared it. A rule is dropped when a file it needs is
 /// missing, when it also has `geoip`, or when it already lists `rule_set`
-/// (merging the lists would turn their AND into an OR). `geoip` DNS rules are
-/// left as they are.
+/// (merging the lists would turn their AND into an OR).
+///
+/// `geoip` DNS rules are dropped, not expanded: they match the response
+/// address, which a `rule_set` reference only does under `match_response`,
+/// and the pinned core refuses to start on the legacy field (GeoIP was
+/// removed in sing-box 1.12).
 fn expand_dns_geosite_rules(
     dns: &mut Value,
     rule_sets: &mut Vec<Value>,
@@ -1824,12 +1828,19 @@ fn expand_dns_geosite_rules(
     let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
         return;
     };
-    if !rules.iter().any(|rule| rule.get("geosite").is_some()) {
+    if !rules
+        .iter()
+        .any(|rule| rule.get("geosite").is_some() || rule.get("geoip").is_some())
+    {
         return;
     }
     let present = sources.bundled_names();
     let mut dropped: Vec<String> = Vec::new();
     rules.retain_mut(|rule| {
+        if rule.get("geoip").is_some() {
+            dropped.push("geoip".into());
+            return false;
+        }
         match expand_geo_rule(
             rule,
             crate::remote_rule_set::DNS_GEO_KINDS,
@@ -1849,7 +1860,7 @@ fn expand_dns_geosite_rules(
         dropped.dedup();
         tracing::warn!(
             items = %dropped.join(","),
-            "GeoSite rule-set files missing (not bundled and not downloaded yet) for DNS geosite matchers; DNS rules dropped"
+            "DNS rules with legacy geo matchers dropped: geoip is unsupported by the core, or GeoSite rule-set files are missing (not bundled and not downloaded yet)"
         );
     }
 }

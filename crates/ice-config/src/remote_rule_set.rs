@@ -136,8 +136,8 @@ pub fn rule_set_cache_meta_path(cache_dir: &Path, url: &str) -> PathBuf {
 }
 
 /// Legacy matchers the config builder expands into rule-set references:
-/// both kinds in route rules, only `geosite` in DNS rules (`geoip` DNS rules
-/// are left as they are).
+/// both kinds in route rules, only `geosite` in DNS rules (the builder drops
+/// `geoip` DNS rules).
 pub(crate) const ROUTE_GEO_KINDS: &[&str] = &["geoip", "geosite"];
 pub(crate) const DNS_GEO_KINDS: &[&str] = &["geosite"];
 

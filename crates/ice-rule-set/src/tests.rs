@@ -304,6 +304,46 @@ fn item_limit_applies() {
     ));
 }
 
+/// A logical rule with a hostile nested count is rejected against the rule
+/// budget before its `Vec<Rule>` is reserved. The nested bytes are garbage,
+/// so reaching them would report `Malformed` instead of `TooLarge`.
+#[test]
+fn nested_rule_count_is_charged_before_allocating() {
+    fn uvarint(mut n: u64, out: &mut Vec<u8>) {
+        loop {
+            let byte = (n & 0x7f) as u8;
+            n >>= 7;
+            if n == 0 {
+                out.push(byte);
+                return;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+    fn logical_payload(nested: u64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        uvarint(1, &mut payload); // one top-level rule
+        payload.extend([1, 0]); // logical rule, mode AND
+        uvarint(nested, &mut payload);
+        payload.resize(payload.len() + 2 * nested as usize, 0xEE);
+        payload
+    }
+
+    // 4M nested rules would reserve ~1.8 GB at `size_of::<Rule>()` each.
+    let err = sanitize_err(&srs(1, &logical_payload(4_000_000)));
+    assert!(matches!(err, RuleSetError::TooLarge(_)), "{err:?}");
+
+    // The top-level rule already used one slot of the budget.
+    let limits = Limits {
+        max_rules: 10,
+        ..Limits::default()
+    };
+    let err = sanitize(&srs(1, &logical_payload(10)), &limits).expect_err("over budget");
+    assert!(matches!(err, RuleSetError::TooLarge(_)), "{err:?}");
+    let err = sanitize(&srs(1, &logical_payload(9)), &limits).expect_err("garbage rules");
+    assert!(matches!(err, RuleSetError::Malformed(_)), "{err:?}");
+}
+
 const ITEM_DOMAIN_KEYWORD_FOR_TEST: u8 = 3;
 
 #[test]

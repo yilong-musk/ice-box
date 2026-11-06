@@ -518,9 +518,14 @@ fn persist_sanitised_config_via_sudo_inner(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+/// `<idx>.json` as the guard stages rule-sets now; `<idx>.srs` from older
+/// guards is still copied so a leftover staging tree keeps working.
+#[cfg(any(target_os = "macos", test))]
 fn is_staged_rule_set_name(name: &str) -> bool {
-    let Some(stem) = name.strip_suffix(".srs") else {
+    let Some(stem) = name
+        .strip_suffix(".json")
+        .or_else(|| name.strip_suffix(".srs"))
+    else {
         return false;
     };
     !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit())
@@ -2049,7 +2054,7 @@ mod tests {
         ));
         let from = dir.join("tmp-rule-sets");
         std::fs::create_dir_all(&from).unwrap();
-        let staged = from.join("0.srs");
+        let staged = from.join("0.json");
         std::fs::write(&staged, b"x").unwrap();
         let canon = staged.canonicalize().unwrap();
         let mut cfg = serde_json::json!({
@@ -2060,9 +2065,27 @@ mod tests {
         remap_staged_rule_set_paths(&mut cfg, &from, &to).expect("remap");
         assert_eq!(
             cfg["route"]["rule_set"][0]["path"].as_str().unwrap(),
-            to.join("0.srs").to_string_lossy()
+            to.join("0.json").to_string_lossy()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staged_rule_set_names_match_what_the_guard_writes() {
+        for name in ["0.json", "12.json", "0.srs", "3.srs"] {
+            assert!(is_staged_rule_set_name(name), "{name} must be copied");
+        }
+        for name in [
+            ".json",
+            ".srs",
+            "a.json",
+            "0.json.tmp",
+            "0.txt",
+            "config.json",
+            "0",
+        ] {
+            assert!(!is_staged_rule_set_name(name), "{name} must be skipped");
+        }
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
