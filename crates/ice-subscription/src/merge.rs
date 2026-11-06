@@ -124,6 +124,8 @@ impl ProfileCache {
 
         let mut profile = read_profile(paths, meta.id)?;
         normalize_dns_on(&mut profile, platform.is_windows());
+        // Before the defaults: a profile left with no rules gets them.
+        drop_ineffective_rules(&mut profile);
         if auto_default_rules {
             apply_builtin_default_rules(&mut profile, platform);
         }
@@ -427,6 +429,16 @@ pub fn short_id(id: &uuid::Uuid) -> String {
     id.to_string()[..8].to_string()
 }
 
+/// Drop subscription rules that can never take effect in a generated config
+/// ([`ice_config::rule_never_takes_effect`]), so the Rules page lists only
+/// rules that route traffic.
+pub fn drop_ineffective_rules(profile: &mut NormalizedProfile) {
+    profile
+        .route
+        .rules
+        .retain(|rule| !ice_config::rule_never_takes_effect(rule));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,6 +565,92 @@ mod tests {
             .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
             .expect("invalidated");
         assert_eq!(updated.nodes[0].tag, "n2-longer-tag");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_drops_rules_that_never_take_effect() {
+        use crate::store::{load_index, write_subscription_success};
+        use crate::{SubscriptionFormat, SubscriptionMeta};
+        use serde_json::json;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use uuid::Uuid;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-ineffective-rules-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let paths = SubscriptionPaths::from_root(&dir);
+        let meta = SubscriptionMeta {
+            id: Uuid::new_v4(),
+            name: "t".into(),
+            url: "https://example.com/s".into(),
+            active: true,
+            format: SubscriptionFormat::SingBox,
+            node_count: 1,
+            group_count: 0,
+            rule_count: 0,
+            has_dns: false,
+            parse_warnings: vec![],
+            last_updated: None,
+            last_error: None,
+            etag: None,
+            last_modified: None,
+            fetched_as: None,
+            userinfo: None,
+            provider_info: vec![],
+            auto_update: false,
+            auto_update_interval: None,
+            source: crate::SubscriptionSource::Remote,
+        };
+        let seed = |rules: Vec<Value>| {
+            let mut profile = NormalizedProfile::from_nodes_only(vec![NormalizedOutbound {
+                tag: "n1".into(),
+                outbound: std::sync::Arc::new(
+                    json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+                ),
+            }]);
+            profile.route.rules = rules;
+            write_subscription_success(&paths, &meta, "{}", &profile).expect("seed");
+            load_index(&paths).expect("index")
+        };
+
+        // The shape a panel's sing-box config carries.
+        let index = seed(vec![
+            json!({ "action": "sniff" }),
+            json!({ "action": "hijack-dns", "protocol": "dns" }),
+            json!({ "clash_mode": "关闭代理", "outbound": "direct" }),
+            json!({ "clash_mode": "Global", "outbound": "n1" }),
+            json!({ "clash_mode": "Rule", "domain": ["rule.example"], "outbound": "n1" }),
+            json!({ "outbound": "direct", "rule_set": ["geosite-cn", "geoip-cn"] }),
+            json!({ "ip_is_private": true, "outbound": "direct" }),
+        ]);
+        let profile = ProfileCache::new()
+            .load_active_with_default_rules(&paths, &index, false, HostPlatform::MacOs)
+            .expect("load");
+        assert_eq!(
+            profile.route.rules,
+            vec![
+                json!({ "clash_mode": "Rule", "domain": ["rule.example"], "outbound": "n1" }),
+                json!({ "outbound": "direct", "rule_set": ["geosite-cn", "geoip-cn"] }),
+                json!({ "ip_is_private": true, "outbound": "direct" }),
+            ]
+        );
+
+        // Nothing effective left: the built-in defaults apply.
+        let index = seed(vec![
+            json!({ "action": "sniff" }),
+            json!({ "clash_mode": "direct", "outbound": "direct" }),
+        ]);
+        let profile = ProfileCache::new()
+            .load_active_with_default_rules(&paths, &index, true, HostPlatform::MacOs)
+            .expect("load");
+        assert_eq!(profile.route.rules.len(), 3);
+        assert_eq!(profile.route.rules[0]["ip_is_private"], true);
+        assert_eq!(profile.route.rules[1]["geosite"][0], "cn");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

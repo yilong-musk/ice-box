@@ -115,6 +115,12 @@ impl AppPaths {
         self.shared.join("geoip")
     }
 
+    /// Sanitized downloaded rule-sets (`<sha256(url)>.json` + `.meta.json`).
+    /// Under the shared root, which the core process can read on mobile.
+    pub fn rule_set_cache_dir(&self) -> PathBuf {
+        self.shared.join("rule-sets")
+    }
+
     pub fn subscriptions_index(&self) -> PathBuf {
         self.subscriptions_dir().join("index.json")
     }

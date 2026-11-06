@@ -17,6 +17,7 @@ mod mcp;
 mod orchestrate;
 mod proc_memory;
 mod proxy_terminal;
+mod rule_set_watch;
 mod runtime;
 mod runtime_status;
 #[cfg(target_os = "windows")]
@@ -387,6 +388,7 @@ pub fn run() {
             core_watch::spawn_core_watchdog(app.handle().clone());
             runtime_status::spawn_probe_watchdog(app.handle().clone());
             subscription_watch::spawn_subscription_watchdog(app.handle().clone());
+            rule_set_watch::spawn_rule_set_watchdog(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -447,6 +449,8 @@ pub fn run() {
             commands::set_group_selection,
             commands::test_node_delay,
             commands::get_rule_overview,
+            commands::get_rule_set_status,
+            commands::refresh_rule_sets,
             commands::release_rule_keyword_cache,
             commands::list_rules,
             commands::set_rule_disabled,

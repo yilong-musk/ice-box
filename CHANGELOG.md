@@ -11,10 +11,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   take effect instead of being skipped. The app ships 22 common GeoSite
   rule-sets from SagerNet/sing-geosite (such as `cn`, `geolocation-!cn`,
   `category-ads-all`, `google`, `netflix` and `openai`), about 380 KB in all.
-  A rule whose category is not bundled is still skipped. Rule-sets are only
-  updated with the app; the app never downloads them.
+  A category or country that is not bundled, or whose bundled file is
+  missing, is downloaded from the same upstream (see below).
+- sing-box subscriptions keep the provider's split routing (domestic direct,
+  ad blocking). The app now downloads a subscription's remote rule-sets itself
+  (any `https` URL, `.srs` or JSON), over the same connection rules as
+  subscription updates, and refreshes them once a day. Until a set has been
+  downloaded, a copy of a bundled file (SagerNet/sing-geosite sets and
+  Loyalsoldier/geoip country sets, from GitHub or jsDelivr) uses that file;
+  otherwise the route and DNS rules that need it are skipped until it is.
+  A plain-`http` rule-set is still skipped with a warning.
+- Every downloaded rule-set is decoded and re-encoded before use: only known
+  matcher fields are kept, values are checked, sizes are bounded, and a set
+  with a catch-all IP range, or with a regex the core could refuse to compile
+  or would read differently, is rejected, keeping the last good copy. The
+  sing-box core never fetches a rule-set, and in TUN mode the privileged side
+  re-checks every rule-set file before the core reads it.
+- Rules page: a "Rule-sets" button lists every rule-set the subscription and
+  your rules use, whether it is downloaded, bundled, or not ready yet (its
+  rules are skipped until it is), when it was last updated, and why the last
+  update failed. "Update now" downloads them all immediately.
 
 ### Changed
+
+- The bundled GeoIP rule-sets now come from Loyalsoldier/geoip instead of
+  SagerNet/sing-geoip. Its mainland China ranges come from operator BGP data
+  and cover more addresses, notably IPv6, and it is published weekly.
+- The built-in split routing for rule-less subscriptions now sends Chinese
+  domains direct with the bundled `geosite-cn` rule-set, in both routing and
+  DNS, instead of a hand-written list of about 150 domains. Its DNS split now
+  resolves every domain in `geosite-cn` with the domestic server. A `geosite`
+  matcher in a subscription's own DNS rules also uses the bundled files now.
+- Subscription rules that can never take effect are dropped when the profile
+  loads, so the Rules page no longer lists them: `sniff` and `hijack-dns`
+  (ice-box adds its own), and `clash_mode` rules for any mode other than Rule
+  (ice-box's own Global and Direct rules come first, and a panel's mode names
+  such as "全局代理" are never set). A subscription left with no rules then
+  gets the built-in split routing when that setting is on. The rule count on
+  the subscription card leaves them out too.
+- A subscription DNS rule with a `geoip` matcher is now dropped. The sing-box
+  core no longer supports the field and refused to start with it.
+- The bundled rule-set directory moved from `third_party/sing-geoip` to
+  `third_party/bundled-rule-sets`, since it now holds GeoIP and GeoSite files
+  from more than one source.
 
 - The Android APK is much smaller to download (about 76 MB to 28 MB). Native
   libraries are now compressed inside the APK, the Rust library is built for
@@ -32,6 +71,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for the node in use, replacing the "In use" label.
 
 ### Fixed
+
+- Rules page: a rule such as `ip_is_private: true` is titled by what it
+  matches ("Private IP") instead of a bare "true"; a `false` flag reads as
+  "NOT (Private IP)".
+- Rules page: the quick filters are now exclusive. Custom and Disabled could
+  be pressed together with a type chip, and the list then showed only rules
+  matching all of them, often none.
+- On desktop, an app update now replaces the bundled GeoIP / GeoSite files in
+  the data directory. Before, the copies from the first install were kept, so
+  rule-set data never changed after an update.
+- A sing-box subscription without `route.final` sent unmatched traffic
+  direct. It now goes to the config's first outbound, as in sing-box.
+- A subscription with its own rules but no usable DNS now gets the built-in
+  split DNS (domestic resolver for domestic domains, the rest through the
+  proxy) instead of a single resolver for everything.
+- `sniff` and `hijack-dns` rules from a sing-box subscription are no longer
+  emitted next to the app's own; on Windows TUN a second DNS hijack could
+  send STUN, mDNS and LLMNR traffic into the DNS engine.
 
 - Switching the UI language no longer leaves previously opened pages in the
   old language, and opening one of those pages no longer switches the

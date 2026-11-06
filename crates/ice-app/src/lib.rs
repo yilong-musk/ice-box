@@ -109,6 +109,7 @@ mod tests {
             profile: Arc::new(NormalizedProfile::from_nodes_only(vec![])),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,

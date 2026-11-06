@@ -209,6 +209,7 @@ fn group_selection_overrides_selector_default_in_built_config() {
         profile: Arc::new(profile),
         selected_tag: Some("Proxies".into()),
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: selections,
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -299,6 +300,7 @@ fn g5_10_empty_outbounds() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -346,6 +348,7 @@ fn dns_listen_key_dropped_without_dns_inbound() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -396,6 +399,7 @@ fn geoip_rules_expand_to_local_rule_sets_when_files_present() {
         profile: Arc::new(profile_with_geoip(&["cn"])),
         selected_tag: None,
         geoip_rule_set_dir: Some(dir.clone()),
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -442,6 +446,7 @@ fn geoip_rules_dropped_when_rule_set_file_missing() {
         profile: Arc::new(profile_with_geoip(&["kz"])),
         selected_tag: None,
         geoip_rule_set_dir: Some(dir.clone()),
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -499,6 +504,7 @@ fn build_with_rules(
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: Some(dir.to_path_buf()),
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
@@ -600,6 +606,144 @@ fn geosite_categories_with_a_bang_expand() {
 }
 
 #[test]
+fn rules_that_never_take_effect() {
+    use crate::rule_never_takes_effect as never;
+    assert!(never(&json!({ "action": "sniff" })));
+    assert!(never(&json!({ "action": "hijack-dns", "protocol": "dns" })));
+    // Shadowed by the builder's own Global / Direct rules, or never set.
+    assert!(never(&json!({ "clash_mode": "Global", "outbound": "a" })));
+    assert!(never(
+        &json!({ "clash_mode": "direct", "outbound": "direct" })
+    ));
+    assert!(never(&json!({ "clash_mode": "全局代理", "outbound": "a" })));
+    // Matches in Rule mode.
+    assert!(!never(&json!({ "clash_mode": "Rule", "outbound": "a" })));
+    assert!(!never(
+        &json!({ "clash_mode": "rule", "domain": ["x.example"], "outbound": "a" })
+    ));
+    assert!(!never(
+        &json!({ "action": "reject", "rule_set": ["geosite-category-ads-all"] })
+    ));
+    assert!(!never(
+        &json!({ "ip_is_private": true, "outbound": "direct" })
+    ));
+}
+
+fn build_with_dns(dir: &std::path::Path, rules: Vec<Value>, dns: Value) -> Value {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rules = rules;
+    profile.dns = Some(dns);
+    build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(dir.to_path_buf()),
+        rule_set_cache_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap()
+}
+
+fn split_dns(rules: Vec<Value>) -> Value {
+    json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+        ],
+        "rules": rules,
+        "final": "local",
+    })
+}
+
+#[test]
+fn dns_geosite_rule_defines_its_bundled_set_without_a_route_rule() {
+    let dir = temp_rule_set_dir("dns-geosite", &["geosite-cn.srs"]);
+    // The profile's own route rules do not mention geosite-cn.
+    let cfg = build_with_dns(
+        &dir,
+        vec![json!({ "domain": ["keep.example"], "outbound": "a" })],
+        split_dns(vec![json!({ "geosite": ["cn"], "server": "cn-dns" })]),
+    );
+    let dns_rule = cfg["dns"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["server"] == "cn-dns")
+        .expect("dns geosite rule kept");
+    assert_eq!(dns_rule["rule_set"], json!(["geosite-cn"]));
+    assert!(dns_rule.get("geosite").is_none());
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0]["tag"], "geosite-cn");
+    assert_eq!(sets[0]["type"], "local");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_geosite_rule_shares_the_set_a_route_rule_declared() {
+    let dir = temp_rule_set_dir("dns-geosite-shared", &["geosite-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![json!({ "geosite": ["cn"], "outbound": "direct" })],
+        split_dns(vec![json!({ "geosite": ["cn"], "server": "cn-dns" })]),
+    );
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(sets.len(), 1, "one definition for route and DNS");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dns_geosite_rule_dropped_when_unusable() {
+    let dir = temp_rule_set_dir("dns-geosite-missing", &["geosite-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![],
+        split_dns(vec![
+            json!({ "geosite": ["not-bundled"], "server": "cn-dns" }),
+            // Merging into an existing list would turn AND into OR.
+            json!({ "geosite": ["cn"], "rule_set": ["other"], "server": "cn-dns" }),
+            json!({ "domain": ["keep.example"], "server": "cn-dns" }),
+        ]),
+    );
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert!(rules
+        .iter()
+        .all(|rule| rule.get("geosite").is_none() && rule.get("rule_set").is_none()));
+    assert!(rules.iter().any(|rule| rule["domain"][0] == "keep.example"));
+    assert!(cfg["route"].get("rule_set").is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The core rejects the legacy `geoip` DNS field, and a `rule_set` would
+/// change what it matches, so such a rule is dropped and the rest stay.
+#[test]
+fn dns_geoip_rule_is_dropped() {
+    let dir = temp_rule_set_dir("dns-geoip", &["geosite-cn.srs", "geoip-cn.srs"]);
+    let cfg = build_with_dns(
+        &dir,
+        vec![],
+        split_dns(vec![
+            json!({ "geoip": ["cn"], "server": "cn-dns" }),
+            json!({ "geosite": ["cn"], "server": "cn-dns" }),
+        ]),
+    );
+    let rules = cfg["dns"]["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().all(|rule| rule.get("geoip").is_none()),
+        "{rules:?}"
+    );
+    assert!(rules
+        .iter()
+        .any(|rule| rule["rule_set"] == json!(["geosite-cn"])));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dns_block_present() {
     let cfg = build_runtime_json(&build_input_from_nodes(
         LocalTemplate::default(),
@@ -685,6 +829,7 @@ fn ipv6_switches_override_the_profile_dns_strategy() {
             profile: Arc::new(profile.clone()),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
@@ -763,6 +908,7 @@ fn fakeip_aaaa_falls_through_when_ipv6_is_enabled() {
             profile: Arc::new(profile.clone()),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
@@ -807,6 +953,7 @@ fn fakeip_aaaa_handles_string_and_broad_rules() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -855,6 +1002,7 @@ fn fakeip_with_inet6_range_keeps_aaaa_when_ipv6_is_enabled() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -899,6 +1047,7 @@ fn legacy_dns_rules_keep_the_block_in_legacy_mode() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -943,6 +1092,7 @@ fn legacy_dns_query_type_rules_do_not_become_unconditional() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -979,6 +1129,7 @@ fn dns_rules_reject_mixed_legacy_and_response_matching() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1030,6 +1181,7 @@ fn rule_set_legacy_dns_mode_strips_profile_address_family_fields() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: Some(dir.clone()),
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1090,6 +1242,7 @@ fn domain_only_dns_rule_set_keeps_fakeip_query_type_rules() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1151,6 +1304,7 @@ fn source_format_ip_rule_set_forces_legacy_dns_mode() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1206,6 +1360,7 @@ fn source_format_domain_rule_set_keeps_fakeip_query_type_rules() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1270,6 +1425,7 @@ fn source_format_domain_rule_set_with_geoip_name_keeps_fakeip_query_type_rules()
             profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
@@ -1329,6 +1485,7 @@ fn legacy_rule_set_reference_with_modern_features_is_rejected() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1375,6 +1532,7 @@ fn legacy_geoip_rule_set_reference_with_modern_features_is_rejected() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1426,6 +1584,7 @@ fn dns_rules_reject_legacy_with_response_actions() {
             profile: Arc::new(profile),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
@@ -1474,6 +1633,7 @@ fn fakeip_inet6_range_inside_fc00_7_strips_aaaa() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1658,6 +1818,7 @@ fn disabled_subscription_rules_dropped_and_custom_rules_prepended() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
@@ -1713,6 +1874,7 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
@@ -1758,6 +1920,7 @@ fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: overrides,
         capture_intent: CaptureIntent::Diagnostic,
@@ -1802,6 +1965,7 @@ fn string_rule_set_refs_are_checked_like_arrays() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1852,6 +2016,7 @@ fn remote_rule_sets_and_hosts_dns_are_dropped_for_user_mode() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1909,6 +2074,7 @@ fn subscription_rule_with_unknown_outbound_still_fails() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1933,6 +2099,7 @@ fn proxy_mode_rule_keeps_rules_and_subscription_final() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -1983,6 +2150,7 @@ fn proxy_mode_global_keeps_rules_with_clash_mode_global_target() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -2020,6 +2188,7 @@ fn proxy_mode_global_without_groups_uses_injected_proxy_selector() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -2057,6 +2226,7 @@ fn proxy_mode_direct_keeps_rules_with_clash_mode_direct() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -2190,6 +2360,7 @@ fn diagnostic_intent_never_emits_tun_inbound_even_when_tun_enabled() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -2219,6 +2390,7 @@ fn tun_config_has_both_inbounds_and_locked_shape() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2286,6 +2458,7 @@ fn tun_config_reserved_rules_precede_clash_mode_and_sniff_precedes_domain_rules(
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2331,6 +2504,7 @@ fn tun_config_works_for_every_proxy_mode_and_direct_only_keeps_tun() {
             profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
@@ -2374,6 +2548,7 @@ fn tun_config_requires_interface_name_at_build_time() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2401,6 +2576,7 @@ fn tun_config_rejects_invalid_mtu_and_address_at_build_time() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2439,6 +2615,7 @@ fn tun_intent_is_rejected_on_platforms_without_a_green_gate() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2529,6 +2706,7 @@ fn windows_tun_runtime_config_emits_ipv4_port_53_hijack_without_protocol_dns() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -2621,6 +2799,7 @@ fn build_input_serde_preserves_capture_intent_and_defaults_to_diagnostic() {
         profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Tun,
@@ -3045,7 +3224,7 @@ fn share_singbox_config_is_a_portable_document() {
             && set["url"]
                 .as_str()
                 .unwrap()
-                .contains("sing-geoip/rule-set/geoip-cn.srs")
+                .contains("Loyalsoldier/geoip/release/srs/cn.srs")
     }));
     assert!(sets.iter().any(|set| {
         set["tag"] == "geosite-cn"
@@ -3456,7 +3635,7 @@ fn share_rewrites_dns_geo_rules_and_keeps_inverted_predicates() {
 
     let sets = value["route"]["rule_set"].as_array().unwrap();
     assert!(sets.iter().any(|set| {
-        set["tag"] == "geoip-cn" && set["url"].as_str().unwrap().ends_with("/geoip-cn.srs")
+        set["tag"] == "geoip-cn" && set["url"].as_str().unwrap().ends_with("/srs/cn.srs")
     }));
     assert!(sets.iter().any(|set| {
         set["tag"] == "geosite-cn" && set["url"].as_str().unwrap().ends_with("/geosite-cn.srs")
@@ -3503,8 +3682,8 @@ fn generated_configs_pass_pinned_core_check() {
 
     let profile = || Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")]));
     // The real bundled files, as fetched by scripts/fetch-geoip.sh.
-    let bundled_dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../third_party/sing-geoip/rule-set");
+    let bundled_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../third_party/bundled-rule-sets/rule-set");
     let mut bundled_geo = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     bundled_geo.route.rules = vec![
         json!({ "geosite": ["category-ads-all"], "action": "reject" }),
@@ -3512,6 +3691,15 @@ fn generated_configs_pass_pinned_core_check() {
         json!({ "geosite": ["geolocation-!cn"], "outbound": "a" }),
         json!({ "geoip": ["cn"], "outbound": "direct" }),
     ];
+    // Same shape as the built-in split DNS for rule-less subscriptions.
+    bundled_geo.dns = Some(json!({
+        "servers": [
+            { "type": "local", "tag": "local" },
+            { "type": "udp", "tag": "cn-dns", "server": "223.5.5.5", "server_port": 53 },
+        ],
+        "rules": [{ "geosite": ["cn"], "server": "cn-dns" }],
+        "final": "local",
+    }));
     let mut legacy = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     legacy.dns = Some(json!({
         "servers": [
@@ -3597,6 +3785,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: profile(),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Tun,
@@ -3620,6 +3809,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: profile(),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Tun,
@@ -3639,6 +3829,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: Arc::new(fakeip),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Diagnostic,
@@ -3658,6 +3849,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: Arc::new(legacy),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Diagnostic,
@@ -3677,6 +3869,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: Arc::new(legacy_rule_set),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Diagnostic,
@@ -3693,6 +3886,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: Arc::new(hysteria2),
                 selected_tag: None,
                 geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Diagnostic,
@@ -3709,6 +3903,7 @@ fn generated_configs_pass_pinned_core_check() {
                 profile: Arc::new(bundled_geo),
                 selected_tag: None,
                 geoip_rule_set_dir: Some(bundled_dir.clone()),
+                rule_set_cache_dir: None,
                 group_selections: GroupSelections::new(),
                 rule_overrides: RuleOverrides::default(),
                 capture_intent: CaptureIntent::Diagnostic,
@@ -3783,6 +3978,7 @@ fn generated_tun_configs_pass_the_elevated_guard() {
             profile: Arc::new(NormalizedProfile::from_nodes_only(vec![socks("a")])),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Tun,
@@ -3819,6 +4015,7 @@ fn hysteria2_self_signed_nodes_keep_the_pre_1_14_handshake() {
         profile: Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,
@@ -3940,4 +4137,183 @@ fn share_config_rejects_mixed_legacy_and_response_dns_rules() {
         err.to_string().contains("legacy address filters"),
         "unexpected error: {err}"
     );
+}
+
+// --- App-downloaded rule-sets -------------------------------------------------
+
+const DOWNLOAD_URL: &str = "https://rules.example/ru.srs";
+
+fn build_with_downloads(
+    bundled: &std::path::Path,
+    cache: &std::path::Path,
+    rules: Vec<Value>,
+    rule_sets: Vec<Value>,
+) -> Value {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rules = rules;
+    profile.route.rule_sets = rule_sets;
+    build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(bundled.to_path_buf()),
+        rule_set_cache_dir: Some(cache.to_path_buf()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap()
+}
+
+fn cache_file(cache: &std::path::Path, url: &str) -> std::path::PathBuf {
+    let path = crate::rule_set_cache_path(cache, url);
+    fs::write(&path, br#"{"version":1,"rules":[{"domain":"x.ru"}]}"#).unwrap();
+    path
+}
+
+#[test]
+fn download_set_uses_the_cached_copy_as_source_json() {
+    let bundled = temp_rule_set_dir("dl-bundled", &[]);
+    let cache = temp_rule_set_dir("dl-cache", &[]);
+    let path = cache_file(&cache, DOWNLOAD_URL);
+    let cfg = build_with_downloads(
+        &bundled,
+        &cache,
+        vec![json!({ "rule_set": ["ru"], "outbound": "direct" })],
+        vec![json!({ "type": "download", "tag": "ru", "url": DOWNLOAD_URL })],
+    );
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(
+        sets,
+        &vec![json!({
+            "type": "local", "tag": "ru", "format": "source",
+            "path": path.to_string_lossy(),
+        })]
+    );
+    assert!(cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["rule_set"] == json!(["ru"])));
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn download_set_falls_back_to_its_bundled_copy_then_drops() {
+    let bundled = temp_rule_set_dir("dl-fallback", &["geosite-cn.srs"]);
+    let cache = temp_rule_set_dir("dl-fallback-cache", &[]);
+    let url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs";
+    let cfg = build_with_downloads(
+        &bundled,
+        &cache,
+        vec![
+            json!({ "rule_set": ["cn"], "outbound": "direct" }),
+            json!({ "rule_set": ["ru"], "outbound": "direct" }),
+        ],
+        vec![
+            json!({ "type": "download", "tag": "cn", "url": url, "bundled": "geosite-cn" }),
+            json!({ "type": "download", "tag": "ru", "url": DOWNLOAD_URL }),
+        ],
+    );
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    assert_eq!(sets.len(), 1, "ru has no file yet: {sets:?}");
+    assert_eq!(sets[0]["tag"], "cn");
+    assert_eq!(sets[0]["format"], "binary");
+    assert_eq!(
+        sets[0]["path"],
+        Value::String(bundled.join("geosite-cn.srs").to_string_lossy().into())
+    );
+    let rules = serde_json::to_string(&cfg["route"]["rules"]).unwrap();
+    assert!(
+        !rules.contains("\"ru\""),
+        "rule needing ru is dropped: {rules}"
+    );
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn unbundled_geosite_code_resolves_to_its_downloaded_upstream() {
+    let bundled = temp_rule_set_dir("dl-geo", &["geosite-cn.srs"]);
+    let cache = temp_rule_set_dir("dl-geo-cache", &[]);
+    let url = crate::upstream_url_for_name("geosite-category-ru").unwrap();
+    let path = cache_file(&cache, &url);
+    let cfg = build_with_downloads(
+        &bundled,
+        &cache,
+        vec![json!({ "geosite": ["cn", "category-ru"], "outbound": "direct" })],
+        vec![],
+    );
+    let sets = cfg["route"]["rule_set"].as_array().unwrap();
+    let ru = sets
+        .iter()
+        .find(|s| s["tag"] == "geosite-category-ru")
+        .expect("downloaded category");
+    assert_eq!(ru["format"], "source");
+    assert_eq!(ru["path"], Value::String(path.to_string_lossy().into()));
+    let cn = sets.iter().find(|s| s["tag"] == "geosite-cn").unwrap();
+    assert_eq!(cn["format"], "binary");
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn dns_rule_on_a_missing_download_set_is_dropped() {
+    let bundled = temp_rule_set_dir("dns-missing", &[]);
+    let cache = temp_rule_set_dir("dns-missing-cache", &[]);
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
+    profile.route.rule_sets = vec![json!({ "type": "download", "tag": "ru", "url": DOWNLOAD_URL })];
+    profile.dns = Some(json!({
+        "servers": [
+            { "type": "udp", "tag": "remote", "server": "8.8.8.8" },
+            { "type": "local", "tag": "local" }
+        ],
+        "rules": [
+            { "rule_set": "ru", "server": "local" },
+            { "domain_suffix": ["example.org"], "server": "local" }
+        ],
+        "final": "remote"
+    }));
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: Some(bundled.clone()),
+        rule_set_cache_dir: Some(cache.clone()),
+        group_selections: GroupSelections::new(),
+        rule_overrides: RuleOverrides::default(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+    let dns_rules = serde_json::to_string(&cfg["dns"]["rules"]).unwrap();
+    assert!(
+        !dns_rules.contains("\"ru\""),
+        "a DNS rule on an unavailable set would stop the core: {dns_rules}"
+    );
+    assert!(dns_rules.contains("example.org"), "{dns_rules}");
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn route_geo_rule_with_rule_set_is_dropped_not_widened() {
+    let bundled = temp_rule_set_dir("geo-and-set", &["geosite-cn.srs"]);
+    let cache = temp_rule_set_dir("geo-and-set-cache", &[]);
+    let cfg = build_with_downloads(
+        &bundled,
+        &cache,
+        vec![json!({ "geosite": "cn", "rule_set": ["other"], "outbound": "direct" })],
+        vec![],
+    );
+    let rules = serde_json::to_string(&cfg["route"]["rules"]).unwrap();
+    assert!(!rules.contains("geosite-cn"), "{rules}");
+    let _ = fs::remove_dir_all(&bundled);
+    let _ = fs::remove_dir_all(&cache);
 }

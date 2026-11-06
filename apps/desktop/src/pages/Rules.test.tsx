@@ -20,6 +20,8 @@ const updateCustomRule = vi.fn();
 const removeCustomRule = vi.fn();
 const listNodes = vi.fn();
 const listenStateChanged = vi.fn();
+const getRuleSetStatus = vi.fn();
+const refreshRuleSets = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -31,6 +33,8 @@ vi.mock("../api/client", () => ({
     removeCustomRule: (...args: unknown[]) => removeCustomRule(...args),
     listNodes: (...args: unknown[]) => listNodes(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
+    getRuleSetStatus: (...args: unknown[]) => getRuleSetStatus(...args),
+    refreshRuleSets: (...args: unknown[]) => refreshRuleSets(...args),
   },
   formatInvokeError: (err: unknown) => {
     if (err && typeof err === "object") {
@@ -109,6 +113,8 @@ describe("Rules", () => {
     updateCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-custom" });
     removeCustomRule.mockResolvedValue({ ok: true });
     listenStateChanged.mockResolvedValue(() => {});
+    getRuleSetStatus.mockResolvedValue([]);
+    refreshRuleSets.mockResolvedValue([]);
     listNodes.mockResolvedValue([
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
@@ -233,8 +239,8 @@ describe("Rules", () => {
     expect(view.getByRole("radio", { name: t("rules.typeAll") })).toBeInTheDocument();
     expect(view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` })).toBeInTheDocument();
     const chips = view.getByLabelText(t("rules.filtersAria"));
-    const customFilter = view.getByRole("button", { name: t("rules.customCount", { count: 1 }) });
-    const disabledFilter = view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) });
+    const customFilter = view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) });
+    const disabledFilter = view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) });
     expect(chips).toContainElement(customFilter);
     expect(chips).toContainElement(disabledFilter);
     expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
@@ -322,7 +328,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("rules.disabledCount", { count: 1 }) }).click();
+    view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
@@ -338,13 +344,48 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    view.getByRole("button", { name: t("rules.customCount", { count: 1 }) }).click();
+    view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) }).click();
 
     await waitFor(() => {
       const calls = listRules.mock.calls;
       const call = calls[calls.length - 1]?.[0] as { custom: boolean | null };
       expect(call.custom).toBe(true);
     });
+  });
+
+  it("keeps quick filters exclusive so they never combine into an empty list", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    const lastCall = () => {
+      const calls = listRules.mock.calls;
+      return calls[calls.length - 1]?.[0] as {
+        type: string | null;
+        custom: boolean | null;
+        disabled: string;
+      };
+    };
+    const geoip = view.getByRole("radio", { name: `${ruleTypeLabel("geoip")} 1` });
+    const custom = view.getByRole("radio", { name: t("rules.customCount", { count: 1 }) });
+    const disabled = view.getByRole("radio", { name: t("rules.disabledCount", { count: 1 }) });
+
+    fireEvent.click(geoip);
+    await waitFor(() => expect(lastCall().type).toBe("geoip"));
+
+    fireEvent.click(custom);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: null, custom: true, disabled: "all" }));
+    expect(geoip).toHaveAttribute("aria-checked", "false");
+    expect(custom).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(disabled);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: null, custom: null, disabled: "disabled" }));
+    expect(custom).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(geoip);
+    await waitFor(() => expect(lastCall()).toMatchObject({ type: "geoip", custom: null, disabled: "all" }));
+    expect(disabled).toHaveAttribute("aria-checked", "false");
   });
 
   it("debounces keyword search and sends server-side filters", async () => {
@@ -818,5 +859,56 @@ describe("Rules", () => {
       const call = calls[calls.length - 1]?.[0] as { offset: number };
       expect(call.offset).toBe(100);
     });
+  });
+
+  it("hides the rule-set button when the profile uses no rule-sets", async () => {
+    render(<Rules />);
+    await screen.findByTitle("n1");
+    await waitFor(() => expect(getRuleSetStatus).toHaveBeenCalled());
+    expect(screen.queryByTestId("rule-sets-button")).toBeNull();
+  });
+
+  it("lists rule-set status and updates them on demand", async () => {
+    const pending = {
+      tag: "geosite-category-ru",
+      source: "geo",
+      url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs",
+      state: "pending",
+      last_error: "offline",
+    };
+    const cn = {
+      tag: "geosite-cn",
+      source: "download",
+      url: "https://example.com/geosite-cn.srs",
+      state: "downloaded",
+      updated_at: 1_790_000_000,
+      checked_at: 1_790_000_000,
+      items: 9402,
+    };
+    getRuleSetStatus.mockResolvedValue([cn, pending]);
+    refreshRuleSets.mockResolvedValue([
+      cn,
+      { ...pending, state: "downloaded", last_error: undefined, items: 120, updated_at: 1_790_000_100 },
+    ]);
+    render(<Rules />);
+    const button = await screen.findByTestId("rule-sets-button");
+    expect(button.textContent).toBe(t("rules.ruleSetsPending", { count: 2, pending: 1 }));
+
+    fireEvent.click(button);
+    const dialog = await screen.findByTestId("rule-set-status-dialog");
+    const view = within(dialog);
+    expect(view.getByText("geosite-category-ru")).toBeTruthy();
+    expect(view.getByText(t("ruleSets.state.pending"))).toBeTruthy();
+    expect(view.getByText(t("ruleSets.lastError", { detail: "offline" }))).toBeTruthy();
+
+    fireEvent.click(view.getByRole("button", { name: t("ruleSets.refresh") }));
+    await waitFor(() => expect(refreshRuleSets).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(view.queryByText(t("ruleSets.state.pending"))).toBeNull(),
+    );
+    expect(view.getAllByText(t("ruleSets.state.downloaded"))).toHaveLength(2);
+    expect(screen.getByTestId("rule-sets-button").textContent).toBe(
+      t("rules.ruleSets", { count: 2 }),
+    );
   });
 });

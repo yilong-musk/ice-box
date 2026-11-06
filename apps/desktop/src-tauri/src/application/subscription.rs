@@ -186,6 +186,8 @@ pub(crate) fn add_subscription_use_case(
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
+    // The profile may need rule-sets that are not downloaded yet.
+    crate::rule_set_watch::request_refresh(false);
     if let Some(w) = &apply_warning {
         tracing::warn!(code = %w.code, error = %w.message, "add_subscription: apply warning");
     }
@@ -226,6 +228,8 @@ pub(crate) fn import_subscription_file_use_case(
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
+    // The profile may need rule-sets that are not downloaded yet.
+    crate::rule_set_watch::request_refresh(false);
     if let Some(w) = &apply_warning {
         tracing::warn!(code = %w.code, error = %w.message, "import_subscription_file: apply warning");
     }
@@ -259,6 +263,8 @@ pub(crate) fn remove_subscription_use_case(
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
+    // The profile may need rule-sets that are not downloaded yet.
+    crate::rule_set_watch::request_refresh(false);
     let mut value = serde_json::json!({ "ok": true });
     attach_apply_warning(&mut value, apply_warning);
     drop(_orch);
@@ -310,6 +316,8 @@ pub(crate) fn update_subscription_use_case(
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
+    // The profile may need rule-sets that are not downloaded yet.
+    crate::rule_set_watch::request_refresh(false);
     let mut value = serde_json::to_value(meta)
         .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
     attach_apply_warning(&mut value, apply_warning);
@@ -338,6 +346,8 @@ pub(crate) fn set_active_subscription_use_case(
 
     let settings = current_settings(&state.paths)?;
     let apply_warning = apply_after_subscription_change(app, state, &settings);
+    // The profile may need rule-sets that are not downloaded yet.
+    crate::rule_set_watch::request_refresh(false);
     let mut value = serde_json::to_value(meta)
         .map_err(|e| AppError::new(ErrorCode::ConfigInvalid, format!("serialize: {e}")))?;
     attach_apply_warning(&mut value, apply_warning);

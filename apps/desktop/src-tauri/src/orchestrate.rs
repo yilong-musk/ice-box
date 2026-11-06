@@ -38,7 +38,8 @@ pub fn repo_third_party_singbox() -> PathBuf {
 
 pub fn repo_geoip_rule_sets() -> PathBuf {
     // apps/desktop/src-tauri → repo root
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../third_party/sing-geoip/rule-set")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../third_party/bundled-rule-sets/rule-set")
 }
 
 /// Geoip rule-sets are copied into the app data dir only by the app itself and
@@ -46,8 +47,10 @@ pub fn repo_geoip_rule_sets() -> PathBuf {
 /// is scanned at most once per process lifetime.
 static ENSURED_GEOIP_DIRS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
-/// Ensure `geoip-{code}.srs` rule-sets exist in the app data dir (copied from bundled
-/// resources, falling back to the repo copy for dev/tests). Returns the directory.
+/// Ensure the bundled `geoip-*.srs` / `geosite-*.srs` rule-sets in the app data dir
+/// match the ones this build ships (copied from bundled resources, falling back to
+/// the repo copy for dev/tests), so an app update replaces older data. Returns the
+/// directory.
 ///
 /// The directory lock is held for the whole copy so a setup warmup and the
 /// first `generate_config` cannot duplicate the scan.
@@ -80,8 +83,14 @@ pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>)
                     continue;
                 }
                 let dest = target.join(&name);
-                if !dest.is_file() && std::fs::copy(entry.path(), &dest).is_ok() {
-                    copied += 1;
+                match refresh_rule_set_file(&entry.path(), &dest) {
+                    Ok(true) => copied += 1,
+                    Ok(false) => {}
+                    Err(err) => tracing::warn!(
+                        file = %dest.display(),
+                        error = %err,
+                        "bundled rule-set not refreshed; keeping the existing copy"
+                    ),
                 }
             }
         }
@@ -91,6 +100,24 @@ pub fn ensure_geoip_rule_sets(app_paths: &AppPaths, resource_dir: Option<&Path>)
     ice_config::invalidate_geoip_code_cache();
     ensured.push(target.clone());
     target
+}
+
+/// Copy `src` over `dest` when `dest` is missing or differs. The copy goes
+/// through a temporary file and a rename, so a failure leaves the old file.
+fn refresh_rule_set_file(src: &Path, dest: &Path) -> std::io::Result<bool> {
+    let fresh = std::fs::read(src)?;
+    if std::fs::read(dest).is_ok_and(|current| current == fresh) {
+        return Ok(false);
+    }
+    let mut tmp_name = dest.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".partial");
+    let tmp = dest.with_file_name(tmp_name);
+    std::fs::write(&tmp, &fresh)?;
+    if let Err(err) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(true)
 }
 
 pub fn build_core_paths(
@@ -406,6 +433,7 @@ pub fn generate_config_with_cache(
         profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
+        rule_set_cache_dir: Some(app_paths.rule_set_cache_dir()),
         group_selections,
         rule_overrides,
         capture_intent,
@@ -911,6 +939,36 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use uuid::Uuid;
+
+    #[test]
+    fn bundled_rule_set_copies_are_refreshed_when_they_differ() {
+        let dir = std::env::temp_dir().join(format!(
+            "ice-box-rs-refresh-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.srs");
+        let dest = dir.join("geoip-cn.srs");
+        std::fs::write(&src, b"new").unwrap();
+
+        assert!(refresh_rule_set_file(&src, &dest).unwrap(), "missing copy");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert!(
+            !refresh_rule_set_file(&src, &dest).unwrap(),
+            "already current"
+        );
+
+        // An older app version left different data behind.
+        std::fs::write(&dest, b"old").unwrap();
+        assert!(refresh_rule_set_file(&src, &dest).unwrap(), "stale copy");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert!(!dir.join("geoip-cn.srs.partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[derive(Default)]
     struct TrackProxy {

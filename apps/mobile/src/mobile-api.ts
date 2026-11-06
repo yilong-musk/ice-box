@@ -18,6 +18,7 @@ import type {
   NodeInfo,
   ProxyMode,
   RuleOverview,
+  RuleSetStatus,
   SettingsPatch,
   StatusResponse,
   SubscriptionMeta,
@@ -118,6 +119,8 @@ export const api = {
     });
   },
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
+  getRuleSetStatus: () => invoke<RuleSetStatus[]>("get_rule_set_status"),
+  refreshRuleSets: () => invoke<RuleSetStatus[]>("refresh_rule_sets"),
   listRules: (req: ListRulesRequest) => invoke<ListRulesResponse>("list_rules", { req }),
   setRuleDisabled: (fingerprint: string, disabled: boolean) =>
     invoke<{ ok: boolean; disabled: boolean; apply_warning?: AppErrorPayload }>(

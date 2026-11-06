@@ -21,17 +21,19 @@ pub use ice_config::{
     TunSettings, RULE_TYPE_KEYS,
 };
 pub use ice_subscription::{
-    active_subscription, apply_builtin_default_rules, detect_format, list_profile_outbounds,
-    load_active_profile, load_active_profile_with_default_rules, load_index, maybe_decode_base64,
-    normalize_raw_body, parse_clash_profile, parse_profile, parse_singbox, parse_singbox_profile,
-    parse_subscription, read_index, read_profile, recover_subscription_dirs,
+    active_subscription, apply_builtin_default_rules, detect_format, drop_ineffective_rules,
+    list_profile_outbounds, load_active_profile, load_active_profile_with_default_rules,
+    load_index, maybe_decode_base64, normalize_raw_body, parse_clash_profile, parse_profile,
+    parse_singbox, parse_singbox_profile, parse_subscription, prune_rule_set_cache, read_index,
+    read_profile, read_rule_set_cache_meta, recover_subscription_dirs,
     redact_subscription_url_for_log, redact_subscription_url_for_ui, remove_subscription,
-    resolve_selected_tag, set_active, set_auto_update, set_enabled, subscription_share_text,
-    write_subscription_error, write_subscription_success, AutoUpdateInterval, DefaultFetcher,
-    DirectFetcher, FetchResponse, HttpFetcher, MemorySubscriptionManager, MockFetchMode,
-    MockFetcher, ProfileCache, SubscriptionError, SubscriptionFormat, SubscriptionIndex,
-    SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionProxy,
-    SubscriptionShareKind, SubscriptionSource,
+    resolve_selected_tag, rule_set_statuses, set_active, set_auto_update, set_enabled,
+    subscription_share_text, write_subscription_error, write_subscription_success,
+    AutoUpdateInterval, DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher,
+    MemorySubscriptionManager, MockFetchMode, MockFetcher, ProfileCache, RuleSetCacheMeta,
+    RuleSetRefresh, RuleSetRefreshReport, RuleSetStatus, SubscriptionError, SubscriptionFormat,
+    SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionProxy,
+    SubscriptionShareKind, SubscriptionSource, RULE_SET_CACHE_MAX_IDLE, RULE_SET_REFRESH_INTERVAL,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 
@@ -110,6 +112,7 @@ pub fn subscription_to_config(
     platform: HostPlatform,
 ) -> Result<String, EngineError> {
     let (_, mut profile) = normalize_raw_body(raw, platform)?;
+    drop_ineffective_rules(&mut profile);
     // Rule-less bodies get the built-in split-routing defaults (same default
     // the desktop app applies via `auto_default_rules`).
     apply_builtin_default_rules(&mut profile, platform);
@@ -118,6 +121,7 @@ pub fn subscription_to_config(
         profile: std::sync::Arc::new(profile),
         selected_tag: None,
         geoip_rule_set_dir,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent,
@@ -184,7 +188,7 @@ proxies:
                 .join("configs/examples/subscription-uri-list.txt"),
         )
         .expect("fixture");
-        let geoip_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let geoip_dir = manifest.join("../../third_party/bundled-rule-sets/rule-set");
         let json = subscription_to_config(
             &raw,
             LocalTemplate::default(),
@@ -244,9 +248,13 @@ proxies:
             .any(|r| r["rule_set"][0] == "geoip-cn" && r["outbound"] == "direct"));
         assert!(rules
             .iter()
-            .any(|r| r.get("domain_suffix").is_some() && r["outbound"] == "direct"));
+            .any(|r| r["rule_set"][0] == "geosite-cn" && r["outbound"] == "direct"));
         let rule_sets = value["route"]["rule_set"].as_array().expect("rule_set");
         assert!(rule_sets.iter().any(|s| s["tag"] == "geoip-cn"));
+        assert_eq!(
+            rule_sets.iter().find(|s| s["tag"] == "geosite-cn").unwrap()["type"],
+            "local"
+        );
         assert_eq!(
             rule_sets.iter().find(|s| s["tag"] == "geoip-cn").unwrap()["type"],
             "local"
@@ -266,7 +274,9 @@ proxies:
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["server"] == "cn-dns"));
+            .any(|r| r["rule_set"][0] == "geosite-cn"
+                && r["server"] == "cn-dns"
+                && r.get("geosite").is_none()));
         assert_eq!(value["route"]["default_domain_resolver"], "local");
     }
 
@@ -279,7 +289,7 @@ proxies:
                 .join("configs/examples/subscription-clash-rules-min.yaml"),
         )
         .expect("fixture");
-        let rule_set_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let rule_set_dir = manifest.join("../../third_party/bundled-rule-sets/rule-set");
         let json = subscription_to_config(
             &raw,
             LocalTemplate::default(),
@@ -315,6 +325,66 @@ proxies:
     }
 
     #[test]
+    fn panel_singbox_rule_sets_resolve_to_bundled_files() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(
+            manifest
+                .join("../..")
+                .join("configs/examples/subscription-singbox-panel.json"),
+        )
+        .expect("fixture");
+        let rule_set_dir = manifest.join("../../third_party/bundled-rule-sets/rule-set");
+        let json = subscription_to_config(
+            &raw,
+            LocalTemplate::default(),
+            Some(rule_set_dir.clone()),
+            CaptureIntent::Diagnostic,
+            HostPlatform::Windows,
+        )
+        .expect("pipeline");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let sets = value["route"]["rule_set"].as_array().expect("rule sets");
+        for (tag, file) in [
+            ("geosite-cn", "geosite-cn.srs"),
+            ("geosite-category-ads-all", "geosite-category-ads-all.srs"),
+            ("geoip-cn", "geoip-cn.srs"),
+        ] {
+            let set = sets
+                .iter()
+                .find(|s| s["tag"] == tag)
+                .unwrap_or_else(|| panic!("{tag}: {sets:?}"));
+            assert_eq!(set["type"], "local");
+            assert_eq!(
+                set["path"],
+                serde_json::Value::String(rule_set_dir.join(file).to_string_lossy().into())
+            );
+        }
+        let rules = value["route"]["rules"].as_array().expect("rules");
+        assert!(rules.iter().any(|r| {
+            r["rule_set"] == serde_json::json!(["geosite-cn", "geoip-cn"])
+                && r["outbound"] == "direct"
+        }));
+        assert!(rules.iter().any(|r| {
+            r["rule_set"] == serde_json::json!(["geosite-category-ads-all"])
+                && r["action"] == "reject"
+        }));
+        // The builder owns sniff and DNS hijack (none in this capture shape);
+        // the panel's copies are not emitted.
+        assert!(
+            rules
+                .iter()
+                .all(|r| r["action"] != "sniff" && r["action"] != "hijack-dns"),
+            "{rules:?}"
+        );
+        assert_eq!(value["route"]["final"], "节点选择");
+        assert!(value["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["tag"] == "remote-dns"));
+    }
+
+    #[test]
     fn uri_list_windows_pipeline_moves_the_resolver_off_the_proxy_dns() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let raw = std::fs::read_to_string(
@@ -323,7 +393,7 @@ proxies:
                 .join("configs/examples/subscription-uri-list.txt"),
         )
         .expect("fixture");
-        let geoip_dir = manifest.join("../../third_party/sing-geoip/rule-set");
+        let geoip_dir = manifest.join("../../third_party/bundled-rule-sets/rule-set");
         let json = subscription_to_config(
             &raw,
             LocalTemplate::default(),
@@ -424,6 +494,7 @@ proxies:
             ])),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,
@@ -466,6 +537,7 @@ proxies:
             profile: std::sync::Arc::new(NormalizedProfile::from_nodes_only(vec![])),
             selected_tag: None,
             geoip_rule_set_dir: None,
+            rule_set_cache_dir: None,
             group_selections: GroupSelections::new(),
             rule_overrides: RuleOverrides::default(),
             capture_intent: CaptureIntent::Diagnostic,

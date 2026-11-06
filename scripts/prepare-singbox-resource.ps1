@@ -187,7 +187,7 @@ if ($Platform -eq "win") {
   }
 }
 
-$GeoipSrc = Join-Path $Root "third_party/sing-geoip/rule-set"
+$GeoipSrc = Join-Path $Root "third_party/bundled-rule-sets/rule-set"
 $GeoipDest = Join-Path $DestDir "geoip"
 if (Test-Path $GeoipSrc) {
   New-Item -ItemType Directory -Force -Path $GeoipDest | Out-Null

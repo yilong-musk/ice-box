@@ -31,7 +31,7 @@ use crate::{
 enum SingBoxAnswer {
     Usable,
     /// A sing-box config that parses but loses route rules to rule sets
-    /// ice-box never downloads.
+    /// ice-box cannot load (plain-`http` or otherwise unusable).
     Lossy,
     Unusable,
 }
@@ -755,6 +755,19 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
     pub fn active_profile(&self) -> Result<Arc<NormalizedProfile>, SubscriptionError> {
         let index = load_index(&self.paths)?;
         load_active_profile(&self.paths, &index, self.platform)
+    }
+
+    /// Download remote rule-sets with this manager's fetcher (same proxy
+    /// and SSRF rules as subscription fetches). See
+    /// [`crate::refresh_rule_sets`].
+    pub fn refresh_rule_sets(
+        &self,
+        cache_dir: &std::path::Path,
+        urls: &[String],
+        max_age: std::time::Duration,
+        force: bool,
+    ) -> Vec<crate::RuleSetRefreshReport> {
+        crate::refresh_rule_sets(&self.fetcher, cache_dir, urls, max_age, force)
     }
 }
 

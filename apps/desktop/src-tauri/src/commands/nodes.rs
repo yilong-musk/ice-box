@@ -28,6 +28,32 @@ pub async fn get_rule_overview(app: AppHandle) -> Result<RuleOverview, AppError>
 }
 
 #[tauri::command]
+pub async fn get_rule_set_status(
+    app: AppHandle,
+) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
+    run_blocking("get_rule_set_status", move || {
+        let state = app.state::<AppState>();
+        rule_set_status(state.inner())
+    })
+    .await
+}
+
+/// Download every rule-set the profile needs now, ignoring the daily
+/// interval, re-apply when anything changed, and return the new status.
+#[tauri::command]
+pub async fn refresh_rule_sets(app: AppHandle) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
+    run_blocking("refresh_rule_sets", move || {
+        let state = app.state::<AppState>();
+        if !crate::rule_set_watch::refresh_pass(state.inner(), &app, true) {
+            // Apply was busy; the background worker re-applies shortly.
+            crate::rule_set_watch::request_refresh(false);
+        }
+        rule_set_status(state.inner())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_rules(
     app: AppHandle,
     req: ListRulesRequest,

@@ -69,7 +69,12 @@ describe("rule helpers", () => {
       ruleMatchSummary(row({ domain_suffix: ["a.com", "b.com"], outbound: "direct" })),
     ).toBe("a.com, b.com");
     expect(ruleMatchSummary(row({ geoip: ["cn"], outbound: "direct" }))).toBe("cn");
-    expect(ruleMatchSummary(row({ ip_is_private: true, outbound: "direct" }))).toBe("true");
+    expect(ruleMatchSummary(row({ ip_is_private: true, outbound: "direct" }))).toBe(
+      t("ruleType.ipIsPrivate"),
+    );
+    expect(ruleMatchSummary(row({ source_ip_is_private: false, outbound: "direct" }))).toBe(
+      t("rules.invertedSummary", { summary: t("ruleType.sourceIpIsPrivate") }),
+    );
     expect(ruleMatchSummary(row({ outbound: "direct" }))).toBe("");
   });
 

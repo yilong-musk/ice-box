@@ -381,6 +381,23 @@ export type RuleOverview = {
 };
 
 
+/** Where one rule-set the active profile needs comes from. */
+export type RuleSetStatus = {
+  tag: string;
+  /** A subscription's remote set, a `geoip` / `geosite` code, a bundled marker, or a local file. */
+  source: "download" | "geo" | "bundled" | "local";
+  /** Download URL without query or credentials. */
+  url?: string;
+  /** `pending`: nothing usable yet, so the rules that need it are skipped. */
+  state: "downloaded" | "bundled" | "pending" | "local";
+  /** Unix seconds of the last download that brought new content. */
+  updated_at?: number;
+  /** Unix seconds of the last successful check. */
+  checked_at?: number;
+  items?: number;
+  last_error?: string;
+};
+
 export type RuleRow = {
   /** Position in the active subscription's route.rules; null for custom rules. */
   index: number | null;
@@ -466,6 +483,9 @@ export interface CoreApi {
   /** Write that sing-box document to a file. `"cancelled"` when the save dialog is dismissed. */
   exportSubscriptionSingbox(id: string, name: string, title: string): Promise<"saved" | "cancelled">;
   getRuleOverview(): Promise<RuleOverview>;
+  getRuleSetStatus(): Promise<RuleSetStatus[]>;
+  /** Download every needed rule-set now (ignoring the daily interval); resolves with the new status. */
+  refreshRuleSets(): Promise<RuleSetStatus[]>;
   listRules(req: ListRulesRequest): Promise<ListRulesResponse>;
   setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean; apply_warning?: AppErrorPayload }>;
   addCustomRule(rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;

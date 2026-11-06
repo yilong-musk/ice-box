@@ -686,7 +686,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     // Disabled (fingerprint-matched) subscription rules are dropped; custom rules are
     // prepended after the `clash_mode` rules so a custom / subscription rule can never
     // win over the active runtime mode (e.g. a custom `direct` rule in global mode).
-    let (final_rules, rule_sets): (Vec<Value>, Vec<Value>) = {
+    let (final_rules, mut rule_sets): (Vec<Value>, Vec<Value>) = {
         let mut final_rules: Vec<Value> = Vec::new();
         // Reserved bypass rules precede `clash_mode` (`docs/tun.md`): the
         // control path stays direct even in
@@ -711,12 +711,15 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .rules
             .iter()
             .filter(|r| !input.rule_overrides.is_rule_disabled(r))
+            // Profiles are filtered at load (`merge.rs`); this covers cached
+            // profiles parsed before that filter existed.
+            .filter(|r| !rule_never_takes_effect(r))
             .cloned()
             .collect();
         let (mut sub_rules, mut sub_sets) = expand_geoip_rules(
             &enabled_sub_rules,
             &input.profile.route.rule_sets,
-            input.geoip_rule_set_dir.as_deref(),
+            RuleSetSources::of(input),
         );
         ice_config_guard::retain_local_rule_sets(&mut sub_sets);
         let sub_set_tags: std::collections::HashSet<&str> = sub_sets
@@ -758,11 +761,8 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         // Custom rules are expanded the same way: they are persisted verbatim, so a
         // rule written before the add-time validation may still carry `geoip` or
         // `geosite`.
-        let (custom_rules, mut all_sets) = expand_geoip_rules(
-            &custom_rules,
-            &sub_sets,
-            input.geoip_rule_set_dir.as_deref(),
-        );
+        let (custom_rules, mut all_sets) =
+            expand_geoip_rules(&custom_rules, &sub_sets, RuleSetSources::of(input));
         ice_config_guard::retain_local_rule_sets(&mut all_sets);
         final_rules.extend(custom_rules);
         final_rules.extend(sub_rules);
@@ -774,21 +774,6 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
             .unwrap()
             .insert("rules".into(), Value::Array(final_rules));
     }
-    // DNS rules can only be kept in legacy mode when they reference a set
-    // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
-    // so; GeoSite and other local sets may be domain-only.
-    let legacy_dns_rule_set_tags: HashSet<String> = rule_sets
-        .iter()
-        .filter(|set| rule_set_is_known_ip_cidr(set))
-        .filter_map(|set| set.get("tag").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    if !rule_sets.is_empty() {
-        route
-            .as_object_mut()
-            .unwrap()
-            .insert("rule_set".into(), Value::Array(rule_sets));
-    }
-
     let mut dns = input
         .profile
         .dns
@@ -803,6 +788,24 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     ice_config_guard::retain_allowed_dns_servers(&mut dns);
     if !dns_block_is_usable(&dns) {
         dns = minimal_dns_block(input.platform);
+    }
+    // DNS `geosite` matchers resolve to the same bundled files as route rules,
+    // adding a set definition when no route rule declared it.
+    expand_dns_geosite_rules(&mut dns, &mut rule_sets, RuleSetSources::of(input));
+    retain_dns_rules_with_known_sets(&mut dns, &rule_sets);
+    // DNS rules can only be kept in legacy mode when they reference a set
+    // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
+    // so; GeoSite and other local sets may be domain-only.
+    let legacy_dns_rule_set_tags: HashSet<String> = rule_sets
+        .iter()
+        .filter(|set| rule_set_is_known_ip_cidr(set))
+        .filter_map(|set| set.get("tag").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if !rule_sets.is_empty() {
+        route
+            .as_object_mut()
+            .unwrap()
+            .insert("rule_set".into(), Value::Array(rule_sets));
     }
     apply_dns_strategy(
         &mut dns,
@@ -1469,6 +1472,32 @@ fn tun_inbound(tun: &TunSettings, platform: HostPlatform) -> Value {
     inbound
 }
 
+/// Whether a subscription rule can never take effect in a generated config,
+/// so it is neither emitted nor listed on the Rules page.
+///
+/// - `sniff` and `hijack-dns` actions: the builder emits its own, in the place
+///   each capture shape needs (on Windows TUN a second DNS hijack after sniff
+///   sends STUN / mDNS / LLMNR into the DNS engine, see
+///   [`tun_reserved_rules`]). Provider sing-box configs carry both.
+/// - A top-level `clash_mode` rule for any mode but `rule`: ice-box only ever
+///   switches between Rule, Global and Direct, and its own Global and Direct
+///   rules come before every subscription rule, so such a rule is either
+///   shadowed or names a mode that is never set (a panel's "全局代理").
+///   sing-box compares modes case-insensitively. A `clash_mode: rule` rule
+///   does match in Rule mode and is kept.
+pub fn rule_never_takes_effect(rule: &Value) -> bool {
+    if matches!(
+        rule.get("action").and_then(Value::as_str),
+        Some("sniff" | "hijack-dns")
+    ) {
+        return true;
+    }
+    match rule.get("clash_mode") {
+        Some(Value::String(mode)) => !mode.eq_ignore_ascii_case("rule"),
+        _ => false,
+    }
+}
+
 /// Cached listing of the bundled rule-set directory: dir, mtime, entry count, names.
 type GeoipCodeCache = Option<(PathBuf, Option<SystemTime>, usize, HashSet<String>)>;
 
@@ -1594,7 +1623,7 @@ fn geoip_code_cache() -> &'static Mutex<GeoipCodeCache> {
 /// File stems (`geoip-cn`, `geosite-netflix`) of the bundled `.srs` rule-sets
 /// in `dir`. Only these names can become rule-set paths, so a rule value can
 /// never point outside the bundled directory.
-fn bundled_rule_set_names(dir: &Path) -> HashSet<String> {
+pub(crate) fn bundled_rule_set_names(dir: &Path) -> HashSet<String> {
     let mtime = fs::metadata(dir).and_then(|m| m.modified()).ok();
     let count = fs::read_dir(dir)
         .map(|entries| entries.count())
@@ -1629,82 +1658,145 @@ pub fn invalidate_geoip_code_cache() {
         .take();
 }
 
-/// Codes of a legacy `geoip` / `geosite` value: one string or a list.
-fn legacy_geo_codes(value: &Value) -> Vec<&str> {
-    match value {
-        Value::String(code) => vec![code.as_str()],
-        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
+/// Whether the bundled rule-set `name` (`geosite-cn`) is on disk in `dir`.
+/// Uses the same listing as the config builder.
+pub fn bundled_rule_set_is_present(dir: &Path, name: &str) -> bool {
+    bundled_rule_set_names(dir).contains(name)
+}
+
+/// Where rule-set files come from: the bundled `.srs` directory (app
+/// resources) and the cache of sanitized downloads (data dir).
+#[derive(Clone, Copy)]
+struct RuleSetSources<'a> {
+    bundled_dir: Option<&'a Path>,
+    cache_dir: Option<&'a Path>,
+}
+
+impl<'a> RuleSetSources<'a> {
+    fn of(input: &'a BuildInput) -> Self {
+        Self {
+            bundled_dir: input.geoip_rule_set_dir.as_deref(),
+            cache_dir: input.rule_set_cache_dir.as_deref(),
+        }
+    }
+
+    fn bundled_names(&self) -> Option<HashSet<String>> {
+        self.bundled_dir.map(bundled_rule_set_names)
+    }
+
+    /// The cached canonical JSON for `url`, when it has been downloaded.
+    fn cached(&self, url: &str) -> Option<PathBuf> {
+        let path = crate::rule_set_cache_path(self.cache_dir?, url);
+        path.is_file().then_some(path)
+    }
+
+    /// Local set for a legacy geo name (`geosite-cn`): the bundled file, or
+    /// the downloaded copy of its upstream when it is not bundled.
+    fn geo_set(&self, present: Option<&HashSet<String>>, name: &str) -> Option<Value> {
+        if let (Some(dir), Some(names)) = (self.bundled_dir, present) {
+            if names.contains(name) {
+                return Some(bundled_local_set(dir, name, name));
+            }
+        }
+        let url = crate::upstream_url_for_name(name)?;
+        self.cached(&url).map(|path| cached_local_set(&path, name))
+    }
+
+    /// Local set for a `download` marker: the downloaded copy, else its
+    /// bundled fallback.
+    fn download_set(
+        &self,
+        present: Option<&HashSet<String>>,
+        set: &Value,
+        tag: &str,
+    ) -> Option<Value> {
+        if let Some(path) = crate::download_rule_set_url(set).and_then(|url| self.cached(url)) {
+            return Some(cached_local_set(&path, tag));
+        }
+        let name = crate::download_rule_set_fallback(set)?;
+        let dir = self.bundled_dir?;
+        present?
+            .contains(name)
+            .then(|| bundled_local_set(dir, tag, name))
     }
 }
 
-/// Expand legacy `geoip` / `geosite` matchers into local rule-set references
+fn bundled_local_set(dir: &Path, tag: &str, name: &str) -> Value {
+    json!({
+        "type": "local",
+        "tag": tag,
+        "format": "binary",
+        "path": dir.join(format!("{name}.srs")),
+    })
+}
+
+fn cached_local_set(path: &Path, tag: &str) -> Value {
+    json!({
+        "type": "local",
+        "tag": tag,
+        "format": "source",
+        "path": path,
+    })
+}
+
+/// Resolve `bundled` profile rule-sets to the bundled directory, and expand
+/// legacy `geoip` / `geosite` matchers into local rule-set references
 /// to the bundled `geoip-{code}.srs` / `geosite-{category}.srs` files (sing-box
 /// 1.13 removed both rule options). A rule is dropped (counted via tracing
 /// warn) instead of failing the build when a file it needs is missing, or when
-/// it combines `geoip` with `geosite`: one `rule_set` list would turn their
-/// AND into an OR.
+/// it combines `geoip` with `geosite` or with `rule_set`: one `rule_set` list
+/// would turn their AND into an OR.
 fn expand_geoip_rules(
     rules: &[Value],
     rule_sets: &[Value],
-    geoip_rule_set_dir: Option<&Path>,
+    sources: RuleSetSources<'_>,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut kept = Vec::with_capacity(rules.len());
-    let mut sets = rule_sets.to_vec();
     let mut dropped: Vec<String> = Vec::new();
-    let present = geoip_rule_set_dir.map(bundled_rule_set_names);
+    let present = sources.bundled_names();
+    // `bundled` profile sets name a bundled file and `download` sets a
+    // downloaded one; point them at this app's copy, or drop them (and,
+    // later, the rules that reference them) when no file is there.
+    let mut sets = Vec::with_capacity(rule_sets.len());
+    for set in rule_sets {
+        let kind = set.get("type").and_then(Value::as_str);
+        let tag = set.get("tag").and_then(Value::as_str);
+        if kind == Some(crate::DOWNLOAD_RULE_SET_TYPE) {
+            match tag.and_then(|tag| sources.download_set(present.as_ref(), set, tag)) {
+                Some(local) => sets.push(local),
+                None => dropped.push(
+                    tag.map_or_else(|| "download".to_string(), |tag| format!("download:{tag}")),
+                ),
+            }
+            continue;
+        }
+        if kind != Some(crate::BUNDLED_RULE_SET_TYPE) {
+            sets.push(set.clone());
+            continue;
+        }
+        let name = crate::bundled_rule_set_name(set);
+        match (name, tag, sources.bundled_dir) {
+            (Some(name), Some(tag), Some(dir))
+                if present.as_ref().is_some_and(|names| names.contains(name)) =>
+            {
+                sets.push(bundled_local_set(dir, tag, name));
+            }
+            _ => dropped.push(name.unwrap_or("bundled").to_string()),
+        }
+    }
 
     for rule in rules {
-        let (kind, value) = match (rule.get("geoip"), rule.get("geosite")) {
-            (None, None) => {
-                kept.push(rule.clone());
-                continue;
-            }
-            (Some(value), None) => ("geoip", value),
-            (None, Some(value)) => ("geosite", value),
-            (Some(_), Some(_)) => {
-                dropped.push("geoip+geosite".into());
-                continue;
-            }
-        };
-        let tags: Vec<String> = legacy_geo_codes(value)
-            .into_iter()
-            .map(|code| format!("{kind}-{code}"))
-            .collect();
-        if tags.is_empty() {
-            dropped.push(kind.into());
-            continue;
+        let mut rule = rule.clone();
+        match expand_geo_rule(
+            &mut rule,
+            crate::remote_rule_set::ROUTE_GEO_KINDS,
+            sources,
+            present.as_ref(),
+            &mut sets,
+        ) {
+            Ok(()) => kept.push(rule),
+            Err(reason) => dropped.push(reason),
         }
-        if let Some(missing) = tags
-            .iter()
-            .find(|tag| present.as_ref().is_none_or(|names| !names.contains(*tag)))
-        {
-            dropped.push(missing.clone());
-            continue;
-        }
-
-        let dir = geoip_rule_set_dir.expect("resolvable implies dir");
-        for tag in &tags {
-            if !sets
-                .iter()
-                .any(|e| e.get("tag").and_then(|v| v.as_str()) == Some(tag.as_str()))
-            {
-                sets.push(json!({
-                    "type": "local",
-                    "tag": tag,
-                    "format": "binary",
-                    "path": dir.join(format!("{tag}.srs")),
-                }));
-            }
-        }
-        let mut converted = rule.clone();
-        let obj = converted.as_object_mut().expect("geo rule is object");
-        obj.remove(kind);
-        obj.insert(
-            "rule_set".into(),
-            Value::Array(tags.into_iter().map(Value::String).collect()),
-        );
-        kept.push(converted);
     }
 
     if !dropped.is_empty() {
@@ -1712,10 +1804,134 @@ fn expand_geoip_rules(
         dropped.dedup();
         tracing::warn!(
             items = %dropped.join(","),
-            "bundled GeoIP/GeoSite rule-set files missing for geoip/geosite matchers; rules dropped"
+            "rule-set files missing (not bundled and not downloaded yet); rule-sets and rules dropped"
         );
     }
     (kept, sets)
+}
+
+/// Expand legacy `geosite` matchers in top-level DNS rules into references to
+/// the bundled `geosite-{category}.srs` files, adding each set to `rule_sets`
+/// when no route rule declared it. A rule is dropped when a file it needs is
+/// missing, when it also has `geoip`, or when it already lists `rule_set`
+/// (merging the lists would turn their AND into an OR).
+///
+/// `geoip` DNS rules are dropped, not expanded: they match the response
+/// address, which a `rule_set` reference only does under `match_response`,
+/// and the pinned core refuses to start on the legacy field (GeoIP was
+/// removed in sing-box 1.12).
+fn expand_dns_geosite_rules(
+    dns: &mut Value,
+    rule_sets: &mut Vec<Value>,
+    sources: RuleSetSources<'_>,
+) {
+    let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if !rules
+        .iter()
+        .any(|rule| rule.get("geosite").is_some() || rule.get("geoip").is_some())
+    {
+        return;
+    }
+    let present = sources.bundled_names();
+    let mut dropped: Vec<String> = Vec::new();
+    rules.retain_mut(|rule| {
+        if rule.get("geoip").is_some() {
+            dropped.push("geoip".into());
+            return false;
+        }
+        match expand_geo_rule(
+            rule,
+            crate::remote_rule_set::DNS_GEO_KINDS,
+            sources,
+            present.as_ref(),
+            rule_sets,
+        ) {
+            Ok(()) => true,
+            Err(reason) => {
+                dropped.push(reason);
+                false
+            }
+        }
+    });
+    if !dropped.is_empty() {
+        dropped.sort();
+        dropped.dedup();
+        tracing::warn!(
+            items = %dropped.join(","),
+            "DNS rules with legacy geo matchers dropped: geoip is unsupported by the core, or GeoSite rule-set files are missing (not bundled and not downloaded yet)"
+        );
+    }
+}
+
+/// Rewrite one rule's legacy geo matcher (see
+/// [`crate::remote_rule_set::geo_matcher`]) into a `rule_set` reference,
+/// adding each resolved set to `sets` once. `Err` names why the rule must be
+/// dropped: the unresolved set, or the invalid combination.
+fn expand_geo_rule(
+    rule: &mut Value,
+    kinds: &[&str],
+    sources: RuleSetSources<'_>,
+    present: Option<&HashSet<String>>,
+    sets: &mut Vec<Value>,
+) -> Result<(), String> {
+    use crate::remote_rule_set::{geo_matcher, GeoMatcher};
+    let (kind, tags) = match geo_matcher(rule, kinds) {
+        GeoMatcher::None => return Ok(()),
+        GeoMatcher::Invalid(reason) => return Err(reason.to_string()),
+        GeoMatcher::Expand { kind, codes } => (
+            kind,
+            codes
+                .into_iter()
+                .map(|code| format!("{kind}-{code}"))
+                .collect::<Vec<String>>(),
+        ),
+    };
+    let mut resolved = Vec::with_capacity(tags.len());
+    for tag in &tags {
+        match sources.geo_set(present, tag) {
+            Some(local) => resolved.push(local),
+            None => return Err(tag.clone()),
+        }
+    }
+    for (tag, local) in tags.iter().zip(resolved) {
+        if !sets
+            .iter()
+            .any(|set| set.get("tag").and_then(Value::as_str) == Some(tag.as_str()))
+        {
+            sets.push(local);
+        }
+    }
+    let obj = rule.as_object_mut().expect("geo rule is object");
+    obj.remove(kind);
+    obj.insert(
+        "rule_set".into(),
+        Value::Array(tags.into_iter().map(Value::String).collect()),
+    );
+    Ok(())
+}
+
+/// Drop DNS rules that reference a rule-set missing from the final
+/// `route.rule_set` (a `download` set not fetched yet, a missing bundled
+/// file). sing-box refuses to start on an unknown rule-set tag, and route
+/// rules are already filtered the same way.
+fn retain_dns_rules_with_known_sets(dns: &mut Value, rule_sets: &[Value]) {
+    let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let tags: HashSet<&str> = rule_sets
+        .iter()
+        .filter_map(|set| set.get("tag").and_then(Value::as_str))
+        .collect();
+    let before = rules.len();
+    rules.retain(|rule| rule_set_refs_are_known(rule, &tags));
+    if rules.len() != before {
+        tracing::warn!(
+            dropped = before - rules.len(),
+            "DNS rules reference rule-sets that are not available yet; rules dropped"
+        );
+    }
 }
 
 pub(crate) fn ensure_builtin_outbound(

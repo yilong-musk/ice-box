@@ -406,11 +406,14 @@ pin the same version for `dtolnay/rust-toolchain`;
 `.github/` differs (a `toolchain:` input, quoted or not, a
 `dtolnay/rust-toolchain@<version>` ref, or a `rustup` install/default), or when
 a `dtolnay/rust-toolchain@stable` step has no `toolchain:` input, so bump them
-together. GeoIP rule-set
-fetches (`scripts/fetch-geoip.sh`) pin `third_party/sing-geoip/REF` and
-verify SHA-256 against `third_party/sing-geoip/CHECKSUMS.sha256` (CI-8);
-the committed checksum file is the trust root, as with
-`third_party/sing-box/CHECKSUMS.sha256`.
+together. The bundled rule-set
+fetches (`scripts/fetch-geoip.sh`) pin a ref per source
+(`third_party/loyalsoldier-geoip/REF` for GeoIP,
+`third_party/sing-geosite/REF` for GeoSite) and verify SHA-256 against that
+source's `CHECKSUMS.sha256` (CI-8); the committed checksum files are the trust
+root, as with `third_party/sing-box/CHECKSUMS.sha256`. Both sources are
+written to `third_party/bundled-rule-sets/rule-set`, the directory every package
+copies from.
 
 ## Known issues and workarounds
 

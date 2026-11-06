@@ -109,9 +109,9 @@ android {
     }
     sourceSets {
         getByName("main") {
-            // `third_party/sing-geoip/rule-set/*.srs` is fetched, not committed.
+            // `third_party/bundled-rule-sets/rule-set/*.srs` is fetched, not committed.
             // Assets are addressed as `rule-set/<file>` from that parent directory.
-            assets.srcDir(file("../../../../../../third_party/sing-geoip"))
+            assets.srcDir(file("../../../../../../third_party/bundled-rule-sets"))
         }
     }
 }
@@ -137,7 +137,7 @@ apply(from = "tauri.build.gradle.kts")
 
 tasks.named("preBuild").configure {
     doFirst {
-        val dir = file("../../../../../../third_party/sing-geoip/rule-set")
+        val dir = file("../../../../../../third_party/bundled-rule-sets/rule-set")
         val count = dir.listFiles()?.count { it.isFile && it.name.endsWith(".srs") } ?: 0
         if (count == 0) {
             error(

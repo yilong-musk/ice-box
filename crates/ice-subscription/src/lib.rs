@@ -11,6 +11,7 @@ mod fetch;
 mod limits;
 mod merge;
 mod prune;
+mod rule_set_download;
 mod share;
 mod store;
 mod tls_fetch;
@@ -32,14 +33,19 @@ pub use clash::{
 pub use decode::maybe_decode_base64;
 pub use error::SubscriptionError;
 pub use fetch::{
-    download_direct, DefaultFetcher, DirectFetcher, FetchClient, FetchResponse, HttpFetcher,
-    MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionProxy, FETCH_TIMEOUT,
+    download_direct, DefaultFetcher, DirectFetcher, FetchBytes, FetchClient, FetchResponse,
+    HttpFetcher, MockFetchMode, MockFetcher, PanicOnceMode, SubscriptionProxy, FETCH_TIMEOUT,
     FETCH_TOTAL_TIMEOUT, MAX_BODY_BYTES,
 };
 pub use manager::{FetchedAdd, FetchedUpdate, MemorySubscriptionManager, SubscriptionManager};
 pub use merge::{
-    active_subscription, list_profile_outbounds, load_active_profile,
+    active_subscription, drop_ineffective_rules, list_profile_outbounds, load_active_profile,
     load_active_profile_with_default_rules, resolve_selected_tag, short_id, ProfileCache,
+};
+pub use rule_set_download::{
+    prune_rule_set_cache, read_rule_set_cache_meta, refresh_rule_sets, rule_set_statuses,
+    RuleSetCacheMeta, RuleSetRefresh, RuleSetRefreshReport, RuleSetStatus, RULE_SET_CACHE_MAX_IDLE,
+    RULE_SET_REFRESH_INTERVAL,
 };
 pub use share::{subscription_share_text, SubscriptionShareKind};
 pub use store::{
@@ -244,7 +250,7 @@ pub(crate) fn sniff_format(raw: &str) -> SubscriptionFormat {
 }
 
 /// Whether parsing dropped route rules that reference rule sets ice-box
-/// never downloads. The warning is persisted with the profile, so this also
+/// cannot load (plain-`http` or otherwise unusable). The warning is persisted with the profile, so this also
 /// holds for a profile read back from disk.
 pub(crate) fn lost_rule_set_rules(warnings: &[UiMessage]) -> bool {
     warnings
@@ -333,7 +339,14 @@ pub(crate) fn meta_from_profile(
         format,
         node_count: profile.nodes.len(),
         group_count: profile.groups.len(),
-        rule_count: profile.route.rules.len(),
+        // Same count the Rules page shows: loading drops the rules that can
+        // never take effect (`merge::drop_ineffective_rules`).
+        rule_count: profile
+            .route
+            .rules
+            .iter()
+            .filter(|rule| !ice_config::rule_never_takes_effect(rule))
+            .count(),
         has_dns: profile.dns.is_some(),
         parse_warnings: profile.parse_stats.warnings.clone(),
         last_updated: Some(Utc::now()),
@@ -473,20 +486,17 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         }
         NormalizedRoute {
             rules,
+            // sing-box routes unmatched traffic to the first outbound when
+            // `final` is unset; panels rely on that (their first outbound is
+            // the main selector). A tag the parser dropped falls back in
+            // `prune_dangling_refs`.
             final_outbound: r
                 .get("final")
                 .and_then(|v| v.as_str())
+                .or_else(|| first_outbound_tag(&value))
                 .unwrap_or("direct")
                 .to_string(),
-            rule_sets: {
-                let mut sets = r
-                    .get("rule_set")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                ice_config_guard::retain_local_rule_sets(&mut sets);
-                sets
-            },
+            rule_sets: provider_rule_sets(r.get("rule_set")),
         }
     } else {
         NormalizedRoute {
@@ -510,6 +520,37 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
         crate::prune::prune_dangling_refs(&mut profile);
         profile
     })
+}
+
+fn first_outbound_tag(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("outbounds")?
+        .as_array()?
+        .first()?
+        .get("tag")?
+        .as_str()
+}
+
+/// The provider's rule-sets ice-box can load: local sets, and remote sets
+/// rewritten to a `download` marker (fetched and sanitized by the app, with
+/// a bundled fallback when the URL is a copy of a bundled file). The core
+/// never fetches a set itself. Other sets are dropped; rules that reference
+/// them are pruned with a warning.
+fn provider_rule_sets(raw: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    let Some(sets) = raw.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut downloads = Vec::new();
+    let mut other = Vec::new();
+    for set in sets {
+        match ice_config::download_marker_for_remote(set) {
+            Some(marker) => downloads.push(marker),
+            None => other.push(set.clone()),
+        }
+    }
+    ice_config_guard::retain_local_rule_sets(&mut other);
+    other.extend(downloads);
+    other
 }
 
 /// The provider's DNS block with disallowed servers removed, or `None` when

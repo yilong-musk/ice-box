@@ -406,7 +406,7 @@ pub(crate) fn drop_rule_keyword_cache(state: &AppState) {
 
 /// Full profile from disk, including rules and DNS. Does not touch the
 /// long-lived parse cache.
-fn read_full_profile(state: &AppState) -> Result<Option<NormalizedProfile>, AppError> {
+pub(crate) fn read_full_profile(state: &AppState) -> Result<Option<NormalizedProfile>, AppError> {
     let sub_paths = SubscriptionPaths::from_app(&state.paths);
     let index = ice_engine::read_index(&sub_paths).map_err(AppError::from)?;
     let auto_default_rules = current_settings(&state.paths)

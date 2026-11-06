@@ -113,8 +113,9 @@ by the manual acceptance script in [testing.md](testing.md#live-tests).
 
 - The per-user `ice-box-tun` scheduled task runs protected launcher/core copies
   under `%ProgramFiles%\ice-box`. Its identity and binary hashes are pinned.
-  Config is sanitized into an admin-owned run directory; staged `rule_set`
-  files get explicit SYSTEM/Administrators file DACLs (directory `(OI)(CI)`
+  Config is sanitized into an admin-owned run directory; each `rule_set` file
+  is decoded and re-encoded as canonical source JSON before it is staged, and
+  staged files get explicit SYSTEM/Administrators file DACLs (directory `(OI)(CI)`
   grants are not applied to files via `/T`). Standard-user over-the-shoulder
   UAC is refused. If Task Scheduler rejects the unsigned
   launcher (`0x80004005`), the task runs Microsoft-signed `wscript.exe` with

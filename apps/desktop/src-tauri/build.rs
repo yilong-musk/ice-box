@@ -96,7 +96,7 @@ fn copy_geoip_resources(manifest_dir: &Path) {
         .join("../../..")
         .canonicalize()
         .unwrap_or_else(|_| manifest_dir.join("../../.."));
-    let src = repo_root.join("third_party/sing-geoip/rule-set");
+    let src = repo_root.join("third_party/bundled-rule-sets/rule-set");
     let dest_dir = manifest_dir.join("resources").join("geoip");
 
     println!("cargo:rerun-if-changed={}", src.display());

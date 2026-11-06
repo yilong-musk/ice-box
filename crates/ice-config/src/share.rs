@@ -30,9 +30,7 @@ use crate::{
     ConfigError, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
 };
 
-const GEOIP_RULE_SET_BASE: &str = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
-const GEOSITE_RULE_SET_BASE: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
+use crate::bundled_rule_set::{portable_remote_for_bundled, upstream_url};
 
 /// Action / DNS keys that are not match conditions.
 const RULE_META_KEYS: &[&str] = &[
@@ -576,6 +574,14 @@ fn push_portable_rule_set(set: &Value, sets: &mut Vec<Value>, tags: &mut HashSet
 }
 
 fn portable_rule_set(set: &Value) -> Option<Value> {
+    // A bundled file is shared as its canonical upstream copy.
+    if let Some(remote) = portable_remote_for_bundled(set) {
+        return portable_rule_set(&remote);
+    }
+    // A downloaded set is shared as the remote set it came from.
+    if let Some(remote) = crate::portable_remote_for_download(set) {
+        return portable_rule_set(&remote);
+    }
     let obj = set.as_object()?;
     if obj.get("type").and_then(|v| v.as_str()) == Some("local") {
         return None;
@@ -966,16 +972,14 @@ fn ensure_share_geo_set(
     if set_tags.contains(&tag) {
         return Some(tag);
     }
-    let base = match kind {
-        "geoip" => GEOIP_RULE_SET_BASE,
-        "geosite" => GEOSITE_RULE_SET_BASE,
-        _ => return None,
-    };
+    if !matches!(kind, "geoip" | "geosite") {
+        return None;
+    }
     rule_sets.push(json!({
         "type": "remote",
         "tag": tag,
         "format": "binary",
-        "url": format!("{base}/{kind}-{code}.srs"),
+        "url": upstream_url(&tag),
     }));
     set_tags.insert(tag.clone());
     Some(tag)

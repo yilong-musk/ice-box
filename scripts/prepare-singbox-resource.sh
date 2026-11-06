@@ -60,7 +60,7 @@ if [[ -n "$got" && "$got" != *"$VERSION"* ]]; then
   exit 1
 fi
 
-GEOIP_SRC="$ROOT/third_party/sing-geoip/rule-set"
+GEOIP_SRC="$ROOT/third_party/bundled-rule-sets/rule-set"
 GEOIP_DEST="$DEST_DIR/geoip"
 if [[ -d "$GEOIP_SRC" ]]; then
   mkdir -p "$GEOIP_DEST"

@@ -82,6 +82,12 @@ function baseMatchSummary(row: RuleRow): string {
     const v = row.rule[key];
     if (v === undefined) continue;
     if (Array.isArray(v)) return v.map(String).join(", ");
+    // A flag matcher (`ip_is_private: true`) has no payload worth showing;
+    // name what it matches, and say so when the flag is off.
+    if (typeof v === "boolean") {
+      const label = ruleTypeLabel(key);
+      return v ? label : t("rules.invertedSummary", { summary: label });
+    }
     return String(v);
   }
   // No recognized matcher (a logical rule, an action-only rule, a newer
