@@ -13,6 +13,7 @@ import type {
   NodeInfo,
   ProxyMode,
   RuleOverview,
+  RuleSetStatus,
   StatusResponse,
   SubscriptionAutoUpdateInterval,
   SubscriptionMeta,
@@ -40,6 +41,7 @@ export type {
   ProxyMode,
   RuleOverview,
   RuleRow,
+  RuleSetStatus,
   StatusResponse,
   SubscriptionAutoUpdateInterval,
   SubscriptionMeta,
@@ -654,6 +656,17 @@ export const api = {
       types: [...new Set(ruleRows.map((row) => row.rule_type))].map((rule_type) => ({ rule_type, count: ruleRows.filter((row) => row.rule_type === rule_type).length })),
     };
   },
+  async getRuleSetStatus(): Promise<RuleSetStatus[]> {
+    await delay();
+    return demoRuleSetStatus();
+  },
+  async refreshRuleSets(): Promise<RuleSetStatus[]> {
+    await delay(600);
+    const now = Math.floor(Date.now() / 1000);
+    return demoRuleSetStatus().map((set) =>
+      set.state === "downloaded" ? { ...set, checked_at: now } : set,
+    );
+  },
   async listRules(req: ListRulesRequest): Promise<ListRulesResponse> {
     await delay();
     const keyword = req.keyword?.toLowerCase() ?? "";
@@ -683,3 +696,29 @@ export const api = {
     return demoMcpStatus();
   },
 } satisfies ApiContract;
+
+/** Demo rule-set status: one entry per set the demo rules reference. */
+function demoRuleSetStatus(): RuleSetStatus[] {
+  const day = 24 * 60 * 60;
+  const now = Math.floor(Date.now() / 1000);
+  const tags = [
+    ...new Set(
+      ruleRows.flatMap((row) =>
+        row.rule_type === "rule_set" ? [String(row.rule.rule_set)] : [],
+      ),
+    ),
+  ].sort();
+  return tags.map((tag, index): RuleSetStatus =>
+    index % 3 === 2
+      ? { tag, source: "download", state: "bundled", url: `https://example.com/rules/${tag}.srs` }
+      : {
+          tag,
+          source: "download",
+          state: "downloaded",
+          url: `https://example.com/rules/${tag}.srs`,
+          updated_at: now - 2 * day,
+          checked_at: now - 3600,
+          items: 1200 + index * 731,
+        },
+  );
+}

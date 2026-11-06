@@ -756,6 +756,19 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         let index = load_index(&self.paths)?;
         load_active_profile(&self.paths, &index, self.platform)
     }
+
+    /// Download remote rule-sets with this manager's fetcher (same proxy
+    /// and SSRF rules as subscription fetches). See
+    /// [`crate::refresh_rule_sets`].
+    pub fn refresh_rule_sets(
+        &self,
+        cache_dir: &std::path::Path,
+        urls: &[String],
+        max_age: std::time::Duration,
+        force: bool,
+    ) -> Vec<crate::RuleSetRefreshReport> {
+        crate::refresh_rule_sets(&self.fetcher, cache_dir, urls, max_age, force)
+    }
 }
 
 /// Display names are stored in the index. Cap them so a file name cannot bloat it.

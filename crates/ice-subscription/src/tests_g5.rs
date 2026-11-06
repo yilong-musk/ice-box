@@ -839,6 +839,7 @@ fn g5_8_selected_via_resolve_and_build() {
         profile: Arc::new(profile),
         selected_tag: sel,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: Default::default(),
         rule_overrides: Default::default(),
         capture_intent: Default::default(),
@@ -1161,7 +1162,7 @@ fn singbox_truncates_too_many_nodes() {
 }
 
 #[test]
-fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
+fn singbox_profile_downloads_https_rule_sets_and_drops_hosts_dns() {
     let raw = r#"{
         "outbounds": [
             {"type":"socks","tag":"n","server":"1.1.1.1","server_port":1080}
@@ -1170,10 +1171,12 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
             "final": "n",
             "rules": [
                 {"rule_set":["evil"],"outbound":"n"},
+                {"rule_set":["remote"],"outbound":"n"},
                 {"domain_suffix":["keep.com"],"outbound":"n"}
             ],
             "rule_set": [
-                {"type":"remote","tag":"evil","url":"https://evil.example/x.srs"},
+                {"type":"remote","tag":"evil","url":"http://evil.example/x.srs"},
+                {"type":"remote","tag":"remote","url":"https://rules.example/x.srs","download_detour":"n"},
                 {"type":"local","tag":"ok","path":"geoip/ok.srs"}
             ]
         },
@@ -1186,8 +1189,25 @@ fn singbox_profile_drops_remote_rule_sets_and_hosts_dns() {
         }
     }"#;
     let profile = parse_singbox_profile(raw).expect("parse");
+    // Plain-http sets cannot be downloaded and are dropped with their rules.
     assert!(profile.route.rule_sets.iter().all(|s| s["tag"] != "evil"));
     assert!(profile.route.rule_sets.iter().any(|s| s["tag"] == "ok"));
+    // An https set becomes an app download; the core never fetches it.
+    let remote = profile
+        .route
+        .rule_sets
+        .iter()
+        .find(|s| s["tag"] == "remote")
+        .expect("download marker");
+    assert_eq!(
+        remote,
+        &serde_json::json!({"type":"download","tag":"remote","url":"https://rules.example/x.srs"})
+    );
+    assert!(profile
+        .route
+        .rules
+        .iter()
+        .any(|r| r.get("rule_set") == Some(&serde_json::json!(["remote"]))));
     assert!(profile
         .route
         .rules
@@ -1749,8 +1769,8 @@ const PANEL_SINGBOX_BODY: &str = r#"{
             {"ip_is_private":true,"outbound":"direct"}
         ],
         "rule_set": [
-            {"type":"remote","tag":"geosite-cn","format":"binary","url":"https://example.com/geosite-cn.srs"},
-            {"type":"remote","tag":"geoip-cn","format":"binary","url":"https://example.com/geoip-cn.srs"}
+            {"type":"remote","tag":"geosite-cn","format":"binary","url":"http://example.com/geosite-cn.srs"},
+            {"type":"remote","tag":"geoip-cn","format":"binary","url":"http://example.com/geoip-cn.srs"}
         ]
     },
     "dns": {
@@ -1812,7 +1832,7 @@ fn singbox_profile_keeps_provider_route_final_and_dns_next_to_a_dropped_rule() {
                 {"domain_suffix":["example.cn"],"outbound":"direct"}
             ],
             "rule_set": [
-                {"type":"remote","tag":"geosite-ads","url":"https://example.com/ads.srs"}
+                {"type":"remote","tag":"geosite-ads","url":"http://example.com/ads.srs"}
             ]
         },
         "dns": {
@@ -2273,7 +2293,7 @@ fn a_kept_lossy_singbox_config_is_not_pinned_by_a_304() {
     );
 }
 
-// --- Panel sing-box config whose remote rule sets are bundled ---------------
+// --- Panel sing-box config whose remote rule sets have bundled copies -------
 
 /// Shape of a real panel's sing-box answer (nodes replaced).
 fn panel_fixture() -> String {
@@ -2289,7 +2309,7 @@ fn panel_singbox_config_keeps_its_routing_through_bundled_rule_sets() {
     let profile = parse_singbox_profile(&panel_fixture()).expect("parse");
     assert!(
         !super::lost_rule_set_rules(&profile.parse_stats.warnings),
-        "every remote set maps onto a bundled file: {:?}",
+        "every remote set is downloadable: {:?}",
         profile.parse_stats.warnings
     );
     assert_eq!(profile.route.rules.len(), 7, "provider rules are kept");
@@ -2297,7 +2317,7 @@ fn panel_singbox_config_keeps_its_routing_through_bundled_rule_sets() {
         .route
         .rule_sets
         .iter()
-        .map(|s| (s["tag"].as_str().unwrap(), s["name"].as_str().unwrap()))
+        .map(|s| (s["tag"].as_str().unwrap(), s["bundled"].as_str().unwrap()))
         .collect();
     assert_eq!(
         names,
@@ -2311,7 +2331,8 @@ fn panel_singbox_config_keeps_its_routing_through_bundled_rule_sets() {
         .route
         .rule_sets
         .iter()
-        .all(|s| s["type"] == "bundled" && s.get("url").is_none()));
+        .all(|s| s["type"] == "download"
+            && s["url"].as_str().is_some_and(|u| u.starts_with("https://"))));
     // No `final`: sing-box uses the first outbound, the panel's main selector.
     assert_eq!(profile.route.final_outbound, "节点选择");
     // Legacy-format DNS servers are filtered out; the built-in DNS fills in.

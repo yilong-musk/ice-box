@@ -1,0 +1,12 @@
+[package]
+name = "ice-rule-set"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Decode, validate and re-encode untrusted sing-box rule-sets into canonical source JSON"
+
+[dependencies]
+serde_json = { workspace = true }
+# Pure-Rust zlib backend (miniz_oxide); no C code on the privileged path.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode"] }

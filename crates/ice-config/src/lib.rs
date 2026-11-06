@@ -15,6 +15,7 @@ mod error;
 mod favorites;
 mod profile;
 mod redact;
+mod remote_rule_set;
 mod rule_overrides;
 mod runtime_config;
 mod selections;
@@ -47,6 +48,11 @@ pub use ice_types::{
 };
 pub use profile::{NormalizedProfile, NormalizedRoute, ProfileParseStats};
 pub use redact::{redact_config_json, redact_config_str};
+pub use remote_rule_set::{
+    download_marker_for_remote, download_rule_set_fallback, download_rule_set_url,
+    is_downloadable_rule_set_url, portable_remote_for_download, required_rule_set_urls,
+    rule_set_cache_meta_path, rule_set_cache_path, upstream_url_for_name, DOWNLOAD_RULE_SET_TYPE,
+};
 pub use rule_overrides::{
     load_rule_overrides, rule_fingerprint, rule_matches_fingerprint, rule_type_of,
     save_rule_overrides, RuleOverrides, RULE_TYPE_KEYS,
@@ -260,6 +266,12 @@ pub struct BuildInput {
     /// `geosite-{category}.srs` rule-set files (app resources). `geoip` /
     /// `geosite` rules whose file is missing here are dropped at build time.
     pub geoip_rule_set_dir: Option<PathBuf>,
+    /// Cache of sanitized downloaded rule-sets (`<sha256(url)>.json`, see
+    /// [`rule_set_cache_path`]). `download` sets and unbundled `geoip` /
+    /// `geosite` codes resolve here; without a cached file they fall back to
+    /// a bundled copy or are dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_set_cache_dir: Option<PathBuf>,
     /// Persisted per-group member selections, applied as selector `default`s.
     #[serde(default)]
     pub group_selections: GroupSelections,
@@ -323,6 +335,7 @@ pub fn build_input_from_nodes(
         profile: Arc::new(NormalizedProfile::from_nodes_only(outbounds)),
         selected_tag,
         geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
         group_selections: GroupSelections::new(),
         rule_overrides: RuleOverrides::default(),
         capture_intent: CaptureIntent::Diagnostic,

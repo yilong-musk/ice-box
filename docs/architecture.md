@@ -325,6 +325,18 @@ mixed inbound listen/port; `urltest` health-check URLs; `experimental` keys
 other than `clash_api` / `cache_file`). User-mode generation drops remote
 `rule_set` URLs and disallowed DNS types so the unelevated core has the same
 fetch/file surface.
+
+The core never downloads a rule-set. A subscription's `https` remote
+rule-set, and a `geoip` / `geosite` code with no bundled file, is downloaded by
+the unprivileged app with the subscription fetcher (same SSRF, redirect,
+deadline and size rules). [ice-rule-set](../crates/ice-rule-set/src/lib.rs)
+decodes the `.srs` or JSON body into a strict model (fixed matcher fields,
+value checks, size limits, no catch-all CIDRs) and re-encodes canonical source
+JSON into the data-dir rule-set cache. Generation uses the cached copy, then a
+bundled copy of the same upstream file, and otherwise drops the rules that
+need the set. The config guard runs every local rule-set through the same
+sanitizer again before staging it, so an elevated core only parses JSON the
+privileged side wrote.
 Platform privilege and ownership rules live in [tun.md](tun.md).
 
 The Home card and the tray also expose session-only terminal helpers: they set

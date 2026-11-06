@@ -11,13 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   take effect instead of being skipped. The app ships 22 common GeoSite
   rule-sets from SagerNet/sing-geosite (such as `cn`, `geolocation-!cn`,
   `category-ads-all`, `google`, `netflix` and `openai`), about 380 KB in all.
-  A rule whose category is not bundled is still skipped. Rule-sets are only
-  updated with the app; the app never downloads them.
+  A category or country that is not bundled is downloaded from the same
+  upstream (see below).
 - sing-box subscriptions keep the provider's split routing (domestic direct,
-  ad blocking). Remote rule-sets that are copies of a bundled file now use
-  that file: SagerNet/sing-geosite sets and Loyalsoldier/geoip country sets,
-  from GitHub or jsDelivr. Other remote rule-sets are still skipped with a
-  warning; nothing is downloaded.
+  ad blocking). The app now downloads a subscription's remote rule-sets itself
+  (any `https` URL, `.srs` or JSON), over the same connection rules as
+  subscription updates, and refreshes them once a day. Until a set has been
+  downloaded, a copy of a bundled file (SagerNet/sing-geosite sets and
+  Loyalsoldier/geoip country sets, from GitHub or jsDelivr) uses that file.
+  A plain-`http` rule-set is still skipped with a warning.
+- Every downloaded rule-set is decoded and re-encoded before use: only known
+  matcher fields are kept, values are checked, sizes are bounded, and a set
+  with a catch-all IP range, or with a regex the core could refuse to compile
+  or would read differently, is rejected, keeping the last good copy. The
+  sing-box core never fetches a rule-set, and in TUN mode the privileged side
+  re-checks every rule-set file before the core reads it.
+- Rules page: a "Rule-sets" button lists every rule-set the subscription and
+  your rules use, whether it is downloaded, bundled, or not ready yet (its
+  rules are skipped until it is), when it was last updated, and why the last
+  update failed. "Update now" downloads them all immediately.
 
 ### Changed
 

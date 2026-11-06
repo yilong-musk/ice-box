@@ -717,7 +717,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         let (mut sub_rules, mut sub_sets) = expand_geoip_rules(
             &enabled_sub_rules,
             &input.profile.route.rule_sets,
-            input.geoip_rule_set_dir.as_deref(),
+            RuleSetSources::of(input),
         );
         ice_config_guard::retain_local_rule_sets(&mut sub_sets);
         let sub_set_tags: std::collections::HashSet<&str> = sub_sets
@@ -759,11 +759,8 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
         // Custom rules are expanded the same way: they are persisted verbatim, so a
         // rule written before the add-time validation may still carry `geoip` or
         // `geosite`.
-        let (custom_rules, mut all_sets) = expand_geoip_rules(
-            &custom_rules,
-            &sub_sets,
-            input.geoip_rule_set_dir.as_deref(),
-        );
+        let (custom_rules, mut all_sets) =
+            expand_geoip_rules(&custom_rules, &sub_sets, RuleSetSources::of(input));
         ice_config_guard::retain_local_rule_sets(&mut all_sets);
         final_rules.extend(custom_rules);
         final_rules.extend(sub_rules);
@@ -792,11 +789,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
     }
     // DNS `geosite` matchers resolve to the same bundled files as route rules,
     // adding a set definition when no route rule declared it.
-    expand_dns_geosite_rules(
-        &mut dns,
-        &mut rule_sets,
-        input.geoip_rule_set_dir.as_deref(),
-    );
+    expand_dns_geosite_rules(&mut dns, &mut rule_sets, RuleSetSources::of(input));
     // DNS rules can only be kept in legacy mode when they reference a set
     // that actually contains `ip_cidr`. Generated GeoIP sets are known to do
     // so; GeoSite and other local sets may be domain-only.
@@ -1671,6 +1664,81 @@ fn legacy_geo_codes(value: &Value) -> Vec<&str> {
     }
 }
 
+/// Where rule-set files come from: the bundled `.srs` directory (app
+/// resources) and the cache of sanitized downloads (data dir).
+#[derive(Clone, Copy)]
+struct RuleSetSources<'a> {
+    bundled_dir: Option<&'a Path>,
+    cache_dir: Option<&'a Path>,
+}
+
+impl<'a> RuleSetSources<'a> {
+    fn of(input: &'a BuildInput) -> Self {
+        Self {
+            bundled_dir: input.geoip_rule_set_dir.as_deref(),
+            cache_dir: input.rule_set_cache_dir.as_deref(),
+        }
+    }
+
+    fn bundled_names(&self) -> Option<HashSet<String>> {
+        self.bundled_dir.map(bundled_rule_set_names)
+    }
+
+    /// The cached canonical JSON for `url`, when it has been downloaded.
+    fn cached(&self, url: &str) -> Option<PathBuf> {
+        let path = crate::rule_set_cache_path(self.cache_dir?, url);
+        path.is_file().then_some(path)
+    }
+
+    /// Local set for a legacy geo name (`geosite-cn`): the bundled file, or
+    /// the downloaded copy of its upstream when it is not bundled.
+    fn geo_set(&self, present: Option<&HashSet<String>>, name: &str) -> Option<Value> {
+        if let (Some(dir), Some(names)) = (self.bundled_dir, present) {
+            if names.contains(name) {
+                return Some(bundled_local_set(dir, name, name));
+            }
+        }
+        let url = crate::upstream_url_for_name(name)?;
+        self.cached(&url).map(|path| cached_local_set(&path, name))
+    }
+
+    /// Local set for a `download` marker: the downloaded copy, else its
+    /// bundled fallback.
+    fn download_set(
+        &self,
+        present: Option<&HashSet<String>>,
+        set: &Value,
+        tag: &str,
+    ) -> Option<Value> {
+        if let Some(path) = crate::download_rule_set_url(set).and_then(|url| self.cached(url)) {
+            return Some(cached_local_set(&path, tag));
+        }
+        let name = crate::download_rule_set_fallback(set)?;
+        let dir = self.bundled_dir?;
+        present?
+            .contains(name)
+            .then(|| bundled_local_set(dir, tag, name))
+    }
+}
+
+fn bundled_local_set(dir: &Path, tag: &str, name: &str) -> Value {
+    json!({
+        "type": "local",
+        "tag": tag,
+        "format": "binary",
+        "path": dir.join(format!("{name}.srs")),
+    })
+}
+
+fn cached_local_set(path: &Path, tag: &str) -> Value {
+    json!({
+        "type": "local",
+        "tag": tag,
+        "format": "source",
+        "path": path,
+    })
+}
+
 /// Resolve `bundled` profile rule-sets to the bundled directory, and expand
 /// legacy `geoip` / `geosite` matchers into local rule-set references
 /// to the bundled `geoip-{code}.srs` / `geosite-{category}.srs` files (sing-box
@@ -1681,32 +1749,37 @@ fn legacy_geo_codes(value: &Value) -> Vec<&str> {
 fn expand_geoip_rules(
     rules: &[Value],
     rule_sets: &[Value],
-    geoip_rule_set_dir: Option<&Path>,
+    sources: RuleSetSources<'_>,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut kept = Vec::with_capacity(rules.len());
     let mut dropped: Vec<String> = Vec::new();
-    let present = geoip_rule_set_dir.map(bundled_rule_set_names);
-    // `bundled` profile sets name a bundled file; point them at this app's
-    // copy, or drop them (and, later, the rules that reference them) when the
-    // file is not there.
+    let present = sources.bundled_names();
+    // `bundled` profile sets name a bundled file and `download` sets a
+    // downloaded one; point them at this app's copy, or drop them (and,
+    // later, the rules that reference them) when no file is there.
     let mut sets = Vec::with_capacity(rule_sets.len());
     for set in rule_sets {
-        if set.get("type").and_then(Value::as_str) != Some(crate::BUNDLED_RULE_SET_TYPE) {
+        let kind = set.get("type").and_then(Value::as_str);
+        let tag = set.get("tag").and_then(Value::as_str);
+        if kind == Some(crate::DOWNLOAD_RULE_SET_TYPE) {
+            match tag.and_then(|tag| sources.download_set(present.as_ref(), set, tag)) {
+                Some(local) => sets.push(local),
+                None => dropped.push(
+                    tag.map_or_else(|| "download".to_string(), |tag| format!("download:{tag}")),
+                ),
+            }
+            continue;
+        }
+        if kind != Some(crate::BUNDLED_RULE_SET_TYPE) {
             sets.push(set.clone());
             continue;
         }
         let name = crate::bundled_rule_set_name(set);
-        let tag = set.get("tag").and_then(Value::as_str);
-        match (name, tag, geoip_rule_set_dir) {
+        match (name, tag, sources.bundled_dir) {
             (Some(name), Some(tag), Some(dir))
                 if present.as_ref().is_some_and(|names| names.contains(name)) =>
             {
-                sets.push(json!({
-                    "type": "local",
-                    "tag": tag,
-                    "format": "binary",
-                    "path": dir.join(format!("{name}.srs")),
-                }));
+                sets.push(bundled_local_set(dir, tag, name));
             }
             _ => dropped.push(name.unwrap_or("bundled").to_string()),
         }
@@ -1733,26 +1806,24 @@ fn expand_geoip_rules(
             dropped.push(kind.into());
             continue;
         }
-        if let Some(missing) = tags
+        let resolved: Option<Vec<Value>> = tags
             .iter()
-            .find(|tag| present.as_ref().is_none_or(|names| !names.contains(*tag)))
-        {
+            .map(|tag| sources.geo_set(present.as_ref(), tag))
+            .collect();
+        let Some(resolved) = resolved else {
+            let missing = tags
+                .iter()
+                .find(|tag| sources.geo_set(present.as_ref(), tag).is_none())
+                .expect("one tag is unresolved");
             dropped.push(missing.clone());
             continue;
-        }
-
-        let dir = geoip_rule_set_dir.expect("resolvable implies dir");
-        for tag in &tags {
+        };
+        for (tag, local) in tags.iter().zip(resolved) {
             if !sets
                 .iter()
                 .any(|e| e.get("tag").and_then(|v| v.as_str()) == Some(tag.as_str()))
             {
-                sets.push(json!({
-                    "type": "local",
-                    "tag": tag,
-                    "format": "binary",
-                    "path": dir.join(format!("{tag}.srs")),
-                }));
+                sets.push(local);
             }
         }
         let mut converted = rule.clone();
@@ -1770,7 +1841,7 @@ fn expand_geoip_rules(
         dropped.dedup();
         tracing::warn!(
             items = %dropped.join(","),
-            "bundled GeoIP/GeoSite rule-set files missing for geoip/geosite matchers; rules dropped"
+            "rule-set files missing (not bundled and not downloaded yet); rule-sets and rules dropped"
         );
     }
     (kept, sets)
@@ -1785,7 +1856,7 @@ fn expand_geoip_rules(
 fn expand_dns_geosite_rules(
     dns: &mut Value,
     rule_sets: &mut Vec<Value>,
-    geoip_rule_set_dir: Option<&Path>,
+    sources: RuleSetSources<'_>,
 ) {
     let Some(rules) = dns.get_mut("rules").and_then(Value::as_array_mut) else {
         return;
@@ -1793,7 +1864,7 @@ fn expand_dns_geosite_rules(
     if !rules.iter().any(|rule| rule.get("geosite").is_some()) {
         return;
     }
-    let present = geoip_rule_set_dir.map(bundled_rule_set_names);
+    let present = sources.bundled_names();
     let mut dropped: Vec<String> = Vec::new();
     rules.retain_mut(|rule| {
         let Some(value) = rule.get("geosite") else {
@@ -1811,25 +1882,24 @@ fn expand_dns_geosite_rules(
             dropped.push("geosite".into());
             return false;
         }
-        let (Some(dir), Some(names)) = (geoip_rule_set_dir, present.as_ref()) else {
-            dropped.push(tags[0].clone());
-            return false;
-        };
-        if let Some(missing) = tags.iter().find(|tag| !names.contains(*tag)) {
+        let resolved: Option<Vec<Value>> = tags
+            .iter()
+            .map(|tag| sources.geo_set(present.as_ref(), tag))
+            .collect();
+        let Some(resolved) = resolved else {
+            let missing = tags
+                .iter()
+                .find(|tag| sources.geo_set(present.as_ref(), tag).is_none())
+                .expect("one tag is unresolved");
             dropped.push(missing.clone());
             return false;
-        }
-        for tag in &tags {
+        };
+        for (tag, local) in tags.iter().zip(resolved) {
             if !rule_sets
                 .iter()
                 .any(|set| set.get("tag").and_then(Value::as_str) == Some(tag.as_str()))
             {
-                rule_sets.push(json!({
-                    "type": "local",
-                    "tag": tag,
-                    "format": "binary",
-                    "path": dir.join(format!("{tag}.srs")),
-                }));
+                rule_sets.push(local);
             }
         }
         let obj = rule.as_object_mut().expect("geosite rule is object");
@@ -1845,7 +1915,7 @@ fn expand_dns_geosite_rules(
         dropped.dedup();
         tracing::warn!(
             items = %dropped.join(","),
-            "bundled GeoSite rule-set files missing for DNS geosite matchers; DNS rules dropped"
+            "GeoSite rule-set files missing (not bundled and not downloaded yet) for DNS geosite matchers; DNS rules dropped"
         );
     }
 }

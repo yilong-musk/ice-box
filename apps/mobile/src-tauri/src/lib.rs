@@ -59,6 +59,8 @@ pub fn run() {
             commands::set_proxy_mode,
             commands::set_app_proxy,
             commands::get_rule_overview,
+            commands::get_rule_set_status,
+            commands::refresh_rule_sets,
             commands::list_rules,
             commands::set_rule_disabled,
             commands::add_custom_rule,

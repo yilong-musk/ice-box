@@ -158,6 +158,9 @@ fn ready<'a>(
         Err(err) => return Err(map_tunnel(err)),
     };
     guard.ensure_paths(AppPaths::new(private), shared)?;
+    // First use in this process: bring downloaded rule-sets up to date. The
+    // task waits for this guard before it reads anything.
+    spawn_rule_set_refresh(app, false);
     Ok(guard)
 }
 
@@ -189,6 +192,61 @@ fn apply_config(host: &mut MobileHost, tunnel: &Tunnel<Wry>) -> Result<(), AppEr
         Err(TunnelError::Unavailable) => host.rewrite_config(None),
         Err(err) => Err(map_tunnel(err)),
     }
+}
+
+/// Download the rule-sets the active profile needs and re-apply the config
+/// when new content arrived. Failures only log: the config already fell back
+/// to bundled copies.
+async fn refresh_rule_sets_now(app: &AppHandle, force: bool) {
+    let inputs = {
+        let host = app.state::<Mutex<MobileHost>>();
+        let tunnel = app.state::<Tunnel<Wry>>();
+        match ready(app, &host, &tunnel).and_then(|guard| guard.rule_set_refresh_inputs()) {
+            Ok(inputs) => inputs,
+            Err(err) => {
+                log::warn!("rule-set refresh: {}", err.message);
+                return;
+            }
+        }
+    };
+    let (sub_paths, cache_dir, urls) = inputs;
+    let changed = run_blocking("rule_set_refresh", move || {
+        ice_subscription::prune_rule_set_cache(
+            &cache_dir,
+            &urls,
+            ice_subscription::RULE_SET_CACHE_MAX_IDLE,
+        );
+        SubscriptionManager::open(sub_paths, PLATFORM)
+            .refresh_rule_sets(
+                &cache_dir,
+                &urls,
+                ice_subscription::RULE_SET_REFRESH_INTERVAL,
+                force,
+            )
+            .iter()
+            .any(|report| report.changed())
+    })
+    .await
+    .unwrap_or(false);
+    if !changed {
+        return;
+    }
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let Ok(mut guard) = ready(app, &host, &tunnel) else {
+        return;
+    };
+    if let Err(err) = apply_config(&mut guard, &tunnel) {
+        log::warn!("rule-set refresh: apply failed: {}", err.message);
+    }
+    drop(guard);
+    notify(app);
+}
+
+/// [`refresh_rule_sets_now`] in the background.
+fn spawn_rule_set_refresh(app: &AppHandle, force: bool) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_rule_sets_now(&app, force).await });
 }
 
 fn notify(app: &AppHandle) {
@@ -433,6 +491,7 @@ pub async fn add_subscription(
     let meta = guard.apply_added(fetched)?;
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
+    spawn_rule_set_refresh(&app, false);
     notify(&app);
     Ok(meta)
 }
@@ -462,6 +521,7 @@ pub async fn import_subscription_file(
     let meta = guard.apply_added(prepared)?;
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
+    spawn_rule_set_refresh(&app, false);
     notify(&app);
     Ok(meta)
 }
@@ -514,6 +574,7 @@ pub async fn update_subscription(
     };
     apply_config(&mut guard, &tunnel)?;
     drop(guard);
+    spawn_rule_set_refresh(&app, false);
     notify(&app);
     Ok(meta)
 }
@@ -529,6 +590,7 @@ pub fn set_active_subscription(
     let meta = host.set_active(req.id, req.active)?;
     apply_config(&mut host, &tunnel)?;
     drop(host);
+    spawn_rule_set_refresh(&app, false);
     notify(&app);
     Ok(meta)
 }
@@ -739,6 +801,28 @@ pub fn get_rule_overview(
 ) -> Result<RuleOverview, AppError> {
     let host = ready(&app, &host, &tunnel)?;
     host.rule_overview()
+}
+
+#[tauri::command]
+pub fn get_rule_set_status(
+    app: AppHandle,
+    host: State<'_, Mutex<MobileHost>>,
+    tunnel: State<'_, Tunnel<Wry>>,
+) -> Result<Vec<ice_subscription::RuleSetStatus>, AppError> {
+    let host = ready(&app, &host, &tunnel)?;
+    host.rule_set_status()
+}
+
+/// Download every rule-set the profile needs now and return the new status.
+#[tauri::command]
+pub async fn refresh_rule_sets(
+    app: AppHandle,
+) -> Result<Vec<ice_subscription::RuleSetStatus>, AppError> {
+    refresh_rule_sets_now(&app, true).await;
+    let host = app.state::<Mutex<MobileHost>>();
+    let tunnel = app.state::<Tunnel<Wry>>();
+    let guard = ready(&app, &host, &tunnel)?;
+    guard.rule_set_status()
 }
 
 #[tauri::command]

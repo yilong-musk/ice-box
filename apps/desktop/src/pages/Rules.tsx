@@ -7,11 +7,13 @@ import {
   type ListRulesRequest,
   type RuleOverview,
   type RuleRow,
+  type RuleSetStatus,
 } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";
 import { RuleJsonDialog } from "../components/RuleJsonDialog";
+import { RuleSetStatusDialog } from "../components/RuleSetStatusDialog";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,6 +102,8 @@ export function Rules({ onNavigate, active = true }: Props) {
   >(null);
   const [jsonForm, setJsonForm] = useState<RuleRow | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RuleRow | null>(null);
+  const [ruleSets, setRuleSets] = useState<RuleSetStatus[]>([]);
+  const [ruleSetsOpen, setRuleSetsOpen] = useState(false);
   const [nearBottom, setNearBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
@@ -174,6 +178,27 @@ export function Rules({ onNavigate, active = true }: Props) {
     if (!active) return;
     void load();
   }, [active, load]);
+
+  // Rule-set status follows the overview: it is re-read whenever the
+  // overview is (page activation, refresh, a background update).
+  useEffect(() => {
+    if (!active || typeof api.getRuleSetStatus !== "function") {
+      setRuleSets([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getRuleSetStatus()
+      .then((statuses) => {
+        if (!cancelled && mountedRef.current) setRuleSets(statuses);
+      })
+      .catch(() => {
+        // The status is informational; the rule list reports real errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, overview]);
 
   // Keep the latest `load` and `busy` reachable from the long-lived listener
   // below, so filter changes do not re-register it.
@@ -373,6 +398,23 @@ export function Rules({ onNavigate, active = true }: Props) {
             >
               {t("common.refresh")}
             </Button>
+            {ruleSets.length > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                data-testid="rule-sets-button"
+                onClick={() => setRuleSetsOpen(true)}
+              >
+                {(() => {
+                  const pending = ruleSets.filter((s) => s.state === "pending").length;
+                  return pending > 0
+                    ? t("rules.ruleSetsPending", { count: ruleSets.length, pending })
+                    : t("rules.ruleSets", { count: ruleSets.length });
+                })()}
+              </Button>
+            ) : null}
             {phone ? null : addCustomButton}
           </CardAction>
         </CardHeader>
@@ -632,6 +674,12 @@ export function Rules({ onNavigate, active = true }: Props) {
         onSave={(fingerprint, rule) =>
           onUpdateCustomRule(fingerprint, rule)
         }
+      />
+      <RuleSetStatusDialog
+        open={ruleSetsOpen}
+        onOpenChange={setRuleSetsOpen}
+        statuses={ruleSets}
+        onStatusesChange={setRuleSets}
       />
       <ConfirmDialog
         open={pendingDelete !== null}

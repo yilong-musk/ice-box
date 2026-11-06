@@ -10,6 +10,10 @@
 //! filesystem-referencing keys are rejected with a JSON pointer in the error.
 //! Callers write the sanitised object to a root/admin-owned path and start
 //! sing-box from that copy.
+//!
+//! Local rule-set files are content-checked too: each one is decoded and
+//! re-encoded by `ice-rule-set`, and only that canonical source JSON is
+//! staged, so the elevated core never parses bytes the user side wrote.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,8 +26,10 @@ use serde_json::{json, Map, Value};
 
 /// Upper bound on a sanitised config after parse (8 MiB).
 pub const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
-/// Upper bound on a single local `rule_set` file copied into staging.
-pub const MAX_RULE_SET_BYTES: usize = 8 * 1024 * 1024;
+/// Upper bound on a single local `rule_set` file read for staging. Sized for
+/// canonical source JSON (a large GeoIP country is several MiB); the output
+/// is bounded again by `ice_rule_set::Limits`.
+pub const MAX_RULE_SET_BYTES: usize = 32 * 1024 * 1024;
 /// Upper bound on `outbounds` array length.
 pub const MAX_OUTBOUNDS: usize = 640;
 /// Upper bound on `route.rules` array length.
@@ -1011,11 +1017,19 @@ fn validate_rule_set_paths(cfg: &mut Value, ctx: &GuardContext) -> Result<(), Gu
                 GuardError::new(&pointer, format!("rule_set path {raw} is not allowed"))
             }));
         };
-        // Copy the bytes we opened (Unix: same O_NOFOLLOW fd) into a
-        // helper-owned staging file. Rewriting the JSON path to a
+        // Decode and re-encode the bytes we opened (Unix: same O_NOFOLLOW
+        // fd): the core only ever parses canonical JSON written here.
+        let limits = ice_rule_set::Limits {
+            max_input_bytes: MAX_RULE_SET_BYTES,
+            ..ice_rule_set::Limits::default()
+        };
+        let sanitized = ice_rule_set::sanitize(&bytes, &limits)
+            .map_err(|err| GuardError::new(&pointer, format!("rule_set {raw} rejected: {err}")))?;
+        // Stage into a helper-owned file. Rewriting the JSON path to a
         // user-writable canonical location is not an inode pin: the user
         // could replace that path with a symlink before sing-box starts.
-        let staged = write_staged_rule_set(staging, idx, &bytes)?;
+        let staged = write_staged_rule_set(staging, idx, &sanitized.json)?;
+        obj.insert("format".to_string(), Value::String("source".into()));
         obj.insert(
             "path".to_string(),
             Value::String(staged.to_string_lossy().into_owned()),
@@ -1171,7 +1185,7 @@ fn write_staged_rule_set(staging: &Path, idx: usize, bytes: &[u8]) -> Result<Pat
             )
         })?;
     }
-    let dest = staging.join(format!("{idx}.srs"));
+    let dest = staging.join(format!("{idx}.json"));
     if dest.exists() {
         fs::remove_file(&dest).map_err(|err| {
             GuardError::new(
@@ -1517,6 +1531,10 @@ fn parse_http_url_parts(raw: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A valid source rule-set and the canonical JSON the guard stages for it.
+    const RULE_SET: &[u8] = br#"{"version":1,"rules":[{"domain":"a.cn"}]}"#;
+    const STAGED: &[u8] = br#"{"rules":[{"domain":["a.cn"]}],"version":1}"#;
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1618,7 +1636,7 @@ mod tests {
     #[test]
     fn rule_set_path_outside_resources_is_rejected() {
         let dir = temp_dir("rs");
-        fs::write(dir.join("geoip-cn.srs"), b"x").unwrap();
+        fs::write(dir.join("geoip-cn.srs"), RULE_SET).unwrap();
         let mut cfg = minimal_allowed_config();
         cfg["route"]["rule_set"] = json!([{
             "type": "local",
@@ -1636,7 +1654,7 @@ mod tests {
         let dir = temp_dir("rs-ok");
         let srs = dir.join("geoip").join("geoip-cn.srs");
         fs::create_dir_all(srs.parent().unwrap()).unwrap();
-        fs::write(&srs, b"x").unwrap();
+        fs::write(&srs, RULE_SET).unwrap();
         let mut cfg = minimal_allowed_config();
         cfg["route"]["rule_set"] = json!([{
             "type": "local",
@@ -1653,7 +1671,7 @@ mod tests {
         let dir = temp_dir("rs-no-staging");
         let srs = dir.join("geoip").join("geoip-cn.srs");
         fs::create_dir_all(srs.parent().unwrap()).unwrap();
-        fs::write(&srs, b"x").unwrap();
+        fs::write(&srs, RULE_SET).unwrap();
         let mut cfg = minimal_allowed_config();
         cfg["route"]["rule_set"] = json!([{
             "type": "local",
@@ -1679,7 +1697,7 @@ mod tests {
         let dir = temp_dir("rs-follow");
         let srs = dir.join("geoip").join("geoip-cn.srs");
         fs::create_dir_all(srs.parent().unwrap()).unwrap();
-        fs::write(&srs, b"x").unwrap();
+        fs::write(&srs, RULE_SET).unwrap();
         let outside = std::env::temp_dir().join(format!(
             "ice-guard-outside-{}",
             std::time::SystemTime::now()
@@ -1716,11 +1734,11 @@ mod tests {
             Path::new(pinned).starts_with(&staging),
             "rule_set path must be copied into staging, got {pinned}"
         );
-        assert_eq!(fs::read(pinned).unwrap(), b"x");
+        assert_eq!(fs::read(pinned).unwrap(), STAGED);
         fs::write(&srs, b"swapped").unwrap();
         assert_eq!(
             fs::read(pinned).unwrap(),
-            b"x",
+            STAGED,
             "swapping the user-writable original must not change the staged copy"
         );
         let _ = fs::remove_file(&outside);
@@ -1760,7 +1778,7 @@ mod tests {
     #[test]
     fn local_rule_set_download_url_is_rejected() {
         let dir = temp_dir("rs-download-url");
-        fs::write(dir.join("geoip-cn.srs"), b"x").unwrap();
+        fs::write(dir.join("geoip-cn.srs"), RULE_SET).unwrap();
         let mut cfg = minimal_allowed_config();
         cfg["route"]["rule_set"] = json!([{
             "type": "local",
@@ -2007,7 +2025,7 @@ mod tests {
         let srs = data.join("geoip").join("geoip-cn.srs");
         fs::create_dir_all(srs.parent().unwrap()).unwrap();
         fs::create_dir_all(&resources).unwrap();
-        fs::write(&srs, b"x").unwrap();
+        fs::write(&srs, RULE_SET).unwrap();
         let mut cfg = minimal_allowed_config();
         cfg["route"]["rule_set"] = json!([{
             "type": "local",
@@ -2441,5 +2459,59 @@ mod tests {
         assert!(!path_is_windows_ipc_device(Path::new(
             r"\\?\C:\Users\me\config.json"
         )));
+    }
+
+    #[test]
+    fn staged_rule_set_is_reencoded_as_source_json() {
+        let dir = temp_dir("rs-reencode");
+        let srs = dir.join("geoip").join("geoip-cn.srs");
+        fs::create_dir_all(srs.parent().unwrap()).unwrap();
+        // A real binary rule-set is staged as canonical source JSON.
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../third_party/bundled-rule-sets/rule-set/geosite-openai.srs");
+        fs::copy(&bundled, &srs).unwrap();
+        let mut cfg = minimal_allowed_config();
+        cfg["route"]["rule_set"] = json!([{
+            "type": "local",
+            "tag": "openai",
+            "format": "binary",
+            "path": srs.to_string_lossy(),
+        }]);
+        let after = sanitize(cfg, &ctx(&dir)).expect("binary input");
+        let set = &after["route"]["rule_set"][0];
+        assert_eq!(set["format"], "source");
+        let staged = fs::read(set["path"].as_str().unwrap()).unwrap();
+        assert!(
+            staged.starts_with(b"{\"rules\":"),
+            "{}",
+            String::from_utf8_lossy(&staged)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hostile_rule_set_content_is_rejected() {
+        let dir = temp_dir("rs-hostile");
+        let path = dir.join("rule-sets").join("x.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for body in [
+            &b"garbage"[..],
+            br#"{"version":1,"rules":[{"ip_cidr":"0.0.0.0/0"}]}"#,
+            br#"{"version":1,"rules":[{"domain":"a.cn","outbound":"direct"}]}"#,
+            b"SRS\x01\x78\x9c",
+        ] {
+            fs::write(&path, body).unwrap();
+            let mut cfg = minimal_allowed_config();
+            cfg["route"]["rule_set"] = json!([{
+                "type": "local",
+                "tag": "x",
+                "format": "source",
+                "path": path.to_string_lossy(),
+            }]);
+            let err = sanitize(cfg, &ctx(&dir)).expect_err("hostile content");
+            assert_eq!(err.pointer, "/route/rule_set/0/path");
+            assert!(err.message.contains("rejected"), "{}", err.message);
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }

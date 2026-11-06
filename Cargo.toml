@@ -20,6 +20,7 @@ members = [
   "crates/ice-helper",
   "crates/ice-elevate",
   "crates/ice-spawn",
+  "crates/ice-rule-set",
 ]
 
 [workspace.package]
@@ -59,3 +60,4 @@ ice-tun-journal = { path = "crates/ice-tun-journal" }
 ice-tun-pin = { path = "crates/ice-tun-pin" }
 ice-elevate = { path = "crates/ice-elevate" }
 ice-spawn = { path = "crates/ice-spawn" }
+ice-rule-set = { path = "crates/ice-rule-set" }

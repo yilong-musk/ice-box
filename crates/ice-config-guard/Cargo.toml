@@ -8,6 +8,7 @@ description = "Allowlist sanitizer for elevated sing-box JSON configs"
 [dependencies]
 serde_json = { workspace = true }
 ice-types = { workspace = true }
+ice-rule-set = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

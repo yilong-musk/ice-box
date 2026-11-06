@@ -39,6 +39,7 @@ pub fn write_config(paths: &AppPaths, package_name: Option<&str>) -> Result<(), 
         profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(paths.geoip_dir()),
+        rule_set_cache_dir: Some(paths.rule_set_cache_dir()),
         group_selections: load_group_selections(&paths.group_selections()),
         rule_overrides: load_rule_overrides(&paths.rule_overrides()),
         capture_intent: CaptureIntent::Tun,
@@ -49,6 +50,39 @@ pub fn write_config(paths: &AppPaths, package_name: Option<&str>) -> Result<(), 
     let config = build_mobile_config(&input)?;
     write_runtime_config_file(&paths.config(), &paths.config_bak(), &config)?;
     Ok(())
+}
+
+/// The active profile plus its route and custom rules, for rule-set queries.
+fn profile_and_rules(
+    paths: &AppPaths,
+) -> Result<(Arc<NormalizedProfile>, Vec<serde_json::Value>), AppError> {
+    let settings = load_settings(&paths.settings())?;
+    let profile = active_profile(paths, settings.auto_default_rules)?;
+    let mut rules = profile.route.rules.clone();
+    rules.extend(load_rule_overrides(&paths.rule_overrides()).custom);
+    Ok((profile, rules))
+}
+
+/// URLs of the remote rule-sets the active profile and custom rules need.
+pub fn required_rule_set_urls(paths: &AppPaths) -> Result<Vec<String>, AppError> {
+    let (profile, rules) = profile_and_rules(paths)?;
+    Ok(ice_config::required_rule_set_urls(
+        &profile.route.rule_sets,
+        &rules,
+        profile.dns.as_ref(),
+    ))
+}
+
+/// Where each rule-set the active profile needs comes from.
+pub fn rule_set_status(paths: &AppPaths) -> Result<Vec<ice_subscription::RuleSetStatus>, AppError> {
+    let (profile, rules) = profile_and_rules(paths)?;
+    Ok(ice_subscription::rule_set_statuses(
+        &profile.route.rule_sets,
+        &rules,
+        profile.dns.as_ref(),
+        Some(&paths.geoip_dir()),
+        &paths.rule_set_cache_dir(),
+    ))
 }
 
 pub fn active_profile(

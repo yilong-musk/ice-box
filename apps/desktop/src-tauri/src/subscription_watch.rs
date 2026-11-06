@@ -107,6 +107,7 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
         return true;
     }
     let results = mgr.apply_all(fetched);
+    crate::rule_set_watch::request_refresh(false);
     let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
     let failed = results.len() - updated;
     for (id, result) in &results {

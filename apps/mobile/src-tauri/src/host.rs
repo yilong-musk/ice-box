@@ -128,6 +128,23 @@ impl MobileHost {
         self.paths().cloned()
     }
 
+    /// What a rule-set refresh needs, read under the host lock: the
+    /// subscription paths (for the fetcher), the cache dir and the URLs.
+    pub fn rule_set_refresh_inputs(
+        &self,
+    ) -> Result<(SubscriptionPaths, std::path::PathBuf, Vec<String>), AppError> {
+        let paths = self.paths()?;
+        Ok((
+            SubscriptionPaths::from_app(paths),
+            paths.rule_set_cache_dir(),
+            config::required_rule_set_urls(paths)?,
+        ))
+    }
+
+    pub fn rule_set_status(&self) -> Result<Vec<ice_subscription::RuleSetStatus>, AppError> {
+        config::rule_set_status(self.paths()?)
+    }
+
     pub fn subscription_paths(&self) -> Result<SubscriptionPaths, AppError> {
         Ok(SubscriptionPaths::from_app(self.paths()?))
     }

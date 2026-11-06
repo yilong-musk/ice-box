@@ -77,6 +77,16 @@ pub struct FetchResponse {
     pub content_disposition: Option<String>,
 }
 
+/// A binary response body; see [`HttpFetcher::get_bytes`].
+#[derive(Debug, Clone)]
+pub struct FetchBytes {
+    pub body: Vec<u8>,
+    /// HTTP 304 Not Modified: the body is empty.
+    pub not_modified: bool,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
 /// Which client a subscription request identifies itself as. Provider panels
 /// choose the body format, and whether to send `subscription-userinfo`, from
 /// the `User-Agent`.
@@ -116,6 +126,24 @@ pub trait HttpFetcher: Send {
         last_modified: Option<&str>,
         client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError>;
+
+    /// GET a binary resource (a rule-set) as the generic client. The default
+    /// goes through [`Self::get`], which only carries UTF-8 bodies; the real
+    /// fetchers override it to keep the raw bytes.
+    fn get_bytes(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<FetchBytes, SubscriptionError> {
+        let resp = self.get(url, etag, last_modified)?;
+        Ok(FetchBytes {
+            body: resp.body.into_bytes(),
+            not_modified: resp.not_modified,
+            etag: resp.etag,
+            last_modified: resp.last_modified,
+        })
+    }
 
     /// GET `url` as the generic client.
     fn get(
@@ -307,6 +335,15 @@ impl HttpFetcher for DefaultFetcher {
         client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
         fetch_response(&self.agents, url, etag, last_modified, client)
+    }
+
+    fn get_bytes(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<FetchBytes, SubscriptionError> {
+        fetch_bytes(&self.agents, url, etag, last_modified)
     }
 }
 
@@ -725,6 +762,49 @@ fn fetch_response(
     )
 }
 
+/// Binary GET with the same SSRF, redirect, deadline and size rules as
+/// [`fetch_response`].
+fn fetch_bytes(
+    agents: &FetchAgents,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> Result<FetchBytes, SubscriptionError> {
+    let redacted = crate::redact_subscription_url_for_log(url);
+    let deadline = Instant::now() + FETCH_TOTAL_TIMEOUT;
+    let hop = fetch_get(
+        agents,
+        url,
+        FetchClient::Generic.user_agent(),
+        etag,
+        last_modified,
+        deadline,
+    )
+    .inspect_err(
+        |e| tracing::warn!(url = %redacted, error = %e.redacted_display(), "binary fetch: failed"),
+    )?;
+    if hop.status == 304 {
+        return Ok(FetchBytes {
+            body: Vec::new(),
+            not_modified: true,
+            etag: hop.etag,
+            last_modified: hop.last_modified,
+        });
+    }
+    if !(200..300).contains(&hop.status) {
+        return Err(SubscriptionError::HttpStatus {
+            url: url.to_string(),
+            status: hop.status,
+        });
+    }
+    Ok(FetchBytes {
+        body: hop.body,
+        not_modified: false,
+        etag: hop.etag,
+        last_modified: hop.last_modified,
+    })
+}
+
 /// [`fetch_response`] with an explicit deadline so tests can use short budgets.
 fn fetch_response_with_deadline(
     agents: &FetchAgents,
@@ -789,6 +869,15 @@ impl HttpFetcher for DirectFetcher {
         client: FetchClient,
     ) -> Result<FetchResponse, SubscriptionError> {
         fetch_response(&FetchAgents::direct(), url, etag, last_modified, client)
+    }
+
+    fn get_bytes(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<FetchBytes, SubscriptionError> {
+        fetch_bytes(&FetchAgents::direct(), url, etag, last_modified)
     }
 }
 

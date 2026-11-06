@@ -1773,6 +1773,7 @@ dependencies = [
 name = "ice-config-guard"
 version = "0.2.9"
 dependencies = [
+ "ice-rule-set",
  "ice-types",
  "libc",
  "serde_json",
@@ -1847,6 +1848,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ice-rule-set"
+version = "0.2.9"
+dependencies = [
+ "flate2",
+ "regex-syntax",
+ "serde_json",
+]
+
+[[package]]
 name = "ice-spawn"
 version = "0.2.9"
 dependencies = [
@@ -1864,6 +1874,7 @@ dependencies = [
  "flate2",
  "ice-config",
  "ice-config-guard",
+ "ice-rule-set",
  "percent-encoding",
  "rcgen",
  "rustls",

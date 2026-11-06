@@ -433,6 +433,7 @@ pub fn generate_config_with_cache(
         profile,
         selected_tag: selected,
         geoip_rule_set_dir: Some(geoip_dir),
+        rule_set_cache_dir: Some(app_paths.rule_set_cache_dir()),
         group_selections,
         rule_overrides,
         capture_intent,

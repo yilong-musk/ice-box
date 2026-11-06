@@ -3,7 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -153,6 +153,8 @@ export const api = {
       req: { id, name, title },
     }),
   getRuleOverview: () => invoke<RuleOverview>("get_rule_overview"),
+  getRuleSetStatus: () => invoke<RuleSetStatus[]>("get_rule_set_status"),
+  refreshRuleSets: () => invoke<RuleSetStatus[]>("refresh_rule_sets"),
   listRules: (req: ListRulesRequest) =>
     invoke<ListRulesResponse>("list_rules", { req }),
   setRuleDisabled: (fingerprint: string, disabled: boolean) =>

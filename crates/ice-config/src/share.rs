@@ -578,6 +578,10 @@ fn portable_rule_set(set: &Value) -> Option<Value> {
     if let Some(remote) = portable_remote_for_bundled(set) {
         return portable_rule_set(&remote);
     }
+    // A downloaded set is shared as the remote set it came from.
+    if let Some(remote) = crate::portable_remote_for_download(set) {
+        return portable_rule_set(&remote);
+    }
     let obj = set.as_object()?;
     if obj.get("type").and_then(|v| v.as_str()) == Some("local") {
         return None;
