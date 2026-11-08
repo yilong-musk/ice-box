@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, CircleAlert } from "lucide-react";
 
 import { t } from "../lib/i18n";
+import { useTransient } from "../lib/transient";
 import { cn } from "@/lib/utils";
 
 const ERROR_DURATION_MS = 5000;
@@ -18,45 +19,24 @@ export type CapsuleToastState = {
   tone: CapsuleToastTone;
 } | null;
 
-/** Single transient page-level notice, replaced by the next one. */
+/** Single transient page-level notice, replaced by the next one. Its time keeps
+ * running while the page is hidden (see `useTransient`). */
 export function useCapsuleToast() {
-  const [toast, setToast] = useState<CapsuleToastState>(null);
+  const [toast, showToast, dismiss] = useTransient<CapsuleToastState>(null);
   const nextId = useRef(0);
-  const timer = useRef<number | null>(null);
-
-  const clearTimer = useCallback(() => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  }, []);
-
-  const dismiss = useCallback(() => {
-    clearTimer();
-    setToast(null);
-  }, [clearTimer]);
 
   const show = useCallback(
     (message: string, tone: CapsuleToastTone = "error") => {
       const text = message.trim();
       if (!text) return;
-      clearTimer();
       nextId.current += 1;
-      setToast({ id: nextId.current, message: text, tone });
-      timer.current = window.setTimeout(
-        () => {
-          timer.current = null;
-          setToast(null);
-        },
+      showToast(
+        { id: nextId.current, message: text, tone },
         tone === "success" ? SUCCESS_DURATION_MS : ERROR_DURATION_MS,
       );
     },
-    [clearTimer],
+    [showToast],
   );
-
-  useEffect(() => {
-    return () => clearTimer();
-  }, [clearTimer]);
 
   return { toast, show, dismiss };
 }

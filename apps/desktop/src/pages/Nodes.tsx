@@ -22,7 +22,6 @@ import {
   CARD_GAP,
   CARD_HEIGHT,
   CARD_MIN_WIDTH,
-  COMPACT_CARD_MIN_WIDTH,
   SECTION_HEADER_HEIGHT,
   cardWindow,
   gridColumns,
@@ -645,10 +644,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     }
     return result;
   }, [grouped, orderedNodes, memberOrder, expandedGroups, selectedTag]);
-  const columns = gridColumns(
-    viewport.width,
-    compact ? COMPACT_CARD_MIN_WIDTH : CARD_MIN_WIDTH,
-  );
+  // The phone keeps one full-width column: two columns felt cramped there and
+  // cut node names short.
+  const columns = compact ? 1 : gridColumns(viewport.width, CARD_MIN_WIDTH);
   const layout = useMemo(
     () => (listVisible ? sectionLayout(sections, columns) : EMPTY_LAYOUT),
     [listVisible, sections, columns],

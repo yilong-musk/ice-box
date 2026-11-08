@@ -22,6 +22,7 @@ import { isPhoneShell } from "@platform/shell";
 import { readLanguagePreference, t, useLanguagePreference } from "../lib/i18n";
 import { useThemePreference } from "../lib/theme";
 import { useRuntimeStore } from "../lib/runtimeStore";
+import { useTransient } from "../lib/transient";
 import { AndroidSystemCard } from "./settings/Android";
 import { PhoneLogsCard } from "./settings/PhoneLogs";
 import { AppearanceCard } from "./settings/Appearance";
@@ -159,7 +160,7 @@ export function Settings({
   const [loaded, setLoaded] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saved, showSaved] = useTransient(false);
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -184,10 +185,6 @@ export function Settings({
   const persistedFormRef = useRef<AppSettings>(defaults);
   /** Coalesce state announcements received while a local save is in flight. */
   const remoteReloadPendingRef = useRef(false);
-  /// Reset timer for the "saved" flash; tracked so the pending reset is
-  /// cancelled on unmount (a stray fire into a torn-down test environment
-  /// crashes with `window is not defined`) and superseded on every new save.
-  const savedResetTimerRef = useRef<number | null>(null);
   /// Skip the first post-load snapshot so opening the page never persists
   /// the just-read settings; re-armed on every reload cycle.
   const skipInitialSaveRef = useRef(true);
@@ -313,23 +310,8 @@ export function Settings({
 
   /// Briefly show the "saved" confirmation; re-armed on each save.
   function flashSaved() {
-    setSaved(true);
-    if (savedResetTimerRef.current !== null) {
-      window.clearTimeout(savedResetTimerRef.current);
-    }
-    savedResetTimerRef.current = window.setTimeout(() => {
-      savedResetTimerRef.current = null;
-      setSaved(false);
-    }, 2000);
+    showSaved(true, 2000);
   }
-
-  useEffect(() => {
-    return () => {
-      if (savedResetTimerRef.current !== null) {
-        window.clearTimeout(savedResetTimerRef.current);
-      }
-    };
-  }, []);
 
   function hasLocalDraft(): boolean {
     return (

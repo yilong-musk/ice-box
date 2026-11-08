@@ -18,6 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { copyText } from "../lib/logCopy";
 import { t, useLanguagePreference } from "../lib/i18n";
+import { useTransient } from "../lib/transient";
 
 const POLL_MS = 2000;
 
@@ -27,8 +28,7 @@ export function Mcp({ active = true }: { active?: boolean }) {
   const [statusError, setStatusError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const copiedTimerRef = useRef<number | null>(null);
+  const [copied, flashCopied] = useTransient(false);
   const requestSeqRef = useRef(0);
 
   const applyStatus = useCallback((next: McpStatus) => {
@@ -57,15 +57,6 @@ export function Mcp({ active = true }: { active?: boolean }) {
       window.clearInterval(timer);
     };
   }, [active, refresh]);
-
-  useEffect(
-    () => () => {
-      if (copiedTimerRef.current !== null) {
-        window.clearTimeout(copiedTimerRef.current);
-      }
-    },
-    [],
-  );
 
   async function setEnabled(enabled: boolean) {
     requestSeqRef.current += 1;
@@ -105,15 +96,8 @@ export function Mcp({ active = true }: { active?: boolean }) {
     if (!status?.client_config) return;
     try {
       await copyText(status.client_config);
-      setCopied(true);
+      flashCopied(true, 1600);
       setActionError(null);
-      if (copiedTimerRef.current !== null) {
-        window.clearTimeout(copiedTimerRef.current);
-      }
-      copiedTimerRef.current = window.setTimeout(() => {
-        copiedTimerRef.current = null;
-        setCopied(false);
-      }, 1600);
     } catch (copyError) {
       setActionError(formatInvokeError(copyError));
     }

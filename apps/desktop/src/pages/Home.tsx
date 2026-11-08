@@ -55,6 +55,7 @@ import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
 import { formatUptime } from "../lib/uptime";
 import { resolveShellProxyEndpoint } from "../lib/shellProxy";
+import { useTransient } from "../lib/transient";
 
 type Props = {
   onBusyChange?: (busy: boolean) => void;
@@ -189,8 +190,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [tunSaving, setTunSaving] = useState(false);
   const activeRef = useRef(active);
   const settingsRef = useRef<AppSettings | null>(null);
-  const [copiedCliProxy, setCopiedCliProxy] = useState(false);
-  const copiedCliProxyTimerRef = useRef<number | null>(null);
+  const [copiedCliProxy, flashCopiedCliProxy] = useTransient(false);
   const statusRef = useRef<StatusResponse | null>(null);
   /** Wall time of the latest node-list snapshot. Compared with `sampled_at_ms`. */
   const snapWallRef = useRef(0);
@@ -343,14 +343,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       unlisten();
     };
   }, [refresh]);
-
-  useEffect(() => {
-    return () => {
-      if (copiedCliProxyTimerRef.current !== null) {
-        window.clearTimeout(copiedCliProxyTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     activeRef.current = active;
@@ -604,14 +596,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       setError(formatInvokeError(err));
       return;
     }
-    setCopiedCliProxy(true);
-    if (copiedCliProxyTimerRef.current !== null) {
-      window.clearTimeout(copiedCliProxyTimerRef.current);
-    }
-    copiedCliProxyTimerRef.current = window.setTimeout(() => {
-      copiedCliProxyTimerRef.current = null;
-      setCopiedCliProxy(false);
-    }, 2000);
+    flashCopiedCliProxy(true, 2000);
   }
 
   async function onOpenCliProxy() {
