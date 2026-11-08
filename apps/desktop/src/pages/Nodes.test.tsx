@@ -39,6 +39,22 @@ vi.mock("../api/client", () => ({
   formatInvokeError: (err: unknown) => String(err),
 }));
 
+/** A profile without strategy groups: every node is a top-level, selectable
+ * row under the injected `proxy` selector. */
+const FLAT_NODES = [
+  { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+  { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+];
+
+/** A group section header or a node card: the units rows used to be. */
+const ROW = '[data-testid="group-header"], [data-testid="node-card"]';
+/** Header and card titles in document order. */
+const TITLES = '[data-testid="group-header-title"], [data-testid="node-card-title"]';
+
+function useFlatProfile() {
+  listNodes.mockImplementation(async () => FLAT_NODES.map((node) => ({ ...node })));
+}
+
 describe("Nodes", () => {
   beforeEach(() => {
     const actions = document.createElement("div");
@@ -52,6 +68,8 @@ describe("Nodes", () => {
       return Promise.resolve(() => {});
     });
     clearNodesSnapshot();
+    // Expanded groups are remembered across mounts; start every test collapsed.
+    window.localStorage.removeItem("ice-box.nodes.expanded-groups");
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
@@ -101,6 +119,7 @@ describe("Nodes", () => {
   });
 
   it("renders node list from backend", async () => {
+    useFlatProfile();
     const { container } = render(<Nodes />);
     const view = within(container);
 
@@ -128,14 +147,19 @@ describe("Nodes", () => {
     expect(view.queryByTestId("delay-testing")).not.toBeInTheDocument();
   });
 
-  it("drops the per-node test on the phone and shortens the batch test", async () => {
+  it("keeps a per-card test on the phone and shortens the batch test", async () => {
     phoneShell.value = true;
+    useFlatProfile();
     const { container } = render(<Nodes embedded />);
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
 
-    expect(view.queryAllByRole("button", { name: t("nodes.test") })).toHaveLength(0);
-    expect(view.getAllByRole("button", { name: t("nodes.select") }).length).toBeGreaterThan(0);
+    expect(
+      view.getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }),
+    ).toBeInTheDocument();
+    expect(
+      view.getByRole("button", { name: t("nodes.selectNodeAria", { node: "node-b" }) }),
+    ).toBeInTheDocument();
     const batch = view.getByRole("button", { name: t("nodes.batchTest") });
     // Icon plus the short label, so it fits beside the card title on a
     // narrow screen; the full name stays as its accessible name.
@@ -176,19 +200,20 @@ describe("Nodes", () => {
     );
     const view = within(container);
 
-    await view.findAllByText("node-a");
+    await view.findAllByText("选择组");
     expect(view.queryByText(t("nodes.notRunningWarn"))).not.toBeInTheDocument();
   });
 
   it("publishes the selected node to the shared snapshot", async () => {
+    useFlatProfile();
     const { container } = render(<Nodes />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
     });
-    const selectButtons = view.getAllByRole("button", { name: t("nodes.select") });
-    const enabled = selectButtons.filter((btn) => !(btn as HTMLButtonElement).disabled);
-    fireEvent.click(enabled[0]);
+    fireEvent.click(
+      view.getByRole("button", { name: t("nodes.selectNodeAria", { node: "node-b" }) }),
+    );
     await waitFor(() => {
       expect(setSelectedNode).toHaveBeenCalledWith("node-b");
     });
@@ -197,17 +222,20 @@ describe("Nodes", () => {
     });
   });
 
-  it("shows selection as an icon toggle without an in-use text label", async () => {
+  it("marks the node in use with an icon instead of a text label", async () => {
+    useFlatProfile();
     const { container } = render(<Nodes />);
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
-    const current = view.getByRole("button", { name: t("nodes.inUse") });
+    const current = view.getByRole("button", {
+      name: t("nodes.memberCurrentAria", { member: "node-a" }),
+    });
     expect(current).toBeDisabled();
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current).toHaveTextContent("");
-    for (const button of view.getAllByRole("button", { name: t("nodes.select") })) {
-      expect(button).toHaveTextContent("");
-    }
+    expect(current.closest(ROW)).toHaveAttribute("data-current", "true");
+    // The check is an announced icon, not an "in use" text label.
+    expect(view.getByRole("img", { name: t("nodes.inUse") })).toBeInTheDocument();
     expect(view.queryByText(t("nodes.inUse"))).not.toBeInTheDocument();
   });
 
@@ -250,14 +278,15 @@ describe("Nodes", () => {
           resolveSelect = resolve;
         }),
     );
+    useFlatProfile();
     const { container, rerender } = render(<Nodes active />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
     });
-    const selectButtons = view.getAllByRole("button", { name: t("nodes.select") });
-    const enabled = selectButtons.filter((btn) => !(btn as HTMLButtonElement).disabled);
-    fireEvent.click(enabled[0]);
+    fireEvent.click(
+      view.getByRole("button", { name: t("nodes.selectNodeAria", { node: "node-b" }) }),
+    );
     await waitFor(() => {
       expect(setSelectedNode).toHaveBeenCalledWith("node-b");
     });
@@ -329,14 +358,32 @@ describe("Nodes", () => {
     ).toBeInTheDocument();
   });
 
-  it("drops delay results and expanded groups when the lineup changes", async () => {
+  it("drops delay results and another lineup's expanded groups when the lineup changes", async () => {
     testNodeDelay.mockRejectedValue("probe timed out");
+    // node-a stays outside every group so it keeps a top-level row.
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      { tag: "node-d", outbound_type: "vmess", group_now: null, group_all: null },
+      {
+        tag: "选择组",
+        outbound_type: "selector",
+        group_now: "node-b",
+        group_all: ["node-b", "node-d"],
+      },
+      {
+        tag: "自动组",
+        outbound_type: "urltest",
+        group_now: "node-b",
+        group_all: ["node-b", "node-d"],
+      },
+    ]);
     const { container } = render(<Nodes />);
     const view = within(container);
     const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
     const rowOf = (tag: string) =>
-      within(nodeList).getAllByText(tag)[0].closest("[data-slot='item']") as HTMLElement;
-    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }));
+      within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
     await waitFor(() => {
       expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
     });
@@ -346,24 +393,25 @@ describe("Nodes", () => {
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
+      { tag: "node-d", outbound_type: "vmess", group_now: null, group_all: null },
       {
         tag: "选择组",
         outbound_type: "selector",
         group_now: "node-b",
-        group_all: ["node-a", "node-b"],
+        group_all: ["node-b", "node-d"],
       },
       {
         tag: "自动组",
         outbound_type: "urltest",
-        group_now: "node-a",
-        group_all: ["node-a", "node-b"],
+        group_now: "node-d",
+        group_all: ["node-b", "node-d"],
       },
     ]);
     await act(async () => {
       stateChangedHandler?.();
     });
     await waitFor(() => {
-      expect(readNodesSnapshot()?.nodes[3]?.group_now).toBe("node-a");
+      expect(readNodesSnapshot()?.nodes[4]?.group_now).toBe("node-d");
     });
     expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
     expect(view.getByRole("button", { name: "选择组", expanded: true })).toBeInTheDocument();
@@ -372,11 +420,12 @@ describe("Nodes", () => {
     listNodes.mockResolvedValue([
       { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "node-c", outbound_type: "vmess", group_now: null, group_all: null },
+      { tag: "node-e", outbound_type: "vmess", group_now: null, group_all: null },
       {
         tag: "选择组",
         outbound_type: "selector",
-        group_now: "node-a",
-        group_all: ["node-a", "node-c"],
+        group_now: "node-e",
+        group_all: ["node-e"],
       },
     ]);
     await act(async () => {
@@ -390,6 +439,7 @@ describe("Nodes", () => {
   });
 
   it("drops results of a delay test that spans a lineup change", async () => {
+    useFlatProfile();
     let finish: (value: { tag: string; delay_ms: number }) => void = () => {};
     testNodeDelay.mockImplementation(
       () => new Promise((resolve) => {
@@ -400,8 +450,8 @@ describe("Nodes", () => {
     const view = within(container);
     const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
     const rowOf = (tag: string) =>
-      within(nodeList).getAllByText(tag)[0].closest("[data-slot='item']") as HTMLElement;
-    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }));
+      within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
     await waitFor(() => {
       expect(within(rowOf("node-a")).getByTestId("delay-testing")).toBeInTheDocument();
     });
@@ -425,7 +475,7 @@ describe("Nodes", () => {
     // The test still ends: the controls are usable again.
     await waitFor(() => {
       expect(
-        within(rowOf("node-a")).getByRole("button", { name: t("nodes.test") }),
+        within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }),
       ).toBeEnabled();
     });
   });
@@ -447,15 +497,15 @@ describe("Nodes", () => {
       expect(view.getByText("node-0")).toBeInTheDocument();
     });
     fireEvent.scroll(container.querySelector('[data-slot="scroll-area-viewport"]')!, {
-      target: { scrollTop: 3880 },
+      target: { scrollTop: 4850 },
     });
     await waitFor(() => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
     const titles = container.querySelectorAll(
-      `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
+      `[aria-label="${t("nodes.listAria")}"] [data-testid="node-card-title"]`,
     );
-    expect(titles.length).toBeLessThanOrEqual(15);
+    expect(titles.length).toBeLessThanOrEqual(16);
   });
 
   it("does not flash the empty-state guide before nodes load", async () => {
@@ -588,7 +638,7 @@ describe("Nodes", () => {
     await expandGroup(view, "选择组");
     expect(view.queryByText("leaf-89")).toBeNull();
     const viewport = container.querySelector('[data-slot="scroll-area-viewport"]')!;
-    fireEvent.scroll(viewport, { target: { scrollTop: 2336 } });
+    fireEvent.scroll(viewport, { target: { scrollTop: 5600 } });
     await waitFor(() => {
       expect(
         view.getByLabelText(t("nodes.setMemberAria", { member: "leaf-89", group: "选择组" })),
@@ -614,27 +664,29 @@ describe("Nodes", () => {
 
     expect(view.getByText("node-0")).toBeInTheDocument();
     const firstPaint = container.querySelectorAll(
-      `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
+      `[aria-label="${t("nodes.listAria")}"] [data-testid="node-card-title"]`,
     );
     expect(firstPaint.length).toBeGreaterThan(0);
-    expect(firstPaint.length).toBeLessThanOrEqual(15);
+    expect(firstPaint.length).toBeLessThanOrEqual(16);
     expect(view.queryByText("node-79")).toBeNull();
 
     fireEvent.scroll(container.querySelector('[data-slot="scroll-area-viewport"]')!, {
-      target: { scrollTop: 3880 },
+      target: { scrollTop: 4800 },
     });
     await waitFor(() => {
       expect(view.getByText("node-79")).toBeInTheDocument();
     });
     expect(view.queryByText("node-0")).toBeNull();
-    expect(
-      container.querySelectorAll(`[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`),
-    ).toHaveLength(14);
+    const lastPaint = container.querySelectorAll(
+      `[aria-label="${t("nodes.listAria")}"] [data-testid="node-card-title"]`,
+    );
+    expect(lastPaint.length).toBeGreaterThan(0);
+    expect(lastPaint.length).toBeLessThanOrEqual(16);
     rerender(<Nodes active={false} />);
     expect(view.queryByRole("list", { name: t("nodes.listAria") })).toBeNull();
     rerender(<Nodes active />);
     expect(view.getByText("node-79")).toBeInTheDocument();
-    expect(container.querySelector('[data-slot="scroll-area-viewport"]')).toHaveProperty("scrollTop", 3880);
+    expect(container.querySelector('[data-slot="scroll-area-viewport"]')).toHaveProperty("scrollTop", 4800);
   });
 
   it("shows empty-state guide when no nodes", async () => {
@@ -673,7 +725,7 @@ describe("Nodes", () => {
     expect(await view.findByLabelText(t("nodes.membersAria", { group: groupName }))).toBeInTheDocument();
   }
 
-  it("toggles a strategy group from the row except 测速 and 选用", async () => {
+  it("toggles a strategy group from its header except the test button", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
 
@@ -681,23 +733,20 @@ describe("Nodes", () => {
       name: "选择组",
       expanded: false,
     });
-    const row = toggle.closest("[data-slot='item']");
+    const row = toggle.closest(ROW);
     expect(row).not.toBeNull();
     const rowView = within(row as HTMLElement);
 
-    fireEvent.click(view.getByText(t("nodes.groupType", { type: "selector" })));
+    fireEvent.click(rowView.getByText("selector"));
     expect(await view.findByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
 
-    fireEvent.click(view.getByText(t("nodes.groupType", { type: "selector" })));
+    fireEvent.click(rowView.getByText("selector"));
     expect(view.queryByLabelText(t("nodes.membersAria", { group: "选择组" }))).not.toBeInTheDocument();
 
     fireEvent.click(rowView.getByText("→ node-a"));
     expect(await view.findByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
 
     fireEvent.click(rowView.getByRole("button", { name: t("nodes.test") }));
-    expect(view.getByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
-
-    fireEvent.click(rowView.getByRole("button", { name: t("nodes.select") }));
     expect(view.getByLabelText(t("nodes.membersAria", { group: "选择组" }))).toBeInTheDocument();
   });
 
@@ -772,7 +821,7 @@ describe("Nodes", () => {
       name: groupName,
       expanded,
     });
-    const row = toggle.closest("[data-slot='item']");
+    const row = toggle.closest(ROW);
     expect(row).not.toBeNull();
     fireEvent.click(
       within(row as HTMLElement).getByRole("button", { name: t("nodes.test") }),
@@ -792,7 +841,7 @@ describe("Nodes", () => {
     expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
     expect(testNodeDelay).not.toHaveBeenCalledWith("node-b");
     const toggle = view.getByRole("button", { name: "选择组" });
-    const row = toggle.closest("[data-slot='item']");
+    const row = toggle.closest(ROW);
     await waitFor(() => {
       expect(within(row as HTMLElement).getByTestId("delay-ok")).toHaveTextContent(
         "42 ms",
@@ -823,7 +872,7 @@ describe("Nodes", () => {
     const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
     const row = within(nodeList)
       .getAllByRole("button", { name: t("nodes.test") })[0]
-      .closest("[data-slot='item']");
+      .closest(ROW);
     expect(row).not.toBeNull();
     fireEvent.click(
       within(row as HTMLElement).getByRole("button", { name: t("nodes.test") }),
@@ -985,24 +1034,19 @@ describe("Nodes", () => {
       expect(screen.getByRole("button", { name: t("nodes.batchTest") })).toBeEnabled();
     });
 
-    const titles = [
-      ...container.querySelectorAll(
-        `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
-      ),
-    ].map((el) =>
-      (el.textContent ?? "").replace(new RegExp(t("nodes.inUse"), "g"), "").replace(/\s+/g, " ").trim(),
-    );
-    expect(titles).toEqual(["node-a", "node-b", "选择组", "自动组"]);
+    const titles = rowTitles(container);
+    // Grouped profile: only the groups are top-level; their members are inside.
+    expect(titles).toEqual(["选择组", "自动组"]);
 
     const selectorRow = view
       .getByRole("button", { name: "选择组" })
-      .closest("[data-slot='item']");
+      .closest(ROW);
     expect(within(selectorRow as HTMLElement).getByTestId("delay-warn")).toHaveTextContent(
       "800 ms",
     );
     const autoRow = view
       .getByRole("button", { name: "自动组" })
-      .closest("[data-slot='item']");
+      .closest(ROW);
     expect(within(autoRow as HTMLElement).getByTestId("delay-ok")).toHaveTextContent(
       "10 ms",
     );
@@ -1040,10 +1084,13 @@ describe("Nodes", () => {
   });
 
   function rowOf(view: ReturnType<typeof within>, tag: string): HTMLElement {
-    const toggle = view.queryByRole("button", { name: tag });
+    const toggle = view.queryByRole("button", { name: tag, expanded: undefined });
     const item =
-      toggle?.closest("[data-slot='item']") ??
-      view.getByText(tag).closest("[data-slot='item']");
+      (toggle?.getAttribute("aria-expanded") != null ? toggle.closest(ROW) : null) ??
+      view
+        .getAllByTestId("node-card-title")
+        .find((title: HTMLElement) => title.textContent === tag)
+        ?.closest(ROW);
     expect(item).not.toBeNull();
     return item as HTMLElement;
   }
@@ -1056,15 +1103,8 @@ describe("Nodes", () => {
 
   function rowTitles(container: HTMLElement): string[] {
     return [
-      ...container.querySelectorAll(
-        `[aria-label="${t("nodes.listAria")}"] [data-slot="item-title"]`,
-      ),
-    ].map((el) =>
-      (el.textContent ?? "")
-        .replace(new RegExp(t("nodes.inUse"), "g"), "")
-        .replace(/\s+/g, " ")
-        .trim(),
-    );
+      ...container.querySelectorAll(`[aria-label="${t("nodes.listAria")}"] :is(${TITLES})`),
+    ].map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim());
   }
 
   function useBackendNodes(nodes: Array<Record<string, unknown>>) {
@@ -1073,19 +1113,19 @@ describe("Nodes", () => {
     return backend;
   }
 
-  it("shows a star on top-level rows and none on expanded members", async () => {
+  it("stars cards, not group headers", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
 
-    expect(
-      view.getAllByRole("button", { name: t("nodes.favoriteAria") }),
-    ).toHaveLength(4);
+    // Collapsed groups show only their headers, which carry no star.
+    expect(view.queryAllByRole("button", { name: t("nodes.favoriteAria") })).toHaveLength(0);
 
     await expandGroup(view, "选择组");
+    const members = view.getByLabelText(t("nodes.membersAria", { group: "选择组" }));
     expect(
-      view.getAllByRole("button", { name: t("nodes.favoriteAria") }),
-    ).toHaveLength(4);
+      within(members).getAllByRole("button", { name: t("nodes.favoriteAria") }),
+    ).toHaveLength(2);
     expect(
       view.queryByLabelText(
         t("nodes.setMemberAria", { member: "node-b", group: "选择组" }),
@@ -1093,20 +1133,21 @@ describe("Nodes", () => {
     ).toBeInTheDocument();
   });
 
-  it("toggles a favorite without selecting or expanding the row", async () => {
+  it("toggles a favorite without picking the card or collapsing the group", async () => {
     const { container } = render(<Nodes />);
     const view = within(container);
-    await view.findByRole("list", { name: t("nodes.listAria") });
+    await expandGroup(view, "选择组");
 
-    fireEvent.click(star(rowOf(view, "选择组")));
+    fireEvent.click(star(rowOf(view, "node-b")));
 
     await waitFor(() => {
-      expect(setNodeFavorite).toHaveBeenCalledWith("选择组", true);
+      expect(setNodeFavorite).toHaveBeenCalledWith("node-b", true);
     });
+    expect(setGroupSelection).not.toHaveBeenCalled();
     expect(setSelectedNode).not.toHaveBeenCalled();
     expect(
-      view.queryByLabelText(t("nodes.membersAria", { group: "选择组" })),
-    ).not.toBeInTheDocument();
+      view.getByLabelText(t("nodes.membersAria", { group: "选择组" })),
+    ).toBeInTheDocument();
   });
 
   it("pins the newest favorite above earlier favorites", async () => {
@@ -1194,6 +1235,7 @@ describe("Nodes", () => {
   });
 
   it("keeps the optimistic star while the write is in flight and ignores a poll", async () => {
+    useFlatProfile();
     let release: () => void = () => {};
     setNodeFavorite.mockImplementation(
       () =>
@@ -1225,6 +1267,7 @@ describe("Nodes", () => {
   });
 
   it("sends one request for a rapid second click and disables row actions", async () => {
+    useFlatProfile();
     let release: () => void = () => {};
     setNodeFavorite.mockImplementation(
       () =>
@@ -1246,10 +1289,12 @@ describe("Nodes", () => {
     for (const starButton of container.querySelectorAll("button[aria-pressed]")) {
       expect(starButton).toBeDisabled();
     }
-    for (const name of [t("nodes.test"), t("nodes.select")]) {
-      for (const button of view.getAllByRole("button", { name })) {
-        expect(button).toBeDisabled();
-      }
+    for (const name of [
+      t("nodes.testNodeAria", { node: "node-a" }),
+      t("nodes.testNodeAria", { node: "node-b" }),
+      t("nodes.selectNodeAria", { node: "node-b" }),
+    ]) {
+      expect(view.getByRole("button", { name })).toBeDisabled();
     }
 
     await act(async () => {
@@ -1258,6 +1303,7 @@ describe("Nodes", () => {
   });
 
   it("ignores a star click while a selection is pending", async () => {
+    useFlatProfile();
     let release: () => void = () => {};
     setSelectedNode.mockImplementation(
       () =>
@@ -1271,7 +1317,7 @@ describe("Nodes", () => {
 
     const row = rowOf(view, "node-b");
     fireEvent.click(
-      within(row).getByRole("button", { name: t("nodes.select") }),
+      within(row).getByRole("button", { name: t("nodes.selectNodeAria", { node: "node-b" }) }),
     );
     await waitFor(() => expect(star(row)).toBeDisabled());
 
@@ -1288,6 +1334,7 @@ describe("Nodes", () => {
   });
 
   it("keeps the single-flight guard through the post-success refresh", async () => {
+    useFlatProfile();
     const { container } = render(<Nodes />);
     const view = within(container);
     await view.findByRole("list", { name: t("nodes.listAria") });
@@ -1333,6 +1380,7 @@ describe("Nodes", () => {
   });
 
   it("rolls back and shows the error when the favorite write fails", async () => {
+    useFlatProfile();
     setNodeFavorite.mockRejectedValueOnce("favorite failed");
     const { container } = render(<Nodes />);
     const view = within(container);
@@ -1350,6 +1398,7 @@ describe("Nodes", () => {
   });
 
   it("keeps the star enabled while the core is stopped", async () => {
+    useFlatProfile();
     getStatus.mockResolvedValue({
       core: { status: "stopped", message: null, inbound_host: null, inbound_port: null },
       subscription_count: 1,
@@ -1401,6 +1450,267 @@ describe("Nodes", () => {
 
     await waitFor(() => {
       expect(star(rowOf(view, "node-a"))).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  describe("profile structure", () => {
+    const STRUCTURED = [
+      { tag: "节点选择", outbound_type: "selector", group_now: "自动选择",
+        group_all: ["自动选择", "hk-1", "jp-1"] },
+      { tag: "自动选择", outbound_type: "urltest", group_now: "jp-1",
+        group_all: ["hk-1", "jp-1"] },
+      { tag: "hk-1", outbound_type: "vless", group_now: null, group_all: null },
+      { tag: "jp-1", outbound_type: "vless", group_now: null, group_all: null },
+      { tag: "solo", outbound_type: "vless", group_now: null, group_all: null },
+    ];
+
+    it("lists groups and standalone nodes, keeping members inside their groups", async () => {
+      useBackendNodes(STRUCTURED);
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await waitFor(() => {
+        expect(rowTitles(container)).toEqual([
+          "节点选择",
+          "自动选择",
+          t("nodes.standalone"),
+          "solo",
+        ]);
+      });
+      // No group holds the standalone node and grouped profiles have no flat
+      // selector, so it can be tested and starred but not selected.
+      const solo = rowOf(view, "solo");
+      expect(
+        within(solo).getByRole("button", { name: t("nodes.testNodeAria", { node: "solo" }) }),
+      ).toBeInTheDocument();
+      expect(within(solo).queryByRole("button", { name: t("nodes.selectNodeAria", { node: "solo" }) })).toBeNull();
+      expect(within(solo).getByRole("button", { name: t("nodes.favoriteAria") })).toBeInTheDocument();
+    });
+
+    it("shows where a nested group member leads", async () => {
+      useBackendNodes(STRUCTURED);
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await expandGroup(view, "节点选择");
+      const members = view.getByLabelText(t("nodes.membersAria", { group: "节点选择" }));
+      const nested = within(members)
+        .getByRole("button", { name: t("nodes.memberCurrentAria", { member: "自动选择" }) })
+        .closest(ROW) as HTMLElement;
+      expect(within(nested).getByText("→ jp-1")).toBeInTheDocument();
+    });
+
+    it("puts favorited members first inside their group", async () => {
+      const backend = useBackendNodes(STRUCTURED);
+      setNodeFavorite.mockImplementation(async (tag: string, favorite: boolean) => {
+        for (const node of backend) {
+          if (node.tag === tag) {
+            node.favorite = favorite;
+            node.favorite_rank = favorite ? 0 : null;
+          }
+        }
+      });
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await expandGroup(view, "自动选择");
+      const members = () =>
+        view.getByLabelText(t("nodes.membersAria", { group: "自动选择" }));
+      const memberNames = () =>
+        [...members().querySelectorAll('[data-testid="node-card-title"]')].map(
+          (el) => el.textContent,
+        );
+      expect(memberNames()).toEqual(["hk-1", "jp-1"]);
+
+      const jpRow = within(members()).getByText("jp-1").closest(ROW) as HTMLElement;
+      fireEvent.click(within(jpRow).getByRole("button", { name: t("nodes.favoriteAria") }));
+
+      await waitFor(() => {
+        expect(setNodeFavorite).toHaveBeenCalledWith("jp-1", true);
+        expect(memberNames()).toEqual(["jp-1", "hk-1"]);
+      });
+      // The group order itself does not move.
+      expect(
+        rowTitles(container).filter((title) => !["hk-1", "jp-1"].includes(title)),
+      ).toEqual(["节点选择", "自动选择", t("nodes.standalone"), "solo"]);
+    });
+
+    it("starts collapsed and remembers expanded groups across mounts", async () => {
+      useBackendNodes(STRUCTURED);
+      const first = render(<Nodes />);
+      const view = within(first.container);
+      expect(
+        await view.findByRole("button", { name: "节点选择", expanded: false }),
+      ).toBeInTheDocument();
+      expect(view.getByRole("button", { name: "自动选择", expanded: false })).toBeInTheDocument();
+      await expandGroup(view, "自动选择");
+      first.unmount();
+
+      clearNodesSnapshot();
+      const second = render(<Nodes />);
+      const again = within(second.container);
+      expect(
+        await again.findByRole("button", { name: "自动选择", expanded: true }),
+      ).toBeInTheDocument();
+      expect(again.getByRole("button", { name: "节点选择", expanded: false })).toBeInTheDocument();
+    });
+
+    it("keeps expanded groups per subscription", async () => {
+      useBackendNodes(STRUCTURED);
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await expandGroup(view, "自动选择");
+
+      // Another subscription with other groups starts collapsed.
+      useBackendNodes([
+        { tag: "Proxies", outbound_type: "selector", group_now: "us-1", group_all: ["us-1"] },
+        { tag: "us-1", outbound_type: "vless", group_now: null, group_all: null },
+      ]);
+      await act(async () => {
+        stateChangedHandler?.();
+      });
+      expect(
+        await view.findByRole("button", { name: "Proxies", expanded: false }),
+      ).toBeInTheDocument();
+
+      // Switching back restores what was open there.
+      useBackendNodes(STRUCTURED);
+      await act(async () => {
+        stateChangedHandler?.();
+      });
+      expect(
+        await view.findByRole("button", { name: "自动选择", expanded: true }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("delay result expiry", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("clears a delay result three minutes after it was measured", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      useFlatProfile();
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await view.findByRole("list", { name: t("nodes.listAria") });
+
+      fireEvent.click(
+        view.getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }),
+      );
+      await waitFor(() => {
+        expect(within(rowOf(view, "node-a")).getByText("42 ms")).toBeInTheDocument();
+      });
+
+      // Still shown just before the deadline.
+      await act(async () => {
+        vi.advanceTimersByTime(3 * 60_000 - 1_000);
+      });
+      expect(within(rowOf(view, "node-a")).getByText("42 ms")).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(within(rowOf(view, "node-a")).queryByText("42 ms")).toBeNull();
+      // Back to the untested state: the card offers a fresh test.
+      expect(
+        view.getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }),
+      ).toBeEnabled();
+    });
+
+    it("restarts the three minutes when a node is tested again", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      useFlatProfile();
+      testNodeDelay.mockImplementationOnce(async (tag: string) => ({ tag, delay_ms: 42 }));
+      testNodeDelay.mockImplementationOnce(async (tag: string) => ({ tag, delay_ms: 77 }));
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await view.findByRole("list", { name: t("nodes.listAria") });
+      const testButton = () =>
+        view.getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) });
+
+      fireEvent.click(testButton());
+      await waitFor(() => {
+        expect(within(rowOf(view, "node-a")).getByText("42 ms")).toBeInTheDocument();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2 * 60_000);
+      });
+      fireEvent.click(testButton());
+      await waitFor(() => {
+        expect(within(rowOf(view, "node-a")).getByText("77 ms")).toBeInTheDocument();
+      });
+
+      // Past the first result's deadline, the newer result stays.
+      await act(async () => {
+        vi.advanceTimersByTime(90_000);
+      });
+      expect(within(rowOf(view, "node-a")).getByText("77 ms")).toBeInTheDocument();
+      await act(async () => {
+        vi.advanceTimersByTime(91_000);
+      });
+      expect(within(rowOf(view, "node-a")).queryByText("77 ms")).toBeNull();
+    });
+  });
+
+  describe("group delays follow the current exit", () => {
+    const NESTED = [
+      { tag: "节点选择", outbound_type: "selector", group_now: "自动选择",
+        group_all: ["自动选择", "hk-1", "jp-1"] },
+      { tag: "自动选择", outbound_type: "urltest", group_now: "jp-1",
+        group_all: ["hk-1", "jp-1"] },
+      { tag: "hk-1", outbound_type: "vless", group_now: null, group_all: null },
+      { tag: "jp-1", outbound_type: "vless", group_now: null, group_all: null },
+    ];
+
+    it("shows the new exit's delay in the header right after a switch", async () => {
+      testNodeDelay.mockImplementation(async (tag: string) => ({
+        tag,
+        delay_ms: tag === "node-a" ? 42 : 610,
+      }));
+      // The backend keeps the switch, so the follow-up refresh agrees with it.
+      const backend = useBackendNodes(await listNodes());
+      setGroupSelection.mockImplementation(async (group: string, member: string) => {
+        for (const node of backend) if (node.tag === group) node.group_now = member;
+      });
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await expandGroup(view, "选择组");
+      // Test both members; the header shows the current exit, node-a.
+      await clickGroupDelayTest(view, "选择组", true);
+      await waitFor(() => {
+        expect(within(rowOf(view, "选择组")).getByText("42 ms")).toBeInTheDocument();
+      });
+
+      fireEvent.click(
+        view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })),
+      );
+      await waitFor(() => {
+        expect(within(rowOf(view, "选择组")).getByText("610 ms")).toBeInTheDocument();
+      });
+      expect(within(rowOf(view, "选择组")).queryByText("42 ms")).toBeNull();
+    });
+
+    it("tests and shows the node a nested group leads to", async () => {
+      useBackendNodes(NESTED);
+      testNodeDelay.mockImplementation(async (tag: string) => ({ tag, delay_ms: 88 }));
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await view.findByRole("button", { name: "节点选择", expanded: false });
+
+      // The collapsed main group probes the node behind 自动选择, not the group.
+      await clickGroupDelayTest(view, "节点选择", false);
+      await waitFor(() => {
+        expect(within(rowOf(view, "节点选择")).getByText("88 ms")).toBeInTheDocument();
+      });
+      expect(testNodeDelay.mock.calls.map(([tag]) => tag)).toEqual(["jp-1"]);
+      // 自动选择 leads to the same node, so its header shows the same result.
+      expect(within(rowOf(view, "自动选择")).getByText("88 ms")).toBeInTheDocument();
+
+      await expandGroup(view, "节点选择");
+      const members = view.getByLabelText(t("nodes.membersAria", { group: "节点选择" }));
+      const nested = within(members)
+        .getByRole("button", { name: t("nodes.memberCurrentAria", { member: "自动选择" }) })
+        .closest(ROW) as HTMLElement;
+      expect(within(nested).getByText("88 ms")).toBeInTheDocument();
     });
   });
 });

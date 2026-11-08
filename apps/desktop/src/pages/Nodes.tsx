@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Circle, CircleCheck, Gauge, Star } from "lucide-react";
+import { ChevronRight, CircleCheck, Gauge, Star } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -10,24 +10,26 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
-import { badgeVariants } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemTitle,
-} from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference, type ResolvedLanguage } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
-import { memberWindow, nodeLayout, visibleNodeRows, MEMBER_ROW_HEIGHT, NODE_ROW_HEIGHT } from "../lib/virtualNodes";
+import {
+  CARD_GAP,
+  CARD_HEIGHT,
+  CARD_MIN_WIDTH,
+  COMPACT_CARD_MIN_WIDTH,
+  SECTION_HEADER_HEIGHT,
+  cardWindow,
+  gridColumns,
+  sectionCardsOffset,
+  sectionLayout,
+  visibleSections,
+} from "../lib/virtualNodes";
 import {
   applyFavoriteToNodes,
   applyGroupNowToNodes,
@@ -36,14 +38,20 @@ import {
   delayTestTagsForList,
   delayResultTone,
   formatDelay,
+  groupLineupKey,
+  hasStrategyGroups,
   isFavoriteNode,
   isGroupType,
   nodesEqual,
-  orderNodesByFavorite,
+  orderMembersByFavorite,
+  readExpandedGroups,
   readNodesSnapshot,
   sameNodeLineup,
   resolveSelectedTag,
+  resolveExitTag,
   reuseUnchangedNodes,
+  structuredTopLevel,
+  writeExpandedGroups,
   writeNodesSnapshot,
   type DelayCell,
 } from "../lib/nodes";
@@ -61,13 +69,8 @@ function groupMembersDomId(tag: string): string {
   return `group-members-${encodeURIComponent(tag).replace(/%/g, "_")}`;
 }
 
-function nodeTypeLabel(n: NodeInfo): string {
-  return isGroupType(n.outbound_type)
-    ? t("nodes.groupType", { type: n.outbound_type })
-    : n.outbound_type;
-}
-
-function delayBadge(delay: DelayCell) {
+/** Delay text with its colour band; nothing for an untested node. */
+function DelayText({ delay }: { delay: DelayCell }) {
   if (typeof delay === "number") {
     const tone = delayResultTone(delay);
     return (
@@ -91,42 +94,11 @@ function delayBadge(delay: DelayCell) {
       </span>
     );
   }
-  // No result yet: render no cell at all (formatDelay(null) is empty).
   if (delay === null) return null;
   return (
     <span data-testid="delay-testing" className="text-xs text-muted-foreground">
       {formatDelay(delay)}
     </span>
-  );
-}
-
-function TestButton({
-  node,
-  disabled,
-  title,
-  onTest,
-}: {
-  node: NodeInfo;
-  disabled: boolean;
-  title: string;
-  onTest: (node: NodeInfo) => void;
-}) {
-  // Same gauge glyph as the phone header's batch test; the label stays as the
-  // accessible name so the icon-only button is still announced.
-  return (
-    <button
-      type="button"
-      className={cn(
-        buttonVariants({ variant: "ghost", size: "icon" }),
-        "text-muted-foreground",
-      )}
-      disabled={disabled}
-      aria-label={t("nodes.test")}
-      title={title}
-      onClick={() => onTest(node)}
-    >
-      <Gauge className="size-5" aria-hidden="true" />
-    </button>
   );
 }
 
@@ -144,8 +116,10 @@ function FavoriteButton({
     <button
       type="button"
       className={cn(
-        buttonVariants({ variant: "ghost", size: "icon" }),
-        favorite ? "text-warn" : "text-muted-foreground",
+        // Same right inset as the card's delay button below it, so the star and
+        // the delay/test glyph line up on the card's right edge.
+        "relative z-10 -mr-1.5 flex h-6 shrink-0 items-center justify-end rounded px-1.5 transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
+        favorite ? "text-warn" : "text-muted-foreground/70 hover:text-foreground",
       )}
       disabled={pending}
       aria-pressed={favorite}
@@ -153,338 +127,388 @@ function FavoriteButton({
       title={t(favorite ? "nodes.unfavorite" : "nodes.favorite")}
       onClick={() => onToggle(node)}
     >
-      <Star className={cn("size-5", favorite && "fill-current")} aria-hidden="true" />
-    </button>
-  );
-}
-
-function SelectButton({
-  tag,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  tag: string;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: (tag: string) => void;
-}) {
-  // Icon-only radio-style control: a hollow ring when idle, a check when this
-  // node is the active one. The label keeps the button announced either way.
-  const label = t(selected ? "nodes.inUse" : "nodes.select");
-  return (
-    <button
-      type="button"
-      className={cn(
-        buttonVariants({ variant: "ghost", size: "icon" }),
-        selected ? "text-ok disabled:opacity-100" : "text-muted-foreground",
-      )}
-      disabled={disabled || selected}
-      aria-current={selected ? "true" : undefined}
-      aria-label={label}
-      title={label}
-      onClick={() => onSelect(tag)}
-    >
-      {selected ? (
-        <CircleCheck className="size-5" aria-hidden="true" />
-      ) : (
-        <Circle className="size-5" aria-hidden="true" />
-      )}
+      <Star className={cn("size-3.5", favorite && "fill-current")} aria-hidden="true" />
     </button>
   );
 }
 
 const EMPTY_DELAYS: Record<string, DelayCell> = {};
-const EMPTY_LAYOUT: ReturnType<typeof nodeLayout> = { rows: [], height: 0 };
+const EMPTY_LAYOUT: ReturnType<typeof sectionLayout<GridSection>> = { rows: [], height: 0 };
+const EMPTY_RANGE = { start: 0, end: 0, offset: 0 };
 /** Probes in flight during one delay test: a few nodes at a time keeps a long
  * list moving without flooding the core or the upstream links. The macOS tray
  * menu's delay test runs the same pool (`MAX_PROBES_IN_FLIGHT` in
  * `apps/desktop/src-tauri/src/tray_delay.rs`). */
 const DELAY_TEST_CONCURRENCY = 4;
+/** How long a finished delay result (a latency or a failure) stays on screen.
+ * After that the card shows the untested state again: an old number says
+ * little about the link now. */
+const DELAY_RESULT_TTL_MS = 3 * 60_000;
 
-type GroupMembersProps = {
-  start: number;
-  end: number;
-  groupTag: string;
-  members: string[];
-  groupNow: string | null;
+/**
+ * One block of the grid. A strategy group is a collapsible section whose
+ * cards are its members; a flat profile is one headerless section of every
+ * node; a grouped profile's nodes outside every group form a read-only
+ * section at the end.
+ */
+type GridSection = {
+  key: string;
+  /** The strategy group this section shows; null for node-only sections. */
+  group: NodeInfo | null;
+  /** Card tags in display order (favorites first). */
+  cards: string[];
+  /** Whether clicking a card switches to it. */
+  selectable: boolean;
+  /** The card marked as in use. */
+  current: string | null;
+  header: boolean;
+  collapsed: boolean;
+  cardCount: number;
+};
+
+type NodeCardProps = {
+  tag: string;
+  node: NodeInfo | undefined;
+  /** Group the card is a member of; null for a flat profile's node. */
+  groupTag: string | null;
+  current: boolean;
   selectable: boolean;
   running: boolean;
   busy: boolean;
-  delays: Record<string, DelayCell>;
-  onGroupSelect: (group: string, member: string) => void;
-  lang: ResolvedLanguage;
-  showDivider: boolean;
+  favoritePending: boolean;
+  delay: DelayCell;
+  onPick: (groupTag: string | null, tag: string) => void;
+  onTestTag: (tag: string) => void;
+  onToggleFavorite: (node: NodeInfo) => void;
 };
 
-const GroupMembers = memo(function GroupMembers({
-  start,
-  end,
+const NodeCard = memo(function NodeCard({
+  tag,
+  node,
   groupTag,
-  members,
-  groupNow,
+  current,
   selectable,
   running,
   busy,
-  delays,
-  onGroupSelect,
-  lang,
-  showDivider,
-}: GroupMembersProps) {
+  favoritePending,
+  delay,
+  onPick,
+  onTestTag,
+  onToggleFavorite,
+}: NodeCardProps) {
+  // A member that is itself a strategy group (e.g. an urltest inside the main
+  // selector) shows where it currently leads instead of a protocol.
+  const nestedNow =
+    node && isGroupType(node.outbound_type) ? node.group_now : null;
+  const subtitle = nestedNow
+    ? `→ ${nestedNow}`
+    : node && isGroupType(node.outbound_type)
+      ? node.outbound_type
+      : (node?.outbound_type ?? "");
+  const pickLabel = current
+    ? t("nodes.memberCurrentAria", { member: tag })
+    : groupTag
+      ? t("nodes.setMemberAria", { member: tag, group: groupTag })
+      : t("nodes.selectNodeAria", { node: tag });
+  const pickTitle = current
+    ? t(groupTag ? "nodes.currentExit" : "nodes.inUse")
+    : groupTag
+      ? running
+        ? t("nodes.setExit")
+        : t("nodes.setExitAfterStart")
+      : t("nodes.select");
+
   return (
     <div
-      id={groupMembersDomId(groupTag)}
-      lang={lang}
-      aria-label={t("nodes.membersAria", { group: groupTag })}
-      style={{ paddingTop: start * MEMBER_ROW_HEIGHT, paddingBottom: (members.length - end) * MEMBER_ROW_HEIGHT }}
+      data-testid="node-card"
+      data-current={current ? "true" : undefined}
       className={cn(
-        "flex flex-col pl-6",
-        showDivider && "shadow-[inset_0_-1px_0_var(--border)]",
+        "relative flex min-w-0 flex-col justify-center rounded-lg border px-3 transition-colors",
+        current
+          ? "border-ok/60 bg-ok/10"
+          : "border-border bg-muted/20",
+        selectable && !current && "hover:border-foreground/25 hover:bg-muted/50",
       )}
+      style={{ height: CARD_HEIGHT }}
     >
-      {members.slice(start, end).map((member) => {
-        const isExit = member === groupNow;
-        return (
-          <div
-            key={`${groupTag}::${member}`}
-            className="flex h-8 shrink-0 items-center gap-2 overflow-hidden px-0"
+      {/* The whole card picks the node; the star and the delay stay their own
+          buttons above it instead of nesting inside a button. */}
+      {selectable ? (
+        <button
+          type="button"
+          className="absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+          disabled={busy || current}
+          aria-current={current ? "true" : undefined}
+          aria-label={pickLabel}
+          title={pickTitle}
+          onClick={() => onPick(groupTag, tag)}
+        />
+      ) : null}
+      <div className="flex min-w-0 items-center gap-1">
+        <span
+          data-testid="node-card-title"
+          className="min-w-0 flex-1 truncate text-sm font-medium"
+          title={tag}
+        >
+          {tag}
+        </span>
+        {node ? (
+          <FavoriteButton
+            node={node}
+            pending={favoritePending}
+            onToggle={onToggleFavorite}
+          />
+        ) : null}
+      </div>
+      <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {current ? (
+          <CircleCheck
+            className="size-3.5 shrink-0 text-ok"
+            role="img"
+            aria-label={t("nodes.inUse")}
+          />
+        ) : null}
+        <span className="min-w-0 flex-1 truncate" title={subtitle}>
+          {subtitle}
+        </span>
+        {running && node ? (
+          <button
+            type="button"
+            className="relative z-10 -mr-1.5 flex h-5 shrink-0 items-center justify-end rounded px-1.5 hover:bg-muted disabled:pointer-events-none"
+            disabled={busy}
+            aria-label={t("nodes.testNodeAria", { node: tag })}
+            title={t("nodes.test")}
+            onClick={() => onTestTag(tag)}
           >
-            {selectable ? (
-              <button
-                type="button"
-                className={cn(
-                  buttonVariants({ variant: "ghost", size: "sm" }),
-                  "h-7 min-w-0 flex-1 justify-start px-0 text-xs",
-                )}
-                disabled={busy || isExit}
-                aria-current={isExit ? "true" : undefined}
-                aria-label={
-                  isExit
-                    ? t("nodes.memberCurrentAria", { member })
-                    : t("nodes.setMemberAria", { member, group: groupTag })
-                }
-                title={
-                  isExit
-                    ? t("nodes.currentExit")
-                    : running
-                      ? t("nodes.setExit")
-                      : t("nodes.setExitAfterStart")
-                }
-                onClick={() => onGroupSelect(groupTag, member)}
-              >
-                <span className="truncate">{member}</span>
-              </button>
+            {delay === null ? (
+              <Gauge className="size-3.5 text-muted-foreground/70" aria-hidden="true" />
             ) : (
-              <span className="min-w-0 flex-1 truncate text-xs" title={member}>
-                {member}
-              </span>
+              <DelayText delay={delay} />
             )}
-            {isExit ? (
-              <CircleCheck
-                className="size-4 shrink-0 text-ok"
-                role="img"
-                aria-label={t("nodes.inUse")}
-              />
-            ) : null}
-            {delayBadge(delays[member] ?? null)}
-          </div>
-        );
-      })}
+          </button>
+        ) : (
+          <DelayText delay={delay} />
+        )}
+      </div>
     </div>
   );
 });
 
-type NodeRowProps = {
-  memberStart: number;
-  memberEnd: number;
-  node: NodeInfo;
-  selected: boolean;
-  expanded: boolean;
-  showDivider: boolean;
+type SectionHeaderProps = {
+  section: GridSection;
+  membersId: string;
+  running: boolean;
+  busy: boolean;
+  compact: boolean;
+  delay: DelayCell;
+  onToggleGroup: (tag: string, open: boolean) => void;
+  onTestSection: (section: GridSection) => void;
+};
+
+const SectionHeader = memo(function SectionHeader({
+  section,
+  membersId,
+  running,
+  busy,
+  compact,
+  delay,
+  onToggleGroup,
+  onTestSection,
+}: SectionHeaderProps) {
+  const group = section.group;
+  const expanded = !section.collapsed;
+  const title = group?.tag ?? t("nodes.standalone");
+  const heading = (
+    <>
+      {group ? (
+        <ChevronRight
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+      ) : null}
+      <span
+        data-testid="group-header-title"
+        className="min-w-0 truncate text-sm font-semibold"
+        title={title}
+      >
+        {title}
+      </span>
+      {group ? (
+        <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground">
+          {group.outbound_type}
+        </span>
+      ) : (
+        <span className="min-w-0 truncate text-xs text-muted-foreground" title={t("nodes.standaloneHint")}>
+          {compact ? null : t("nodes.standaloneHint")}
+        </span>
+      )}
+      <span className="flex-1" />
+      {group?.group_now ? (
+        <span
+          className="min-w-0 max-w-[45%] truncate text-xs text-foreground/80"
+          title={group.group_now}
+        >
+          → {group.group_now}
+        </span>
+      ) : group && !compact ? (
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {t("nodes.notRunning")}
+        </span>
+      ) : null}
+      {group ? <DelayText delay={delay} /> : null}
+    </>
+  );
+
+  return (
+    <div
+      data-testid="group-header"
+      className="flex items-center gap-2 border-b border-border/60"
+      style={{ height: SECTION_HEADER_HEIGHT }}
+    >
+      {group ? (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={group.tag}
+          aria-expanded={expanded}
+          aria-controls={membersId}
+          title={expanded ? t("nodes.collapseMembers") : t("nodes.expandMembers")}
+          className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => onToggleGroup(group.tag, !expanded)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onToggleGroup(group.tag, !expanded);
+            }
+          }}
+        >
+          {heading}
+        </div>
+      ) : (
+        <div className="flex h-full min-w-0 flex-1 items-center gap-2">{heading}</div>
+      )}
+      <button
+        type="button"
+        className={cn(
+          buttonVariants({ variant: "ghost", size: "icon-sm" }),
+          "shrink-0 text-muted-foreground",
+        )}
+        disabled={!running || busy}
+        aria-label={t("nodes.test")}
+        title={
+          group
+            ? expanded
+              ? t("nodes.testAllMembers")
+              : t("nodes.testCurrent")
+            : t("nodes.test")
+        }
+        onClick={() => onTestSection(section)}
+      >
+        <Gauge className="size-4" aria-hidden="true" />
+      </button>
+    </div>
+  );
+});
+
+type SectionBlockProps = {
+  section: GridSection;
+  columns: number;
+  cardRange: { start: number; end: number; offset: number };
+  nodesByTag: ReadonlyMap<string, NodeInfo>;
   running: boolean;
   busy: boolean;
   favoritePending: boolean;
-  selectionPending: boolean;
-  /** Phone layout: trim the row to fit a narrow screen. */
   compact: boolean;
-  delay: DelayCell;
+  /** The delay of the node the group currently leads to, shown in the header
+   * even while the section is collapsed. */
+  headerDelay: DelayCell;
+  /** Delay results by node tag; a group card shows its exit node's result.
+   * Empty while collapsed so a delay test does not re-render sections that
+   * show no cards. */
   delays: Record<string, DelayCell>;
-  onToggleGroup: (tag: string, open: boolean) => void;
-  onTest: (node: NodeInfo) => void;
-  onSelect: (tag: string) => void;
-  onGroupSelect: (group: string, member: string) => void;
-  onToggleFavorite: (node: NodeInfo) => void;
   lang: ResolvedLanguage;
+  onToggleGroup: (tag: string, open: boolean) => void;
+  onTestSection: (section: GridSection) => void;
+  onTestTag: (tag: string) => void;
+  onPick: (groupTag: string | null, tag: string) => void;
+  onToggleFavorite: (node: NodeInfo) => void;
 };
 
-const NodeRow = memo(function NodeRow({
-  memberStart,
-  memberEnd,
-  node,
-  selected,
-  expanded,
-  showDivider,
+const SectionBlock = memo(function SectionBlock({
+  section,
+  columns,
+  cardRange,
+  nodesByTag,
   running,
   busy,
   favoritePending,
-  selectionPending,
   compact,
-  delay,
+  headerDelay,
   delays,
-  onToggleGroup,
-  onTest,
-  onSelect,
-  onGroupSelect,
-  onToggleFavorite,
   lang,
-}: NodeRowProps) {
-  const expandable =
-    isGroupType(node.outbound_type) && (node.group_all?.length ?? 0) > 0;
-  const membersId = groupMembersDomId(node.tag);
-  const typeLabel = nodeTypeLabel(node);
-  const itemDivider = showDivider || expanded;
-
+  onToggleGroup,
+  onTestSection,
+  onTestTag,
+  onPick,
+  onToggleFavorite,
+}: SectionBlockProps) {
+  const groupTag = section.group?.tag ?? null;
+  const membersId = groupMembersDomId(section.key);
   return (
     <div lang={lang}>
-      <Item
-        style={{ height: NODE_ROW_HEIGHT }}
-        size="sm"
-        variant="default"
-        className={cn(
-          "box-border flex-nowrap overflow-hidden rounded-none border-x-0 border-t-0 px-0 py-1.5",
-          itemDivider ? "border-b border-border" : "border-b-0",
-          expandable && "cursor-pointer",
-        )}
-      >
-        {expandable ? (
-          <>
-            <div
-              role="button"
-              tabIndex={0}
-              aria-label={node.tag}
-              aria-expanded={expanded}
-              aria-controls={membersId}
-              title={expanded ? t("nodes.collapseMembers") : t("nodes.expandMembers")}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
-              onClick={() => onToggleGroup(node.tag, !expanded)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onToggleGroup(node.tag, !expanded);
-                }
-              }}
-            >
-              <ItemContent className="min-w-0 gap-0">
-                <ItemTitle className="w-full max-w-full" title={node.tag}>
-                  <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-                    <ChevronRight
-                      className={cn(
-                        "size-4 shrink-0",
-                        expanded && "rotate-90",
-                      )}
-                    />
-                    <span className="truncate">{node.tag}</span>
-                  </span>
-                </ItemTitle>
-                <ItemDescription className="line-clamp-1 leading-4">
-                  {typeLabel}
-                </ItemDescription>
-              </ItemContent>
-              {node.group_now ? (
-                <span className={badgeVariants({ variant: "outline" })}>
-                  → {node.group_now}
-                </span>
-              ) : compact ? null : (
-                <span
-                  className={cn(
-                    badgeVariants({ variant: "ghost" }),
-                    "text-muted-foreground",
-                  )}
-                >
-                  {t("nodes.notRunning")}
-                </span>
-              )}
-              {delayBadge(delay)}
-            </div>
-            <ItemActions className="flex-nowrap">
-              <FavoriteButton
-                node={node}
-                pending={favoritePending || selectionPending}
-                onToggle={onToggleFavorite}
-              />
-              {/* The phone row is too narrow for a per-node test; the header's
-                  batch test covers it there. */}
-              {compact ? null : (
-                <TestButton
-                  node={node}
-                  disabled={!running || busy || favoritePending}
-                  title={
-                    expanded
-                      ? t("nodes.testAllMembers")
-                      : t("nodes.testCurrent")
-                  }
-                  onTest={onTest}
-                />
-              )}
-              <SelectButton
-                tag={node.tag}
-                selected={selected}
-                disabled={busy || favoritePending}
-                onSelect={onSelect}
-              />
-            </ItemActions>
-          </>
-        ) : (
-          <>
-            <ItemContent className="min-w-0 gap-0">
-              <ItemTitle title={node.tag}>
-                <span className="truncate">{node.tag}</span>
-              </ItemTitle>
-              <ItemDescription className="line-clamp-1 leading-4">
-                {typeLabel}
-              </ItemDescription>
-            </ItemContent>
-            <ItemActions className="flex-nowrap">
-              {delayBadge(delay)}
-              <FavoriteButton
-                node={node}
-                pending={favoritePending || selectionPending}
-                onToggle={onToggleFavorite}
-              />
-              {compact ? null : (
-                <TestButton
-                  node={node}
-                  disabled={!running || busy || favoritePending}
-                  title={t("nodes.test")}
-                  onTest={onTest}
-                />
-              )}
-              <SelectButton
-                tag={node.tag}
-                selected={selected}
-                disabled={busy || favoritePending}
-                onSelect={onSelect}
-              />
-            </ItemActions>
-          </>
-        )}
-      </Item>
-      {expandable && expanded && node.group_all ? (
-        <GroupMembers
-          start={memberStart}
-          end={memberEnd}
-          groupTag={node.tag}
-          members={node.group_all}
-          groupNow={node.group_now}
-          selectable={node.outbound_type === "selector"}
+      {section.header ? (
+        <SectionHeader
+          section={section}
+          membersId={membersId}
           running={running}
-          busy={busy || favoritePending}
-          delays={delays}
-          onGroupSelect={onGroupSelect}
-          lang={lang}
-          showDivider={showDivider}
+          busy={busy}
+          compact={compact}
+          delay={headerDelay}
+          onToggleGroup={onToggleGroup}
+          onTestSection={onTestSection}
         />
       ) : null}
+      {section.collapsed ? null : (
+        <div
+          id={membersId}
+          role="group"
+          data-card-count={section.cardCount}
+          aria-label={
+            groupTag
+              ? t("nodes.membersAria", { group: groupTag })
+              : section.header
+                ? t("nodes.standalone")
+                : undefined
+          }
+          className="grid"
+          style={{
+            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            gap: CARD_GAP,
+            paddingTop: sectionCardsOffset(section) - (section.header ? SECTION_HEADER_HEIGHT : 0) + cardRange.offset,
+          }}
+        >
+          {section.cards.slice(cardRange.start, cardRange.end).map((tag) => (
+            <NodeCard
+              key={`${section.key}::${tag}`}
+              tag={tag}
+              node={nodesByTag.get(tag)}
+              groupTag={groupTag}
+              current={tag === section.current}
+              selectable={section.selectable}
+              running={running}
+              busy={busy || favoritePending}
+              favoritePending={favoritePending}
+              delay={delays[resolveExitTag(tag, nodesByTag)] ?? null}
+              onPick={onPick}
+              onTestTag={onTestTag}
+              onToggleFavorite={onToggleFavorite}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -511,9 +535,19 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => (readNodesSnapshot()?.nodes.length ?? 0) > 0,
   );
   const [delays, setDelays] = useState<Record<string, DelayCell>>({});
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    () => new Set(),
-  );
+  // Expanded groups are remembered per lineup (another subscription has other
+  // groups); everything starts collapsed the first time.
+  const groupLineup = useMemo(() => groupLineupKey(nodes), [nodes]);
+  const [expansion, setExpansion] = useState(() => {
+    const lineup = groupLineupKey(readNodesSnapshot()?.nodes ?? []);
+    return { lineup, groups: readExpandedGroups(lineup) };
+  });
+  if (expansion.lineup !== groupLineup) {
+    // Adjust state while rendering (React's "previous render" pattern): the
+    // stored groups of the new lineup apply before this render commits.
+    setExpansion({ lineup: groupLineup, groups: readExpandedGroups(groupLineup) });
+  }
+  const expandedGroups = expansion.groups;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [favoritePending, setFavoritePending] = useState(false);
@@ -529,6 +563,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   // Delay results and probes from an older lineup are dropped: a reused tag
   // may now name another server.
   const lineupRef = useRef(0);
+  // When each finished delay result was written, by tag; drives the expiry.
+  const delayStampsRef = useRef(new Map<string, number>());
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const selectedTagRef = useRef(selectedTag);
@@ -542,24 +578,100 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => {},
   );
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ top: 0, height: 600 });
+  const [viewport, setViewport] = useState({ top: 0, height: 600, width: 0 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
   // Rows render only while the page is shown. The hidden page catches up at
   // low priority and drops its rows then; the scroll position is restored from
   // `viewport` on the next visit.
   const listVisible = active && (runtime?.visible ?? true);
-  const orderedNodes = useMemo(() => orderNodesByFavorite(nodes), [nodes]);
+  const grouped = useMemo(() => hasStrategyGroups(nodes), [nodes]);
+  const orderedNodes = useMemo(() => structuredTopLevel(nodes), [nodes]);
+  const nodesByTag = useMemo(
+    () => new Map(nodes.map((node) => [node.tag, node])),
+    [nodes],
+  );
+  const memberOrder = useMemo(() => {
+    const order = new Map<string, string[]>();
+    for (const node of nodes) {
+      if (node.group_all) {
+        order.set(node.tag, orderMembersByFavorite(node.group_all, nodesByTag));
+      }
+    }
+    return order;
+  }, [nodes, nodesByTag]);
+  const sections = useMemo<GridSection[]>(() => {
+    if (!grouped) {
+      const cards = orderedNodes.map((node) => node.tag);
+      return [{
+        key: "__all",
+        group: null,
+        cards,
+        selectable: true,
+        current: selectedTag || null,
+        header: false,
+        collapsed: false,
+        cardCount: cards.length,
+      }];
+    }
+    const result: GridSection[] = [];
+    const standalone: string[] = [];
+    for (const node of orderedNodes) {
+      if (!isGroupType(node.outbound_type)) {
+        standalone.push(node.tag);
+        continue;
+      }
+      const cards = memberOrder.get(node.tag) ?? [];
+      const collapsed = !expandedGroups.has(node.tag) || cards.length === 0;
+      result.push({
+        key: node.tag,
+        group: node,
+        cards,
+        selectable: node.outbound_type === "selector",
+        current: node.group_now ?? null,
+        header: true,
+        collapsed,
+        cardCount: cards.length,
+      });
+    }
+    if (standalone.length > 0) {
+      // Nodes no group holds: grouped profiles have no flat selector for them,
+      // so they can be tested and starred but not switched to.
+      result.push({
+        key: "__standalone",
+        group: null,
+        cards: standalone,
+        selectable: false,
+        current: null,
+        header: true,
+        collapsed: false,
+        cardCount: standalone.length,
+      });
+    }
+    return result;
+  }, [grouped, orderedNodes, memberOrder, expandedGroups, selectedTag]);
+  const columns = gridColumns(
+    viewport.width,
+    compact ? COMPACT_CARD_MIN_WIDTH : CARD_MIN_WIDTH,
+  );
   const layout = useMemo(
-    () => (listVisible ? nodeLayout(orderedNodes, expandedGroups) : EMPTY_LAYOUT),
-    [listVisible, orderedNodes, expandedGroups],
+    () => (listVisible ? sectionLayout(sections, columns) : EMPTY_LAYOUT),
+    [listVisible, sections, columns],
   );
   const viewportTop = Math.max(0, Math.min(viewport.top, layout.height - viewport.height));
   const updateViewport = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
-    const next = { top: el.scrollTop, height: el.clientHeight || 600 };
-    setViewport(prev => prev.top === next.top && prev.height === next.height ? prev : next);
+    const next = {
+      top: el.scrollTop,
+      height: el.clientHeight || 600,
+      width: el.clientWidth,
+    };
+    setViewport((prev) =>
+      prev.top === next.top && prev.height === next.height && prev.width === next.width
+        ? prev
+        : next,
+    );
   }, []);
 
   useLayoutEffect(() => {
@@ -605,8 +717,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       const prevNodes = nodesRef.current;
       if (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n)) {
         lineupRef.current += 1;
+        delayStampsRef.current.clear();
         setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
-        setExpandedGroups((prev) => (prev.size === 0 ? prev : new Set()));
       }
       setNodes((prev) => reuseUnchangedNodes(prev, n));
       setSelectedTag((prev) => (prev === selected ? prev : selected));
@@ -651,8 +763,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
 
   // Leaving the tab keeps the list, its member lists, the expanded groups and
   // the delay results; only the rendered rows unmount (`listVisible`). The
-  // delay results and expanded groups reset in `refresh` when the lineup
-  // changes, since a reused tag may then name another server.
+  // delay results reset in `refresh` when the lineup changes, since a reused
+  // tag may then name another server; the expanded groups follow the group
+  // lineup and come back from storage.
 
   useEffect(() => {
     activeRef.current = active;
@@ -674,26 +787,60 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, [active, nextGeneration, refresh]);
 
   const setGroupOpen = useCallback((tag: string, open: boolean) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (open) next.add(tag);
-      else next.delete(tag);
-      return next;
+    setExpansion((prev) => {
+      if (prev.groups.has(tag) === open) return prev;
+      const groups = new Set(prev.groups);
+      if (open) groups.add(tag);
+      else groups.delete(tag);
+      return { lineup: prev.lineup, groups };
     });
   }, []);
 
+  const savedExpansionRef = useRef(expansion);
+  useEffect(() => {
+    // Only a toggle writes: a lineup switch loads what storage already holds.
+    if (savedExpansionRef.current === expansion) return;
+    const lineupChanged = savedExpansionRef.current.lineup !== expansion.lineup;
+    savedExpansionRef.current = expansion;
+    if (!lineupChanged) writeExpandedGroups(expansion.lineup, expansion.groups);
+  }, [expansion]);
+
+  // Results are kept per node. A group (header or nested-group card) is not
+  // given a copy: it shows the result of the node its exit resolves to at
+  // render time, so switching the exit shows that node's result at once.
   function writeDelay(tag: string, value: DelayCell) {
-    const list = nodesRef.current;
-    setDelays((prev) => {
-      const next = { ...prev, [tag]: value };
-      for (const n of list) {
-        if (isGroupType(n.outbound_type) && n.group_now === tag) {
-          next[n.tag] = value;
-        }
-      }
-      return next;
-    });
+    // Only a finished result ages out; an in-flight probe has no age yet.
+    if (typeof value === "number" || value === "error") {
+      delayStampsRef.current.set(tag, Date.now());
+    } else {
+      delayStampsRef.current.delete(tag);
+    }
+    setDelays((prev) => (prev[tag] === value ? prev : { ...prev, [tag]: value }));
   }
+
+  // Drop each finished result DELAY_RESULT_TTL_MS after it was measured. One
+  // timer for the earliest expiry; every change to the results reschedules it.
+  useEffect(() => {
+    const stamps = delayStampsRef.current;
+    if (stamps.size === 0) return;
+    let earliest = Infinity;
+    for (const at of stamps.values()) earliest = Math.min(earliest, at);
+    const id = window.setTimeout(() => {
+      const now = Date.now();
+      const expired: string[] = [];
+      for (const [tag, at] of stamps) {
+        if (now - at >= DELAY_RESULT_TTL_MS) expired.push(tag);
+      }
+      for (const tag of expired) stamps.delete(tag);
+      if (expired.length === 0) return;
+      setDelays((prev) => {
+        const next = { ...prev };
+        for (const tag of expired) delete next[tag];
+        return next;
+      });
+    }, Math.max(0, earliest + DELAY_RESULT_TTL_MS - Date.now()));
+    return () => window.clearTimeout(id);
+  }, [delays]);
 
   function clearTestingDelays() {
     setDelays((prev) => {
@@ -709,7 +856,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     });
   }
 
-  async function testTags(tags: string[]) {
+  async function testTags(requested: string[]) {
+    // Probe the nodes behind any group tag, so the result lands on the node
+    // the group header and nested-group cards look up.
+    const byTag = new Map(nodesRef.current.map((node) => [node.tag, node]));
+    const tags = [...new Set(requested.map((tag) => resolveExitTag(tag, byTag)))];
     if (tags.length === 0) return;
     const run = ++delayRunRef.current;
     const lineup = lineupRef.current;
@@ -784,6 +935,18 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     })();
   }, []);
 
+  const onTestTag = useCallback((tag: string) => {
+    void testTags([tag]);
+  }, []);
+
+  const onTestSection = useCallback((section: GridSection) => {
+    if (section.group) {
+      onTest(section.group);
+      return;
+    }
+    void testTags(section.cards);
+  }, [onTest]);
+
   const onToggleFavorite = useCallback(
     (node: NodeInfo) => {
       void (async () => {
@@ -819,12 +982,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     [nextGeneration, refresh],
   );
 
-  const handleSelect = useCallback((tag: string) => {
-    void onSelectRef.current(tag);
-  }, []);
-
-  const handleGroupSelect = useCallback((group: string, member: string) => {
-    void onGroupSelectRef.current(group, member);
+  const handlePick = useCallback((group: string | null, tag: string) => {
+    if (group) void onGroupSelectRef.current(group, tag);
+    else void onSelectRef.current(tag);
   }, []);
 
   async function onBatchTest() {
@@ -909,8 +1069,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   onSelectRef.current = onSelect;
   onGroupSelectRef.current = onGroupSelect;
 
-  const visibleRows = useMemo(
-    () => visibleNodeRows(layout.rows, viewportTop, viewport.height),
+  const visible = useMemo(
+    () => visibleSections(layout.rows, viewportTop, viewport.height),
     [layout.rows, viewportTop, viewport.height],
   );
 
@@ -987,7 +1147,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
             {batchButton}
           </div>
         ) : null}
-        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardContent className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", embedded && "pt-2")}>
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">
               {t("nodes.loading")}
@@ -1009,41 +1169,56 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label={t("nodes.listAria")} className="relative gap-0!" style={{ height: layout.height }}>
-                {visibleRows.map(({ node: n, index, top, members }) => {
-                  const expanded =
-                    isGroupType(n.outbound_type) &&
-                    Boolean(n.group_all?.length) &&
-                    expandedGroups.has(n.tag);
-                  const memberRange = memberWindow(members, top, viewportTop, viewport.height);
-                  return (
-                    <div key={n.tag} role="listitem" aria-posinset={index + 1} aria-setsize={orderedNodes.length}
-                      className="absolute inset-x-0" style={{ top }}>
-                    <NodeRow
-                      memberStart={memberRange.start}
-                      memberEnd={memberRange.end}
-                      node={n}
-                      selected={n.tag === selectedTag}
-                      expanded={expanded}
-                      showDivider={index < orderedNodes.length - 1}
+              <div
+                role="list"
+                aria-label={t("nodes.listAria")}
+                className="relative"
+                style={{ height: layout.height }}
+              >
+                {visible.map(({ section, index, top }) => (
+                  <div
+                    key={section.key}
+                    role="listitem"
+                    aria-posinset={index + 1}
+                    aria-setsize={sections.length}
+                    className="absolute inset-x-0"
+                    style={{ top }}
+                  >
+                    <SectionBlock
+                      section={section}
+                      columns={columns}
+                      cardRange={
+                        section.collapsed
+                          ? EMPTY_RANGE
+                          : cardWindow(
+                              section.cardCount,
+                              columns,
+                              top + sectionCardsOffset(section),
+                              viewportTop,
+                              viewport.height,
+                            )
+                      }
+                      nodesByTag={nodesByTag}
                       running={running}
                       busy={busy}
-                      favoritePending={favoritePending}
-                      selectionPending={selectionPending}
+                      favoritePending={favoritePending || selectionPending}
                       compact={compact}
-                      delay={delays[n.tag] ?? null}
-                      delays={expanded ? delays : EMPTY_DELAYS}
-                      onToggleGroup={setGroupOpen}
-                      onTest={onTest}
-                      onSelect={handleSelect}
-                      onGroupSelect={handleGroupSelect}
-                      onToggleFavorite={onToggleFavorite}
+                      headerDelay={
+                        section.group
+                          ? (delays[resolveExitTag(section.group.tag, nodesByTag)] ?? null)
+                          : null
+                      }
+                      delays={section.collapsed ? EMPTY_DELAYS : delays}
                       lang={lang}
+                      onToggleGroup={setGroupOpen}
+                      onTestSection={onTestSection}
+                      onTestTag={onTestTag}
+                      onPick={handlePick}
+                      onToggleFavorite={onToggleFavorite}
                     />
-                    </div>
-                  );
-                })}
-              </ItemGroup>
+                  </div>
+                ))}
+              </div>
             </ScrollArea>
           ) : null}
         </CardContent>

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { t } from "./i18n";
 import {
   applyFavoriteToNodes,
@@ -11,17 +11,24 @@ import {
   delayTestTagsForList,
   delayResultTone,
   formatDelay,
+  groupLineupKey,
+  hasStrategyGroups,
   isFavoriteNode,
   isGroupType,
   nodesEqual,
   nodesSnapshotRevision,
+  orderMembersByFavorite,
   orderNodesByFavorite,
+  readExpandedGroups,
   readNodesSnapshot,
   reuseUnchangedNodes,
+  resolveExitTag,
   resolveSelectedTag,
   sameNodeLineup,
+  structuredTopLevel,
   subscribeNodesSnapshot,
   withoutGroupMembers,
+  writeExpandedGroups,
   writeNodesSnapshot,
 } from "./nodes";
 
@@ -471,5 +478,137 @@ describe("sameNodeLineup", () => {
         [group("g", ["a", "c"]), leaf("a")],
       ),
     ).toBe(false);
+  });
+});
+
+describe("profile structure", () => {
+  const leaf = (tag: string, favorite_rank: number | null = null) => ({
+    tag,
+    outbound_type: "vless",
+    group_now: null,
+    group_all: null,
+    favorite: favorite_rank != null,
+    favorite_rank,
+  });
+  const group = (tag: string, members: string[] | null) => ({
+    tag,
+    outbound_type: "selector",
+    group_now: null,
+    group_all: members,
+  });
+
+  it("detects strategy groups", () => {
+    expect(hasStrategyGroups([leaf("a")])).toBe(false);
+    expect(hasStrategyGroups([leaf("a"), group("g", ["a"])])).toBe(true);
+  });
+
+  it("lists every node of a flat profile, favorites first", () => {
+    const top = structuredTopLevel([leaf("a"), leaf("b", 0)]);
+    expect(top.map((node) => node.tag)).toEqual(["b", "a"]);
+  });
+
+  it("lists groups in order, then standalone nodes with favorites first", () => {
+    const top = structuredTopLevel([
+      group("g1", ["a"]),
+      group("g2", ["a", "b"]),
+      leaf("a"),
+      leaf("b"),
+      leaf("c"),
+      leaf("d", 0),
+    ]);
+    expect(top.map((node) => node.tag)).toEqual(["g1", "g2", "d", "c"]);
+  });
+
+  it("leaves standalone nodes out while group members are unknown", () => {
+    const top = structuredTopLevel([group("g", null), leaf("a"), leaf("b")]);
+    expect(top.map((node) => node.tag)).toEqual(["g"]);
+  });
+
+  it("orders favorited members first by rank", () => {
+    const byTag = new Map(
+      [leaf("a"), leaf("b", 1), leaf("c", 0)].map((node) => [node.tag, node]),
+    );
+    expect(orderMembersByFavorite(["a", "b", "c", "direct"], byTag)).toEqual([
+      "c",
+      "b",
+      "a",
+      "direct",
+    ]);
+    const members = ["a", "direct"];
+    expect(orderMembersByFavorite(members, byTag)).toBe(members);
+  });
+});
+
+describe("remembered expanded groups", () => {
+  beforeEach(() => {
+    window.localStorage.removeItem("ice-box.nodes.expanded-groups");
+  });
+
+  it("keys lineups by their sorted group tags and skips flat profiles", () => {
+    expect(groupLineupKey([{ tag: "a", outbound_type: "vless" } as never])).toBe("");
+    expect(
+      groupLineupKey([
+        { tag: "z", outbound_type: "urltest" },
+        { tag: "a", outbound_type: "vless" },
+        { tag: "m", outbound_type: "selector" },
+      ] as never),
+    ).toBe(JSON.stringify(["m", "z"]));
+  });
+
+  it("stores expanded groups per lineup", () => {
+    expect(readExpandedGroups("one")).toEqual(new Set());
+    writeExpandedGroups("one", new Set(["g1"]));
+    writeExpandedGroups("two", new Set(["g2", "g3"]));
+    expect(readExpandedGroups("one")).toEqual(new Set(["g1"]));
+    expect(readExpandedGroups("two")).toEqual(new Set(["g2", "g3"]));
+    writeExpandedGroups("", new Set(["ignored"]));
+    expect(readExpandedGroups("")).toEqual(new Set());
+  });
+
+  it("keeps only the most recent lineups", () => {
+    for (let index = 0; index < 10; index += 1) {
+      writeExpandedGroups(`lineup-${index}`, new Set([`g${index}`]));
+    }
+    expect(readExpandedGroups("lineup-9")).toEqual(new Set(["g9"]));
+    expect(readExpandedGroups("lineup-2")).toEqual(new Set(["g2"]));
+    expect(readExpandedGroups("lineup-1")).toEqual(new Set());
+  });
+
+  it("ignores malformed storage", () => {
+    window.localStorage.setItem("ice-box.nodes.expanded-groups", "{not json");
+    expect(readExpandedGroups("one")).toEqual(new Set());
+    window.localStorage.setItem(
+      "ice-box.nodes.expanded-groups",
+      JSON.stringify([{ lineup: "one", groups: [1] }]),
+    );
+    expect(readExpandedGroups("one")).toEqual(new Set());
+  });
+});
+
+describe("resolveExitTag", () => {
+  const byTag = new Map(
+    [
+      { tag: "main", outbound_type: "selector", group_now: "auto", group_all: ["auto", "a"] },
+      { tag: "auto", outbound_type: "urltest", group_now: "a", group_all: ["a", "b"] },
+      { tag: "idle", outbound_type: "selector", group_now: null, group_all: ["a"] },
+      { tag: "loop-1", outbound_type: "selector", group_now: "loop-2", group_all: ["loop-2"] },
+      { tag: "loop-2", outbound_type: "selector", group_now: "loop-1", group_all: ["loop-1"] },
+      { tag: "a", outbound_type: "vless", group_now: null, group_all: null },
+    ].map((node) => [node.tag, node]),
+  );
+
+  it("follows nested groups to the node traffic leaves by", () => {
+    expect(resolveExitTag("main", byTag)).toBe("a");
+    expect(resolveExitTag("auto", byTag)).toBe("a");
+    expect(resolveExitTag("a", byTag)).toBe("a");
+  });
+
+  it("keeps a group without an exit and unknown tags as they are", () => {
+    expect(resolveExitTag("idle", byTag)).toBe("idle");
+    expect(resolveExitTag("direct", byTag)).toBe("direct");
+  });
+
+  it("stops on a cycle", () => {
+    expect(["loop-1", "loop-2"]).toContain(resolveExitTag("loop-1", byTag));
   });
 });
