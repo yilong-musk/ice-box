@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { Home } from "./Home";
+import { PaneVisibleContext } from "../lib/paneVisibility";
+import { RUNTIME_STATUS_FALLBACK_MS } from "../lib/runtimeStore";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
 
@@ -330,6 +332,68 @@ describe("Home", () => {
         await vi.advanceTimersByTimeAsync(3000);
       });
       expect(view.getByTestId("home-run-uptime")).toHaveTextContent("01:08");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses the run uptime and status polling while its pane is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const coreStartedAt = Date.now() - 28 * 60_000;
+      const startedAt = Date.now() - 65_000;
+      getStatus.mockResolvedValue({
+        core: {
+          status: "running",
+          message: null,
+          inbound_host: "127.0.0.1",
+          inbound_port: 17890,
+        },
+        running_since_ms: coreStartedAt,
+        capture_since_ms: startedAt,
+        subscription_count: 1,
+        proxy_recovery_warning: null,
+        system_proxy_applied: true,
+        system_proxy_recorded: true,
+        system_proxy_available: true,
+        has_nodes: true,
+        ...tunStatus,
+      });
+      getSettings.mockResolvedValue({
+        mixed_listen: "127.0.0.1",
+        mixed_port: 17890,
+        clash_api_listen: "127.0.0.1",
+        clash_api_port: 19090,
+        selected_tag: null,
+        auto_set_system_proxy: true,
+        proxy_service_enabled: false,
+        allow_lan: false,
+        proxy_mode: "rule",
+      });
+
+      const tree = (visible: boolean) => (
+        <PaneVisibleContext value={visible}>
+          <Home active={visible} />
+        </PaneVisibleContext>
+      );
+      const rendered = render(tree(true));
+      const view = within(rendered.container);
+      await waitFor(() => {
+        expect(view.getByTestId("home-run-uptime")).toHaveTextContent("01:05");
+      });
+
+      rendered.rerender(tree(false));
+      const reads = getStatus.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUNTIME_STATUS_FALLBACK_MS * 2 + 3000);
+      });
+      expect(view.getByTestId("home-run-uptime")).toHaveTextContent("01:05");
+      expect(getStatus.mock.calls.length).toBe(reads);
+
+      rendered.rerender(tree(true));
+      await waitFor(() => {
+        expect(view.getByTestId("home-run-uptime")).not.toHaveTextContent("01:05");
+      });
     } finally {
       vi.useRealTimers();
     }

@@ -212,7 +212,8 @@ try {
     .click();
   await youtube.getByText("Direct", { exact: true }).waitFor({ timeout: 8000 });
   await tabs.nth(0).click();
-  await frame.locator('[data-testid="home-panel"]').waitFor();
+  // Home stays attached while hidden (App.tsx KeptPane); wait for its pane to show.
+  await frame.locator('[data-active="true"]:has(> [data-testid="home-panel"])').waitFor();
   await tabs.nth(1).click();
   await appRows.first().waitFor();
   // Let the Apps page re-read settings before asserting the value survived.
@@ -290,7 +291,7 @@ try {
     }
   }
   await tabs.nth(0).click();
-  await frame.locator('[data-testid="home-panel"]').waitFor();
+  await frame.locator('[data-active="true"]:has(> [data-testid="home-panel"])').waitFor();
 
   await page.locator(".nav-language").click();
   await frame.getByRole("button", { name: "应用", exact: true }).waitFor({

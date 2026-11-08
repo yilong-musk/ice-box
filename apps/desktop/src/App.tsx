@@ -6,6 +6,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
@@ -136,6 +137,16 @@ function KeptPane({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Until `inert` lands below, a control focused before the switch would
+  // keep focus (and take Space/Enter) inside the hidden pane. Drop it in the
+  // switch frame; this touches only the focused element.
+  useLayoutEffect(() => {
+    if (active) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && ref.current?.contains(focused)) {
+      focused.blur();
+    }
+  }, [active]);
   // `inert` keeps keyboard focus out of the hidden pane. It is inherited, so
   // WebKit restyles the whole pane when it changes; apply it after the switch
   // has been painted instead of in that frame.

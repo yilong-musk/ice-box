@@ -469,6 +469,26 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("moves focus out of a kept pane in the frame it hides", async () => {
+    const { container } = render(<App />);
+    const view = within(container);
+    const home = view.getByTestId("home-panel");
+    const control = await waitFor(() => {
+      const button = home.querySelector("button");
+      expect(button).not.toBeNull();
+      return button as HTMLButtonElement;
+    });
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    // A tray switch moves no focus itself; the pane must drop it before
+    // `inert` lands a frame later.
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
+    expect(home.parentElement).toHaveAttribute("aria-hidden", "true");
+    expect(home.parentElement).not.toHaveAttribute("inert");
+    expect(home.contains(document.activeElement)).toBe(false);
+  });
+
   it("shows a sidebar upgrade icon when a background check finds a version", async () => {
     checkAppUpdate.mockResolvedValue({
       available: true,

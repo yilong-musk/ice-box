@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePaneVisible } from "@/lib/paneVisibility";
 import { Copy, Power, Terminal } from "lucide-react";
 import {
   api,
@@ -150,13 +151,17 @@ function keepIfSame<T>(prev: T | null, next: T): T {
 }
 
 /** Elapsed time since `since` (epoch ms), re-rendered once a second on its own
- * timer so the parent page does not re-render every tick. */
+ * timer so the parent page does not re-render every tick. The timer stops
+ * while the tab pane is hidden, so the kept page is not restyled each second. */
 function RunUptime({ since }: { since: number }) {
+  const visible = usePaneVisible();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (!visible) return;
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [visible]);
   return <>{formatUptime(now - since)}</>;
 }
 
@@ -373,16 +378,19 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       }
       void refresh(gen, { settings: true, status: !shareStatus });
     })();
-    const id = window.setInterval(() => {
-      if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
-        return;
-      }
-      if (document.visibilityState === "hidden") return;
-      const rt = runtimeRef.current;
-      if (rt && !rt.visible) return;
-      pollGenRef.current += 1;
-      void refresh(pollGenRef.current, { status: rt == null });
-    }, RUNTIME_STATUS_FALLBACK_MS);
+    // A hidden Home stays mounted (App.tsx KeptPane) and does not poll.
+    const id = active
+      ? window.setInterval(() => {
+          if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
+            return;
+          }
+          if (document.visibilityState === "hidden") return;
+          const rt = runtimeRef.current;
+          if (rt && !rt.visible) return;
+          pollGenRef.current += 1;
+          void refresh(pollGenRef.current, { status: rt == null });
+        }, RUNTIME_STATUS_FALLBACK_MS)
+      : 0;
     return () => {
       cancelled = true;
       activeRef.current = false;
@@ -393,11 +401,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   }, [active, refresh]);
 
   // The page stays mounted while another tab is shown (the tray can switch
-  // tabs). Do not leave its install dialog open over that tab.
+  // tabs). Do not leave its install dialog open over that tab: the dialog is
+  // portaled outside the pane, so close it in the frame the pane hides
+  // (`paneVisible`) rather than when the deferred `active` catches up.
+  const paneVisible = usePaneVisible();
   const setTunInstallOpen = tunInstall.setOpen;
-  useEffect(() => {
-    if (!active) setTunInstallOpen(false);
-  }, [active, setTunInstallOpen]);
+  useLayoutEffect(() => {
+    if (!active || !paneVisible) setTunInstallOpen(false);
+  }, [active, paneVisible, setTunInstallOpen]);
 
   const core: CoreState | undefined = status?.core;
   const tunTransitioning =
