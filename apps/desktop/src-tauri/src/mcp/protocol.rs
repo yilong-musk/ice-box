@@ -669,8 +669,8 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
         }
         "select_group_member" => {
             let request: GroupSelectionRequest = parse_args(args)?;
-            set_group_selection_use_case(app, state.inner(), request)?;
-            Ok(json!({"ok": true}))
+            let response = set_group_selection_use_case(app, state.inner(), request)?;
+            Ok(json!({"ok": true, "selected_tag": response.selected_tag}))
         }
         "test_node_delay" => {
             let request: TagRequest = parse_args(args)?;

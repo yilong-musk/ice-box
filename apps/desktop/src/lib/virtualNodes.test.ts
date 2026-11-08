@@ -18,7 +18,7 @@ import {
 const STRIDE = CARD_HEIGHT + CARD_GAP;
 
 function section(cardCount: number, collapsed = false, header = true) {
-  return { header, collapsed, cardCount };
+  return { header, collapsed, cards: Array.from({ length: cardCount }) };
 }
 
 describe("grid geometry", () => {

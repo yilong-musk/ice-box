@@ -163,7 +163,6 @@ type GridSection = {
   current: string | null;
   header: boolean;
   collapsed: boolean;
-  cardCount: number;
 };
 
 type NodeCardProps = {
@@ -200,11 +199,7 @@ const NodeCard = memo(function NodeCard({
   // selector) shows where it currently leads instead of a protocol.
   const nestedNow =
     node && isGroupType(node.outbound_type) ? node.group_now : null;
-  const subtitle = nestedNow
-    ? `→ ${nestedNow}`
-    : node && isGroupType(node.outbound_type)
-      ? node.outbound_type
-      : (node?.outbound_type ?? "");
+  const subtitle = nestedNow ? `→ ${nestedNow}` : (node?.outbound_type ?? "");
   const pickLabel = current
     ? t("nodes.memberCurrentAria", { member: tag })
     : groupTag
@@ -464,7 +459,7 @@ const SectionBlock = memo(function SectionBlock({
           section={section}
           membersId={membersId}
           running={running}
-          busy={busy}
+          busy={busy || favoritePending}
           compact={compact}
           delay={headerDelay}
           onToggleGroup={onToggleGroup}
@@ -475,7 +470,7 @@ const SectionBlock = memo(function SectionBlock({
         <div
           id={membersId}
           role="group"
-          data-card-count={section.cardCount}
+          data-card-count={section.cards.length}
           aria-label={
             groupTag
               ? t("nodes.membersAria", { group: groupTag })
@@ -487,7 +482,8 @@ const SectionBlock = memo(function SectionBlock({
           style={{
             gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
             gap: CARD_GAP,
-            paddingTop: sectionCardsOffset(section) - (section.header ? SECTION_HEADER_HEIGHT : 0) + cardRange.offset,
+            // Only shown while expanded: the header row sits above, then one gap.
+            paddingTop: (section.header ? CARD_GAP : 0) + cardRange.offset,
           }}
         >
           {section.cards.slice(cardRange.start, cardRange.end).map((tag) => (
@@ -535,6 +531,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => (readNodesSnapshot()?.nodes.length ?? 0) > 0,
   );
   const [delays, setDelays] = useState<Record<string, DelayCell>>({});
+  // Bumped when the delay TTL timer fires before anything expired.
+  const [ttlRearm, setTtlRearm] = useState(0);
   // Expanded groups are remembered per lineup (another subscription has other
   // groups); everything starts collapsed the first time.
   const groupLineup = useMemo(() => groupLineupKey(nodes), [nodes]);
@@ -567,8 +565,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const delayStampsRef = useRef(new Map<string, number>());
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
-  const selectedTagRef = useRef(selectedTag);
-  selectedTagRef.current = selectedTag;
   const runningRef = useRef(running);
   runningRef.current = running;
   const expandedRef = useRef(expandedGroups);
@@ -591,6 +587,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     () => new Map(nodes.map((node) => [node.tag, node])),
     [nodes],
   );
+  const nodesByTagRef = useRef(nodesByTag);
+  nodesByTagRef.current = nodesByTag;
   const memberOrder = useMemo(() => {
     const order = new Map<string, string[]>();
     for (const node of nodes) {
@@ -611,7 +609,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         current: selectedTag || null,
         header: false,
         collapsed: false,
-        cardCount: cards.length,
       }];
     }
     const result: GridSection[] = [];
@@ -631,7 +628,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         current: node.group_now ?? null,
         header: true,
         collapsed,
-        cardCount: cards.length,
       });
     }
     if (standalone.length > 0) {
@@ -645,7 +641,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         current: null,
         header: true,
         collapsed: false,
-        cardCount: standalone.length,
       });
     }
     return result;
@@ -832,7 +827,12 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         if (now - at >= DELAY_RESULT_TTL_MS) expired.push(tag);
       }
       for (const tag of expired) stamps.delete(tag);
-      if (expired.length === 0) return;
+      if (expired.length === 0) {
+        // Fired early (the wall clock moved, or the timer was coarsened):
+        // arm a fresh timer instead of leaving the results up for good.
+        setTtlRearm((n) => n + 1);
+        return;
+      }
       setDelays((prev) => {
         const next = { ...prev };
         for (const tag of expired) delete next[tag];
@@ -840,7 +840,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       });
     }, Math.max(0, earliest + DELAY_RESULT_TTL_MS - Date.now()));
     return () => window.clearTimeout(id);
-  }, [delays]);
+  }, [delays, ttlRearm]);
 
   function clearTestingDelays() {
     setDelays((prev) => {
@@ -859,7 +859,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   async function testTags(requested: string[]) {
     // Probe the nodes behind any group tag, so the result lands on the node
     // the group header and nested-group cards look up.
-    const byTag = new Map(nodesRef.current.map((node) => [node.tag, node]));
+    const byTag = nodesByTagRef.current;
     const tags = [...new Set(requested.map((tag) => resolveExitTag(tag, byTag)))];
     if (tags.length === 0) return;
     const run = ++delayRunRef.current;
@@ -1043,18 +1043,15 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await api.setGroupSelection(group, member);
+      const result = await api.setGroupSelection(group, member);
       const nextNodes = applyGroupNowToNodes(nodesRef.current, group, member);
-      // A pick in the main group also moves the selected node on the backend.
-      // Publish it with the new exit so Home's outbound line follows at once,
-      // even while this page is hidden and skips its refresh.
+      // A pick in the main group also moves the selected node on the backend,
+      // which returns the node selected after the pick. Publish it with the
+      // new exit so Home's outbound line follows at once, even while this page
+      // is hidden and skips its refresh. The backend only moves it to a node
+      // in the list, so this resolves to the backend's own value.
       const snap = readNodesSnapshot();
-      let selected = snap?.selectedTag ?? selectedTagRef.current;
-      try {
-        selected = resolveSelectedTag((await api.getSettings()).selected_tag, nextNodes);
-      } catch {
-        // Keep the previous selection; the next poll catches up.
-      }
+      const selected = resolveSelectedTag(result.selected_tag, nextNodes);
       writeNodesSnapshot({
         nodes: nextNodes,
         selectedTag: selected,
@@ -1201,7 +1198,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
                         section.collapsed
                           ? EMPTY_RANGE
                           : cardWindow(
-                              section.cardCount,
+                              section.cards.length,
                               columns,
                               top + sectionCardsOffset(section),
                               viewportTop,

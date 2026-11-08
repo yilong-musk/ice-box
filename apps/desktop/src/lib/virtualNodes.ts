@@ -38,7 +38,8 @@ export type SectionShape = {
   header: boolean;
   /** Collapsed sections show only their header. */
   collapsed: boolean;
-  cardCount: number;
+  /** The section's cards; only the count matters for layout. */
+  cards: readonly unknown[];
 };
 
 /** Distance from a section's top to its first card row: the header, plus a
@@ -61,7 +62,7 @@ export function sectionLayout<S extends SectionShape>(
 ): { rows: SectionRow<S>[]; height: number } {
   let top = 0;
   const rows = sections.map((section, index) => {
-    const cards = section.collapsed ? 0 : cardsHeight(section.cardCount, columns);
+    const cards = section.collapsed ? 0 : cardsHeight(section.cards.length, columns);
     const height = sectionCardsOffset(section) + cards + SECTION_GAP;
     const row = { section, index, top, height };
     top += height;

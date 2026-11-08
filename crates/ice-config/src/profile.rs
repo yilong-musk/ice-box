@@ -68,6 +68,51 @@ impl NormalizedProfile {
         self.all_outbounds().map(|o| o.tag.clone()).collect()
     }
 
+    /// Outermost group whose direct members include `tag`; prefers the
+    /// profile's main group (`default_outbound`). `None` when the tag belongs
+    /// to no group, or the profile has no groups.
+    pub fn selection_group_for(&self, tag: &str) -> Option<String> {
+        if self.groups.is_empty() {
+            return None;
+        }
+        if let Some(top) = self.default_outbound.as_deref() {
+            if self
+                .groups
+                .iter()
+                .any(|g| g.tag == top && group_contains(g, tag))
+            {
+                return Some(top.to_string());
+            }
+        }
+        self.groups
+            .iter()
+            .find(|g| group_contains(g, tag))
+            .map(|g| g.tag.clone())
+    }
+
+    /// Whether picking `member` in `group` is also a node pick, i.e. moves
+    /// `selected_tag`. Only a pick in the main group (`default_outbound`) of a
+    /// member the profile defines does: Home's outbound line then follows a
+    /// switch made on the Nodes page or in the tray. A pick in any other group
+    /// (e.g. a per-service selector) leaves the selected node alone, whatever
+    /// the group order.
+    pub fn picks_selected_node(&self, group: &str, member: &str) -> bool {
+        self.default_outbound.as_deref() == Some(group)
+            && self
+                .groups
+                .iter()
+                .any(|g| g.tag == group && group_contains(g, member))
+            && self.all_outbounds().any(|o| o.tag == member)
+    }
+
+    /// Whether `tag` is a strategy group that no other group contains (e.g.
+    /// the main group). Picking it is a live no-op for the Clash API.
+    pub fn is_unselectable_group(&self, tag: &str) -> bool {
+        !self.groups.is_empty()
+            && self.groups.iter().any(|g| g.tag == tag)
+            && self.selection_group_for(tag).is_none()
+    }
+
     /// Minimal profile: nodes only, global proxy selector behavior (v1 fallback).
     pub fn from_nodes_only(nodes: Vec<NormalizedOutbound>) -> Self {
         let default = nodes.first().map(|n| n.tag.clone());
@@ -84,4 +129,13 @@ impl NormalizedProfile {
             parse_stats: ProfileParseStats::default(),
         }
     }
+}
+
+/// Whether strategy group `group` lists `tag` among its direct members.
+fn group_contains(group: &NormalizedOutbound, tag: &str) -> bool {
+    group
+        .outbound
+        .get("outbounds")
+        .and_then(|v| v.as_array())
+        .is_some_and(|members| members.iter().filter_map(|v| v.as_str()).any(|m| m == tag))
 }

@@ -105,7 +105,10 @@ describe("Nodes", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
     });
-    setGroupSelection.mockResolvedValue(undefined);
+    // The backend returns the selected node after the pick.
+    setGroupSelection.mockImplementation(async () => ({
+      selected_tag: (await getSettings()).selected_tag,
+    }));
     setSelectedNode.mockResolvedValue(undefined);
     setNodeFavorite.mockResolvedValue(undefined);
     testNodeDelay.mockImplementation(async (tag: string) => ({
@@ -301,8 +304,8 @@ describe("Nodes", () => {
     let resolveGroup: () => void = () => {};
     setGroupSelection.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          resolveGroup = resolve;
+        new Promise<{ selected_tag: string | null }>((resolve) => {
+          resolveGroup = () => resolve({ selected_tag: "node-a" });
         }),
     );
     const { container, rerender } = render(<Nodes active />);
@@ -323,27 +326,13 @@ describe("Nodes", () => {
   });
 
   it("publishes the selected node a main-group pick moved, even when hidden", async () => {
-    let selectedTag = "node-a";
-    getSettings.mockImplementation(async () => ({
-      mixed_listen: "127.0.0.1",
-      mixed_port: 17890,
-      clash_api_listen: "127.0.0.1",
-      clash_api_port: 19090,
-      selected_tag: selectedTag,
-      auto_set_system_proxy: true,
-      proxy_service_enabled: false,
-      allow_lan: false,
-      proxy_mode: "rule",
-    }));
     let release: () => void = () => {};
     setGroupSelection.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          release = () => {
-            // The backend moves `selected_tag` with a main-group pick.
-            selectedTag = "node-b";
-            resolve();
-          };
+        new Promise<{ selected_tag: string | null }>((resolve) => {
+          // The backend moves `selected_tag` with a main-group pick and
+          // returns it; the page must not need another settings read.
+          release = () => resolve({ selected_tag: "node-b" });
         }),
     );
     const { container, rerender } = render(<Nodes active />);
@@ -359,12 +348,14 @@ describe("Nodes", () => {
 
     // Hidden: the page skips its refresh, so the snapshot must carry the move.
     rerender(<Nodes active={false} />);
+    const settingsReads = getSettings.mock.calls.length;
     await act(async () => {
       release();
     });
     await waitFor(() => {
       expect(readNodesSnapshot()?.selectedTag).toBe("node-b");
     });
+    expect(getSettings.mock.calls.length).toBe(settingsReads);
   });
 
   it("keeps member lists and expanded groups while the pane is hidden", async () => {
@@ -1311,6 +1302,32 @@ describe("Nodes", () => {
     await waitFor(() => expect(star(rowOf(view, "node-a"))).toBeEnabled());
   });
 
+  it("disables the section test while a favorite write is in flight", async () => {
+    let release: () => void = () => {};
+    setNodeFavorite.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await expandGroup(view, "选择组");
+    const sectionTest = () =>
+      within(rowOf(view, "选择组")).getByRole("button", { name: t("nodes.test") });
+    expect(sectionTest()).toBeEnabled();
+
+    const members = view.getByLabelText(t("nodes.membersAria", { group: "选择组" }));
+    fireEvent.click(star(within(members).getByText("node-a").closest(ROW) as HTMLElement));
+    // A delay test now would race the favorite's post-success refresh.
+    await waitFor(() => expect(sectionTest()).toBeDisabled());
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(sectionTest()).toBeEnabled());
+  });
+
   it("sends one request for a rapid second click and disables row actions", async () => {
     useFlatProfile();
     let release: () => void = () => {};
@@ -1661,6 +1678,35 @@ describe("Nodes", () => {
       ).toBeEnabled();
     });
 
+    it("still clears a result when the expiry timer fires early", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      useFlatProfile();
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      await view.findByRole("list", { name: t("nodes.listAria") });
+
+      fireEvent.click(
+        view.getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }),
+      );
+      await waitFor(() => {
+        expect(within(rowOf(view, "node-a")).getByText("42 ms")).toBeInTheDocument();
+      });
+
+      // The wall clock steps back (NTP, sleep/wake): the timer fires on time
+      // but finds nothing old enough yet.
+      vi.setSystemTime(Date.now() - 10_000);
+      await act(async () => {
+        vi.advanceTimersByTime(3 * 60_000 + 500);
+      });
+      expect(within(rowOf(view, "node-a")).getByText("42 ms")).toBeInTheDocument();
+
+      // It re-arms instead of leaving the result up for good.
+      await act(async () => {
+        vi.advanceTimersByTime(11_000);
+      });
+      expect(within(rowOf(view, "node-a")).queryByText("42 ms")).toBeNull();
+    });
+
     it("restarts the three minutes when a node is tested again", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       useFlatProfile();
@@ -1715,6 +1761,7 @@ describe("Nodes", () => {
       const backend = useBackendNodes(await listNodes());
       setGroupSelection.mockImplementation(async (group: string, member: string) => {
         for (const node of backend) if (node.tag === group) node.group_now = member;
+        return { selected_tag: "node-a" };
       });
       const { container } = render(<Nodes />);
       const view = within(container);
