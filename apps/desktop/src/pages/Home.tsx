@@ -325,6 +325,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     let unlisten = () => {};
     void api
       .listenStateChanged(() => {
+        // A hidden Home stays mounted with its listeners; it re-reads on return.
+        if (!activeRef.current) return;
         if (pendingRef.current || modeBusyRef.current || tunSaveRef.current) {
           return;
         }
@@ -389,6 +391,13 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       markHome(false);
     };
   }, [active, refresh]);
+
+  // The page stays mounted while another tab is shown (the tray can switch
+  // tabs). Do not leave its install dialog open over that tab.
+  const setTunInstallOpen = tunInstall.setOpen;
+  useEffect(() => {
+    if (!active) setTunInstallOpen(false);
+  }, [active, setTunInstallOpen]);
 
   const core: CoreState | undefined = status?.core;
   const tunTransitioning =

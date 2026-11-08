@@ -70,7 +70,9 @@ try {
   assert(previousTop > 0, "The test must reach the bottom of a scrollable list");
 
   await page.getByRole("button", { name: "Home", exact: true }).click();
-  await viewport.waitFor({ state: "detached" });
+  // Hidden, the Nodes pane keeps its rows and scroll offset (App.tsx KeptPane).
+  await page.locator('[data-active="false"]:has(> [data-testid="nodes-panel"])').waitFor();
+  assert.equal(await viewport.evaluate(el => el.scrollTop), previousTop, "The hidden pane must keep its scroll position");
   await page.getByRole("button", { name: "Nodes", exact: true }).click();
   await titles.filter({ hasText: `Benchmark node ${nodeCount - 1}` }).waitFor();
   assert.equal(await viewport.evaluate(el => el.scrollTop), previousTop, "Reactivation must restore scroll position");

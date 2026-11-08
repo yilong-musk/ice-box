@@ -443,11 +443,27 @@ describe("App", () => {
     ).toBeNull();
     const panel = view.getByTestId("nodes-panel");
     expect(panel.parentElement).toHaveAttribute("data-active", "false");
+    // Home and Nodes stay laid out while hidden: moved out of view and out of
+    // the accessibility tree at once, out of keyboard reach after the paint.
+    expect(panel.parentElement).toHaveClass("pane-kept-hidden");
+    expect(panel.parentElement).toHaveAttribute("aria-hidden", "true");
+    expect(view.getByText("proxy-1")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(panel.parentElement).toHaveAttribute("inert");
+    });
+    const home = view.getByTestId("home-panel").parentElement;
+    expect(home).not.toHaveClass("pane-kept-hidden");
+    expect(home).not.toHaveAttribute("aria-hidden");
+    expect(home).not.toHaveAttribute("inert");
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.nodes") }));
     expect(view.getByText("proxy-1")).toBeInTheDocument();
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
     expect(panel.parentElement).toHaveAttribute("data-active", "true");
+    expect(panel.parentElement).not.toHaveAttribute("aria-hidden");
+    await waitFor(() => {
+      expect(panel.parentElement).not.toHaveAttribute("inert");
+    });
     expect(
       within(actions as HTMLElement).getByRole("button", { name: t("nodes.batchTest") }),
     ).toBeInTheDocument();

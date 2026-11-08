@@ -576,10 +576,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [viewport, setViewport] = useState({ top: 0, height: 600, width: 0 });
   const viewportStateRef = useRef(viewport);
   viewportStateRef.current = viewport;
-  // Rows render only while the page is shown. The hidden page catches up at
-  // low priority and drops its rows then; the scroll position is restored from
-  // `viewport` on the next visit.
-  const listVisible = active && (runtime?.visible ?? true);
+  // Rows stay rendered while the tab is hidden: the pane keeps its layout and
+  // scroll offset (App.tsx KeptPane), so a return only repaints them instead
+  // of rebuilding and laying out every card. They drop while the window is
+  // hidden; the scroll position is restored from `viewport` when they return.
+  const listVisible = runtime?.visible ?? true;
   const grouped = useMemo(() => hasStrategyGroups(nodes), [nodes]);
   const orderedNodes = useMemo(() => structuredTopLevel(nodes), [nodes]);
   const nodesByTag = useMemo(
@@ -754,11 +755,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     };
   }, [refresh]);
 
-  // Leaving the tab keeps the list, its member lists, the expanded groups and
-  // the delay results; only the rendered rows unmount (`listVisible`). The
-  // delay results reset in `refresh` when the lineup changes, since a reused
-  // tag may then name another server; the expanded groups follow the group
-  // lineup and come back from storage.
+  // Leaving the tab keeps the list, its member lists, the expanded groups,
+  // the delay results and the rendered rows. The delay results reset in
+  // `refresh` when the lineup changes, since a reused tag may then name
+  // another server; the expanded groups follow the group lineup and come back
+  // from storage.
 
   useEffect(() => {
     activeRef.current = active;
@@ -1123,7 +1124,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       )}
       data-testid="nodes-panel"
     >
-      {active && !embedded ? (
+      {/* The title-bar slot hides with the pane (`TitlebarActions`), a render
+          ahead of `active`. */}
+      {!embedded ? (
         <TitlebarActions>{batchButton}</TitlebarActions>
       ) : null}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
