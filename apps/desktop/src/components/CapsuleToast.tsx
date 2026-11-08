@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, CircleAlert } from "lucide-react";
 
 import { t } from "../lib/i18n";
+import { useTransient } from "../lib/transient";
 import { cn } from "@/lib/utils";
 
 const ERROR_DURATION_MS = 5000;
@@ -18,52 +19,24 @@ export type CapsuleToastState = {
   tone: CapsuleToastTone;
 } | null;
 
-type TimedToast = NonNullable<CapsuleToastState> & {
-  /** Wall-clock time (`Date.now()`) the notice goes away. */
-  expiresAt: number;
-};
-
-/** Single transient page-level notice, replaced by the next one. */
+/** Single transient page-level notice, replaced by the next one. Its time only
+ * runs while the page is visible (see `useTransient`). */
 export function useCapsuleToast() {
-  const [toast, setToast] = useState<TimedToast | null>(null);
+  const [toast, showToast, dismiss] = useTransient<CapsuleToastState>(null);
   const nextId = useRef(0);
-
-  const dismiss = useCallback(() => {
-    setToast(null);
-  }, []);
 
   const show = useCallback(
     (message: string, tone: CapsuleToastTone = "error") => {
       const text = message.trim();
       if (!text) return;
       nextId.current += 1;
-      const duration = tone === "success" ? SUCCESS_DURATION_MS : ERROR_DURATION_MS;
-      setToast({
-        id: nextId.current,
-        message: text,
-        tone,
-        expiresAt: Date.now() + duration,
-      });
+      showToast(
+        { id: nextId.current, message: text, tone },
+        tone === "success" ? SUCCESS_DURATION_MS : ERROR_DURATION_MS,
+      );
     },
-    [],
+    [showToast],
   );
-
-  // The timer lives in an effect keyed on the notice, not in `show`: pages stay
-  // mounted inside a hidden <Activity>, which tears down effects (and their
-  // timers) but keeps state. Re-run on reveal, the effect counts down what is
-  // left, and drops a notice that expired while hidden before it paints.
-  useLayoutEffect(() => {
-    if (!toast) return;
-    const remaining = toast.expiresAt - Date.now();
-    if (remaining <= 0) {
-      setToast((current) => (current === toast ? null : current));
-      return;
-    }
-    const id = window.setTimeout(() => {
-      setToast((current) => (current === toast ? null : current));
-    }, remaining);
-    return () => window.clearTimeout(id);
-  }, [toast]);
 
   return { toast, show, dismiss };
 }

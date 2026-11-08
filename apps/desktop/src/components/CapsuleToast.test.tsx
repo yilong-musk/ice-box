@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Activity } from "react";
 import { act, fireEvent, render } from "@testing-library/react";
+import { Activity } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { CapsuleToast, useCapsuleToast } from "./CapsuleToast";
@@ -112,35 +112,23 @@ describe("useCapsuleToast", () => {
     expect(queryByTestId("capsule-toast")).toBeNull();
   });
 
-  it("is gone on return when it expired while the page was hidden", () => {
+  it("still goes away after a tab switch, with only the time it had left", () => {
     vi.useFakeTimers();
     const { queryByTestId, setVisible } = renderPage();
-    expect(queryByTestId("capsule-toast")).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
 
+    // Hidden time does not count, however long.
     setVisible(false);
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
     setVisible(true);
-    expect(queryByTestId("capsule-toast")).toBeNull();
-  });
-
-  it("keeps only the time left when the page comes back early", () => {
-    vi.useFakeTimers();
-    const { queryByTestId, setVisible } = renderPage();
-
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    setVisible(false);
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    setVisible(true);
     expect(queryByTestId("capsule-toast")).not.toBeNull();
 
     act(() => {
-      vi.advanceTimersByTime(399);
+      vi.advanceTimersByTime(1399);
     });
     expect(queryByTestId("capsule-toast")).not.toBeNull();
     act(() => {
