@@ -75,31 +75,26 @@ describe("useTransient", () => {
     expect(value()).toBe("idle");
   });
 
-  it("pauses while the page is hidden and resumes with the time left", () => {
+  it("keeps counting while the page is hidden", () => {
     const { setVisible, value, advance, show } = setup();
     show("saved", 2000);
     advance(500);
     setVisible(false);
-    advance(10 * 60_000);
+    advance(1000);
     setVisible(true);
     expect(value()).toBe("saved");
-    advance(1499);
+    advance(499);
     expect(value()).toBe("saved");
     advance(1);
     expect(value()).toBe("idle");
   });
 
-  it("shows a value raised while hidden for its full time once revealed", () => {
+  it("is not shown again when the page returns after its time", () => {
     const { setVisible, value, advance, show } = setup();
+    show("saved", 2000);
     setVisible(false);
-    // e.g. a background refresh error on a page that is not on screen
-    show("error", 5000);
     advance(60_000);
     setVisible(true);
-    expect(value()).toBe("error");
-    advance(4999);
-    expect(value()).toBe("error");
-    advance(1);
     expect(value()).toBe("idle");
   });
 

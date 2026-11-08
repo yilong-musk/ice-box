@@ -112,23 +112,34 @@ describe("useCapsuleToast", () => {
     expect(queryByTestId("capsule-toast")).toBeNull();
   });
 
-  it("still goes away after a tab switch, with only the time it had left", () => {
+  it("is gone on return when it expired while the page was hidden", () => {
     vi.useFakeTimers();
     const { queryByTestId, setVisible } = renderPage();
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
+    expect(queryByTestId("capsule-toast")).not.toBeNull();
 
-    // Hidden time does not count, however long.
     setVisible(false);
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
     setVisible(true);
+    expect(queryByTestId("capsule-toast")).toBeNull();
+  });
+
+  it("keeps only the time left when the page comes back early", () => {
+    vi.useFakeTimers();
+    const { queryByTestId, setVisible } = renderPage();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    setVisible(false);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    setVisible(true);
     expect(queryByTestId("capsule-toast")).not.toBeNull();
 
     act(() => {
-      vi.advanceTimersByTime(1399);
+      vi.advanceTimersByTime(399);
     });
     expect(queryByTestId("capsule-toast")).not.toBeNull();
     act(() => {

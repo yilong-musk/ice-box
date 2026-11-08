@@ -19,8 +19,8 @@ export type CapsuleToastState = {
   tone: CapsuleToastTone;
 } | null;
 
-/** Single transient page-level notice, replaced by the next one. Its time only
- * runs while the page is visible (see `useTransient`). */
+/** Single transient page-level notice, replaced by the next one. Its time keeps
+ * running while the page is hidden (see `useTransient`). */
 export function useCapsuleToast() {
   const [toast, showToast, dismiss] = useTransient<CapsuleToastState>(null);
   const nextId = useRef(0);
