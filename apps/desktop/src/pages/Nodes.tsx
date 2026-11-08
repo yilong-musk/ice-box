@@ -1045,14 +1045,24 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     try {
       await api.setGroupSelection(group, member);
       const nextNodes = applyGroupNowToNodes(nodesRef.current, group, member);
+      // A pick in the main group also moves the selected node on the backend.
+      // Publish it with the new exit so Home's outbound line follows at once,
+      // even while this page is hidden and skips its refresh.
       const snap = readNodesSnapshot();
+      let selected = snap?.selectedTag ?? selectedTagRef.current;
+      try {
+        selected = resolveSelectedTag((await api.getSettings()).selected_tag, nextNodes);
+      } catch {
+        // Keep the previous selection; the next poll catches up.
+      }
       writeNodesSnapshot({
         nodes: nextNodes,
-        selectedTag: snap?.selectedTag ?? selectedTagRef.current,
+        selectedTag: selected,
         running: snap?.running ?? runningRef.current,
       });
       if (mountedRef.current) {
         setNodes((prev) => (nodesEqual(prev, nextNodes) ? prev : nextNodes));
+        setSelectedTag((prev) => (prev === selected ? prev : selected));
       }
       if (mountedRef.current && activeRef.current) await refresh();
     } catch (e) {

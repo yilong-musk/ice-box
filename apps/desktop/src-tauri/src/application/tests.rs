@@ -17,6 +17,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 fn temp_state_with_node(label: &str) -> AppState {
+    let nodes = vec![NormalizedOutbound {
+        tag: "n1".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
+    }];
+    temp_state_with_profile(
+        label,
+        &ice_config::NormalizedProfile::from_nodes_only(nodes),
+    )
+}
+
+/// App state whose active subscription holds `profile`.
+fn temp_state_with_profile(label: &str, profile: &ice_config::NormalizedProfile) -> AppState {
     let dir = std::env::temp_dir().join(format!(
         "ice-box-cmd-{label}-{}",
         SystemTime::now()
@@ -50,19 +64,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         auto_update_interval: None,
         source: ice_engine::SubscriptionSource::Remote,
     };
-    let nodes = vec![NormalizedOutbound {
-        tag: "n1".into(),
-        outbound: std::sync::Arc::new(
-            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
-        ),
-    }];
-    write_subscription_success(
-        &sub,
-        &meta,
-        "{}",
-        &ice_config::NormalizedProfile::from_nodes_only(nodes),
-    )
-    .unwrap();
+    write_subscription_success(&sub, &meta, "{}", profile).unwrap();
 
     let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
         ice_core::CoreController::default(),
@@ -2214,4 +2216,70 @@ fn mixed_port_on_the_clash_api_port_moves_the_clash_api() {
     saved.validate().unwrap();
 
     let _ = fs::remove_dir_all(state.paths.root());
+}
+
+/// A grouped profile shaped like a typical subscription: a main selector
+/// (the default exit) holding an urltest group and the nodes, plus a
+/// per-service selector.
+fn grouped_profile() -> ice_config::NormalizedProfile {
+    let outbound = |value: serde_json::Value| NormalizedOutbound {
+        tag: value["tag"].as_str().unwrap().into(),
+        outbound: std::sync::Arc::new(value),
+    };
+    let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![
+        outbound(serde_json::json!({"type":"socks","tag":"hk","server":"1.1.1.1","server_port":1})),
+        outbound(serde_json::json!({"type":"socks","tag":"jp","server":"1.1.1.2","server_port":1})),
+    ]);
+    profile.groups = vec![
+        outbound(
+            serde_json::json!({"type":"selector","tag":"main","outbounds":["auto","hk","jp"]}),
+        ),
+        outbound(serde_json::json!({"type":"urltest","tag":"auto","outbounds":["hk","jp"]})),
+        outbound(serde_json::json!({"type":"selector","tag":"video","outbounds":["main","jp"]})),
+    ];
+    profile.default_outbound = Some("main".into());
+    profile.route.final_outbound = "main".into();
+    profile
+}
+
+#[test]
+fn a_main_group_pick_moves_the_selected_node() {
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_profile("main-group-pick", &grouped_profile());
+    let selected = |state: &AppState| current_settings(&state.paths).unwrap().selected_tag;
+
+    // The Nodes page and the tray switch exits through group picks; Home
+    // reads `selected_tag`, so a pick in the main group must move it.
+    select_group_member(&Host, &state, "main", "jp").expect("pick jp");
+    assert_eq!(selected(&state).as_deref(), Some("jp"));
+    select_group_member(&Host, &state, "main", "auto").expect("pick auto");
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+
+    // A per-service group is not where a node pick lands: Home keeps its node.
+    select_group_member(&Host, &state, "video", "jp").expect("pick video exit");
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+    let selections = load_group_selections(&state.paths.group_selections());
+    assert_eq!(selections.get("video").map(String::as_str), Some("jp"));
+    assert_eq!(selections.get("main").map(String::as_str), Some("auto"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn picks_selected_node_follows_where_a_node_pick_lands() {
+    let profile = grouped_profile();
+    assert!(picks_selected_node(&profile, "main", "hk"));
+    assert!(picks_selected_node(&profile, "main", "auto"));
+    // `jp` is in both selectors; a node pick prefers the default exit group.
+    assert!(!picks_selected_node(&profile, "video", "jp"));
+    // `main` is only in `video`, so a pick of it there is where it lands.
+    assert!(picks_selected_node(&profile, "video", "main"));
 }

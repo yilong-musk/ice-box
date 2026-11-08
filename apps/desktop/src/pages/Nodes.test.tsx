@@ -322,6 +322,51 @@ describe("Nodes", () => {
     });
   });
 
+  it("publishes the selected node a main-group pick moved, even when hidden", async () => {
+    let selectedTag = "node-a";
+    getSettings.mockImplementation(async () => ({
+      mixed_listen: "127.0.0.1",
+      mixed_port: 17890,
+      clash_api_listen: "127.0.0.1",
+      clash_api_port: 19090,
+      selected_tag: selectedTag,
+      auto_set_system_proxy: true,
+      proxy_service_enabled: false,
+      allow_lan: false,
+      proxy_mode: "rule",
+    }));
+    let release: () => void = () => {};
+    setGroupSelection.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            // The backend moves `selected_tag` with a main-group pick.
+            selectedTag = "node-b";
+            resolve();
+          };
+        }),
+    );
+    const { container, rerender } = render(<Nodes active />);
+    const view = within(container);
+    await expandGroup(view, "选择组");
+    fireEvent.click(
+      view.getByLabelText(t("nodes.setMemberAria", { member: "node-b", group: "选择组" })),
+    );
+    await waitFor(() => {
+      expect(setGroupSelection).toHaveBeenCalledWith("选择组", "node-b");
+    });
+    expect(readNodesSnapshot()?.selectedTag).toBe("node-a");
+
+    // Hidden: the page skips its refresh, so the snapshot must carry the move.
+    rerender(<Nodes active={false} />);
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => {
+      expect(readNodesSnapshot()?.selectedTag).toBe("node-b");
+    });
+  });
+
   it("keeps member lists and expanded groups while the pane is hidden", async () => {
     const members = Array.from({ length: 40 }, (_, i) => `leaf-${i}`);
     listNodes.mockResolvedValue([

@@ -928,6 +928,16 @@ pub(crate) fn selection_group_for(profile: &NormalizedProfile, tag: &str) -> Opt
         .map(|g| g.tag.clone())
 }
 
+/// Whether picking `member` in `group` is also a node pick: `group` is where
+/// [`select_node`] would land `member` (the profile's main group when it holds
+/// it). Such a pick moves `selected_tag` too, so Home's outbound line follows
+/// a switch made on the Nodes page or in the tray, as it does after
+/// `select_node`. A pick in another group (e.g. a per-service selector) leaves
+/// the selected node alone.
+pub(crate) fn picks_selected_node(profile: &NormalizedProfile, group: &str, member: &str) -> bool {
+    selection_group_for(profile, member).as_deref() == Some(group)
+}
+
 /// Whether `tag` is a strategy group that no other group contains (e.g. the top-level
 /// group). Such picks are a live no-op for the Clash API.
 pub(crate) fn is_unselectable_group(profile: &NormalizedProfile, tag: &str) -> bool {
@@ -978,7 +988,13 @@ pub(crate) fn select_group_member(
     selections.insert(group.to_string(), member.to_string());
     save_group_selections(&state.paths.group_selections(), &selections)?;
 
-    let settings = current_settings(&state.paths)?;
+    let mut settings = current_settings(&state.paths)?;
+    if picks_selected_node(&profile, group, member)
+        && settings.selected_tag.as_deref() != Some(member)
+    {
+        settings.selected_tag = Some(member.to_string());
+        persist_settings(&state.paths.settings(), &settings, host_platform())?;
+    }
     let should_apply_live = {
         let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         core.state().status == CoreStatus::Running

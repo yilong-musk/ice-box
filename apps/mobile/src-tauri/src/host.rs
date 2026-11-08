@@ -369,6 +369,16 @@ impl MobileHost {
         let mut selections = load_group_selections(&paths.group_selections());
         selections.insert(group.to_string(), member.to_string());
         save_group_selections(&paths.group_selections(), &selections)?;
+        // A pick in the group a node pick of `member` lands in (the main
+        // group) is a node pick too: Home shows `selected_tag`, as after
+        // `set_selected_node`. Other groups leave the selected node alone.
+        if selection_group_for(&profile, member).as_deref() == Some(group) {
+            let mut settings = load_settings(&paths.settings())?;
+            if settings.selected_tag.as_deref() != Some(member) {
+                settings.selected_tag = Some(member.to_string());
+                save_settings_for(&paths.settings(), &settings, PLATFORM)?;
+            }
+        }
         Ok(())
     }
 
