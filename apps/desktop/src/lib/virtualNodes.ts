@@ -16,8 +16,6 @@ export const SECTION_GAP = 12;
 export const NODE_OVERSCAN = 160;
 /** Narrowest card before the grid drops a column. */
 export const CARD_MIN_WIDTH = 176;
-/** Phone cards: two columns on a typical (~390 px) phone, so names keep room. */
-export const COMPACT_CARD_MIN_WIDTH = 160;
 
 const CARD_STRIDE = CARD_HEIGHT + CARD_GAP;
 

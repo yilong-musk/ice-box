@@ -170,6 +170,37 @@ describe("Nodes", () => {
     expect(batch.querySelector("svg")).not.toBeNull();
   });
 
+  it("lays the phone out in one column however wide the screen", async () => {
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(800);
+    try {
+      useFlatProfile();
+      const columnsOf = async (container: HTMLElement) => {
+        const view = within(container);
+        await view.findByRole("list", { name: t("nodes.listAria") });
+        const grid = container.querySelector('[role="group"].grid') as HTMLElement;
+        return grid.style.gridTemplateColumns;
+      };
+
+      // The desktop fills the width with as many cards as fit.
+      const desktop = render(<Nodes embedded />);
+      await waitFor(async () => {
+        expect(await columnsOf(desktop.container)).toBe("repeat(4, minmax(0, 1fr))");
+      });
+      desktop.unmount();
+
+      // The phone keeps a single full-width column: two felt cramped.
+      phoneShell.value = true;
+      const phone = render(<Nodes embedded />);
+      await waitFor(async () => {
+        expect(await columnsOf(phone.container)).toBe("repeat(1, minmax(0, 1fr))");
+      });
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("keeps the full row and text batch test when embedded on desktop", async () => {
     const { container } = render(<Nodes embedded />);
     const view = within(container);
