@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Switching to or away from Home and Nodes no longer stutters. Both pages now
+  stay laid out while another tab is shown, so a switch only repaints them
+  instead of rebuilding the node cards and the traffic chart and laying out
+  the whole page again; on macOS a switch took up to about 55 ms of work
+  before the next frame and now takes a few.
+- The Home traffic chart no longer makes the window restyle every element on
+  each one-second sample, which caused a dropped frame every second while
+  Home was open.
+
 ## [0.3.0] - 2026-11-08
 
 ### Added

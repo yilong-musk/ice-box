@@ -81,7 +81,7 @@ function ChartContainer({
   )
 }
 
-const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
+function chartStyleCss(id: string, config: ChartConfig): string | null {
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme ?? config.color
   )
@@ -90,12 +90,9 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
+  return Object.entries(THEMES)
+    .map(
+      ([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
@@ -107,11 +104,23 @@ ${colorConfig
   .join("\n")}
 }
 `
-          )
-          .join("\n"),
-      }}
-    />
-  )
+    )
+    .join("\n")
+}
+
+const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
+  const css = chartStyleCss(id, config)
+  // React rewrites `innerHTML` whenever the `dangerouslySetInnerHTML` object
+  // is a new one, even with the same text. A rewritten <style> makes the
+  // browser restyle the whole document, and the chart re-renders on every
+  // sample, so keep the object while the text is unchanged.
+  const html = React.useMemo(() => (css == null ? null : { __html: css }), [css])
+
+  if (html == null) {
+    return null
+  }
+
+  return <style dangerouslySetInnerHTML={html} />
 }
 
 const ChartTooltip = RechartsPrimitive.Tooltip

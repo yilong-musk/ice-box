@@ -411,8 +411,8 @@ describe("Nodes", () => {
     await expandGroup(view, "选择组");
 
     rerender(<Nodes active={false} />);
-    // The rows unmount, the data stays.
-    expect(view.queryByText("选择组")).toBeNull();
+    // The rows stay rendered with the data: the hidden pane keeps its layout.
+    expect(view.getByText("选择组")).toBeInTheDocument();
 
     // Coming back renders the expanded group before any refetch lands.
     listNodes.mockImplementation(() => new Promise(() => {}));
@@ -650,7 +650,8 @@ describe("Nodes", () => {
     const { container, rerender } = render(<Nodes active={false} />);
     const view = within(container);
 
-    expect(view.queryByText("cached-node")).toBeNull();
+    // A hidden pane shows the cached list without polling for a fresh one.
+    expect(view.getByText("cached-node")).toBeInTheDocument();
     expect(listNodes).not.toHaveBeenCalled();
 
     rerender(<Nodes active />);
@@ -714,7 +715,7 @@ describe("Nodes", () => {
     expect(view.queryByLabelText(t("nodes.memberCurrentAria", { member: "leaf-0" }))).toBeNull();
   });
 
-  it("bounds long-list DOM and restores scrolling after hiding", async () => {
+  it("bounds long-list DOM and keeps its rows and scrolling while hidden", async () => {
     writeNodesSnapshot({
       nodes: Array.from({ length: 80 }, (_, i) => ({
         tag: `node-${i}`,
@@ -750,7 +751,8 @@ describe("Nodes", () => {
     expect(lastPaint.length).toBeGreaterThan(0);
     expect(lastPaint.length).toBeLessThanOrEqual(16);
     rerender(<Nodes active={false} />);
-    expect(view.queryByRole("list", { name: t("nodes.listAria") })).toBeNull();
+    expect(view.getByRole("list", { name: t("nodes.listAria") })).toBeInTheDocument();
+    expect(view.getByText("node-79")).toBeInTheDocument();
     rerender(<Nodes active />);
     expect(view.getByText("node-79")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="scroll-area-viewport"]')).toHaveProperty("scrollTop", 4800);

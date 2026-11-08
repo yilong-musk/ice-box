@@ -169,6 +169,15 @@
     @apply flex min-h-0 flex-col overflow-hidden;
   }
 
+  /* A hidden tab pane that stays laid out (App.tsx KeptPane): moved out of
+     the clipped content area instead of `display: none`, so showing it again
+     needs no style or layout pass over the page. Only `transform`: an
+     inherited property here (or a Tailwind utility, which sets inherited
+     custom properties) would restyle every element in the pane. */
+  .pane-kept-hidden {
+    transform: translateX(-200vw);
+  }
+
   .error {
     @apply text-destructive;
   }

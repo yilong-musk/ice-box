@@ -4,7 +4,9 @@ import {
   Activity,
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
@@ -60,6 +62,7 @@ import {
 import { useThemePreference } from "./lib/theme";
 import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
+import { PaneVisibleContext } from "./lib/paneVisibility";
 import logo from "./assets/logo.png";
 
 type Tab =
@@ -74,11 +77,9 @@ type Tab =
 
 const SIDEBAR_WIDTH = "11rem";
 
-// Every visited page stays mounted inside an <Activity>. Memoized pages with
-// stable props skip the shell re-render on a tab switch: the page coming in
-// renders on the click, and the hidden page leaving catches up at low priority
-// after the frame is painted. Each page subscribes to language changes on its
-// own.
+// Every visited page stays mounted. Memoized pages with stable props skip the
+// shell re-render on a tab switch. Each page subscribes to language changes on
+// its own.
 const HomePage = memo(Home);
 const NodesPage = memo(Nodes);
 const AppsPage = memo(Apps);
@@ -91,6 +92,11 @@ const McpPage = memo(Mcp);
 const SIDEBAR_PROVIDER_STYLE = {
   "--sidebar-width": SIDEBAR_WIDTH,
 } as CSSProperties;
+
+/** All panes share one grid cell, so a hidden pane that keeps its layout has
+ * exactly the size it will have when shown again. */
+const PANE_CLASS =
+  "col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col";
 
 /**
  * A page that stays mounted while its tab is not shown. Hidden, <Activity>
@@ -107,13 +113,64 @@ function TabPane({
 }) {
   return (
     <Activity mode={active ? "visible" : "hidden"}>
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-        data-active={active ? "true" : "false"}
-      >
+      <div className={PANE_CLASS} data-active={active ? "true" : "false"}>
         {children}
       </div>
     </Activity>
+  );
+}
+
+/**
+ * A pane for the pages people switch to most (Home, Nodes). Hidden, it stays
+ * mounted, rendered and laid out, just moved out of view, and its effects keep
+ * running: the page stops its own polling through `active`. <Activity> set
+ * `display: none` instead and re-ran every effect on the way back, so each
+ * return rebuilt and laid out the whole page (the traffic chart re-registered
+ * with Recharts and re-measured its ticks), which WebKit takes tens of
+ * milliseconds for.
+ */
+function KeptPane({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Until `inert` lands below, a control focused before the switch would
+  // keep focus (and take Space/Enter) inside the hidden pane. Drop it in the
+  // switch frame; this touches only the focused element.
+  useLayoutEffect(() => {
+    if (active) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && ref.current?.contains(focused)) {
+      focused.blur();
+    }
+  }, [active]);
+  // `inert` keeps keyboard focus out of the hidden pane. It is inherited, so
+  // WebKit restyles the whole pane when it changes; apply it after the switch
+  // has been painted instead of in that frame.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let timer = 0;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => el.toggleAttribute("inert", !active), 0);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [active]);
+  return (
+    <div
+      ref={ref}
+      className={cn(PANE_CLASS, !active && "pane-kept-hidden")}
+      data-active={active ? "true" : "false"}
+      aria-hidden={active ? undefined : true}
+    >
+      <PaneVisibleContext value={active}>{children}</PaneVisibleContext>
+    </div>
   );
 }
 
@@ -192,6 +249,10 @@ function AppShell() {
   const [visited, setVisited] = useState<ReadonlySet<Tab>>(
     () => new Set<Tab>(["home"]),
   );
+  // Kept panes switch on `tab` at once; their pages see the change one render
+  // later, so the click only flips two panes and the page work (stopping or
+  // starting polls) runs after that frame.
+  const pageTab = useDeferredValue(tab);
   const runtime = useRuntimeStore();
   const [globalStatus, setGlobalStatus] = useState<StatusResponse | null>(null);
   const status = runtime?.status ?? globalStatus;
@@ -336,20 +397,20 @@ function AppShell() {
   const current = navItems.find((item) => item.id === tab);
 
   const pages = (
-    <>
+    <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
       {visited.has("home") && (
-        <TabPane active={tab === "home"}>
+        <KeptPane active={tab === "home"}>
           <HomePage
             onNavigate={selectTab}
-            active={tab === "home"}
+            active={pageTab === "home"}
             onStatus={setGlobalStatus}
           />
-        </TabPane>
+        </KeptPane>
       )}
       {!phone && visited.has("nodes") && (
-        <TabPane active={tab === "nodes"}>
-          <NodesPage onNavigate={selectTab} active={tab === "nodes"} />
-        </TabPane>
+        <KeptPane active={tab === "nodes"}>
+          <NodesPage onNavigate={selectTab} active={pageTab === "nodes"} />
+        </KeptPane>
       )}
       {phone && visited.has("apps") && (
         <TabPane active={tab === "apps"}>
@@ -386,7 +447,7 @@ function AppShell() {
           <McpPage active={tab === "mcp"} />
         </TabPane>
       )}
-    </>
+    </div>
   );
 
   const recovery = status?.proxy_recovery_warning?.length ? (
