@@ -10,6 +10,7 @@ import type {
   AppSettings,
   AppProxyMode,
   CheckAppUpdateResponse,
+  GroupSelectionResponse,
   DelayTestResponse,
   InstalledApp,
   ListRulesRequest,
@@ -55,7 +56,7 @@ export const api = {
   setNodeFavorite: (tag: string, favorite: boolean) =>
     invoke<void>("set_node_favorite", { req: { tag, favorite } }),
   setGroupSelection: (group: string, member: string) =>
-    invoke<void>("set_group_selection", { req: { group, member } }),
+    invoke<GroupSelectionResponse>("set_group_selection", { req: { group, member } }),
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
   getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),

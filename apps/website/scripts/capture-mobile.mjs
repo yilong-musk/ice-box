@@ -171,7 +171,7 @@ async function verifyHomeData(page, target) {
 
   const nodeRow = page
     .getByTestId("nodes-panel")
-    .locator('[role="listitem"]')
+    .locator('[data-testid="node-card"]')
     .first();
   await nodeRow.waitFor({ timeout: 15_000 });
 }

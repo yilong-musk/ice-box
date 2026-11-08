@@ -290,14 +290,14 @@ impl MobileHost {
                 format!("unknown node tag: {tag}"),
             ));
         }
-        if is_unselectable_group(&profile, tag) {
+        if profile.is_unselectable_group(tag) {
             return Ok(());
         }
         let paths = self.paths()?.clone();
         let mut settings = load_settings(&paths.settings())?;
         settings.selected_tag = Some(tag.to_string());
         save_settings_for(&paths.settings(), &settings, PLATFORM)?;
-        if let Some(group) = selection_group_for(&profile, tag) {
+        if let Some(group) = profile.selection_group_for(tag) {
             let mut selections = load_group_selections(&paths.group_selections());
             selections.insert(group, tag.to_string());
             save_group_selections(&paths.group_selections(), &selections)?;
@@ -310,7 +310,7 @@ impl MobileHost {
         let Ok(profile) = self.profile() else {
             return;
         };
-        if let Some(group) = selection_group_for(&profile, tag) {
+        if let Some(group) = profile.selection_group_for(tag) {
             self.record_group_now(&group, tag);
         }
     }
@@ -340,7 +340,14 @@ impl MobileHost {
         }
     }
 
-    pub fn set_group_selection(&mut self, group: &str, member: &str) -> Result<(), AppError> {
+    /// Persist a selector member pick. Returns the selected node after the
+    /// pick: a main-group pick moves it (see
+    /// [`NormalizedProfile::picks_selected_node`]).
+    pub fn set_group_selection(
+        &mut self,
+        group: &str,
+        member: &str,
+    ) -> Result<Option<String>, AppError> {
         let profile = self.profile()?;
         let group_outbound = profile
             .groups
@@ -369,7 +376,16 @@ impl MobileHost {
         let mut selections = load_group_selections(&paths.group_selections());
         selections.insert(group.to_string(), member.to_string());
         save_group_selections(&paths.group_selections(), &selections)?;
-        Ok(())
+        // A main-group pick is a node pick too: Home shows `selected_tag`, as
+        // after `set_selected_node`. Other groups leave the selected node alone.
+        let mut settings = load_settings(&paths.settings())?;
+        if profile.picks_selected_node(group, member)
+            && settings.selected_tag.as_deref() != Some(member)
+        {
+            settings.selected_tag = Some(member.to_string());
+            save_settings_for(&paths.settings(), &settings, PLATFORM)?;
+        }
+        Ok(settings.selected_tag)
     }
 
     pub fn test_delay(&self, tag: &str, live: bool) -> Result<u32, AppError> {
@@ -944,45 +960,6 @@ fn member_tags(outbound: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn selection_group_for(profile: &NormalizedProfile, tag: &str) -> Option<String> {
-    if profile.groups.is_empty() {
-        return None;
-    }
-    let contains = |group: &ice_config::NormalizedOutbound| {
-        group
-            .outbound
-            .get("outbounds")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .any(|member| member == tag)
-            })
-            .unwrap_or(false)
-    };
-    if let Some(top) = profile.default_outbound.as_deref() {
-        if profile
-            .groups
-            .iter()
-            .any(|group| group.tag == top && contains(group))
-        {
-            return Some(top.to_string());
-        }
-    }
-    profile
-        .groups
-        .iter()
-        .find(|group| contains(group))
-        .map(|group| group.tag.clone())
-}
-
-fn is_unselectable_group(profile: &NormalizedProfile, tag: &str) -> bool {
-    !profile.groups.is_empty()
-        && profile.groups.iter().any(|group| group.tag == tag)
-        && selection_group_for(profile, tag).is_none()
 }
 
 fn rule_rows(profile: &NormalizedProfile, overrides: &RuleOverrides) -> Vec<RuleRow> {

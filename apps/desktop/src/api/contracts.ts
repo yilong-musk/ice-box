@@ -290,6 +290,11 @@ export type DelayTestResponse = {
   delay_ms: number;
 };
 
+export type GroupSelectionResponse = {
+  /** The selected node after the pick; a main-group pick moves it. */
+  selected_tag: string | null;
+};
+
 
 export type TrafficSample = {
   up: number;
@@ -451,7 +456,8 @@ export interface CoreApi {
   setSelectedNode(tag: string): Promise<void>;
   /** Favorite a top-level node or group; a local preference that never reloads the core. */
   setNodeFavorite(tag: string, favorite: boolean): Promise<void>;
-  setGroupSelection(group: string, member: string): Promise<void>;
+  /** Switch a selector member; resolves with the selected node after the pick. */
+  setGroupSelection(group: string, member: string): Promise<GroupSelectionResponse>;
   testNodeDelay(tag: string): Promise<DelayTestResponse>;
   getTrafficSnapshot(): Promise<TrafficSnapshot>;
   getTrafficSince(cursor?: number | null): Promise<TrafficDelta>;

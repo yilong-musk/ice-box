@@ -147,7 +147,7 @@ pub async fn set_node_favorite(
 pub async fn set_group_selection(
     app: AppHandle,
     req: GroupSelectionRequest,
-) -> Result<(), AppError> {
+) -> Result<GroupSelectionResponse, AppError> {
     run_blocking("set_group_selection", move || {
         let state = app.state::<AppState>();
         set_group_selection_use_case(&app, state.inner(), req)

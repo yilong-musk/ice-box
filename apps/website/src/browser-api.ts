@@ -6,6 +6,7 @@ import type {
   AppProxyMode,
   CheckAppUpdateResponse,
   DelayTestResponse,
+  GroupSelectionResponse,
   InstalledApp,
   ListRulesRequest,
   ListRulesResponse,
@@ -461,7 +462,10 @@ export const api = {
     if (next.length > 0) favoritesBySubscription[id] = next;
     else delete favoritesBySubscription[id];
   },
-  async setGroupSelection(): Promise<void> { await delay(); },
+  async setGroupSelection(): Promise<GroupSelectionResponse> {
+    await delay();
+    return { selected_tag: settings.selected_tag ?? null };
+  },
   async testNodeDelay(tag: string): Promise<DelayTestResponse> { await delay(300); return { tag, delay_ms: 42 + Math.floor(Math.random() * 90) }; },
   async getTrafficSnapshot(): Promise<TrafficSnapshot> {
     await delay();

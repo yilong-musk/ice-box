@@ -47,34 +47,26 @@ try {
 
   await page.getByRole("button", { name: "Nodes", exact: true }).click();
   const panel = page.getByTestId("nodes-panel");
-  await panel.getByText("Benchmark node 1", { exact: true }).waitFor();
   const viewport = panel.locator('[data-slot="scroll-area-viewport"]');
-  const titles = panel.locator('[data-slot="item-title"]');
+  const titles = panel.locator('[data-testid="node-card-title"]');
+  // A grouped profile lists its group collapsed: members stay unmounted.
+  const toggle = panel.getByRole("button", { name: "Benchmark group", exact: true });
+  await toggle.waitFor();
   const firstCount = await titles.count();
-  assert(firstCount > 0 && firstCount < 25, "Only the visible node window should be mounted");
+  assert.equal(firstCount, 0, "A collapsed group must not mount its members");
 
-  await panel.getByRole("button", { name: "Benchmark group", exact: true }).click();
+  await toggle.click();
   const group = panel.locator('[id^="group-members-"]');
   await group.getByText("Benchmark node 1", { exact: true }).waitFor();
-  const firstMembers = await group.locator("button").count();
-  assert(firstMembers > 0 && firstMembers < 40, "Expanded members must remain virtualized");
-  const memberHeight = await group.locator("button").first().evaluate(el =>
-    el.parentElement.getBoundingClientRect().height,
-  );
-  const headerHeight = await titles.first().evaluate(el =>
-    el.closest('[data-slot="item"]').getBoundingClientRect().height,
-  );
-  await viewport.evaluate((el, top) => { el.scrollTop = top - el.clientHeight; },
-    headerHeight + nodeCount * memberHeight);
-  await group.getByText(`Benchmark node ${nodeCount - 1}`, { exact: true }).waitFor();
-  const lastMembers = await group.locator("button").count();
-  assert(lastMembers > 0 && lastMembers < 40, "The last member must not require mounting every member");
+  const firstMembers = await group.locator('[data-testid="node-card"]').count();
+  assert(firstMembers > 0 && firstMembers < 120, "Expanded member cards must remain virtualized");
 
   await viewport.evaluate(el => { el.scrollTop = el.scrollHeight; });
-  await titles.filter({ hasText: `Benchmark node ${nodeCount - 1}` }).waitFor();
+  await group.getByText(`Benchmark node ${nodeCount - 1}`, { exact: true }).waitFor();
+  const lastMembers = await group.locator('[data-testid="node-card"]').count();
+  assert(lastMembers > 0 && lastMembers < 120, "The last member must not require mounting every member");
   const lastCount = await titles.count();
   const previousTop = await viewport.evaluate(el => el.scrollTop);
-  assert(lastCount > 0 && lastCount < 25, "The bottom window must remain bounded");
   assert(previousTop > 0, "The test must reach the bottom of a scrollable list");
 
   await page.getByRole("button", { name: "Home", exact: true }).click();

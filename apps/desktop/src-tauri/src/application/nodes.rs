@@ -807,13 +807,13 @@ pub(crate) fn select_node(app: &impl AppHost, state: &AppState, tag: &str) -> Re
     let selection_group = if profile.groups.is_empty() {
         None
     } else {
-        selection_group_for(&profile, tag)
+        profile.selection_group_for(tag)
     };
 
     // Picking a strategy group that isn't itself a member of any other group (e.g. the
     // top-level group) is a live no-op: grouped profiles have no flat `proxy` selector
     // for select_outbound to target, and there is no parent group to set its member in.
-    if is_unselectable_group(&profile, tag) {
+    if profile.is_unselectable_group(tag) {
         return Ok(());
     }
 
@@ -903,39 +903,6 @@ pub(crate) fn select_node(app: &impl AppHost, state: &AppState, tag: &str) -> Re
     Ok(())
 }
 
-/// Outermost group whose direct members include `tag`; prefers the profile's top-level
-/// group (`default_outbound`). Returns `None` when the tag belongs to no group.
-pub(crate) fn selection_group_for(profile: &NormalizedProfile, tag: &str) -> Option<String> {
-    if profile.groups.is_empty() {
-        return None;
-    }
-    let contains = |g: &NormalizedOutbound| {
-        g.outbound
-            .get("outbounds")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).any(|m| m == tag))
-            .unwrap_or(false)
-    };
-    if let Some(top) = profile.default_outbound.as_deref() {
-        if profile.groups.iter().any(|g| g.tag == top && contains(g)) {
-            return Some(top.to_string());
-        }
-    }
-    profile
-        .groups
-        .iter()
-        .find(|g| contains(g))
-        .map(|g| g.tag.clone())
-}
-
-/// Whether `tag` is a strategy group that no other group contains (e.g. the top-level
-/// group). Such picks are a live no-op for the Clash API.
-pub(crate) fn is_unselectable_group(profile: &NormalizedProfile, tag: &str) -> bool {
-    !profile.groups.is_empty()
-        && profile.groups.iter().any(|g| g.tag == tag)
-        && selection_group_for(profile, tag).is_none()
-}
-
 /// Restore the group selection map to its state before `set_selected_node`.
 pub(crate) fn rollback_group_selection(
     state: &AppState,
@@ -964,42 +931,78 @@ pub struct GroupSelectionRequest {
 /// Persist and apply a strategy-group member pick. Shared by the
 /// `set_group_selection` command and the tray node menu; callers hold the
 /// orchestrate lock. The pick always survives restarts / config regeneration,
-/// and is applied live via the Clash API when the core is running.
+/// and is applied live via the Clash API when the core is running. A pick in
+/// the main group moves `selected_tag` too (see
+/// [`NormalizedProfile::picks_selected_node`]). Returns the selected node after
+/// the pick, so callers need not re-read the settings.
+///
+/// When the live switch or the config write fails, both the selection map and
+/// `selected_tag` are restored, as in [`select_node`], so Home never names an
+/// exit the core is not using.
 pub(crate) fn select_group_member(
     app: &impl AppHost,
     state: &AppState,
     group: &str,
     member: &str,
-) -> Result<(), AppError> {
+) -> Result<Option<String>, AppError> {
     let profile = active_profile(state)?;
     validate_static_group_member(profile.all_outbounds(), group, member)?;
 
     let mut selections = load_group_selections(&state.paths.group_selections());
-    selections.insert(group.to_string(), member.to_string());
+    let prev_member = selections.insert(group.to_string(), member.to_string());
     save_group_selections(&state.paths.group_selections(), &selections)?;
+    let previous_selection = Some((group.to_string(), prev_member));
 
-    let settings = current_settings(&state.paths)?;
+    let previous = match current_settings(&state.paths) {
+        Ok(settings) => settings,
+        Err(err) => {
+            rollback_group_selection(state, &previous_selection);
+            return Err(err);
+        }
+    };
+    let mut settings = previous.clone();
+    let moves_node = profile.picks_selected_node(group, member)
+        && settings.selected_tag.as_deref() != Some(member);
+    if moves_node {
+        settings.selected_tag = Some(member.to_string());
+        if let Err(err) = persist_settings(&state.paths.settings(), &settings, host_platform()) {
+            rollback_group_selection(state, &previous_selection);
+            return Err(err);
+        }
+    }
+    let rollback = |err: AppError| {
+        if moves_node {
+            let _ = persist_settings(&state.paths.settings(), &previous, host_platform());
+        }
+        rollback_group_selection(state, &previous_selection);
+        err
+    };
+
     let should_apply_live = {
         let core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
         core.state().status == CoreStatus::Running
     };
     if should_apply_live {
-        let endpoints = clash_endpoints(&state.paths, &settings)?;
-        select_group(&endpoints, group, member).map_err(AppError::from)?;
+        let endpoints = clash_endpoints(&state.paths, &settings).map_err(rollback)?;
+        select_group(&endpoints, group, member).map_err(|err| rollback(AppError::from(err)))?;
         let generation = state.core_snapshot.load().generation;
         state
             .live_cache
             .record_group_now(&endpoints, generation, group, member);
-    } else if !patch_selected_tag_default(&state.paths, group, member)? {
-        generate_config_with_cache(
-            &state.paths,
-            &settings,
-            resource_dir(app).as_deref(),
-            state.capture.apply_intent(),
-            Some(state.profile_parse_cache.as_ref()),
-        )?;
+    } else {
+        let patched = patch_selected_tag_default(&state.paths, group, member).map_err(rollback)?;
+        if !patched {
+            generate_config_with_cache(
+                &state.paths,
+                &settings,
+                resource_dir(app).as_deref(),
+                state.capture.apply_intent(),
+                Some(state.profile_parse_cache.as_ref()),
+            )
+            .map_err(rollback)?;
+        }
     }
-    Ok(())
+    Ok(settings.selected_tag)
 }
 
 pub(crate) fn validate_static_group_member<'a>(
@@ -1176,17 +1179,23 @@ pub(crate) fn set_selected_node_use_case(
     result
 }
 
+#[derive(Serialize)]
+pub struct GroupSelectionResponse {
+    /// The selected node after the pick; a main-group pick moves it.
+    pub selected_tag: Option<String>,
+}
+
 pub(crate) fn set_group_selection_use_case(
     app: &impl AppHost,
     state: &AppState,
     req: GroupSelectionRequest,
-) -> Result<(), AppError> {
+) -> Result<GroupSelectionResponse, AppError> {
     let result = {
         let _orch = lock_orchestrate(state)?;
         select_group_member(app, state, &req.group, &req.member)
     };
     broadcast_state_change(app);
-    result
+    result.map(|selected_tag| GroupSelectionResponse { selected_tag })
 }
 
 pub(crate) fn test_node_delay_use_case(

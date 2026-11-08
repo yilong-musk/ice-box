@@ -253,6 +253,150 @@ export function isGroupType(outboundType: string): boolean {
   return (STRATEGY_GROUP_TYPES as readonly string[]).includes(outboundType);
 }
 
+/** Whether the list comes from a profile with strategy groups. Flat profiles
+ * (no groups) list their nodes under the injected `proxy` selector instead. */
+export function hasStrategyGroups(nodes: readonly NodeInfo[]): boolean {
+  return nodes.some((node) => isGroupType(node.outbound_type));
+}
+
+/**
+ * Top-level rows in the profile's own structure.
+ *
+ * Flat profiles list every node, favorites first. Grouped profiles list their
+ * strategy groups in profile order, then the nodes no group contains
+ * (favorites first): a node inside a group shows up only among that group's
+ * members. While any group's members are unknown (the shared snapshot drops
+ * them), standalone nodes cannot be told apart from members and are left out
+ * until the members arrive.
+ */
+export function structuredTopLevel(nodes: NodeInfo[]): NodeInfo[] {
+  if (!hasStrategyGroups(nodes)) return orderNodesByFavorite(nodes);
+  const groups = nodes.filter((node) => isGroupType(node.outbound_type));
+  if (groups.some((group) => group.group_all == null)) return groups;
+  const members = new Set<string>();
+  for (const group of groups) {
+    for (const member of group.group_all ?? []) members.add(member);
+  }
+  const standalone = nodes.filter(
+    (node) => !isGroupType(node.outbound_type) && !members.has(node.tag),
+  );
+  return [...groups, ...orderNodesByFavorite(standalone)];
+}
+
+/**
+ * A group's members with favorites first (newest first), provider order for
+ * the rest. Returns `members` itself when no member is favorited.
+ */
+export function orderMembersByFavorite(
+  members: string[],
+  byTag: ReadonlyMap<string, NodeInfo>,
+): string[] {
+  const favorite = (tag: string) => {
+    const node = byTag.get(tag);
+    return node !== undefined && isFavoriteNode(node);
+  };
+  if (!members.some(favorite)) return members;
+  return members
+    .map((tag, index) => ({ tag, index }))
+    .sort((left, right) => {
+      const leftFavorite = favorite(left.tag);
+      const rightFavorite = favorite(right.tag);
+      if (leftFavorite !== rightFavorite) return leftFavorite ? -1 : 1;
+      if (!leftFavorite) return left.index - right.index;
+      const leftNode = byTag.get(left.tag);
+      const rightNode = byTag.get(right.tag);
+      const rankDelta =
+        (leftNode ? favoriteRank(leftNode) : Number.MAX_SAFE_INTEGER) -
+        (rightNode ? favoriteRank(rightNode) : Number.MAX_SAFE_INTEGER);
+      return rankDelta !== 0 ? rankDelta : left.index - right.index;
+    })
+    .map((entry) => entry.tag);
+}
+
+const EXPANDED_GROUPS_STORAGE_KEY = "ice-box.nodes.expanded-groups";
+/** Lineups whose expanded groups are remembered; older ones are dropped. */
+const EXPANDED_GROUPS_MAX_LINEUPS = 8;
+
+type ExpandedGroupsEntry = { lineup: string; groups: string[] };
+
+/**
+ * Key that tells subscriptions apart for the remembered expanded groups: the
+ * sorted strategy-group tags. Empty for flat profiles, which have no groups.
+ */
+export function groupLineupKey(nodes: readonly NodeInfo[]): string {
+  const tags = nodes
+    .filter((node) => isGroupType(node.outbound_type))
+    .map((node) => node.tag)
+    .sort();
+  return tags.length === 0 ? "" : JSON.stringify(tags);
+}
+
+function readExpandedGroupsEntries(): ExpandedGroupsEntry[] {
+  try {
+    const raw = window.localStorage.getItem(EXPANDED_GROUPS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is ExpandedGroupsEntry =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof entry.lineup === "string" &&
+        Array.isArray(entry.groups) &&
+        entry.groups.every((group: unknown) => typeof group === "string"),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Groups the viewer left expanded for this lineup; empty (all collapsed)
+ * when nothing is stored or storage is unavailable. */
+export function readExpandedGroups(lineup: string): Set<string> {
+  if (!lineup) return new Set();
+  const entry = readExpandedGroupsEntries().find((item) => item.lineup === lineup);
+  return new Set(entry?.groups ?? []);
+}
+
+/** Remember the expanded groups of this lineup, most recent lineup first. */
+export function writeExpandedGroups(
+  lineup: string,
+  groups: ReadonlySet<string>,
+): void {
+  if (!lineup) return;
+  const others = readExpandedGroupsEntries().filter((item) => item.lineup !== lineup);
+  const next = [{ lineup, groups: [...groups] }, ...others].slice(
+    0,
+    EXPANDED_GROUPS_MAX_LINEUPS,
+  );
+  try {
+    window.localStorage.setItem(EXPANDED_GROUPS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Storage is a convenience only: the page works without it.
+  }
+}
+
+/** Nesting depth followed when resolving a group's exit; also stops a cycle. */
+const MAX_EXIT_DEPTH = 8;
+
+/**
+ * The node traffic through `tag` actually leaves by: a node is itself, a
+ * strategy group follows its current exit (through nested groups) to a node.
+ * A group without a known exit resolves to itself.
+ */
+export function resolveExitTag(
+  tag: string,
+  byTag: ReadonlyMap<string, NodeInfo>,
+): string {
+  let current = tag;
+  for (let depth = 0; depth < MAX_EXIT_DEPTH; depth += 1) {
+    const node = byTag.get(current);
+    if (!node || !isGroupType(node.outbound_type) || !node.group_now) break;
+    current = node.group_now;
+  }
+  return current;
+}
+
 /** Mark matching selector members as the live exit after a leaf pick. */
 export function applySelectedTagToNodes(
   nodes: NodeInfo[],

@@ -144,11 +144,11 @@ try {
   // The node list must know the tunnel is up before it first paints; otherwise
   // it shows the "proxy service not running" warning over a connected VPN.
   await frame
-    .locator('[data-testid="nodes-panel"] [role="listitem"]')
+    .locator('[data-testid="nodes-panel"] [data-testid="node-card"]')
     .first()
     .waitFor({ timeout: 15_000 });
   const firstNode = await frame
-    .locator('[data-testid="nodes-panel"] [role="listitem"]')
+    .locator('[data-testid="nodes-panel"] [data-testid="node-card"]')
     .first()
     .textContent();
   if (!firstNode?.includes("🇯🇵 Tokyo / edge-01")) {
@@ -162,10 +162,10 @@ try {
     );
   }
 
-  // Favoriting pins the row to the top of this subscription's list. The next
+  // Favoriting pins the card to the top of this subscription's list. The next
   // profile switch must show its own (empty) favorite set.
   const nodeRows = frame.locator(
-    '[data-testid="nodes-panel"] [role="listitem"]',
+    '[data-testid="nodes-panel"] [data-testid="node-card"]',
   );
   await nodeRows
     .nth(1)
@@ -237,9 +237,14 @@ try {
   await tabs.nth(0).click();
   const homeNodeRows = frame
     .getByTestId("home-panel")
-    .locator('[data-testid="nodes-panel"] [role="listitem"]');
+    .locator('[data-testid="nodes-panel"] [data-testid="node-card"]');
   await homeNodeRows.first().waitFor({ timeout: 15_000 });
-  await waitForAttribute(homeNodeRows.first(), "aria-setsize", "12");
+  // The card grid reports how many nodes it holds, mounted or not.
+  await waitForAttribute(
+    frame.getByTestId("home-panel").locator('[data-testid="nodes-panel"] [data-card-count]'),
+    "data-card-count",
+    "12",
+  );
   await homeNodeRows
     .first()
     .getByText("🇯🇵 Tokyo / edge-01")

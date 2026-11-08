@@ -3,7 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -18,7 +18,7 @@ export const api = {
   setNodeFavorite: (tag: string, favorite: boolean) =>
     invoke<void>("set_node_favorite", { req: { tag, favorite } }),
   setGroupSelection: (group: string, member: string) =>
-    invoke<void>("set_group_selection", { req: { group, member } }),
+    invoke<GroupSelectionResponse>("set_group_selection", { req: { group, member } }),
   testNodeDelay: (tag: string) =>
     invoke<DelayTestResponse>("test_node_delay", { req: { tag } }),
   getTrafficSnapshot: () => invoke<TrafficSnapshot>("get_traffic_snapshot"),

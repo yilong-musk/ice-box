@@ -10,7 +10,7 @@ use ice_config::{AppError, AppPaths, AppProxyMode, ErrorCode, ProxyMode, Setting
 use ice_subscription::{
     subscription_share_text, AutoUpdateInterval, SubscriptionManager, SubscriptionShareKind,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, Wry};
 use tauri_plugin_tunnel::{ExportKind, InstalledApp, Tunnel, TunnelError};
 use uuid::Uuid;
@@ -37,6 +37,12 @@ pub struct SetNodeFavoriteRequest {
 pub struct GroupSelectionRequest {
     pub group: String,
     pub member: String,
+}
+
+#[derive(Serialize)]
+pub struct GroupSelectionResponse {
+    /// The selected node after the pick; a main-group pick moves it.
+    pub selected_tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -675,14 +681,14 @@ pub fn set_group_selection(
     host: State<'_, Mutex<MobileHost>>,
     tunnel: State<'_, Tunnel<Wry>>,
     req: GroupSelectionRequest,
-) -> Result<(), AppError> {
+) -> Result<GroupSelectionResponse, AppError> {
     let mut host = ready(&app, &host, &tunnel)?;
-    host.set_group_selection(&req.group, &req.member)?;
+    let selected_tag = host.set_group_selection(&req.group, &req.member)?;
     apply_config(&mut host, &tunnel)?;
     host.record_group_now(&req.group, &req.member);
     drop(host);
     notify(&app);
-    Ok(())
+    Ok(GroupSelectionResponse { selected_tag })
 }
 
 #[tauri::command]
@@ -705,7 +711,7 @@ pub fn test_node_delay(
     })
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct DelayTestResponse {
     pub tag: String,
     pub delay_ms: u32,

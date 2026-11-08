@@ -17,6 +17,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 fn temp_state_with_node(label: &str) -> AppState {
+    let nodes = vec![NormalizedOutbound {
+        tag: "n1".into(),
+        outbound: std::sync::Arc::new(
+            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
+        ),
+    }];
+    temp_state_with_profile(
+        label,
+        &ice_config::NormalizedProfile::from_nodes_only(nodes),
+    )
+}
+
+/// App state whose active subscription holds `profile`.
+fn temp_state_with_profile(label: &str, profile: &ice_config::NormalizedProfile) -> AppState {
     let dir = std::env::temp_dir().join(format!(
         "ice-box-cmd-{label}-{}",
         SystemTime::now()
@@ -50,19 +64,7 @@ fn temp_state_with_node(label: &str) -> AppState {
         auto_update_interval: None,
         source: ice_engine::SubscriptionSource::Remote,
     };
-    let nodes = vec![NormalizedOutbound {
-        tag: "n1".into(),
-        outbound: std::sync::Arc::new(
-            serde_json::json!({"type":"socks","tag":"n1","server":"1.1.1.1","server_port":1}),
-        ),
-    }];
-    write_subscription_success(
-        &sub,
-        &meta,
-        "{}",
-        &ice_config::NormalizedProfile::from_nodes_only(nodes),
-    )
-    .unwrap();
+    write_subscription_success(&sub, &meta, "{}", profile).unwrap();
 
     let (core, core_snapshot) = crate::core_snapshot::wrap_core(Box::new(
         ice_core::CoreController::default(),
@@ -1075,7 +1077,7 @@ fn selection_group_for_flat_profile_is_none() {
         tag: "n1".into(),
         outbound: std::sync::Arc::new(serde_json::json!({"type": "socks", "tag": "n1"})),
     }]);
-    assert_eq!(selection_group_for(&profile, "n1"), None);
+    assert_eq!(profile.selection_group_for("n1"), None);
 }
 
 #[test]
@@ -1109,28 +1111,28 @@ fn selection_group_for_prefers_top_level_group() {
         parse_stats: Default::default(),
     };
     assert_eq!(
-        selection_group_for(&profile, "HK").as_deref(),
+        profile.selection_group_for("HK").as_deref(),
         Some("Proxies"),
         "leaf in top group selects there"
     );
     assert_eq!(
-        selection_group_for(&profile, "auto").as_deref(),
+        profile.selection_group_for("auto").as_deref(),
         Some("Proxies"),
         "sub-group in top group selects there"
     );
     assert_eq!(
-        selection_group_for(&profile, "JP").as_deref(),
+        profile.selection_group_for("JP").as_deref(),
         Some("auto"),
         "leaf only in sub-group selects there"
     );
     assert_eq!(
-        selection_group_for(&profile, "Proxies").as_deref(),
+        profile.selection_group_for("Proxies").as_deref(),
         None,
         "selecting the top group itself is a no-op"
     );
-    assert!(is_unselectable_group(&profile, "Proxies"));
-    assert!(!is_unselectable_group(&profile, "auto"));
-    assert!(!is_unselectable_group(&profile, "HK"));
+    assert!(profile.is_unselectable_group("Proxies"));
+    assert!(!profile.is_unselectable_group("auto"));
+    assert!(!profile.is_unselectable_group("HK"));
 }
 
 fn sample_rules() -> Vec<serde_json::Value> {
@@ -2213,5 +2215,173 @@ fn mixed_port_on_the_clash_api_port_moves_the_clash_api() {
     assert_ne!(saved.clash_api_port, clash_port);
     saved.validate().unwrap();
 
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+/// A grouped profile shaped like a typical subscription: a main selector
+/// (the default exit) holding an urltest group and the nodes, plus a
+/// per-service selector.
+fn grouped_profile() -> ice_config::NormalizedProfile {
+    let outbound = |value: serde_json::Value| NormalizedOutbound {
+        tag: value["tag"].as_str().unwrap().into(),
+        outbound: std::sync::Arc::new(value),
+    };
+    let mut profile = ice_config::NormalizedProfile::from_nodes_only(vec![
+        outbound(serde_json::json!({"type":"socks","tag":"hk","server":"1.1.1.1","server_port":1})),
+        outbound(serde_json::json!({"type":"socks","tag":"jp","server":"1.1.1.2","server_port":1})),
+    ]);
+    profile.groups = vec![
+        outbound(
+            serde_json::json!({"type":"selector","tag":"main","outbounds":["auto","hk","jp"]}),
+        ),
+        outbound(serde_json::json!({"type":"urltest","tag":"auto","outbounds":["hk","jp"]})),
+        outbound(serde_json::json!({"type":"selector","tag":"video","outbounds":["main","jp"]})),
+    ];
+    profile.default_outbound = Some("main".into());
+    profile.route.final_outbound = "main".into();
+    profile
+}
+
+#[test]
+fn a_main_group_pick_moves_the_selected_node() {
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let state = temp_state_with_profile("main-group-pick", &grouped_profile());
+    let selected = |state: &AppState| current_settings(&state.paths).unwrap().selected_tag;
+
+    // The Nodes page and the tray switch exits through group picks; Home
+    // reads `selected_tag`, so a pick in the main group must move it.
+    let returned = select_group_member(&Host, &state, "main", "jp").expect("pick jp");
+    assert_eq!(returned.as_deref(), Some("jp"));
+    assert_eq!(selected(&state).as_deref(), Some("jp"));
+    select_group_member(&Host, &state, "main", "auto").expect("pick auto");
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+
+    // A per-service group is not where a node pick lands: Home keeps its node.
+    let returned = select_group_member(&Host, &state, "video", "jp").expect("pick video exit");
+    assert_eq!(returned.as_deref(), Some("auto"));
+    assert_eq!(selected(&state).as_deref(), Some("auto"));
+    let selections = load_group_selections(&state.paths.group_selections());
+    assert_eq!(selections.get("video").map(String::as_str), Some("jp"));
+    assert_eq!(selections.get("main").map(String::as_str), Some("auto"));
+    let _ = fs::remove_dir_all(state.paths.root());
+}
+
+#[test]
+fn only_a_main_group_pick_moves_the_selected_node() {
+    let mut profile = grouped_profile();
+    assert!(profile.picks_selected_node("main", "hk"));
+    assert!(profile.picks_selected_node("main", "auto"));
+    assert!(!profile.picks_selected_node("video", "jp"));
+    // A per-service group is never the main group, even when it is the only
+    // group holding the member.
+    assert!(!profile.picks_selected_node("video", "main"));
+
+    // A per-service selector listed before the urltest that the main group
+    // leads to: the group order must not turn its picks into node picks.
+    let outbound = |value: serde_json::Value| NormalizedOutbound {
+        tag: value["tag"].as_str().unwrap().into(),
+        outbound: std::sync::Arc::new(value),
+    };
+    profile.groups = vec![
+        outbound(serde_json::json!({"type":"selector","tag":"main","outbounds":["auto","direct"]})),
+        outbound(serde_json::json!({"type":"selector","tag":"netflix","outbounds":["hk","jp"]})),
+        outbound(serde_json::json!({"type":"urltest","tag":"auto","outbounds":["hk","jp"]})),
+    ];
+    assert!(!profile.picks_selected_node("netflix", "hk"));
+    assert!(profile.picks_selected_node("main", "auto"));
+    // A member the profile does not define (a built-in such as `direct`) is
+    // not a node Home can name, so it leaves the selected node alone.
+    assert!(!profile.picks_selected_node("main", "direct"));
+}
+
+#[test]
+fn a_failed_live_group_pick_restores_the_selected_node() {
+    use crate::core_snapshot::wrap_core;
+    use ice_core::{CoreError, CoreHandle, CorePaths, CoreState, ReloadOutcome};
+    use std::path::Path;
+
+    struct RunningCore;
+
+    impl CoreHandle for RunningCore {
+        fn state(&self) -> CoreState {
+            CoreState {
+                status: CoreStatus::Running,
+                message: None,
+                inbound_host: Some("127.0.0.1".into()),
+                inbound_port: Some(17890),
+            }
+        }
+        fn start(&mut self, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn stop(&mut self, _pid_file: &Path) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn reload(&mut self, _paths: &CorePaths) -> Result<ReloadOutcome, CoreError> {
+            Ok(ReloadOutcome::HotReloaded)
+        }
+        fn needs_proxy_restore(&self) -> bool {
+            false
+        }
+        fn clear_needs_proxy_restore(&mut self) {}
+        fn reap_exited_child(&mut self, _pid_file: &Path) -> bool {
+            false
+        }
+        fn adopt_external(&mut self, _pid: u32, _paths: &CorePaths) -> Result<(), CoreError> {
+            Ok(())
+        }
+        fn reclaim_orphan_pid(
+            &mut self,
+            _pid_file: &Path,
+            _cores: &[&Path],
+        ) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    struct Host;
+    impl AppResources for Host {
+        fn resource_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+    impl AppHost for Host {
+        fn state_changed(&self) {}
+    }
+
+    let mut state = temp_state_with_profile("failed-live-group-pick", &grouped_profile());
+    let (core, core_snapshot) = wrap_core(Box::new(RunningCore));
+    state.core = core;
+    state.core_snapshot = core_snapshot;
+
+    // Point the Clash API at a closed port so the live switch fails.
+    let closed_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let mut settings = current_settings(&state.paths).unwrap();
+    settings.clash_api_port = closed_port;
+    settings.selected_tag = Some("hk".into());
+    persist_settings(&state.paths.settings(), &settings, host_platform()).unwrap();
+    let mut selections = load_group_selections(&state.paths.group_selections());
+    selections.insert("main".into(), "hk".into());
+    save_group_selections(&state.paths.group_selections(), &selections).unwrap();
+
+    select_group_member(&Host, &state, "main", "jp").expect_err("live switch must fail");
+
+    // Home must not name an exit the core never switched to.
+    let after = current_settings(&state.paths).unwrap();
+    assert_eq!(after.selected_tag.as_deref(), Some("hk"));
+    let selections = load_group_selections(&state.paths.group_selections());
+    assert_eq!(selections.get("main").map(String::as_str), Some("hk"));
     let _ = fs::remove_dir_all(state.paths.root());
 }

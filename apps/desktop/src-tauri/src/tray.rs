@@ -2460,7 +2460,7 @@ fn switch_node(app: &AppHandle, action: NodeAction) {
         let result = lock_orchestrate(state.inner()).and_then(|_orch| match &action {
             NodeAction::SelectNode(tag) => select_node(&app, state.inner(), tag),
             NodeAction::SelectMember { group, member } => {
-                select_group_member(&app, state.inner(), group, member)
+                select_group_member(&app, state.inner(), group, member).map(|_| ())
             }
         });
         if let Err(err) = result {
