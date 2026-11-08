@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, CircleAlert } from "lucide-react";
 
@@ -18,45 +18,52 @@ export type CapsuleToastState = {
   tone: CapsuleToastTone;
 } | null;
 
+type TimedToast = NonNullable<CapsuleToastState> & {
+  /** Wall-clock time (`Date.now()`) the notice goes away. */
+  expiresAt: number;
+};
+
 /** Single transient page-level notice, replaced by the next one. */
 export function useCapsuleToast() {
-  const [toast, setToast] = useState<CapsuleToastState>(null);
+  const [toast, setToast] = useState<TimedToast | null>(null);
   const nextId = useRef(0);
-  const timer = useRef<number | null>(null);
-
-  const clearTimer = useCallback(() => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  }, []);
 
   const dismiss = useCallback(() => {
-    clearTimer();
     setToast(null);
-  }, [clearTimer]);
+  }, []);
 
   const show = useCallback(
     (message: string, tone: CapsuleToastTone = "error") => {
       const text = message.trim();
       if (!text) return;
-      clearTimer();
       nextId.current += 1;
-      setToast({ id: nextId.current, message: text, tone });
-      timer.current = window.setTimeout(
-        () => {
-          timer.current = null;
-          setToast(null);
-        },
-        tone === "success" ? SUCCESS_DURATION_MS : ERROR_DURATION_MS,
-      );
+      const duration = tone === "success" ? SUCCESS_DURATION_MS : ERROR_DURATION_MS;
+      setToast({
+        id: nextId.current,
+        message: text,
+        tone,
+        expiresAt: Date.now() + duration,
+      });
     },
-    [clearTimer],
+    [],
   );
 
-  useEffect(() => {
-    return () => clearTimer();
-  }, [clearTimer]);
+  // The timer lives in an effect keyed on the notice, not in `show`: pages stay
+  // mounted inside a hidden <Activity>, which tears down effects (and their
+  // timers) but keeps state. Re-run on reveal, the effect counts down what is
+  // left, and drops a notice that expired while hidden before it paints.
+  useLayoutEffect(() => {
+    if (!toast) return;
+    const remaining = toast.expiresAt - Date.now();
+    if (remaining <= 0) {
+      setToast((current) => (current === toast ? null : current));
+      return;
+    }
+    const id = window.setTimeout(() => {
+      setToast((current) => (current === toast ? null : current));
+    }, remaining);
+    return () => window.clearTimeout(id);
+  }, [toast]);
 
   return { toast, show, dismiss };
 }

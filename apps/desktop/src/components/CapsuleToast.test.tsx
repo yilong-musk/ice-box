@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { Activity } from "react";
+import { act, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
-import { CapsuleToast } from "./CapsuleToast";
+import { CapsuleToast, useCapsuleToast } from "./CapsuleToast";
 
 describe("CapsuleToast", () => {
   it("renders no capsule without a toast", () => {
@@ -62,5 +63,89 @@ describe("CapsuleToast", () => {
     fireEvent.keyDown(toast, { key: " " });
     fireEvent.keyDown(toast, { key: "Escape" });
     expect(onDismiss).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("useCapsuleToast", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A page as App mounts it: kept inside <Activity>, which tears down effects
+  // while hidden but keeps state. The notice comes from a user action, as on
+  // the subscriptions page.
+  function Page() {
+    const { toast, show, dismiss } = useCapsuleToast();
+    return (
+      <>
+        <button type="button" onClick={() => show("Updated", "success")}>
+          update
+        </button>
+        <CapsuleToast toast={toast} onDismiss={dismiss} />
+      </>
+    );
+  }
+
+  function renderPage() {
+    const view = render(
+      <Activity mode="visible">
+        <Page />
+      </Activity>,
+    );
+    const setVisible = (visible: boolean) =>
+      view.rerender(
+        <Activity mode={visible ? "visible" : "hidden"}>
+          <Page />
+        </Activity>,
+      );
+    fireEvent.click(view.getByRole("button", { name: "update" }));
+    return { ...view, setVisible };
+  }
+
+  it("goes away on its own", () => {
+    vi.useFakeTimers();
+    const { queryByTestId } = renderPage();
+    expect(queryByTestId("capsule-toast")).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(2400);
+    });
+    expect(queryByTestId("capsule-toast")).toBeNull();
+  });
+
+  it("is gone on return when it expired while the page was hidden", () => {
+    vi.useFakeTimers();
+    const { queryByTestId, setVisible } = renderPage();
+    expect(queryByTestId("capsule-toast")).not.toBeNull();
+
+    setVisible(false);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    setVisible(true);
+    expect(queryByTestId("capsule-toast")).toBeNull();
+  });
+
+  it("keeps only the time left when the page comes back early", () => {
+    vi.useFakeTimers();
+    const { queryByTestId, setVisible } = renderPage();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    setVisible(false);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    setVisible(true);
+    expect(queryByTestId("capsule-toast")).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(queryByTestId("capsule-toast")).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(queryByTestId("capsule-toast")).toBeNull();
   });
 });
