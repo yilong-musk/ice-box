@@ -3,25 +3,29 @@
 /**
  * App logo that mirrors the core state, replacing the Home "core status" row.
  *
- * stopped: the plain logo; starting/stopping: amber breathing glow;
- * running: green; error: red. Visuals live in `index.css` under
- * `.status-logo`, keyed on `data-core`.
+ * unknown/stopped: the plain logo; starting/stopping: amber; running: green;
+ * error: red. The glow breathes only while the app is in the foreground and
+ * holds still otherwise. Visuals live in `index.css` under `.status-logo`,
+ * keyed on `data-core` and `data-active`.
  *
  * Desktop shows the label on hover. The phone shell has no hover, so a tap
  * toggles it and it stays up for a fixed time, whatever the pointer does.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { isPhoneShell } from "@platform/shell";
 
 import type { CoreStatus, StatusResponse } from "@/api/contracts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { t, useLanguagePreference } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type LogoCore = CoreStatus | "unknown";
 
-/** `unknown` until the first status arrives, so boot does not flash grey. */
+/**
+ * `unknown` until the first status arrives. It looks exactly like `stopped`;
+ * only the label differs ("—" instead of "Stopped").
+ */
 export function logoCore(status: StatusResponse | null): LogoCore {
   return status?.core.status ?? "unknown";
 }
@@ -32,6 +36,27 @@ export function logoLabel(core: LogoCore): string {
     state:
       core === "unknown" ? t("common.dash") : t(`home.coreStatus.${core}`),
   });
+}
+
+/** True while the page is visible and its window has focus. */
+function isForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+function subscribeForeground(onChange: () => void): () => void {
+  window.addEventListener("focus", onChange);
+  window.addEventListener("blur", onChange);
+  document.addEventListener("visibilitychange", onChange);
+  return () => {
+    window.removeEventListener("focus", onChange);
+    window.removeEventListener("blur", onChange);
+    document.removeEventListener("visibilitychange", onChange);
+  };
+}
+
+/** Whether the app is open and in the foreground, so animations may run. */
+function useForeground(): boolean {
+  return useSyncExternalStore(subscribeForeground, isForeground, () => false);
 }
 
 /** How long a tapped label stays up on the phone. */
@@ -46,11 +71,10 @@ export function StatusLogo({
   status: StatusResponse | null;
   className?: string;
 }) {
-  // Re-render on language change so the label follows the UI language.
-  useLanguagePreference();
   const core = logoCore(status);
   const label = logoLabel(core);
   const phone = isPhoneShell();
+  const active = useForeground();
   const [tapOpen, setTapOpen] = useState(false);
 
   useEffect(() => {
@@ -59,9 +83,9 @@ export function StatusLogo({
     return () => window.clearTimeout(id);
   }, [tapOpen]);
 
-  // Phone: taps and the timer own the label. Radix's own open/close requests
-  // (pointer leave, focus, outside press) are ignored, so a pointer moving
-  // away does not cut the fixed display time short.
+  // Phone: the label closes only on a second tap or when the timer runs out.
+  // Every Radix open/close request (focus, pointer leave, outside press,
+  // Escape, scroll) is ignored, so nothing else opens it or cuts it short.
   const rootProps = phone
     ? { open: tapOpen, onOpenChange: () => {} }
     : {};
@@ -83,8 +107,11 @@ export function StatusLogo({
         <span
           role="img"
           aria-label={label}
+          // Focusable so keyboard users can open the label on desktop.
+          tabIndex={0}
           className={cn("status-logo", className)}
           data-core={core}
+          data-active={active ? "" : undefined}
           data-testid="status-logo"
         >
           <img src={src} alt="" draggable={false} />

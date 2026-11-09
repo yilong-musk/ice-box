@@ -40,6 +40,42 @@ describe("StatusLogo", () => {
     },
   );
 
+  it("is keyboard-focusable so the label can open without a pointer", () => {
+    render(
+      <TooltipProvider>
+        <StatusLogo src="logo.png" status={status("running")} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("status-logo")).toHaveAttribute("tabindex", "0");
+  });
+
+  it("breathes only while the app is in the foreground", () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      render(
+        <TooltipProvider>
+          <StatusLogo src="logo.png" status={status("running")} />
+        </TooltipProvider>,
+      );
+      const logo = screen.getByTestId("status-logo");
+      expect(logo).toHaveAttribute("data-active");
+
+      hasFocus.mockReturnValue(false);
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(logo).not.toHaveAttribute("data-active");
+
+      hasFocus.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(logo).toHaveAttribute("data-active");
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+
   describe("on the phone", () => {
     afterEach(() => {
       phoneShell.value = false;

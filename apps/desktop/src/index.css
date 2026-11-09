@@ -194,24 +194,13 @@
     @apply text-muted-foreground;
   }
 
-  .status-running {
-    @apply text-ok;
-  }
-
-  .status-error {
-    @apply text-destructive;
-  }
-
-  .status-starting,
-  .status-stopping {
-    @apply text-warn;
-  }
-
   /* Status-aware logo (components/StatusLogo.tsx): the cube shows the core
-     state in place of a Home "core status" row. Stopped is the plain logo;
-     every other state breathes a glow in its status colour. */
+     state in place of a Home "core status" row. Unknown and stopped are the
+     plain logo; every other state glows in its status colour. The glow
+     breathes only while the app is in the foreground (`data-active`), so a
+     hidden or background window does not repaint every frame. */
   .status-logo {
-    @apply relative inline-flex shrink-0;
+    @apply relative inline-flex shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring;
   }
 
   .status-logo > img {
@@ -235,16 +224,15 @@
   .status-logo[data-core="stopping"] > img,
   .status-logo[data-core="running"] > img,
   .status-logo[data-core="error"] > img {
-    animation: status-logo-breathe 2s ease-in-out infinite;
+    filter: drop-shadow(0 0 3px var(--logo-glow));
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .status-logo[data-core="starting"] > img,
-    .status-logo[data-core="stopping"] > img,
-    .status-logo[data-core="running"] > img,
-    .status-logo[data-core="error"] > img {
-      animation: none;
-      filter: drop-shadow(0 0 3px var(--logo-glow));
+  @media (prefers-reduced-motion: no-preference) {
+    .status-logo[data-active][data-core="starting"] > img,
+    .status-logo[data-active][data-core="stopping"] > img,
+    .status-logo[data-active][data-core="running"] > img,
+    .status-logo[data-active][data-core="error"] > img {
+      animation: status-logo-breathe 2s ease-in-out infinite;
     }
   }
 }

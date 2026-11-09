@@ -734,15 +734,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     testId: "home-health-mcp",
   };
   // The core state lives in the sidebar logo (StatusLogo), not in this card.
-  const infoRows: {
-    label: string;
-    value: string;
-    valueClassName?: string;
-    title?: string;
-    testId?: string;
-  }[] = [];
-  if (!phone) {
-    infoRows.push({
+  // The card itself is desktop-only.
+  const infoRows = [
+    {
       label: t("home.health.memory"),
       value: memoryLabel(memory),
       title: memoryTip,
@@ -752,9 +746,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         memoryToneValue === "warn" && "text-warn",
         memoryToneValue === "bad" && "text-destructive",
       ),
-    });
-    infoRows.push(platformStatusRow);
-  }
+    },
+    platformStatusRow,
+  ];
 
   const powerOn = phone ? vpnActive : proxyOn;
   // Service uptime, not core process lifetime: the diagnostic core can keep
