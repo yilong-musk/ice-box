@@ -190,21 +190,34 @@ jobs:
         working-directory: apps/desktop
 
       - name: Restore Tauri NSIS toolset
+        id: nsis-cache
         uses: actions/cache@v6
         with:
           path: ~/AppData/Local/tauri
           key: tauri-nsis-${{ runner.os }}-${{ steps.tauri-cli.outputs.version }}
 
-      # Retry covers a cache miss that hits a transient download failure; the
-      # Rust build is incremental, so a retry only redoes the bundling.
+      # Retry only a cache miss whose failure looks like a transient download
+      # error (the NSIS toolset fetch); any other failure, such as a compile or
+      # config error, fails on the first attempt. The Rust build is
+      # incremental, so a retry only redoes the bundling.
       - name: Build app bundle (tauri build, NSIS)
+        env:
+          NSIS_CACHE_HIT: ${{ steps.nsis-cache.outputs.cache-hit }}
         run: |
+          log="$RUNNER_TEMP/tauri-build.log"
           for attempt in 1 2 3; do
-            if npm run build:win; then
+            set +e
+            npm run build:win 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
               exit 0
             fi
+            if [ "$NSIS_CACHE_HIT" = "true" ] || ! grep -qiE 'status code:? 5[0-9]{2}|http status:? 5[0-9]{2}|error sending request|connection (reset|refused|closed)|operation timed out' "$log"; then
+              exit "$status"
+            fi
             if [ "$attempt" -lt 3 ]; then
-              echo "::warning::tauri build failed (attempt $attempt/3); retrying in 30s"
+              echo "::warning::NSIS toolset download failed (attempt $attempt/3); retrying in 30s"
               sleep 30
             fi
           done
