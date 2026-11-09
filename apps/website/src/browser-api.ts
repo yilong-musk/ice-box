@@ -190,7 +190,8 @@ const subscriptions: SubscriptionMeta[] = [
     etag: null,
     last_modified: null,
     // Both shapes a provider can publish usage in: the `subscription-userinfo`
-    // counters and the info entries embedded in the proxy list.
+    // counters and the info entries embedded in the proxy list. A quarter
+    // used (25%): the traffic bar shows green.
     userinfo: { ...DEMO_QUOTA },
     provider_info: [
       `Traffic: ${formatQuota(DEMO_QUOTA.upload + DEMO_QUOTA.download)} | ${formatQuota(DEMO_QUOTA.total)}`,
@@ -214,9 +215,10 @@ const subscriptions: SubscriptionMeta[] = [
     last_error: null,
     etag: "\"demo-work-3\"",
     last_modified: null,
+    // Nearly used up (85%): the traffic bar shows yellow.
     userinfo: {
-      upload: 2 * 1024 ** 3,
-      download: 16 * 1024 ** 3,
+      upload: 10 * 1024 ** 3,
+      download: 160 * 1024 ** 3,
       total: 200 * 1024 ** 3,
       expire: Math.floor(demoExpiryMs(90) / 1000),
     },
@@ -241,9 +243,10 @@ const subscriptions: SubscriptionMeta[] = [
     etag: null,
     last_modified: new Date(demoNowMs() - 26 * 60 * 60_000).toUTCString(),
     // This provider reports usage in the list body instead of the header.
+    // Almost exhausted (97%): the traffic bar shows red.
     userinfo: null,
     provider_info: [
-      "Traffic: 28.4 GB | 100 GB",
+      "Traffic: 97 GB | 100 GB",
       `Expire: ${new Date(demoExpiryMs(120)).toISOString().slice(0, 10)}`,
     ],
     auto_update: false,
