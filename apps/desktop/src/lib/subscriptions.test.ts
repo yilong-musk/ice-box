@@ -7,6 +7,7 @@ import {
   formatApplyWarning,
   isInsecureSubscriptionUrl,
   subscriptionTrafficView,
+  trafficTone,
 } from "./subscriptions";
 
 describe("isInsecureSubscriptionUrl", () => {
@@ -36,6 +37,19 @@ describe("apply warning helpers", () => {
   });
 });
 
+describe("trafficTone", () => {
+  it.each([
+    [0, "ok"],
+    [0.79, "ok"],
+    [0.8, "warn"],
+    [0.94, "warn"],
+    [0.95, "bad"],
+    [1, "bad"],
+  ] as const)("bands a %s share as %s", (ratio, tone) => {
+    expect(trafficTone(ratio)).toBe(tone);
+  });
+});
+
 describe("subscriptionTrafficView", () => {
   const now = new Date(2026, 8, 1, 12, 0, 0).getTime();
 
@@ -49,11 +63,10 @@ describe("subscriptionTrafficView", () => {
       t("subs.trafficUsedTotal", {
         used: "11.84GB",
         total: "150GB",
-        percent: "7.89",
       }),
     );
     expect(view?.expiry).toBe(t("subs.trafficExpire", { date: "2026-09-26" }));
-    expect(view?.expired).toBe(false);
+    expect(view?.ratio).toBeCloseTo(11.84 / 150);
   });
 
   /** LiangXin: counters in the header, `剩余流量` / `套餐到期：长期有效` in the body. */
@@ -72,11 +85,9 @@ describe("subscriptionTrafficView", () => {
       t("subs.trafficUsedTotal", {
         used: "372.5MB",
         total: "1TB",
-        percent: "0.04",
       }),
     );
     expect(view?.expiry).toBe(t("subs.trafficNeverExpires"));
-    expect(view?.expired).toBe(false);
   });
 
   it("falls back to the side the provider reports alone", () => {
@@ -87,6 +98,9 @@ describe("subscriptionTrafficView", () => {
     const totalOnly = subscriptionTrafficView(null, ["套餐流量：100 GB"], now);
     expect(totalOnly?.usage).toBe(t("subs.trafficTotal", { total: "100GB" }));
     expect(totalOnly?.expiry).toBeNull();
+    // One-sided figures have no ratio, so no bar is drawn.
+    expect(remainingOnly?.ratio).toBeNull();
+    expect(totalOnly?.ratio).toBeNull();
   });
 
   it("marks a past expiry", () => {
@@ -95,7 +109,6 @@ describe("subscriptionTrafficView", () => {
       ["Traffic: 1 GB | 100 GB", "Expire: 2026-01-01"],
       now,
     );
-    expect(view?.expired).toBe(true);
     expect(view?.expiry).toBe(t("subs.trafficExpired", { date: "2026-01-01" }));
   });
 
@@ -109,7 +122,6 @@ describe("subscriptionTrafficView", () => {
       t("subs.trafficUsedTotal", {
         used: "10B",
         total: "5B",
-        percent: "200",
       }),
     );
   });
@@ -120,7 +132,6 @@ describe("subscriptionTrafficView", () => {
       t("subs.trafficUsedTotal", {
         used: "11.84GB",
         total: "150GB",
-        percent: "7.89",
       }),
     );
   });
@@ -135,7 +146,6 @@ describe("subscriptionTrafficView", () => {
       t("subs.trafficUsedTotal", {
         used: "1GB",
         total: "500GB",
-        percent: "0.2",
       }),
     );
   });

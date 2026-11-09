@@ -42,12 +42,23 @@ export function isInsecureSubscriptionUrl(url: string): boolean {
 }
 
 export type SubscriptionTrafficView = {
-  /** `11.84GB/150GB（7.89%）`, or a single-sided fallback when only one side is known. */
+  /** `11.84GB/150GB`, or a single-sided fallback when only one side is known. */
   usage: string | null;
   /** `到期 2026-09-26` / `长期有效` / `已过期 2026-01-01`; `null` when unknown. */
   expiry: string | null;
-  expired: boolean;
+  /** Used share of the quota, 0–1 (capped at 1); `null` unless both used and
+   * total are known, so the list draws a progress bar only for a real ratio. */
+  ratio: number | null;
 };
+
+export type TrafficTone = "ok" | "warn" | "bad";
+
+/** Bar colour by used share: under 80% green, 80–94% yellow, 95%+ red. */
+export function trafficTone(ratio: number): TrafficTone {
+  if (ratio < 0.8) return "ok";
+  if (ratio < 0.95) return "warn";
+  return "bad";
+}
 
 /**
  * One subscription's usage and expiry, normalized from both shapes a provider
@@ -55,10 +66,11 @@ export type SubscriptionTrafficView = {
  * embedded in the proxy list (`Traffic: 11.84 GB | 150 GB`,
  * `剩余流量：1023.64 GB`, `套餐到期：长期有效`). Providers word and scale those
  * entries differently, so the values are parsed and re-rendered in one format:
- * `<used>/<total>（<percent>%）` plus a dated or long-term expiry.
+ * `<used>/<total>` plus a dated or long-term expiry; the used share is
+ * drawn as a progress bar rather than printed.
  *
- * `null` when neither side can be determined. An expiry in the past is flagged
- * so the list can mark the subscription as expired.
+ * `null` when neither side can be determined. A past expiry is worded as
+ * expired (`已过期 …`); the list does not colour it.
  */
 export function subscriptionTrafficView(
   userinfo: SubscriptionUserInfo | null | undefined,
@@ -98,7 +110,9 @@ export function subscriptionTrafficView(
   const usage = formatUsage(used, total, remaining);
   const expiry = formatExpiry(userinfo, lines, now);
   if (!usage && !expiry.text) return null;
-  return { usage, expiry: expiry.text, expired: expiry.expired };
+  const ratio =
+    used !== null && total !== null && total > 0 ? Math.min(1, used / total) : null;
+  return { usage, expiry: expiry.text, ratio };
 }
 
 /** Tokens like `11.84 GB`, `1023.64GB`, `1TiB`; a unit is required so
@@ -194,7 +208,6 @@ function formatUsage(
     return t("subs.trafficUsedTotal", {
       used: formatQuota(used),
       total: formatQuota(total),
-      percent: formatPercent((used / total) * 100),
     });
   }
   if (used !== null) return t("subs.trafficUsed", { used: formatQuota(used) });
@@ -252,18 +265,6 @@ function parseDateText(text: string): string | null {
     return `${chinese[1]}-${pad(Number(chinese[2]))}-${pad(Number(chinese[3]))}`;
   }
   return null;
-}
-
-/** `0.04%` / `7.89%` / `99.9%` — one decimal once the share is in double digits. */
-function formatPercent(share: number): string {
-  if (!Number.isFinite(share) || share <= 0) return "0";
-  return trimNumber(share.toFixed(share >= 10 ? 1 : 2));
-}
-
-function trimNumber(formatted: string): string {
-  return formatted.includes(".")
-    ? formatted.replace(/\.?0+$/, "")
-    : formatted;
 }
 
 function pad(value: number): string {
