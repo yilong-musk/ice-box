@@ -206,4 +206,56 @@
   .status-stopping {
     @apply text-warn;
   }
+
+  /* Status-aware logo (components/StatusLogo.tsx): the cube shows the core
+     state in place of a Home "core status" row. Stopped is the plain logo;
+     every other state breathes a glow in its status colour. */
+  .status-logo {
+    @apply relative inline-flex shrink-0;
+  }
+
+  .status-logo > img {
+    @apply size-full object-contain;
+  }
+
+  .status-logo[data-core="starting"],
+  .status-logo[data-core="stopping"] {
+    --logo-glow: var(--warn);
+  }
+
+  .status-logo[data-core="running"] {
+    --logo-glow: var(--ok);
+  }
+
+  .status-logo[data-core="error"] {
+    --logo-glow: var(--destructive);
+  }
+
+  .status-logo[data-core="starting"] > img,
+  .status-logo[data-core="stopping"] > img,
+  .status-logo[data-core="running"] > img,
+  .status-logo[data-core="error"] > img {
+    animation: status-logo-breathe 2s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status-logo[data-core="starting"] > img,
+    .status-logo[data-core="stopping"] > img,
+    .status-logo[data-core="running"] > img,
+    .status-logo[data-core="error"] > img {
+      animation: none;
+      filter: drop-shadow(0 0 3px var(--logo-glow));
+    }
+  }
+}
+
+@keyframes status-logo-breathe {
+  /* Never fully dark: the glow dips to a faint halo between breaths. */
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px var(--logo-glow));
+  }
+  50% {
+    filter: drop-shadow(0 0 6px var(--logo-glow));
+  }
 }

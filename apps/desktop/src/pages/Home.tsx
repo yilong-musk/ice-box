@@ -8,7 +8,6 @@ import {
   formatInvokeError,
   formatUiMessage,
   type AppSettings,
-  type CoreStatus,
   type CoreState,
   type McpStatus,
   type NodeInfo,
@@ -73,23 +72,6 @@ const PROXY_MODE_KEYS = [
   ["global", "home.mode.global"],
   ["direct", "home.mode.direct"],
 ] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
-
-function formatCoreStatus(status: CoreStatus | undefined): string {
-  switch (status) {
-    case "running":
-      return t("home.coreStatus.running");
-    case "stopped":
-      return t("home.coreStatus.stopped");
-    case "starting":
-      return t("home.coreStatus.starting");
-    case "stopping":
-      return t("home.coreStatus.stopping");
-    case "error":
-      return t("home.coreStatus.error");
-    default:
-      return t("common.dash");
-  }
-}
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
@@ -751,20 +733,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           : undefined,
     testId: "home-health-mcp",
   };
+  // The core state lives in the sidebar logo (StatusLogo), not in this card.
   const infoRows: {
     label: string;
     value: string;
     valueClassName?: string;
     title?: string;
     testId?: string;
-  }[] = [
-    {
-      label: t("home.health.core"),
-      value: formatCoreStatus(core?.status),
-      valueClassName: `status status-${core?.status ?? "unknown"}`,
-      testId: "home-health-core",
-    },
-  ];
+  }[] = [];
   if (!phone) {
     infoRows.push({
       label: t("home.health.memory"),
@@ -913,34 +889,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   <span className="text-sm font-medium">{powerTitle}</span>
                 </Button>
                 {phone && (
-                  <>
-                    <div className="flex min-w-0 items-center justify-between gap-3">
-                      <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                        {t("home.health.core")}
-                      </span>
-                      <span
-                        className={cn(
-                          "min-w-0 flex-1 truncate text-right text-sm font-medium",
-                          `status status-${core?.status ?? "unknown"}`,
-                        )}
-                        data-testid="home-proxy-core-status"
-                      >
-                        {formatCoreStatus(core?.status)}
-                      </span>
-                    </div>
-                    <div className="flex min-w-0 items-center justify-between gap-3">
-                      <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                        {t("home.outbound.node")}
-                      </span>
-                      <span
-                        className="min-w-0 flex-1 truncate text-right text-sm font-medium"
-                        title={currentNodeLabel}
-                        data-testid="home-current-node"
-                      >
-                        {currentNodeLabel}
-                      </span>
-                    </div>
-                  </>
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                      {t("home.outbound.node")}
+                    </span>
+                    <span
+                      className="min-w-0 flex-1 truncate text-right text-sm font-medium"
+                      title={currentNodeLabel}
+                      data-testid="home-current-node"
+                    >
+                      {currentNodeLabel}
+                    </span>
+                  </div>
                 )}
                 {tunCardVisible && (
                   <div className="flex items-center gap-3 whitespace-nowrap">

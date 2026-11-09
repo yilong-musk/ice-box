@@ -46,7 +46,6 @@ function healthRowLabels(container: HTMLElement): (string | null)[] {
 
 function healthRows(): string[] {
   return [
-    t("home.health.core"),
     t("home.health.memory"),
     t("home.health.mcp"),
   ];
@@ -216,10 +215,9 @@ describe("Home", () => {
     const view = within(container);
 
     await waitFor(() => {
-      expect(view.getByTestId("home-health-core")).toHaveTextContent(
-        t("home.coreStatus.running"),
-      );
+      expect(healthRowLabels(container)).toEqual(healthRows());
     });
+    expect(view.queryByTestId("home-health-core")).toBeNull();
     expect(view.getByText(t("home.trafficTitle"))).toBeInTheDocument();
     expect(view.getByText(t("home.proxyStatus"))).toBeInTheDocument();
     expect(view.getByText(t("home.healthTitle"))).toBeInTheDocument();
@@ -414,7 +412,9 @@ describe("Home", () => {
 
     const view = within(render(<Home />).container);
     await waitFor(() => {
-      expect(view.getByText(t("home.coreStatus.stopped"))).toBeInTheDocument();
+      expect(
+        view.getByRole("button", { name: t("home.power.startSystem") }),
+      ).toBeInTheDocument();
     });
     expect(view.queryByTestId("home-run-uptime")).toBeNull();
   });
@@ -443,9 +443,6 @@ describe("Home", () => {
         view.getByRole("button", { name: t("home.power.startSystem") }),
       ).toBeInTheDocument();
     });
-    expect(view.getByTestId("home-health-core")).toHaveTextContent(
-      t("home.coreStatus.running"),
-    );
     expect(view.queryByTestId("home-run-uptime")).toBeNull();
   });
 
@@ -591,7 +588,7 @@ describe("Home", () => {
     expect(view.getByTestId("home-health-mcp").className).toContain("text-ok");
   });
 
-  it("moves core status into the phone shell proxy status card", async () => {
+  it("leaves core status to the logo in the phone shell", async () => {
     phoneShell.value = true;
     const { container } = render(<Home />);
     const view = within(container);
@@ -602,16 +599,9 @@ describe("Home", () => {
     );
 
     await waitFor(() => {
-      expect(view.getByTestId("home-proxy-core-status")).toHaveTextContent(
-        t("home.coreStatus.stopped"),
-      );
+      expect(view.getByTestId("home-current-node")).toBeInTheDocument();
     });
-    expect(
-      view
-        .getByTestId("home-proxy-core-status")
-        .compareDocumentPosition(view.getByTestId("home-current-node")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
+    expect(view.queryByTestId("home-proxy-core-status")).toBeNull();
     expect(view.queryByText(t("home.healthTitle"))).toBeNull();
     expect(view.queryByTestId("home-health-core")).toBeNull();
     expect(view.queryByTestId("home-health-memory")).toBeNull();

@@ -34,6 +34,7 @@ import { Logs } from "./pages/Logs";
 import { Mcp } from "./pages/Mcp";
 import { Settings } from "./pages/Settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { StatusLogo } from "@/components/StatusLogo";
 import {
   Sidebar,
   SidebarContent,
@@ -466,12 +467,7 @@ function AppShell() {
           data-testid="phone-shell"
         >
           <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
-            <img
-              src={logo}
-              alt=""
-              className="size-7 shrink-0 rounded-md object-contain"
-              aria-hidden="true"
-            />
+            <StatusLogo src={logo} status={status} className="size-7" />
             <div className="min-w-0 flex-1">
               <h1 className="font-heading text-sm font-medium tracking-tight">
                 ice-box
@@ -572,12 +568,7 @@ function AppShell() {
                   data-tauri-drag-region
                   data-testid="app-brand-row"
                 >
-                  <img
-                    src={logo}
-                    alt=""
-                    className="size-7 shrink-0 rounded-md object-contain"
-                    aria-hidden="true"
-                  />
+                  <StatusLogo src={logo} status={status} className="size-7" />
                   <h1 className="font-heading text-sm font-medium tracking-tight">
                     ice-box
                   </h1>

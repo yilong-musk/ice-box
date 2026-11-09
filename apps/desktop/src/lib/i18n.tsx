@@ -72,6 +72,7 @@ const zh = {
   "app.nav.logs": "日志",
   "app.nav.aria": "主导航",
   "app.versionAria": "版本 {version}",
+  "app.logo.core": "内核状态：{state}",
   "app.updateAvailableAria": "有新版本 {version}，前往应用更新",
 
   // --- home page ---
@@ -84,7 +85,6 @@ const zh = {
   "home.empty.idleTitle": "还没有可用节点",
   "home.empty.idleDesc":
     "未导入任何订阅。打开软件会自动启动内核（仅直连）；用上方大按钮接管流量（系统代理或 TUN），或先导入订阅。",
-  "home.health.core": "内核状态",
   "home.health.memory": "内存",
   "home.health.network": "网络连通性",
   "home.health.mcp": "MCP 服务状态",
@@ -607,6 +607,7 @@ const en: Record<MessageKey, string> = {
   "app.nav.logs": "Logs",
   "app.nav.aria": "Main navigation",
   "app.versionAria": "Version {version}",
+  "app.logo.core": "Core status: {state}",
   "app.updateAvailableAria": "Version {version} is available, open App Updates",
 
   // --- home page ---
@@ -619,7 +620,6 @@ const en: Record<MessageKey, string> = {
   "home.empty.idleTitle": "No nodes yet",
   "home.empty.idleDesc":
     "No subscriptions imported. The app starts the core (direct-only) automatically; capture traffic with the big button above (system proxy or TUN), or import a subscription first.",
-  "home.health.core": "Core status",
   "home.health.memory": "Memory",
   "home.health.network": "Connectivity",
   "home.health.mcp": "MCP service status",
