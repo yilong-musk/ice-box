@@ -78,8 +78,6 @@ export type StatusResponse = {
     error: UiMessage | null;
   };
   core: CoreState;
-  /** Epoch ms when the current core run reached `running`; null when stopped. */
-  running_since_ms?: number | null;
   subscription_count: number;
   /** Process memory for the Home memory row (core + app main process). */
   memory: MemoryUsage;
@@ -92,9 +90,6 @@ export type StatusResponse = {
   // --- TUN capture status ---
   /** `inactive` means no backend is claimed; `tun_status=recovery_required` blocks fallback. */
   traffic_capture: TrafficCapture;
-  /** Wall-clock ms when the active capture backend started; null when the
-   * proxy service is off. Distinct from the core process lifetime. */
-  capture_since_ms?: number | null;
   /** Committed settings desire (`settings.tun.enabled`); not proof TUN is active. */
   configured_tun: boolean;
   tun_status: TunStatus;

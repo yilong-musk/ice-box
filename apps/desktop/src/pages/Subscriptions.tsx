@@ -16,8 +16,8 @@ import {
   formatApplyWarning,
   subscriptionTrafficView,
   trafficTone,
-  type TrafficTone,
 } from "../lib/subscriptions";
+import { TONE_BG } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
@@ -440,7 +440,6 @@ export function Subscriptions({ active = true }: Props) {
                             {traffic.ratio != null ? (
                               <TrafficBar
                                 ratio={traffic.ratio}
-                                label={traffic.usage ?? ""}
                                 className={phone ? "w-full" : "w-40 shrink-0"}
                                 testId={`sub-traffic-bar-${s.id}`}
                               />
@@ -583,21 +582,15 @@ export function Subscriptions({ active = true }: Props) {
   );
 }
 
-const TRAFFIC_TONE_BAR: Record<TrafficTone, string> = {
-  ok: "bg-ok",
-  warn: "bg-warn",
-  bad: "bg-destructive",
-};
-
-/** Quota usage as a thin progress bar, coloured by how much is used. */
+/** Quota usage as a thin progress bar, coloured by how much is used. Its
+ * accessible name is a fixed label plus the percentage: the usage figures are
+ * printed right next to it, so repeating them would read them out twice. */
 function TrafficBar({
   ratio,
-  label,
   className,
   testId,
 }: {
   ratio: number;
-  label: string;
   className?: string;
   testId: string;
 }) {
@@ -605,7 +598,7 @@ function TrafficBar({
   return (
     <div
       role="progressbar"
-      aria-label={label}
+      aria-label={t("subs.trafficBar")}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent}
@@ -613,7 +606,7 @@ function TrafficBar({
       data-testid={testId}
     >
       <div
-        className={cn("h-full rounded-full", TRAFFIC_TONE_BAR[trafficTone(ratio)])}
+        className={cn("h-full rounded-full", TONE_BG[trafficTone(ratio)])}
         style={{ width: `${percent}%` }}
       />
     </div>

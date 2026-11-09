@@ -401,6 +401,29 @@ describe("Home", () => {
     expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-destructive");
   });
 
+  it("grows the memory scale in 50 MB steps so labels stay apart", async () => {
+    getStatus.mockResolvedValue(
+      statusWithMemory({
+        app_bytes: 35 * 1024 * 1024,
+        core_bytes: 70 * 1024 * 1024,
+        total_bytes: 105 * 1024 * 1024,
+      }),
+    );
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("105 MB");
+    });
+    // 105 MB rounds the scale up to 150, not to 105 right next to the 100 tick.
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "46.67%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "23.33%" });
+    expect(view.getByTestId("home-memory-tick-100")).toHaveStyle({ left: "66.67%" });
+    expect(view.getByTestId("home-memory-tick-150")).toHaveTextContent("150 MB");
+    expect(view.queryByTestId("home-memory-tick-105")).toBeNull();
+  });
+
   it("keeps the memory breakdown adding up to the figure it labels", async () => {
     getStatus.mockResolvedValue(
       statusWithMemory({
@@ -1057,7 +1080,6 @@ describe("Home", () => {
       system_proxy_applied: false,
       system_proxy_recorded: true,
       system_proxy_available: true,
-      running_since_ms: Date.now() - 65_000,
       ...tunStatus,
     });
     listNodes.mockResolvedValue([

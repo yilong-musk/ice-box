@@ -200,7 +200,7 @@
      breathes only while the app is in the foreground (`data-active`), so a
      hidden or background window does not repaint every frame. */
   .status-logo {
-    @apply relative inline-flex shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring;
+    @apply relative inline-flex shrink-0 cursor-default rounded-md border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring;
   }
 
   .status-logo > img {

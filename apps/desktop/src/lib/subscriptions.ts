@@ -6,6 +6,7 @@ import {
   type SubscriptionUserInfo,
 } from "../api/client";
 import { t } from "./i18n";
+import type { Tone } from "./tone";
 import { formatQuota } from "./traffic";
 
 export type ApplyWarning = {
@@ -51,10 +52,8 @@ export type SubscriptionTrafficView = {
   ratio: number | null;
 };
 
-export type TrafficTone = "ok" | "warn" | "bad";
-
 /** Bar colour by used share: under 80% green, 80–94% yellow, 95%+ red. */
-export function trafficTone(ratio: number): TrafficTone {
+export function trafficTone(ratio: number): Tone {
   if (ratio < 0.8) return "ok";
   if (ratio < 0.95) return "warn";
   return "bad";

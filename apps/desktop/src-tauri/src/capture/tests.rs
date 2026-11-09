@@ -372,18 +372,10 @@ fn status_reports_available_and_configured() {
     let settings = tun_settings(true);
     let status = c.status(&settings);
     assert_eq!(status.traffic_capture, TrafficCapture::Inactive);
-    assert_eq!(status.active_since_ms, None, "service is off");
     assert!(status.configured_tun);
     assert_eq!(status.tun_status, TunStatus::Disabled);
     assert!(status.tun_available);
     assert_eq!(status.tun_unavailable_reason, None);
-
-    c.set_system_proxy_active().unwrap();
-    let active = c.status(&settings);
-    assert!(
-        active.active_since_ms.is_some(),
-        "service uptime starts when the backend becomes active"
-    );
     let _ = fs::remove_dir_all(paths.root());
 }
 
@@ -400,7 +392,6 @@ fn enable_tun_success_journals_applied_and_activates() {
 
     assert_eq!(c.active_backend(), TrafficCapture::Tun);
     assert_eq!(c.tun_status(), TunStatus::Enabled);
-    assert!(c.status(&settings).active_since_ms.is_some());
     assert!(
         c.helper_core_used(),
         "helper core log latched after a helper-managed TUN enable"
@@ -500,7 +491,6 @@ fn disable_tun_restores_diagnostic_and_cleans_journal() {
 
     assert_eq!(c.active_backend(), TrafficCapture::Inactive);
     assert_eq!(c.tun_status(), TunStatus::Disabled);
-    assert_eq!(c.status(&settings).active_since_ms, None);
     let journal = TunJournal::load(&paths.tun_state()).unwrap().unwrap();
     assert_eq!(journal.state, JournalState::Clean);
     assert_eq!(journal.interface_name, None);

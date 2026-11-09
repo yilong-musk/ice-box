@@ -104,18 +104,18 @@ export function StatusLogo({
             : undefined
         }
       >
-        <span
-          role="img"
+        {/* A button, so keyboard users reach it and open the label on
+            desktop, and a tap toggles it on the phone. */}
+        <button
+          type="button"
           aria-label={label}
-          // Focusable so keyboard users can open the label on desktop.
-          tabIndex={0}
           className={cn("status-logo", className)}
           data-core={core}
           data-active={active ? "" : undefined}
           data-testid="status-logo"
         >
           <img src={src} alt="" draggable={false} />
-        </span>
+        </button>
       </TooltipTrigger>
       {/* The phone logo sits at the top edge, so its label opens below; the
           padding keeps it off the screen edge. */}

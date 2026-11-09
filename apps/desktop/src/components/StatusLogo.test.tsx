@@ -34,19 +34,21 @@ describe("StatusLogo", () => {
         </TooltipProvider>,
       );
       expect(screen.getByTestId("status-logo")).toHaveAttribute("data-core", core);
-      expect(screen.getByRole("img")).toHaveAccessibleName(
+      expect(screen.getByRole("button")).toHaveAccessibleName(
         t("app.logo.core", { state: t(`home.coreStatus.${core}`) }),
       );
     },
   );
 
-  it("is keyboard-focusable so the label can open without a pointer", () => {
+  it("is a button so the label can open without a pointer", () => {
     render(
       <TooltipProvider>
         <StatusLogo src="logo.png" status={status("running")} />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("status-logo")).toHaveAttribute("tabindex", "0");
+    const logo = screen.getByTestId("status-logo");
+    expect(logo.tagName).toBe("BUTTON");
+    expect(logo).toHaveAttribute("type", "button");
   });
 
   it("breathes only while the app is in the foreground", () => {

@@ -611,7 +611,7 @@ describe("Subscriptions", () => {
     expect(view.queryByText("Traffic: 11.84 GB | 150 GB")).toBeNull();
     expect(view.queryByTestId(`sub-traffic-${otherId}`)).toBeNull();
     // The used share is drawn as a progress bar, green while well under quota.
-    const bar = view.getByRole("progressbar", { name: usage });
+    const bar = view.getByRole("progressbar", { name: t("subs.trafficBar") });
     expect(bar).toHaveAttribute("aria-valuenow", "7.89");
     expect(bar.firstElementChild).toHaveStyle({ width: "7.89%" });
     expect(bar.firstElementChild?.className).toContain("bg-ok");

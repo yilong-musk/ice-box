@@ -5,45 +5,51 @@
  * app, and a legend with each part's figure.
  *
  * The bar is drawn against a fixed 100 MB scale (the red band's threshold), so
- * how full it is shows how close usage is to that band. Above 100 MB the bar
- * fills and the scale follows the total. The bar and the total take the colour
- * of the band the total falls in.
+ * how full it is shows how close usage is to that band. Above 100 MB the scale
+ * grows to the next 50 MB step, so the 100 MB mark stays readable and the bar
+ * shows how far into the red band usage has gone. The bar and the total take
+ * the colour of the band the total falls in.
  */
 
 import type { MemoryUsage } from "@/api/contracts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { t } from "@/lib/i18n";
 import {
+  displayMemoryMb,
   formatMemory,
   formatMemoryPart,
   memoryLabel,
   memoryMb,
   memoryToneFor,
-  type MemoryTone,
 } from "@/lib/memory";
+import { TONE_BG, TONE_TEXT, type Tone } from "@/lib/tone";
 import { cn } from "@/lib/utils";
 
 /** Full-bar scale in MB: the start of the red band. */
 const SCALE_MB = 100;
 
+/** Past 100 MB the scale grows in these steps, never ending just past 100. */
+const SCALE_STEP_MB = 50;
+
 /** Scale labels: the start, and where the bar turns yellow and red. */
 const TICKS_MB = [0, 60, SCALE_MB];
 
-const TONE_TEXT: Record<MemoryTone, string> = {
-  ok: "text-ok",
-  warn: "text-warn",
-  bad: "text-destructive",
-};
+/** An inner label closer than this share of the bar to either end is dropped
+ * (its gap marker stays), so it never runs into the end labels. */
+const MIN_LABEL_GAP = 0.12;
+
+/** Bar length in MB for a displayed total. */
+function memoryScaleMb(totalMb: number): number {
+  return totalMb <= SCALE_MB
+    ? SCALE_MB
+    : Math.ceil(totalMb / SCALE_STEP_MB) * SCALE_STEP_MB;
+}
 
 /** Core segment: the full band colour. */
-const TONE_CORE: Record<MemoryTone, string> = {
-  ok: "bg-ok",
-  warn: "bg-warn",
-  bad: "bg-destructive",
-};
+const TONE_CORE = TONE_BG;
 
 /** App segment: the same colour, lighter, so the two parts read apart. */
-const TONE_APP: Record<MemoryTone, string> = {
+const TONE_APP: Record<Tone, string> = {
   ok: "bg-ok/40",
   warn: "bg-warn/40",
   bad: "bg-destructive/40",
@@ -77,9 +83,15 @@ export function MemoryCard({
   // Rounded per-part figures, the same ones the legend prints.
   const coreMb = memory?.core_bytes != null ? memoryMb(memory.core_bytes) : 0;
   const appMb = memory?.app_bytes != null ? memoryMb(memory.app_bytes) : 0;
-  const scale = Math.max(SCALE_MB, coreMb + appMb);
+  const scale = memoryScaleMb(memory ? displayMemoryMb(memory) : 0);
   // Past 100 MB the scale grows, and its end gets a label of its own.
   const ticks = scale > SCALE_MB ? [...TICKS_MB, scale] : TICKS_MB;
+  const labels = ticks.filter(
+    (mb) =>
+      mb === 0 ||
+      mb === scale ||
+      (mb / scale >= MIN_LABEL_GAP && mb / scale <= 1 - MIN_LABEL_GAP),
+  );
   const pct = (mb: number) => `${Math.round((mb / scale) * 10000) / 100}%`;
 
   const coreValue =
@@ -147,7 +159,7 @@ export function MemoryCard({
             aria-hidden="true"
             className="relative h-3.5 font-mono text-[10px] leading-none text-muted-foreground tabular-nums"
           >
-            {ticks.map((mb) => (
+            {labels.map((mb) => (
               <span
                 key={mb}
                 className={cn(
