@@ -19,12 +19,6 @@ import { Nodes } from "./Nodes";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { useGenerationGuard } from "../lib/generationGuard";
-import {
-  formatMemory,
-  formatMemoryPart,
-  memoryLabel,
-  memoryToneFor,
-} from "../lib/memory";
 import { RUNTIME_STATUS_FALLBACK_MS, useRuntimeStore } from "../lib/runtimeStore";
 import {
   nodesEqual,
@@ -32,6 +26,7 @@ import {
   readNodesSnapshot,
   subscribeNodesSnapshot,
 } from "../lib/nodes";
+import { MemoryCard } from "../components/MemoryCard";
 import { TrafficChart } from "../components/TrafficChart";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,7 +48,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
-import { formatUptime } from "../lib/uptime";
 import { resolveShellProxyEndpoint } from "../lib/shellProxy";
 import { useTransient } from "../lib/transient";
 
@@ -130,21 +124,6 @@ function jsonEqual(a: unknown, b: unknown): boolean {
  * MCP status are small plain JSON. */
 function keepIfSame<T>(prev: T | null, next: T): T {
   return prev != null && jsonEqual(prev, next) ? prev : next;
-}
-
-/** Elapsed time since `since` (epoch ms), re-rendered once a second on its own
- * timer so the parent page does not re-render every tick. The timer stops
- * while the tab pane is hidden, so the kept page is not restyled each second. */
-function RunUptime({ since }: { since: number }) {
-  const visible = usePaneVisible();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!visible) return;
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [visible]);
-  return <>{formatUptime(now - since)}</>;
 }
 
 export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Props) {
@@ -698,21 +677,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // Memory is core + app main-process memory — the physical footprint on
   // macOS, the private working set on Windows.
   const memory = status?.memory;
-  const memoryToneValue = memoryToneFor(memory);
-  const memoryTip = memory
-    ? memory.core_bytes != null
-      ? t("home.memory.tooltip", {
-          core: formatMemory(memory.core_bytes),
-          app: formatMemoryPart(memory.app_bytes),
-        })
-      : running
-        ? t("home.memory.tooltipUnreadable", {
-            app: formatMemoryPart(memory.app_bytes),
-          })
-        : t("home.memory.tooltipAppOnly", {
-            app: formatMemoryPart(memory.app_bytes),
-          })
-    : undefined;
   const mcpSupported = mcpStatus?.supported === true;
   const mcpRunning = mcpStatus?.supported === true && mcpStatus.running;
   const mcpValue = mcpRunning
@@ -720,41 +684,14 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     : mcpSupported
       ? t("mcp.stopped")
       : t("common.dash");
-  const platformStatusRow = {
-    label: t("home.health.mcp"),
-    value: mcpValue,
-    title: mcpStatus?.error ?? undefined,
-    valueClassName: mcpRunning
-      ? "text-ok"
-      : mcpStatus?.error
-        ? "text-destructive"
-        : mcpSupported
-          ? "text-muted-foreground"
-          : undefined,
-    testId: "home-health-mcp",
-  };
-  // The core state lives in the sidebar logo (StatusLogo), not in this card.
-  // The card itself is desktop-only.
-  const infoRows = [
-    {
-      label: t("home.health.memory"),
-      value: memoryLabel(memory),
-      title: memoryTip,
-      testId: "home-health-memory",
-      valueClassName: cn(
-        memoryToneValue === "ok" && "text-ok",
-        memoryToneValue === "warn" && "text-warn",
-        memoryToneValue === "bad" && "text-destructive",
-      ),
-    },
-    platformStatusRow,
-  ];
-
+  const mcpValueClassName = mcpRunning
+    ? "text-ok"
+    : mcpStatus?.error
+      ? "text-destructive"
+      : mcpSupported
+        ? "text-muted-foreground"
+        : undefined;
   const powerOn = phone ? vpnActive : proxyOn;
-  // Service uptime, not core process lifetime: the diagnostic core can keep
-  // running long before the user starts the proxy service. Desktop only; the
-  // phone Home does not show a run uptime.
-  const uptimeSince = phone ? null : status?.capture_since_ms ?? null;
   const canToggle = phone ? !busy : canToggleProxy;
   // The button names the backend it starts/stops: TUN when configured (or
   // active), otherwise the system proxy (docs/tun.md).
@@ -962,16 +899,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     )}
                   </div>
                 )}
-                {powerOn && uptimeSince != null && (
+                {/* Desktop only: the phone shell has no MCP service. */}
+                {!phone && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                      {t("home.runUptime")}
+                      {t("home.health.mcp")}
                     </span>
                     <span
-                      className="font-mono text-sm tabular-nums"
-                      data-testid="home-run-uptime"
+                      className={cn("truncate text-sm", mcpValueClassName)}
+                      title={mcpStatus?.error ?? mcpValue}
+                      data-testid="home-health-mcp"
                     >
-                      <RunUptime since={uptimeSince} />
+                      {mcpValue}
                     </span>
                   </div>
                 )}
@@ -1020,34 +959,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           </CardContent>
         </Card>
 
-        {!phone && (
-          <Card size="sm" className="w-full min-w-0">
-            <CardHeader>
-              <CardTitle className="text-xs font-medium text-muted-foreground">
-                {t("home.healthTitle")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ItemGroup className="w-full gap-0">
-                {infoRows.map((row, index) => (
-                  <div key={row.label}>
-                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                    <Item size="xs" className="justify-between rounded-none px-0">
-                      <ItemDescription>{row.label}</ItemDescription>
-                      <ItemTitle
-                        className={row.valueClassName}
-                        title={row.title ?? row.value}
-                        data-testid={row.testId}
-                      >
-                        {row.value}
-                      </ItemTitle>
-                    </Item>
-                  </div>
-                ))}
-              </ItemGroup>
-            </CardContent>
-          </Card>
-        )}
+        {!phone && <MemoryCard memory={memory} coreRunning={running} />}
 
         {!phone && (
           <div className="flex min-w-0 flex-col gap-3 col-start-1 row-span-2 row-start-2 min-h-0 overflow-y-auto">
