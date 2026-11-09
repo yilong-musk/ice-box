@@ -9,6 +9,7 @@ import { readLanguagePreference } from "../../../apps/desktop/src/lib/language";
 import { applyFlagEmojiPolyfill } from "../../../apps/desktop/src/lib/flagEmoji";
 import flagFontUrl from "country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2?url";
 import "./demo.css";
+import "./demo-logo.css";
 
 // The mocked settings must not pin the UI language: the desktop app treats
 // `settings.language` as authoritative and re-applies it right after mount,
