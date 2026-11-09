@@ -1412,12 +1412,15 @@ describe("Home", () => {
       tun_ui_hidden: true,
       vpn_permission: "granted",
       tunnel_status: "connected",
+      running_since_ms: Date.now() - 65_000,
     });
 
     const { container } = render(<Home />);
     const view = within(container);
     const power = await view.findByRole("button", { name: t("home.power.vpnStop") });
     expect(power).toHaveTextContent(t("home.power.vpnStop"));
+    // The phone Home shows no run uptime, even while the tunnel is up.
+    expect(view.queryByTestId("home-run-uptime")).toBeNull();
     fireEvent.click(power);
     await waitFor(() => expect(stop).toHaveBeenCalled());
     expect(stopSystemProxy).not.toHaveBeenCalled();

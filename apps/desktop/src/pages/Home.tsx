@@ -752,11 +752,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
 
   const powerOn = phone ? vpnActive : proxyOn;
   // Service uptime, not core process lifetime: the diagnostic core can keep
-  // running long before the user starts the proxy service. The phone shell
-  // does not report `capture_since_ms`, so it keeps the core-start fallback.
-  const uptimeSince = phone
-    ? status?.capture_since_ms ?? status?.running_since_ms ?? null
-    : status?.capture_since_ms ?? null;
+  // running long before the user starts the proxy service. Desktop only; the
+  // phone Home does not show a run uptime.
+  const uptimeSince = phone ? null : status?.capture_since_ms ?? null;
   const canToggle = phone ? !busy : canToggleProxy;
   // The button names the backend it starts/stops: TUN when configured (or
   // active), otherwise the system proxy (docs/tun.md).
