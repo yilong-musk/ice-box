@@ -602,16 +602,20 @@ describe("Subscriptions", () => {
     const usage = t("subs.trafficUsedTotal", {
       used: "11.84GB",
       total: "150GB",
-      percent: "7.89",
     });
     const expiry = t("subs.trafficExpire", { date: "2099-01-01" });
     // Both values share one line: usage then the expiry.
     expect(view.getByText(usage, { exact: false }).textContent).toBe(
       `${usage} · ${expiry}`,
     );
-    expect(view.getByText(expiry, { selector: "span" })).toBeInTheDocument();
     expect(view.queryByText("Traffic: 11.84 GB | 150 GB")).toBeNull();
     expect(view.queryByTestId(`sub-traffic-${otherId}`)).toBeNull();
+    // The used share is drawn as a progress bar, green while well under quota.
+    const bar = view.getByRole("progressbar", { name: t("subs.trafficBar") });
+    expect(bar).toHaveAttribute("aria-valuenow", "7.89");
+    expect(bar.firstElementChild).toHaveStyle({ width: "7.89%" });
+    expect(bar.firstElementChild?.className).toContain("bg-ok");
+    expect(view.queryByTestId(`sub-traffic-bar-${otherId}`)).toBeNull();
   });
 
   it("merges header counters with a long-term expiry entry", async () => {
@@ -635,14 +639,13 @@ describe("Subscriptions", () => {
     const usage = t("subs.trafficUsedTotal", {
       used: "372.5MB",
       total: "1TB",
-      percent: "0.04",
     });
     expect(view.getByText(usage, { exact: false }).textContent).toBe(
       `${usage} · ${t("subs.trafficNeverExpires")}`,
     );
   });
 
-  it("flags an expired subscription", async () => {
+  it("words a past expiry as expired, in the plain text colour", async () => {
     const past = Math.floor(new Date(2026, 0, 1, 12, 0, 0).getTime() / 1000);
     listSubscriptions.mockResolvedValue([
       sampleMeta({
@@ -655,11 +658,9 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("sub-a")).toBeInTheDocument();
     });
-    expect(
-      view.getByText(t("subs.trafficExpired", { date: "2026-01-01" }), {
-        selector: "span",
-      }),
-    ).toHaveClass("text-destructive");
+    const line = view.getByText(t("subs.trafficExpired", { date: "2026-01-01" }));
+    expect(line.className).not.toContain("text-destructive");
+    expect(line.querySelector(".text-destructive")).toBeNull();
   });
 
   it("renders legacy payloads without new fields (stale backend)", async () => {

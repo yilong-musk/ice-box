@@ -15,7 +15,9 @@ import {
   extractApplyWarning,
   formatApplyWarning,
   subscriptionTrafficView,
+  trafficTone,
 } from "../lib/subscriptions";
+import { TONE_BG } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
@@ -427,24 +429,30 @@ export function Subscriptions({ active = true }: Props) {
                           {subscriptionSummary(s, phone)}
                         </ItemDescription>
                         {traffic ? (
-                          <ItemDescription
-                            className="tabular-nums"
-                            data-testid={`sub-traffic-${s.id}`}
+                          // Desktop: a short bar leads the usage line. Phone:
+                          // the line is too narrow, so the bar sits above it.
+                          <div
+                            className={cn(
+                              "flex min-w-0",
+                              phone ? "flex-col gap-1.5 py-0.5" : "items-center gap-3",
+                            )}
                           >
-                            {traffic.usage}
-                            {traffic.usage && traffic.expiry ? " · " : null}
-                            {traffic.expiry ? (
-                              <span
-                                className={
-                                  traffic.expired
-                                    ? "text-destructive"
-                                    : undefined
-                                }
-                              >
-                                {traffic.expiry}
-                              </span>
+                            {traffic.ratio != null ? (
+                              <TrafficBar
+                                ratio={traffic.ratio}
+                                className={phone ? "w-full" : "w-40 shrink-0"}
+                                testId={`sub-traffic-bar-${s.id}`}
+                              />
                             ) : null}
-                          </ItemDescription>
+                            <ItemDescription
+                              className="min-w-0 tabular-nums"
+                              data-testid={`sub-traffic-${s.id}`}
+                            >
+                              {traffic.usage}
+                              {traffic.usage && traffic.expiry ? " · " : null}
+                              {traffic.expiry}
+                            </ItemDescription>
+                          </div>
                         ) : null}
                         {warnings.length > 0 ? (
                           <ItemDescription className="text-warn">
@@ -569,6 +577,37 @@ export function Subscriptions({ active = true }: Props) {
           setPendingDelete(null);
           void run(() => api.removeSubscription(sub.id));
         }}
+      />
+    </div>
+  );
+}
+
+/** Quota usage as a thin progress bar, coloured by how much is used. Its
+ * accessible name is a fixed label plus the percentage: the usage figures are
+ * printed right next to it, so repeating them would read them out twice. */
+function TrafficBar({
+  ratio,
+  className,
+  testId,
+}: {
+  ratio: number;
+  className?: string;
+  testId: string;
+}) {
+  const percent = Math.round(ratio * 10000) / 100;
+  return (
+    <div
+      role="progressbar"
+      aria-label={t("subs.trafficBar")}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      className={cn("h-2.5 overflow-hidden rounded-full bg-foreground/10", className)}
+      data-testid={testId}
+    >
+      <div
+        className={cn("h-full rounded-full", TONE_BG[trafficTone(ratio)])}
+        style={{ width: `${percent}%` }}
       />
     </div>
   );

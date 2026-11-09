@@ -1155,7 +1155,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
             {batchButton}
           </div>
         ) : null}
-        <CardContent className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", embedded && "pt-2")}>
+        {/* The card's own gap already spaces the list from the header bar,
+            matching the side padding; no extra top padding here. */}
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!listReady ? (
             <p className="my-auto text-sm text-muted-foreground">
               {t("nodes.loading")}

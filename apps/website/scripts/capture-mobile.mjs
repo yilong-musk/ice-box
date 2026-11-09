@@ -155,13 +155,6 @@ async function verifyHomeData(page, target) {
     throw new Error(`Phone tab bar must show ${MOBILE_TABS} tabs, got ${await tabs.count()}`);
   }
 
-  const uptime = (
-    await page.getByTestId("home-run-uptime").textContent({ timeout: 15_000 })
-  )?.trim();
-  if (!uptime || !/^\d{2}:\d{2}$/.test(uptime)) {
-    throw new Error(`Phone run uptime must show mocked MM:SS data, got ${JSON.stringify(uptime)}`);
-  }
-
   const node = (
     await page.getByTestId("home-current-node").textContent({ timeout: 15_000 })
   )?.trim();

@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Live demos only (demo.tsx, mobile-demo.tsx): keep the status logo breathing
+   at all times. The app pauses the glow unless its window is focused
+   (`data-active`, components/StatusLogo.tsx), but a demo iframe rarely has
+   focus while visitors browse the landing page. This file is unlayered, so it
+   overrides the app's layered rules without touching the app's own CSS.
+   Reduced-motion users still get the app's static glow. */
+@media (prefers-reduced-motion: no-preference) {
+  .status-logo[data-core="starting"] > img,
+  .status-logo[data-core="stopping"] > img,
+  .status-logo[data-core="running"] > img,
+  .status-logo[data-core="error"] > img {
+    animation: status-logo-breathe 2s ease-in-out infinite;
+  }
+}

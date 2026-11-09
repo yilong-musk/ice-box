@@ -61,7 +61,6 @@ function isCaptureMode(): boolean {
 
 const CAPTURE_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
 const DEMO_LANDING_IP = "203.0.113.42";
-const DEMO_INITIAL_RUN_MS = 18 * 60_000 + 42_000;
 const TOKYO_NODE = "🇯🇵 Tokyo / edge-01";
 const SINGAPORE_NODE = "🇸🇬 Singapore / edge-02";
 
@@ -190,7 +189,8 @@ const subscriptions: SubscriptionMeta[] = [
     etag: null,
     last_modified: null,
     // Both shapes a provider can publish usage in: the `subscription-userinfo`
-    // counters and the info entries embedded in the proxy list.
+    // counters and the info entries embedded in the proxy list. A quarter
+    // used (25%): the traffic bar shows green.
     userinfo: { ...DEMO_QUOTA },
     provider_info: [
       `Traffic: ${formatQuota(DEMO_QUOTA.upload + DEMO_QUOTA.download)} | ${formatQuota(DEMO_QUOTA.total)}`,
@@ -214,9 +214,10 @@ const subscriptions: SubscriptionMeta[] = [
     last_error: null,
     etag: "\"demo-work-3\"",
     last_modified: null,
+    // Nearly used up (85%): the traffic bar shows yellow.
     userinfo: {
-      upload: 2 * 1024 ** 3,
-      download: 16 * 1024 ** 3,
+      upload: 10 * 1024 ** 3,
+      download: 160 * 1024 ** 3,
       total: 200 * 1024 ** 3,
       expire: Math.floor(demoExpiryMs(90) / 1000),
     },
@@ -241,9 +242,10 @@ const subscriptions: SubscriptionMeta[] = [
     etag: null,
     last_modified: new Date(demoNowMs() - 26 * 60 * 60_000).toUTCString(),
     // This provider reports usage in the list body instead of the header.
+    // Almost exhausted (97%): the traffic bar shows red.
     userinfo: null,
     provider_info: [
-      "Traffic: 28.4 GB | 100 GB",
+      "Traffic: 97 GB | 100 GB",
       `Expire: ${new Date(demoExpiryMs(120)).toISOString().slice(0, 10)}`,
     ],
     auto_update: false,
@@ -295,7 +297,6 @@ const ruleRows = [
 }));
 
 let running = true;
-let runningSinceMs = Date.now() - DEMO_INITIAL_RUN_MS;
 let trafficTick = 0;
 let mcpEnabled = true;
 let mcpRunning = true;
@@ -339,8 +340,6 @@ export const api = {
     await delay();
     return {
       core: { status: running ? "running" : "stopped", message: null, inbound_host: "127.0.0.1", inbound_port: 17890 },
-      running_since_ms: running ? runningSinceMs : null,
-      capture_since_ms: running ? runningSinceMs : null,
       subscription_count: subscriptions.length,
       proxy_recovery_warning: [],
       system_proxy_applied: running,
@@ -397,13 +396,11 @@ export const api = {
     await delay();
     if (settings.proxy_service_enabled) {
       running = true;
-      runningSinceMs = Date.now();
     }
   },
   async start(): Promise<void> {
     await delay(180);
     running = true;
-    runningSinceMs = Date.now();
   },
   async saveSettings(patch: SettingsPatch): Promise<void> {
     await delay();

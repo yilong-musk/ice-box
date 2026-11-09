@@ -134,12 +134,15 @@ async function waitForLanguage(page, target) {
 }
 
 async function verifyMockedHomeData(page) {
-  const uptime = (
-    await page.getByTestId("home-run-uptime").textContent({ timeout: 15_000 })
+  const coreMemory = (
+    await page.getByTestId("home-memory-core").textContent({ timeout: 15_000 })
   )?.trim();
-  if (!uptime || !/^\d{2}:\d{2}$/.test(uptime)) {
+  const appMemory = (
+    await page.getByTestId("home-memory-app").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (coreMemory !== "14 MB" || appMemory !== "38 MB") {
     throw new Error(
-      `Live Demo run uptime must show mocked MM:SS data, got ${JSON.stringify(uptime)}`,
+      `Live Demo memory card must show the mocked core/app split, got ${JSON.stringify({ coreMemory, appMemory })}`,
     );
   }
 

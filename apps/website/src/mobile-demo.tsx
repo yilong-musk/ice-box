@@ -19,6 +19,7 @@ import { applyStoredLanguage } from "../../desktop/src/lib/i18n";
 import { applyStoredTheme } from "../../desktop/src/lib/theme";
 import flagFontUrl from "country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2?url";
 import "../../mobile/src/app.css";
+import "./demo-logo.css";
 
 /**
  * The phone frame draws a gesture navigation bar over the bottom of the app,

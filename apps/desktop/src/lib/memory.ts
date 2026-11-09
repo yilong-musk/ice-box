@@ -2,8 +2,7 @@
 
 import type { MemoryUsage } from "../api/client";
 import { t } from "./i18n";
-
-export type MemoryTone = "ok" | "warn" | "bad";
+import type { Tone } from "./tone";
 
 /** Rounded whole-MB figure. */
 export function memoryMb(bytes: number): number {
@@ -55,7 +54,7 @@ export function memoryLabel(memory: MemoryUsage | null | undefined): string {
 }
 
 /** Color band by the displayed value: <60 MB green, 60–99 yellow, ≥100 red. */
-export function memoryTone(mb: number): MemoryTone {
+export function memoryTone(mb: number): Tone {
   if (mb < 60) return "ok";
   if (mb < 100) return "warn";
   return "bad";
@@ -64,6 +63,6 @@ export function memoryTone(mb: number): MemoryTone {
 /** Band for the row, `null` while the row shows `—` (no color claim). */
 export function memoryToneFor(
   memory: MemoryUsage | null | undefined,
-): MemoryTone | null {
+): Tone | null {
   return memoryAvailable(memory) ? memoryTone(displayMemoryMb(memory)) : null;
 }
