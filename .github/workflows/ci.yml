@@ -180,8 +180,35 @@ jobs:
       - name: Fetch GeoIP rule-sets
         run: ./scripts/fetch-geoip.sh
 
+      # The Tauri bundler downloads NSIS and its plugins from GitHub Releases on
+      # every fresh runner, and those downloads intermittently return 504.
+      # Cache the toolset (it lives under %LOCALAPPDATA%\tauri) keyed on the
+      # installed Tauri CLI version, so most builds skip the download entirely.
+      - name: Resolve Tauri CLI version
+        id: tauri-cli
+        run: echo "version=$(node -p "require('@tauri-apps/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+        working-directory: apps/desktop
+
+      - name: Restore Tauri NSIS toolset
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-nsis-${{ runner.os }}-${{ steps.tauri-cli.outputs.version }}
+
+      # Retry covers a cache miss that hits a transient download failure; the
+      # Rust build is incremental, so a retry only redoes the bundling.
       - name: Build app bundle (tauri build, NSIS)
-        run: npm run build:win
+        run: |
+          for attempt in 1 2 3; do
+            if npm run build:win; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::tauri build failed (attempt $attempt/3); retrying in 30s"
+              sleep 30
+            fi
+          done
+          exit 1
         working-directory: apps/desktop
 
       - name: Verify Windows NSIS payload (sing-box, libcronet, launcher)
