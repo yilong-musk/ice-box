@@ -22,11 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The Logs page is gone. The log files in the data folder (**Settings → Data
   → Open Data Directory**) are unchanged.
-- The MCP `get_logs` tool returns every log line, including DEBUG and TRACE
-  lines and core chatter it used to hide. The **Debug logs** switch that
-  chose between the two is removed; a `log_debug` value left in
-  `settings.json` is ignored.
-
+- The MCP `get_logs` tool takes `all: true` to return every log line,
+  including DEBUG and TRACE lines and core chatter its default view hides.
+  This replaces the **Debug logs** switch, which is removed; a `log_debug`
+  value left in `settings.json` is ignored.
 - The Home memory card's colour bands start 20 MB higher on macOS (green
   below 80 MB, yellow from 80, red from 120) and its bar scale follows. The
   macOS app figure idles around 50 MB where Windows idles around 15, because

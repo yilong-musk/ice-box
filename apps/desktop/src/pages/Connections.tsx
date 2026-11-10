@@ -33,7 +33,6 @@ import {
   connectionChain,
   connectionRule,
   connectionTarget,
-  formatBytes,
   formatDuration,
   matchesKeyword,
   processName,
@@ -41,6 +40,7 @@ import {
   type ConnectionSort,
 } from "../lib/connections";
 import { useGenerationGuard } from "../lib/generationGuard";
+import { formatBytes } from "../lib/traffic";
 import { t, useLanguagePreference } from "../lib/i18n";
 
 const POLL_MS = 1000;
@@ -187,14 +187,24 @@ export function Connections({ active = true }: { active?: boolean }) {
   const [closingAll, setClosingAll] = useState(false);
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Ids whose close request has not settled. A poll the core answered before
+  // it handled the close still lists them, so they are kept off the page.
+  const closingIdsRef = useRef(new Set<string>());
+  // Close All in flight: every poll result may predate it.
+  const closingAllRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!activeRef.current || documentHidden()) return;
+    if (!activeRef.current || documentHidden() || closingAllRef.current) return;
     const gen = nextGeneration();
     try {
       const next = await api.listConnections();
-      if (isStale(gen) || !activeRef.current) return;
-      setData(next);
+      if (isStale(gen) || !activeRef.current || closingAllRef.current) return;
+      const closing = closingIdsRef.current;
+      setData(
+        closing.size === 0
+          ? next
+          : { ...next, connections: next.connections.filter((row) => !closing.has(row.id)) },
+      );
       setNowMs(Date.now());
       setError(null);
     } catch (e) {
@@ -225,31 +235,41 @@ export function Connections({ active = true }: { active?: boolean }) {
 
   const closeOne = useCallback(
     (id: string) => {
-      // A poll already in flight still lists this connection; drop its result
-      // so the row does not come back for a second.
-      nextGeneration();
+      const closing = closingIdsRef.current;
+      closing.add(id);
       setData((prev) =>
         prev
           ? { ...prev, connections: prev.connections.filter((row) => row.id !== id) }
           : prev,
       );
-      void api.closeConnection(id).catch((e) => {
-        if (activeRef.current) setError(formatInvokeError(e));
-      });
+      void api
+        .closeConnection(id)
+        .catch((e) => {
+          if (activeRef.current) setError(formatInvokeError(e));
+        })
+        .finally(() => {
+          // A poll started while the close was in flight may still list the
+          // row; drop it. The next poll reads after the close.
+          nextGeneration();
+          closing.delete(id);
+        });
     },
     [nextGeneration],
   );
 
   const closeAll = useCallback(async () => {
     setClosingAll(true);
-    nextGeneration();
+    closingAllRef.current = true;
     try {
       await api.closeAllConnections();
       setData((prev) => (prev ? { ...prev, connections: [] } : prev));
-      setError(null);
+      if (activeRef.current) setError(null);
     } catch (e) {
-      setError(formatInvokeError(e));
+      if (activeRef.current) setError(formatInvokeError(e));
     } finally {
+      // Drop any poll that started before the core handled the close.
+      nextGeneration();
+      closingAllRef.current = false;
       setClosingAll(false);
     }
   }, [nextGeneration]);

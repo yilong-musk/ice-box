@@ -5,6 +5,9 @@ use super::*;
 #[derive(Deserialize)]
 pub struct LogViewRequest {
     pub n: usize,
+    /// Keep DEBUG/TRACE and core chatter the default view hides.
+    #[serde(default)]
+    pub all: bool,
 }
 
 /// Cap core/helper logs at 20 MiB by dropping the oldest 5 MiB of the same
@@ -101,9 +104,8 @@ fn truncate_helper_core_log(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Merged tail of the app and core logs for the MCP `get_logs` tool, every
-/// parsed line included. Each call parses the tails afresh: nothing polls
-/// this, so no parsed copy is kept between calls.
+/// Merged tail of the app and core logs for the MCP `get_logs` tool: the
+/// lines worth attention by default, every parsed line with `all`.
 pub(crate) fn get_log_view_use_case(
     state: &AppState,
     req: LogViewRequest,
@@ -119,11 +121,12 @@ pub(crate) fn get_log_view_use_case(
     .then(ice_tun_sys::elevated_core_log_path)
     .flatten();
     let extra_core_log = extra_core_log.as_deref();
-    LogViewCache::default().read(
+    crate::log_view::read_log_view(
         &state.paths.app_log(),
         &state.paths.core_log(),
         extra_core_log,
         req.n,
+        req.all,
     )
 }
 

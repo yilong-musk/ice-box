@@ -337,10 +337,13 @@ pub fn tools() -> Vec<Value> {
         ),
         read_tool(
             "get_logs",
-            "Read a bounded tail of the application and core logs, every parsed line included.",
+            "Read a bounded tail of the application and core logs merged by time: warnings, errors, lifecycle events and connection routes by default; set all to include DEBUG/TRACE and other core chatter.",
             json!({
                 "type": "object",
-                "properties": {"n": {"type": "integer", "minimum": 1, "maximum": MAX_LOG_LINES}},
+                "properties": {
+                    "n": {"type": "integer", "minimum": 1, "maximum": MAX_LOG_LINES},
+                    "all": {"type": "boolean"}
+                },
                 "additionalProperties": false
             }),
         ),
@@ -746,7 +749,11 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
                 .and_then(Value::as_u64)
                 .unwrap_or(200)
                 .clamp(1, MAX_LOG_LINES as u64) as usize;
-            to_value(get_log_view_use_case(state.inner(), LogViewRequest { n })?)
+            let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
+            to_value(get_log_view_use_case(
+                state.inner(),
+                LogViewRequest { n, all },
+            )?)
         }
         "get_runtime_config" => Ok(json!({
             "config": get_runtime_config_use_case(state.inner())?
@@ -1058,6 +1065,8 @@ mod tests {
         assert!(validate_tool_arguments("start_proxy_service", &json!({"dry_run": true})).is_err());
         assert!(validate_tool_arguments("set_proxy_mode", &json!({"mode": "bogus"})).is_err());
         assert!(validate_tool_arguments("get_logs", &json!({"n": 0})).is_err());
+        assert!(validate_tool_arguments("get_logs", &json!({"n": 50, "all": true})).is_ok());
+        assert!(validate_tool_arguments("get_logs", &json!({"all": "yes"})).is_err());
         assert!(validate_tool_arguments(
             "update_settings",
             &json!({"patch": {"mixedPort": 18080}})

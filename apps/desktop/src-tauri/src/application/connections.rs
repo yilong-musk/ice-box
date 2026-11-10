@@ -3,7 +3,7 @@
 use super::*;
 
 /// One live connection as the Connections page shows it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConnectionRow {
     pub id: String,
     /// `tcp` or `udp`.
@@ -76,6 +76,23 @@ pub struct ConnectionsPage {
     pub matched: usize,
     pub connections: Vec<ConnectionRow>,
 }
+
+/// Row fields a keyword searches. The Connections page searches the same
+/// fields (`CONNECTION_SEARCH_FIELDS` in `src/lib/connections.ts`); a test
+/// keeps the two lists equal, and another that `row_matches` searches
+/// exactly these.
+#[cfg(test)]
+const SEARCH_FIELDS: [&str; 9] = [
+    "host",
+    "destination_ip",
+    "destination_port",
+    "network",
+    "inbound",
+    "source",
+    "process_path",
+    "rule",
+    "chains",
+];
 
 fn row_matches(row: &ConnectionRow, needle: &str) -> bool {
     [
@@ -175,14 +192,25 @@ fn connections_response(snapshot: ice_core::ConnectionsSnapshot) -> ConnectionsR
     }
 }
 
+/// The running core's Clash API. The traffic stream already follows it, so a
+/// poll reads no files and keeps the port the core started with even after
+/// `settings.json` changes. Settings are the fallback for a running core
+/// whose stream is not attached.
+fn live_endpoints(state: &AppState) -> Result<ice_core::HealthEndpoints, AppError> {
+    if let Some(endpoints) = state.traffic.endpoints() {
+        return Ok(endpoints);
+    }
+    let settings = current_settings(&state.paths)?;
+    clash_endpoints(&state.paths, &settings)
+}
+
 /// A stopped core has no connections; that is a state of the page, not an
 /// error.
 pub(crate) fn list_connections_use_case(state: &AppState) -> Result<ConnectionsResponse, AppError> {
     if state.core_snapshot.load().state.status != CoreStatus::Running {
         return Ok(ConnectionsResponse::default());
     }
-    let settings = current_settings(&state.paths)?;
-    let endpoints = clash_endpoints(&state.paths, &settings)?;
+    let endpoints = live_endpoints(state)?;
     let snapshot = ice_core::connections(&endpoints).map_err(AppError::from)?;
     Ok(connections_response(snapshot))
 }
@@ -200,15 +228,13 @@ pub(crate) fn close_connection_use_case(
         ));
     }
     require_running_core(state)?;
-    let settings = current_settings(&state.paths)?;
-    let endpoints = clash_endpoints(&state.paths, &settings)?;
+    let endpoints = live_endpoints(state)?;
     ice_core::close_connection(&endpoints, &req.id).map_err(AppError::from)
 }
 
 pub(crate) fn close_all_connections_use_case(state: &AppState) -> Result<(), AppError> {
     require_running_core(state)?;
-    let settings = current_settings(&state.paths)?;
-    let endpoints = clash_endpoints(&state.paths, &settings)?;
+    let endpoints = live_endpoints(state)?;
     ice_core::close_all_connections(&endpoints).map_err(AppError::from)
 }
 
@@ -304,6 +330,50 @@ mod tests {
         );
         assert!(none.connections.is_empty());
         assert_eq!(none.matched, 0);
+    }
+
+    #[test]
+    fn keyword_searches_exactly_the_listed_fields() {
+        let needle = "zz-needle";
+        let base = serde_json::to_value(sample_row("id", "", Some(1))).expect("json");
+        for field in SEARCH_FIELDS {
+            let mut value = base.clone();
+            value[field] = if field == "chains" {
+                serde_json::json!([needle])
+            } else {
+                serde_json::json!(needle)
+            };
+            let row: ConnectionRow = serde_json::from_value(value).expect("row");
+            assert!(row_matches(&row, needle), "{field} is searched");
+        }
+        for (field, original) in base.as_object().expect("object") {
+            if SEARCH_FIELDS.contains(&field.as_str()) || !original.is_string() {
+                continue;
+            }
+            let mut value = base.clone();
+            value[field] = serde_json::json!(needle);
+            let row: ConnectionRow = serde_json::from_value(value).expect("row");
+            assert!(!row_matches(&row, needle), "{field} is not searched");
+        }
+    }
+
+    #[test]
+    fn page_search_fields_match_rust() {
+        let ts = include_str!("../../../src/lib/connections.ts");
+        let start = ts
+            .find("export const CONNECTION_SEARCH_FIELDS = [")
+            .expect("CONNECTION_SEARCH_FIELDS in src/lib/connections.ts");
+        let rest = &ts[start..];
+        let list = &rest[rest.find('[').expect("[") + 1..rest.find(']').expect("]")];
+        let from_ts: Vec<&str> = list
+            .split(',')
+            .map(|item| item.trim().trim_matches('"'))
+            .filter(|item| !item.is_empty())
+            .collect();
+        assert_eq!(
+            from_ts, SEARCH_FIELDS,
+            "SEARCH_FIELDS and CONNECTION_SEARCH_FIELDS in src/lib/connections.ts must list the same fields"
+        );
     }
 
     #[test]

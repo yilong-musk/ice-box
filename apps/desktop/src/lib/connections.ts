@@ -53,30 +53,30 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(total / 86_400)}d ${pad(Math.floor((total % 86_400) / 3600))}h`;
 }
 
-/** Byte totals as `512 B`, `1.5 KB`, `12.34 MB`, `1.20 GB`. */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
+/**
+ * Row fields a keyword searches. The MCP `list_connections` keyword searches
+ * the same ones (`SEARCH_FIELDS` in `src-tauri/src/application/connections.rs`);
+ * a Rust test keeps the two lists equal.
+ */
+export const CONNECTION_SEARCH_FIELDS = [
+  "host",
+  "destination_ip",
+  "destination_port",
+  "network",
+  "inbound",
+  "source",
+  "process_path",
+  "rule",
+  "chains",
+] as const satisfies readonly (keyof ConnectionRow)[];
 
 /** Case-insensitive match over everything a row shows. */
 export function matchesKeyword(row: ConnectionRow, keyword: string): boolean {
   const needle = keyword.trim().toLowerCase();
   if (!needle) return true;
-  return [
-    row.host,
-    row.destination_ip,
-    row.destination_port,
-    row.network,
-    row.inbound,
-    row.source,
-    row.process_path,
-    row.rule,
-    ...row.chains,
-  ].some((field) => field.toLowerCase().includes(needle));
+  return CONNECTION_SEARCH_FIELDS.flatMap((field) => row[field]).some((value) =>
+    value.toLowerCase().includes(needle),
+  );
 }
 
 /**

@@ -137,7 +137,10 @@ connection and `matched` those the keyword matched, so a cut list is
 recognizable. `close_connection` takes an `id` from that list.
 
 `get_logs` returns the last `n` lines (200 by default) of the application and
-core logs merged by time, every parsed line included.
+core logs merged by time. By default it keeps warnings, errors, application
+INFO, core lifecycle events, and the outbound each connection took; it hides
+DEBUG and TRACE lines, other core INFO chatter, and the core's harmless DNS
+`unpack request` errors. `all: true` returns every parsed line.
 
 Results use MCP text content plus structured content when the result is an
 object. Tool failures set `isError` and return the application error code and

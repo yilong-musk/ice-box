@@ -95,12 +95,21 @@ fn clash_get_capped(
         .call()
         .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
-    let mut body = String::new();
+    // Read one byte past the cap so an oversized body is reported as such
+    // instead of reaching the JSON parser cut short.
+    let mut raw = Vec::new();
     response
         .into_reader()
-        .take(max_bytes)
-        .read_to_string(&mut body)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut raw)
         .map_err(|e| clash_api_err(path, format!("read: {e}")))?;
+    if raw.len() as u64 > max_bytes {
+        return Err(clash_api_err(
+            path,
+            format!("response exceeds {} KiB", max_bytes / 1024),
+        ));
+    }
+    let body = String::from_utf8(raw).map_err(|e| clash_api_err(path, format!("read: {e}")))?;
     if !(200..300).contains(&status) {
         return Err(clash_api_err(path, format!("HTTP {status}: {body}")));
     }
@@ -1069,6 +1078,17 @@ mod tests {
         assert_eq!(udp.source, "[fd00::2]:40000");
         assert_eq!(udp.destination_ip, "2001:db8::1");
         assert_eq!(udp.rule, "final");
+    }
+
+    #[test]
+    fn a_body_over_the_cap_is_a_size_error_not_a_parse_error() {
+        let server = MockClashApi::start(200, "Rule");
+        let len = MOCK_CONNECTIONS_BODY.len() as u64;
+        let body = clash_get_capped(&server.endpoints(), "/connections", len).expect("at the cap");
+        assert_eq!(body, MOCK_CONNECTIONS_BODY);
+        let err = clash_get_capped(&server.endpoints(), "/connections", len - 1)
+            .expect_err("over the cap");
+        assert!(err.to_string().contains("response exceeds"), "err: {err}");
     }
 
     #[test]

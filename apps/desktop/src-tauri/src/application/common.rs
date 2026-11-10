@@ -436,8 +436,6 @@ pub(crate) fn subscription_rules_retained(state: &AppState) -> bool {
     })
 }
 
-pub(crate) type LogViewCache = crate::log_view::LogViewReader;
-
 pub(crate) fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok()?, meta.len()))

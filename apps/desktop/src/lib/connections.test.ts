@@ -3,10 +3,10 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionRow } from "../api/contracts";
 import {
+  CONNECTION_SEARCH_FIELDS,
   connectionChain,
   connectionRule,
   connectionTarget,
-  formatBytes,
   formatDuration,
   matchesKeyword,
   processName,
@@ -73,14 +73,6 @@ describe("formatters", () => {
     expect(formatDuration(3_720_000)).toBe("1h 02m");
     expect(formatDuration(183_600_000)).toBe("2d 03h");
   });
-
-  it("formats byte totals by magnitude", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(512)).toBe("512 B");
-    expect(formatBytes(1536)).toBe("1.5 KB");
-    expect(formatBytes(5 * 1024 ** 2)).toBe("5.00 MB");
-    expect(formatBytes(1.2 * 1024 ** 3)).toBe("1.20 GB");
-  });
 });
 
 describe("matchesKeyword", () => {
@@ -92,6 +84,14 @@ describe("matchesKeyword", () => {
     expect(matchesKeyword(row(), "curl")).toBe(true);
     expect(matchesKeyword(row(), "udp")).toBe(false);
     expect(matchesKeyword(row({ host: "", destination_ip: "1.1.1.1" }), "1.1.1")).toBe(true);
+  });
+
+  it("searches every listed field and nothing else", () => {
+    for (const field of CONNECTION_SEARCH_FIELDS) {
+      const value = field === "chains" ? ["zz-needle"] : "zz-needle";
+      expect(matchesKeyword(row({ [field]: value }), "zz-needle"), field).toBe(true);
+    }
+    expect(matchesKeyword(row({ id: "zz-needle" }), "zz-needle")).toBe(false);
   });
 });
 

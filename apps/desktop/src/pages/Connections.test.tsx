@@ -221,6 +221,39 @@ describe("Connections", () => {
     expect(targets(container)).toEqual(["1.1.1.1:53"]);
   });
 
+  it("keeps a closed row off the page while its close is in flight", async () => {
+    let finishClose: () => void = () => {};
+    closeConnection.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        }),
+    );
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(
+      view.getByRole("button", {
+        name: t("connections.close", { target: "api.github.com:443" }),
+      }),
+    );
+    // A poll started after the click, answered before the core closed it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(listConnections).toHaveBeenCalledTimes(2);
+    expect(targets(container)).toEqual(["1.1.1.1:53"]);
+
+    listConnections.mockImplementation(async () => snapshot([dnsRow]));
+    await act(async () => {
+      finishClose();
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(targets(container)).toEqual(["1.1.1.1:53"]);
+  });
+
   it("reports a failed close and shows the row again on the next poll", async () => {
     closeConnection.mockRejectedValue("core.api_failed");
     const { container } = render(<Connections />);
@@ -262,6 +295,75 @@ describe("Connections", () => {
       expect(view.getByTestId("connections-empty")).toHaveTextContent(t("connections.empty"));
     });
     expect(view.getByRole("button", { name: t("connections.closeAll") })).toBeDisabled();
+  });
+
+  it("does not bring rows back from a poll due during Close All", async () => {
+    let finishCloseAll: () => void = () => {};
+    closeAllConnections.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCloseAll = resolve;
+        }),
+    );
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(view.getByRole("button", { name: t("connections.closeAll") }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("connections.closeAll") }));
+    // A poll due while the close is in flight, which the core would answer
+    // before it handles the close.
+    let resolveStale: (value: ConnectionsResponse) => void = () => {};
+    listConnections.mockImplementation(
+      () =>
+        new Promise<ConnectionsResponse>((resolve) => {
+          resolveStale = resolve;
+        }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    await act(async () => {
+      finishCloseAll();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(view.getByTestId("connections-empty")).toBeInTheDocument();
+    });
+    await act(async () => {
+      resolveStale(snapshot([row(), dnsRow]));
+      await Promise.resolve();
+    });
+    expect(view.getByTestId("connections-empty")).toBeInTheDocument();
+  });
+
+  it("does not show a Close All failure that settles after the page is left", async () => {
+    let failCloseAll: (reason: unknown) => void = () => {};
+    closeAllConnections.mockImplementation(
+      () =>
+        new Promise<void>((_, reject) => {
+          failCloseAll = reject;
+        }),
+    );
+    const { container, rerender } = render(<Connections active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(view.getByRole("button", { name: t("connections.closeAll") }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: t("connections.closeAll") }));
+    rerender(<Connections active={false} />);
+    await act(async () => {
+      failCloseAll("core.api_failed");
+      await Promise.resolve();
+    });
+    // The first poll after coming back has not answered yet.
+    listConnections.mockImplementation(() => new Promise<ConnectionsResponse>(() => {}));
+    rerender(<Connections active />);
+    expect(view.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("says so when the core is stopped", async () => {
