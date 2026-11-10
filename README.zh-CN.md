@@ -32,21 +32,31 @@
 
 </div>
 
+## 功能
+
+- **订阅。** 自动识别 sing-box JSON、Clash 和分享链接列表，也可以导入本地的 sing-box 配置文件。桌面端可开启自动更新；Android 在导入或手动刷新时更新。机场上报的流量与到期信息显示在每条订阅上。
+- **分流。** **规则**、**全局**、**直连** 三种模式，订阅规则可逐条开关，还可以叠加自定义规则。
+- **节点。** 按策略组选择出口，单个或批量测延迟，并可收藏常用节点。
+- **流量接管。** macOS 与 Windows 上使用系统代理或 TUN；Android 使用系统 VPN，并支持按应用分流（跟随规则、代理、直连或拦截）。
+- **托盘。** 不打开窗口即可启停代理服务，切换模式、订阅和出口节点。macOS 的菜单栏项还会显示实时网速，菜单内可以测延迟。
+- **Agent 接入。** 可选的本地 MCP 服务，让 Agent 操作同一个正在运行的会话。
+- **省心。** 开机自启、经签名校验的应用内更新、主页上的实时流量与内存读数、中英文界面、浅色与深色主题。
+
 ## 安装
 
 前往 [最新发布页](https://github.com/yilong-musk/ice-box/releases/latest) 下载对应平台的安装包。
 
-| 平台 | 安装包 | 首次启动 |
-|---|---|---|
-| **macOS**（Apple Silicon） | `ice-box_<version>_aarch64.dmg` | 仅有 ad-hoc 签名（无 Developer ID、未公证），首次打开会提示「身份不明的开发者」。可在 **系统设置 → 隐私与安全性** 中点「仍要打开」（macOS 15+）、右键选择 **打开**（较早版本），或执行 `xattr -dr com.apple.quarantine /Applications/ice-box.app`。 |
-| **Windows**（x64） | `ice-box_<version>_x64-setup.exe` | 按用户安装的 NSIS 安装包，无需管理员权限。安装包没有 Authenticode 签名，SmartScreen 可能会要求确认。 |
-| **Android**（arm64） | `ice-box_<version>_android_arm64.apk` | 使用项目密钥签名。没有 Google Play 上架；首次安装时，Android 会要求允许从此来源安装应用。 |
+| 平台 | 系统要求 | 安装包 | 首次启动 |
+|---|---|---|---|
+| **macOS**（Apple Silicon） | macOS 12 及以上 | `ice-box_<version>_aarch64.dmg` | 仅有 ad-hoc 签名（无 Developer ID、未公证），首次打开会提示「身份不明的开发者」。可在 **系统设置 → 隐私与安全性** 中点「仍要打开」（macOS 15+）、右键选择 **打开**（较早版本），或执行 `xattr -dr com.apple.quarantine /Applications/ice-box.app`。 |
+| **Windows**（x64） | Windows 10 及以上 | `ice-box_<version>_x64-setup.exe` | 按用户安装的 NSIS 安装包，无需管理员权限。安装包没有 Authenticode 签名，SmartScreen 可能会要求确认。 |
+| **Android**（arm64） | Android 14 及以上 | `ice-box_<version>_android_arm64.apk` | 使用项目密钥签名。没有 Google Play 上架；首次安装时，Android 会要求允许从此来源安装应用。 |
 
 **更新。** 在 macOS 与 Windows 上（0.1.5+），ice-box 会在后台检查 GitHub Releases，并在 **设置 → 应用更新** 中安装经签名校验的更新；更早版本需要先手动升级一次。在 Android 上，**设置 → 应用更新** 检查同一份目录，在应用内下载 arm64 APK，再交给系统安装器确认。
 
 ## 快速上手
 
-1. **导入订阅。** 打开 **订阅**，粘贴链接，点击 **导入**。sing-box JSON、Clash 和分享链接列表会自动识别。桌面端可开启自动更新；Android 只在导入或手动刷新时更新订阅。机场通过列表条目或 `subscription-userinfo` 响应头上报的流量与到期信息，会汇总到订阅条目上。
+1. **导入订阅。** 打开 **订阅**，粘贴链接，点击 **导入**，格式会自动识别。如果要用本地的 sing-box 配置文件（JSON），选择 **配置文件**；它没有远程地址，不能刷新。
 2. **选择模式和节点。** 在 **主页** 选择 **规则**、**全局** 或 **直连**；桌面端打开 **节点** 选择出口并测速，Android 则使用 **主页** 上的节点列表。
 3. **启动代理服务。** 按下电源键。桌面端会应用系统代理，启用 TUN 时则拉起 TUN；Android 会在系统授权后连接 VPN。
 
@@ -56,19 +66,19 @@
 
 在 macOS 与 Windows 上，打开 **设置 → 启动 → 开机自启**。自启时窗口不弹出，只进入托盘；内核照常启动，并恢复上次的代理状态。
 
-自启项按用户注册——macOS 是 `~/Library/LaunchAgents` 下的 LaunchAgent plist，Windows 是 `HKCU` 下的 `Run` 项——每次启动都会重新指向当前的安装位置。macOS 13 及以上也会在 **系统设置 → 通用 → 登录项** 中显示；以应用内开关为准，在那里关闭不会清除应用内设置。直接从磁盘映像运行会被拒绝，因为该路径在重启后失效。
+关闭时也用这个开关：在 macOS 的 **登录项** 里关闭不会清除应用内设置。启用前请先安装应用，直接从磁盘映像运行会被拒绝。
 
 Android 没有登录项。**设置 → 系统** 说明电池优化豁免、严格私人 DNS，以及始终开启 VPN。
 
 ## TUN 模式
 
-在 macOS 与 Windows 上，TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。启用方式、开关行为、平台覆盖范围和限制统一见 [`docs/tun.md`](docs/tun.md)。Android 使用系统 VPN，见 [`docs/architecture.md`](docs/architecture.md#clients)。
+在 macOS 与 Windows 上，TUN 在网络层接管流量，不读取系统代理的应用也能覆盖。Windows 的 TUN 只接管 IPv4 TCP（不支持 UDP/QUIC 和 IPv6），并且需要管理员账户；这些场景可以改用系统代理。启用方式、开关行为、平台覆盖范围和限制统一见 [`docs/tun.md`](docs/tun.md)。Android 使用系统 VPN，见 [`docs/architecture.md`](docs/architecture.md#clients)。
 
 ## Agent 通过 MCP 访问
 
 macOS 与 Windows 桌面端提供可选的本地 MCP 服务。在 **日志** 和 **设置** 上方打开 **MCP** 页面，启用服务并复制生成的客户端配置。Agent 与 GUI 共享当前会话的设置、订阅、数据、内核和代理状态，不会另起一个运行时。
 
-- **35 个工具。** 覆盖状态、设置、流量、订阅、节点与分组、规则、日志、诊断、代理控制和受保护的 TUN 恢复；当结果为对象时附带结构化内容，并保留应用错误码。
+- **完整的工具集。** 覆盖状态、设置、流量、订阅、节点与分组、规则、日志、诊断、代理控制和受保护的 TUN 恢复；当结果为对象时附带结构化内容，并保留应用错误码。
 - **安全的默认值。** MCP 仅在回环地址上监听，并要求随机控制令牌认证，且复制的客户端配置中不包含该令牌。
 - **内置 stdio 桥接。** 生成的配置会以桥接模式启动同一可执行文件，无需额外的守护进程或协议适配器。
 
@@ -76,7 +86,7 @@ MCP 仅限桌面端：Android 不提供 MCP，网站演示使用模拟服务。�
 
 ## 开发
 
-Rust（stable）、Node.js 22，macOS 上还需要 Xcode Command Line Tools。构建 Android 还需要 JDK 17、Go，以及已设置 `ANDROID_HOME` 的 Android SDK（包由 `scripts/ci-install-android-sdk.sh` 安装）。
+Rust（版本固定在 `rust-toolchain.toml`，rustup 首次使用时自动安装）、Node.js 22，macOS 上还需要 Xcode Command Line Tools。构建 Android 还需要 JDK 17、Go，以及已设置 `ANDROID_HOME` 的 Android SDK（包由 `scripts/ci-install-android-sdk.sh` 安装）。
 
 ```bash
 cd apps/desktop && npm install && cd ../..

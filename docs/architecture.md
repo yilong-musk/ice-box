@@ -138,7 +138,8 @@ The generated configuration targets the bundled core's compatibility version.
 That version is `third_party/sing-box/VERSION`. Desktop downloads, the Android
 libbox build, and `ENGINE_COMPAT_CORE_VERSION` all read it, so a core upgrade
 starts there. The project follows each stable sing-box release: update the
-version file and `third_party/sing-box/CHECKSUMS.sha256`, then review config
+version file, `third_party/sing-box/CHECKSUMS.sha256`, and the version written in
+the READMEs and `tun.md` (the gates fail on a mismatch), then review config
 generation against that release's schema before shipping it. The client owns
 configuration generation; sing-box never fetches subscriptions or interprets
 application preferences.
@@ -224,10 +225,11 @@ revision: a core generation alone is not an application-wide version.
 
 ### Background worker lifecycle
 
-`WorkerSupervisor` owns recurring core health, subscription refresh, runtime
-probe, tray state/speed, and instance-focus workers. Each retains an independent
-thread so a slow subscription fetch cannot delay health reconciliation. Named
-workers expose liveness and restart counts; panics retry with a delay.
+`WorkerSupervisor` owns recurring core health, subscription refresh, rule-set
+refresh, runtime probe, tray state/speed, and instance-focus workers. Each
+retains an independent thread so a slow subscription fetch cannot delay health
+reconciliation. Named workers expose liveness and restart counts; panics retry
+with a delay.
 Condition-variable waits use monotonic deadlines and can interrupt hourly
 timers on cancellation. Quit pauses workers during cleanup, resumes them if
 cleanup fails, and cancels/joins them within a shared bounded budget on success.
@@ -313,8 +315,10 @@ classification.
 
 Subscriptions are untrusted input. Fetching applies address and redirect
 restrictions, TLS validation, and size limits; parsing and configuration
-generation constrain what reaches the core. Subscription fetches use direct
-connections so refreshing a broken profile does not depend on that profile.
+generation constrain what reaches the core. Desktop subscription fetches
+follow the OS system proxy and connect directly when none is set, as described
+in [Configuration flow](#configuration-flow); the DNS-based address check runs
+only on that direct path.
 
 The Clash control API stays on loopback and requires a per-install `secret`
 (`Authorization: Bearer`). Privileged runners authenticate callers

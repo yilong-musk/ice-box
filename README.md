@@ -32,21 +32,31 @@ English · [简体中文](README.zh-CN.md)
 
 </div>
 
+## Features
+
+- **Subscriptions.** sing-box JSON, Clash, and share-link lists are detected automatically, and a local sing-box config file can be imported too. Desktop can auto-update profiles; Android refreshes on import or manual refresh. Provider traffic and expiry are shown on each subscription.
+- **Routing.** **Rule**, **Global**, and **Direct** modes, a switch for each subscription rule, and your own custom rules on top.
+- **Nodes.** Pick an exit per strategy group, test latency one node or a whole list at a time, and pin favorites.
+- **Capture.** System proxy or TUN on macOS and Windows; the system VPN on Android, with per-app routing (follow the rules, proxy, direct, or block).
+- **Tray.** Start and stop the proxy service and switch the mode, subscription, or exit node without opening the window. On macOS the menu bar item also shows live traffic and the menu runs delay tests.
+- **Agent access.** An opt-in local MCP service lets an Agent operate the same running session.
+- **Quiet upkeep.** Launch at login, signature-verified in-app updates, live traffic and memory readouts on Home, English and 简体中文, light and dark themes.
+
 ## Install
 
 Grab the installer for your platform from the [latest release](https://github.com/yilong-musk/ice-box/releases/latest).
 
-| Platform | Installer | First launch |
-|---|---|---|
-| **macOS** (Apple Silicon) | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. Allow it in **System Settings → Privacy & Security → Open Anyway** (macOS 15+), right-click **Open** (older versions), or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
-| **Windows** (x64) | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. It has no Authenticode signature, so SmartScreen may ask you to confirm. |
-| **Android** (arm64) | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore. There is no Google Play listing; Android asks for permission to install from this source. |
+| Platform | Requires | Installer | First launch |
+|---|---|---|---|
+| **macOS** (Apple Silicon) | macOS 12 or later | `ice-box_<version>_aarch64.dmg` | Ad-hoc signed only (no Developer ID, not notarized), so the first launch shows an **unidentified developer** warning. Allow it in **System Settings → Privacy & Security → Open Anyway** (macOS 15+), right-click **Open** (older versions), or run `xattr -dr com.apple.quarantine /Applications/ice-box.app`. |
+| **Windows** (x64) | Windows 10 or later | `ice-box_<version>_x64-setup.exe` | Per-user NSIS installer; no administrator rights required. It has no Authenticode signature, so SmartScreen may ask you to confirm. |
+| **Android** (arm64) | Android 14 or later | `ice-box_<version>_android_arm64.apk` | Signed with the project keystore. There is no Google Play listing; Android asks for permission to install from this source. |
 
 **Updating.** On macOS and Windows (0.1.5+), ice-box checks GitHub Releases in the background and installs signature-verified updates from **Settings → App Updates**; older installs need one manual upgrade first. On Android, **Settings → App Updates** checks the same catalog, downloads the arm64 APK, and hands it to the system installer for confirmation.
 
 ## Quick start
 
-1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**. sing-box JSON, Clash, and share-link lists are detected automatically. Desktop can auto-update profiles; Android refreshes only on import or manual refresh. Provider traffic and expiry from list entries or the `subscription-userinfo` header are summarized on the subscription line.
+1. **Import a subscription.** Open **Subscriptions**, paste the URL, and press **Import**; the format is detected automatically. To use a local sing-box config file (JSON) instead, choose **Config file**; it has no remote URL, so it cannot be refreshed.
 2. **Pick a mode and a node.** On **Home**, choose **Rule**, **Global**, or **Direct**. On desktop, open **Nodes** to pick an exit and test its latency; on Android, use the node list on **Home**.
 3. **Start the proxy service.** Press the power button. Desktop applies the system proxy or starts TUN when enabled; Android connects the VPN after the system permission prompt.
 
@@ -56,19 +66,19 @@ No subscription yet? ice-box starts in direct-only mode, so the core, capture, a
 
 On macOS and Windows, enable **Settings → Startup → Launch at login**. A login start stays in the tray with the window hidden, starts the core, and restores the last proxy state.
 
-The entry is registered per user — a LaunchAgent plist under `~/Library/LaunchAgents` on macOS, an `HKCU` `Run` value on Windows — and re-pointed at the installed app on every launch. macOS 13+ also lists it under **System Settings → General → Login Items**; the in-app switch stays authoritative, so turning the entry off there does not clear it. Running straight from the disk image is refused because that path disappears after reboot.
+Turn it off with the same switch: disabling the entry under macOS **Login Items** does not clear it. Install the app before enabling it, because running straight from the disk image is refused.
 
 Android has no login item. **Settings → System** explains battery-optimization exemption, strict Private DNS, and always-on VPN.
 
 ## TUN mode
 
-On macOS and Windows, TUN captures traffic at the network layer, covering apps that never read the system proxy. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations. Android uses the system VPN; see [`docs/architecture.md`](docs/architecture.md#clients).
+On macOS and Windows, TUN captures traffic at the network layer, covering apps that never read the system proxy. Windows TUN carries IPv4 TCP only (no UDP/QUIC or IPv6) and needs an Administrator account; the system proxy remains the alternative there. See [`docs/tun.md`](docs/tun.md) for setup, switch behavior, platform coverage, and limitations. Android uses the system VPN; see [`docs/architecture.md`](docs/architecture.md#clients).
 
 ## Agent access with MCP
 
 The macOS and Windows app exposes an opt-in local MCP service. Open **MCP** above **Logs** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
 
-- **35 tools.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
+- **Full tool set.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
 - **Safe by default.** MCP listens only on authenticated loopback with a random control token that is never included in the copied client config.
 - **Built-in stdio bridge.** The generated config launches the same executable in bridge mode, so no separate daemon or protocol adapter is needed.
 
@@ -76,7 +86,7 @@ MCP is desktop-only: Android has no MCP, and the website demo uses a simulated s
 
 ## Development
 
-Rust (stable), Node.js 22, and the Xcode Command Line Tools on macOS. Android builds also need JDK 17, Go, and an Android SDK (`ANDROID_HOME`) with the packages installed by `scripts/ci-install-android-sdk.sh`.
+Rust (the version pinned in `rust-toolchain.toml`, which rustup installs on first use), Node.js 22, and the Xcode Command Line Tools on macOS. Android builds also need JDK 17, Go, and an Android SDK (`ANDROID_HOME`) with the packages installed by `scripts/ci-install-android-sdk.sh`.
 
 ```bash
 cd apps/desktop && npm install && cd ../..
