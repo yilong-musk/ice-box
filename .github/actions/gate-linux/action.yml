@@ -22,6 +22,35 @@ runs:
           apps/desktop/package-lock.json
           apps/website/package-lock.json
 
+    # The Ubuntu mirror the runners use is sometimes slow enough to add minutes
+    # to the job, so downloaded .deb files are kept in a cached directory and
+    # only packages missing from it are fetched. This covers both the system
+    # dependencies and the ones Playwright installs for Chromium.
+    - name: Point apt at a cacheable archive directory
+      id: apt-cache-dir
+      shell: bash
+      run: |
+        dir="$HOME/.cache/apt-archives"
+        mkdir -p "$dir/partial"
+        # Sandbox::User root: the _apt user cannot write into $HOME.
+        printf '%s\n' \
+          "Dir::Cache::Archives \"$dir\";" \
+          'APT::Keep-Downloaded-Packages "true";' \
+          'APT::Sandbox::User "root";' \
+          | sudo tee /etc/apt/apt.conf.d/99ci-archive-cache >/dev/null
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v6
+      with:
+        path: ${{ steps.apt-cache-dir.outputs.dir }}
+        # A new runner image or package list saves a fresh cache, seeded from
+        # the closest older one so only changed packages are downloaded.
+        key: apt-${{ steps.apt-cache-dir.outputs.image }}-${{ hashFiles('.github/actions/gate-linux/action.yml') }}
+        restore-keys: |
+          apt-${{ steps.apt-cache-dir.outputs.image }}-
+          apt-${{ runner.os }}-
+
     - name: Install system dependencies
       shell: bash
       run: |
@@ -39,10 +68,32 @@ runs:
       working-directory: apps/website
       run: npm ci
 
+    - name: Resolve Playwright version
+      id: playwright
+      shell: bash
+      working-directory: apps/website
+      run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
     - name: Install Playwright Chromium
       shell: bash
       working-directory: apps/website
-      run: npx playwright install --with-deps chromium
+      run: |
+        # A no-op when the browser came from the cache.
+        npx playwright install chromium
+        npx playwright install-deps chromium
+
+    - name: Prepare apt archives for caching
+      shell: bash
+      run: |
+        # Drop packages superseded upstream so the cache does not keep growing,
+        # and hand the directory to the runner user so the cache can save it.
+        sudo apt-get autoclean
+        sudo chown -R "$(id -u):$(id -g)" "${{ steps.apt-cache-dir.outputs.dir }}"
 
     - name: Workspace gate (G9.10)
       shell: bash
