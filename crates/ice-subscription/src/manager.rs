@@ -764,10 +764,9 @@ impl<F: HttpFetcher> SubscriptionManager<F> {
         &self,
         cache_dir: &std::path::Path,
         urls: &[String],
-        max_age: std::time::Duration,
-        force: bool,
+        mode: crate::RuleSetRefreshMode,
     ) -> Vec<crate::RuleSetRefreshReport> {
-        crate::refresh_rule_sets(&self.fetcher, cache_dir, urls, max_age, force)
+        crate::refresh_rule_sets(&self.fetcher, cache_dir, urls, mode)
     }
 }
 

@@ -44,8 +44,8 @@ pub use merge::{
 };
 pub use rule_set_download::{
     prune_rule_set_cache, read_rule_set_cache_meta, refresh_rule_sets, rule_set_statuses,
-    RuleSetCacheMeta, RuleSetRefresh, RuleSetRefreshReport, RuleSetStatus, RULE_SET_CACHE_MAX_IDLE,
-    RULE_SET_REFRESH_INTERVAL,
+    RuleSetCacheMeta, RuleSetRefresh, RuleSetRefreshMode, RuleSetRefreshReport, RuleSetStatus,
+    RULE_SET_CACHE_MAX_IDLE,
 };
 pub use share::{subscription_share_text, SubscriptionShareKind};
 pub use store::{

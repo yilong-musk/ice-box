@@ -107,9 +107,14 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
         return true;
     }
     let results = mgr.apply_all(fetched);
-    crate::rule_set_watch::request_refresh(false);
     let updated = results.iter().filter(|(_, r)| r.is_ok()).count();
     let failed = results.len() - updated;
+    // Rule-sets follow subscription updates, in the background.
+    crate::rule_set_watch::request_refresh(if updated > 0 {
+        ice_engine::RuleSetRefreshMode::All
+    } else {
+        ice_engine::RuleSetRefreshMode::Missing
+    });
     for (id, result) in &results {
         if let Err(err) = result {
             tracing::warn!(

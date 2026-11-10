@@ -338,7 +338,10 @@ decodes the `.srs` or JSON body into a strict model (fixed matcher fields,
 value checks, size limits, no catch-all CIDRs) and re-encodes canonical source
 JSON into the data-dir rule-set cache. Generation uses the cached copy, then a
 bundled copy of the same upstream file, and otherwise drops the rules that
-need the set. The config guard runs every local rule-set through the same
+need the set. Cached copies are re-checked (conditional requests) in the
+background after a subscription update, manual or automatic, and on a manual
+rule-set refresh; other passes only download sets that have no cached copy
+yet. The config guard runs every local rule-set through the same
 sanitizer again before staging it, so an elevated core only parses JSON the
 privileged side wrote.
 Platform privilege and ownership rules live in [tun.md](tun.md).

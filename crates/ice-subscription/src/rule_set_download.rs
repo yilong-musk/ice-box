@@ -7,6 +7,11 @@
 //! `ice-rule-set` into canonical source JSON, and written atomically to
 //! `<cache>/<sha256(url)>.json` with a `.meta.json` sidecar. A failed fetch
 //! or a rejected rule-set never removes an existing cached copy.
+//!
+//! There is no refresh timer: cached copies are re-checked when the
+//! subscriptions are updated or the user asks for it
+//! ([`RuleSetRefreshMode::All`]); other passes only fill in sets that were
+//! never downloaded ([`RuleSetRefreshMode::Missing`]).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -16,8 +21,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::fetch::HttpFetcher;
 
-/// How long a cached rule-set is used before it is checked again.
-pub const RULE_SET_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Which URLs a refresh pass fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleSetRefreshMode {
+    /// Only URLs without a cached copy; cached ones are left alone.
+    Missing,
+    /// Every URL, with a conditional request when a copy is cached
+    /// (after a subscription update, or a manual refresh).
+    All,
+}
+
+impl RuleSetRefreshMode {
+    /// The wider of two requested modes, for coalescing requests.
+    pub fn max(self, other: Self) -> Self {
+        if self == Self::All || other == Self::All {
+            Self::All
+        } else {
+            Self::Missing
+        }
+    }
+}
 
 /// How long an unused cached rule-set is kept.
 pub const RULE_SET_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -34,6 +57,11 @@ pub struct RuleSetCacheMeta {
     pub updated_at: u64,
     /// Unix seconds of the last successful check (200 or 304).
     pub checked_at: u64,
+    /// Unix seconds when a prune pass last saw the set in use (refreshed
+    /// at most daily). Keeps a needed set from looking idle while its copy
+    /// is not re-checked.
+    #[serde(default)]
+    pub used_at: u64,
     pub rules: usize,
     pub items: usize,
     /// Why the last attempt failed, cleared by the next success. A sidecar
@@ -52,8 +80,8 @@ pub enum RuleSetRefresh {
     Updated,
     /// The server answered 304; the cached copy stays.
     NotModified,
-    /// The cached copy is younger than the refresh interval; not fetched.
-    Fresh,
+    /// A copy is cached and the pass only fetches missing sets.
+    Cached,
     /// The fetch or sanitization failed; any cached copy stays.
     Failed(String),
 }
@@ -106,19 +134,17 @@ fn record_failure(cache_dir: &Path, url: &str, message: &str) {
     }
 }
 
-/// Refresh every URL in `urls`. Cached copies checked within `max_age` are
-/// skipped unless `force`.
+/// Refresh the URLs in `urls` that `mode` selects.
 pub fn refresh_rule_sets<F: HttpFetcher + ?Sized>(
     fetcher: &F,
     cache_dir: &Path,
     urls: &[String],
-    max_age: Duration,
-    force: bool,
+    mode: RuleSetRefreshMode,
 ) -> Vec<RuleSetRefreshReport> {
     urls.iter()
         .map(|url| RuleSetRefreshReport {
             url: url.clone(),
-            outcome: refresh_one(fetcher, cache_dir, url, max_age, force),
+            outcome: refresh_one(fetcher, cache_dir, url, mode),
         })
         .collect()
 }
@@ -127,13 +153,12 @@ fn refresh_one<F: HttpFetcher + ?Sized>(
     fetcher: &F,
     cache_dir: &Path,
     url: &str,
-    max_age: Duration,
-    force: bool,
+    mode: RuleSetRefreshMode,
 ) -> RuleSetRefresh {
     if !ice_config::is_downloadable_rule_set_url(url) {
         return RuleSetRefresh::Failed("rule-set URL must be https".into());
     }
-    let outcome = refresh_downloadable(fetcher, cache_dir, url, max_age, force);
+    let outcome = refresh_downloadable(fetcher, cache_dir, url, mode);
     if let RuleSetRefresh::Failed(message) = &outcome {
         record_failure(cache_dir, url, message);
     }
@@ -144,16 +169,13 @@ fn refresh_downloadable<F: HttpFetcher + ?Sized>(
     fetcher: &F,
     cache_dir: &Path,
     url: &str,
-    max_age: Duration,
-    force: bool,
+    mode: RuleSetRefreshMode,
 ) -> RuleSetRefresh {
     let cached = read_rule_set_cache_meta(cache_dir, url);
-    let now = now_secs();
-    if let Some(meta) = &cached {
-        if !force && now.saturating_sub(meta.checked_at) < max_age.as_secs() {
-            return RuleSetRefresh::Fresh;
-        }
+    if cached.is_some() && mode == RuleSetRefreshMode::Missing {
+        return RuleSetRefresh::Cached;
     }
+    let now = now_secs();
     let (etag, last_modified) = cached.as_ref().map_or((None, None), |m| {
         (m.etag.as_deref(), m.last_modified.as_deref())
     });
@@ -206,6 +228,7 @@ fn refresh_downloadable<F: HttpFetcher + ?Sized>(
             now
         },
         checked_at: now,
+        used_at: now,
         rules: sanitized.stats.rules,
         items: sanitized.stats.items,
         last_error: None,
@@ -349,11 +372,31 @@ fn write_meta(cache_dir: &Path, url: &str, meta: &RuleSetCacheMeta) -> Result<()
     .map_err(|e| format!("write rule-set cache meta: {e}"))
 }
 
-/// Remove cached rule-sets that are not in `keep` and were not checked
-/// within `max_idle` (sets of an inactive subscription survive a while, so
-/// switching back does not download them again). Only files named like
-/// cache entries (`<64 hex>.json` / `<64 hex>.meta.json`) are touched.
+/// How stale `used_at` may get before a prune pass rewrites it.
+const USED_AT_RESOLUTION: u64 = 24 * 60 * 60;
+
+/// Record that the cached copies of `urls` are still in use.
+fn mark_used(cache_dir: &Path, urls: &[String], now: u64) {
+    for url in urls {
+        let Some(mut meta) = read_rule_set_cache_meta(cache_dir, url) else {
+            continue;
+        };
+        if now.saturating_sub(meta.used_at) < USED_AT_RESOLUTION {
+            continue;
+        }
+        meta.used_at = now;
+        let _ = write_meta(cache_dir, url, &meta);
+    }
+}
+
+/// Remove cached rule-sets that are not in `keep` and were neither checked
+/// nor in use within `max_idle` (sets of an inactive subscription survive a
+/// while, so switching back does not download them again). Marks the sets
+/// in `keep` as in use. Only files named like cache entries
+/// (`<64 hex>.json` / `<64 hex>.meta.json`) are touched.
 pub fn prune_rule_set_cache(cache_dir: &Path, keep: &[String], max_idle: Duration) -> usize {
+    let now = now_secs();
+    mark_used(cache_dir, keep, now);
     let keep: HashSet<String> = keep
         .iter()
         .filter_map(|url| {
@@ -366,12 +409,11 @@ pub fn prune_rule_set_cache(cache_dir: &Path, keep: &[String], max_idle: Duratio
     let Ok(entries) = std::fs::read_dir(cache_dir) else {
         return 0;
     };
-    let now = now_secs();
     let idle = |stem: &str| {
         let meta = std::fs::read(cache_dir.join(format!("{stem}.meta.json")))
             .ok()
             .and_then(|raw| serde_json::from_slice::<RuleSetCacheMeta>(&raw).ok());
-        meta.is_none_or(|m| now.saturating_sub(m.checked_at) >= max_idle.as_secs())
+        meta.is_none_or(|m| now.saturating_sub(m.checked_at.max(m.used_at)) >= max_idle.as_secs())
     };
     let mut stale = Vec::new();
     for entry in entries.flatten() {
@@ -473,13 +515,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fetcher = BytesFetcher::new(SET);
         let urls = vec![URL.to_string()];
-        let reports = refresh_rule_sets(
-            &fetcher,
-            dir.path(),
-            &urls,
-            RULE_SET_REFRESH_INTERVAL,
-            false,
-        );
+        let reports = refresh_rule_sets(&fetcher, dir.path(), &urls, RuleSetRefreshMode::Missing);
         assert_eq!(reports[0].outcome, RuleSetRefresh::Updated);
         let cached = std::fs::read(ice_config::rule_set_cache_path(dir.path(), URL)).unwrap();
         assert_eq!(
@@ -490,21 +526,15 @@ mod tests {
         assert_eq!(meta.items, 2);
         assert_eq!(meta.etag.as_deref(), Some("\"v1\""));
 
-        // Within the interval: not fetched again.
-        let reports = refresh_rule_sets(
-            &fetcher,
-            dir.path(),
-            &urls,
-            RULE_SET_REFRESH_INTERVAL,
-            false,
-        );
-        assert_eq!(reports[0].outcome, RuleSetRefresh::Fresh);
+        // Missing-only pass: a cached copy is not fetched again.
+        let reports = refresh_rule_sets(&fetcher, dir.path(), &urls, RuleSetRefreshMode::Missing);
+        assert_eq!(reports[0].outcome, RuleSetRefresh::Cached);
         assert_eq!(*fetcher.calls.lock().unwrap(), 1);
 
-        // Forced: conditional request answered with 304.
-        let reports =
-            refresh_rule_sets(&fetcher, dir.path(), &urls, RULE_SET_REFRESH_INTERVAL, true);
+        // Full pass: conditional request answered with 304.
+        let reports = refresh_rule_sets(&fetcher, dir.path(), &urls, RuleSetRefreshMode::All);
         assert_eq!(reports[0].outcome, RuleSetRefresh::NotModified);
+        assert_eq!(*fetcher.calls.lock().unwrap(), 2);
     }
 
     #[test]
@@ -515,19 +545,18 @@ mod tests {
             &BytesFetcher::new(SET),
             dir.path(),
             &urls,
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
         let before = std::fs::read(ice_config::rule_set_cache_path(dir.path(), URL)).unwrap();
 
         let mut hostile = BytesFetcher::new(br#"{"version":1,"rules":[{"ip_cidr":"0.0.0.0/0"}]}"#);
         hostile.etag = Some("\"v2\"".into());
-        let reports = refresh_rule_sets(&hostile, dir.path(), &urls, Duration::ZERO, true);
+        let reports = refresh_rule_sets(&hostile, dir.path(), &urls, RuleSetRefreshMode::All);
         assert!(matches!(reports[0].outcome, RuleSetRefresh::Failed(_)));
 
         let mut offline = BytesFetcher::new(SET);
         offline.fail = true;
-        let reports = refresh_rule_sets(&offline, dir.path(), &urls, Duration::ZERO, true);
+        let reports = refresh_rule_sets(&offline, dir.path(), &urls, RuleSetRefreshMode::All);
         assert!(matches!(reports[0].outcome, RuleSetRefresh::Failed(_)));
 
         let after = std::fs::read(ice_config::rule_set_cache_path(dir.path(), URL)).unwrap();
@@ -539,7 +568,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fetcher = BytesFetcher::new(SET);
         let urls = vec!["http://example.org/a.srs".to_string()];
-        let reports = refresh_rule_sets(&fetcher, dir.path(), &urls, Duration::ZERO, true);
+        let reports = refresh_rule_sets(&fetcher, dir.path(), &urls, RuleSetRefreshMode::All);
         assert!(matches!(reports[0].outcome, RuleSetRefresh::Failed(_)));
         assert_eq!(*fetcher.calls.lock().unwrap(), 0);
     }
@@ -554,8 +583,7 @@ mod tests {
             &fetcher,
             dir.path(),
             &[a.clone(), b.clone()],
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
         std::fs::write(dir.path().join("notes.json"), b"{}").unwrap();
         // Recently checked: kept even though unlisted.
@@ -577,6 +605,31 @@ mod tests {
     }
 
     #[test]
+    fn a_set_in_use_is_not_pruned_after_it_stops_being_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let urls = vec![URL.to_string()];
+        refresh_rule_sets(
+            &BytesFetcher::new(SET),
+            dir.path(),
+            &urls,
+            RuleSetRefreshMode::All,
+        );
+        // Last checked and last seen in use long ago.
+        let max_idle = Duration::from_secs(30 * 24 * 60 * 60);
+        let mut meta = read_rule_set_cache_meta(dir.path(), URL).unwrap();
+        meta.checked_at = 1;
+        meta.used_at = 1;
+        write_meta(dir.path(), URL, &meta).unwrap();
+
+        // Still needed: kept, and recorded as in use now.
+        assert_eq!(prune_rule_set_cache(dir.path(), &urls, max_idle), 0);
+        assert!(read_rule_set_cache_meta(dir.path(), URL).unwrap().used_at > 1);
+        // No longer needed: kept for the idle period from that use.
+        assert_eq!(prune_rule_set_cache(dir.path(), &[], max_idle), 0);
+        assert!(read_rule_set_cache_meta(dir.path(), URL).is_some());
+    }
+
+    #[test]
     fn statuses_report_where_each_set_comes_from() {
         let cache = tempfile::tempdir().unwrap();
         let bundled = tempfile::tempdir().unwrap();
@@ -586,8 +639,7 @@ mod tests {
             &BytesFetcher::new(SET),
             cache.path(),
             &urls,
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
         let mut offline = BytesFetcher::new(SET);
         offline.fail = true;
@@ -596,8 +648,7 @@ mod tests {
             &offline,
             cache.path(),
             std::slice::from_ref(&failing),
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
 
         let sets = vec![
@@ -630,8 +681,7 @@ mod tests {
             &BytesFetcher::new(SET),
             cache.path(),
             std::slice::from_ref(&failing),
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
         let statuses = rule_set_statuses(&sets, &rules, None, Some(bundled.path()), cache.path());
         let b = statuses.iter().find(|s| s.tag == "b").unwrap();
@@ -649,8 +699,7 @@ mod tests {
             &crate::DirectFetcher,
             dir.path(),
             std::slice::from_ref(&url),
-            Duration::ZERO,
-            true,
+            RuleSetRefreshMode::All,
         );
         assert_eq!(reports[0].outcome, RuleSetRefresh::Updated, "{reports:?}");
         let meta = read_rule_set_cache_meta(dir.path(), &url).unwrap();

@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The choice is remembered across restarts.
 - Each connection's row background now shows its share of total traffic
   (upload plus download) instead of download alone.
+- Downloaded rule-sets are re-checked for updates with the subscriptions
+  instead of daily: in the background after a subscription update, manual or
+  automatic, without holding it up. The manual rule-set refresh is kept. Other
+  checks only download sets that have no cached copy yet.
 
 ## [0.3.2] - 2026-11-10
 
