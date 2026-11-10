@@ -2,7 +2,47 @@
 
 import type { ConnectionRow } from "../api/contracts";
 
-export type ConnectionSort = "newest" | "traffic";
+export type ConnectionSort = "newest" | "total" | "download" | "upload";
+
+/** Sort orders in the order the picker lists them; the first is the default. */
+export const CONNECTION_SORTS: readonly ConnectionSort[] = [
+  "newest",
+  "total",
+  "download",
+  "upload",
+];
+
+export const CONNECTION_SORT_STORAGE_KEY = "ice-box.connections.sort";
+
+function isConnectionSort(value: unknown): value is ConnectionSort {
+  return CONNECTION_SORTS.includes(value as ConnectionSort);
+}
+
+/** The sort order the viewer last picked; newest when nothing valid is stored
+ * or storage is unavailable. */
+export function readConnectionSort(): ConnectionSort {
+  try {
+    const raw = window.localStorage.getItem(CONNECTION_SORT_STORAGE_KEY);
+    if (isConnectionSort(raw)) return raw;
+  } catch {
+    // Fall through to the default.
+  }
+  return CONNECTION_SORTS[0];
+}
+
+/** Remember the picked sort order across restarts. */
+export function writeConnectionSort(sort: ConnectionSort): void {
+  try {
+    window.localStorage.setItem(CONNECTION_SORT_STORAGE_KEY, sort);
+  } catch {
+    // Storage is a convenience only: the page works without it.
+  }
+}
+
+/** Narrow a raw picker value to a sort order, or null when it is not one. */
+export function parseConnectionSort(value: string): ConnectionSort | null {
+  return isConnectionSort(value) ? value : null;
+}
 
 /** `host:port`, falling back to the destination IP (IPv6 bracketed). */
 export function connectionTarget(row: ConnectionRow): string {
@@ -90,10 +130,12 @@ export function sortConnections(
   const newest = (a: ConnectionRow, b: ConnectionRow) =>
     (b.start_ms ?? 0) - (a.start_ms ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const sorted = [...rows];
-  if (sort === "traffic") {
+  if (sort === "total") {
     sorted.sort(
       (a, b) => b.upload + b.download - (a.upload + a.download) || newest(a, b),
     );
+  } else if (sort === "download" || sort === "upload") {
+    sorted.sort((a, b) => b[sort] - a[sort] || newest(a, b));
   } else {
     sorted.sort(newest);
   }

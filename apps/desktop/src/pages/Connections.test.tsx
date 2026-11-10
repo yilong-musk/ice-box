@@ -116,12 +116,31 @@ describe("Connections", () => {
     expect(within(traffic).getByTestId("traffic-up")).toHaveTextContent("↑ 1.0 KB");
   });
 
-  it("scales each row's background to the largest download", async () => {
+  it("scales each row's background to the largest upload plus download", async () => {
     listConnections.mockImplementation(async () =>
       snapshot([
-        row({ id: "big", host: "big.example", download: 4000, start_ms: NOW - 3_000 }),
-        row({ id: "small", host: "small.example", download: 1000, start_ms: NOW - 2_000 }),
-        row({ id: "idle", host: "idle.example", download: 0, start_ms: NOW - 1_000 }),
+        row({
+          id: "big",
+          host: "big.example",
+          upload: 1000,
+          download: 3000,
+          start_ms: NOW - 3_000,
+        }),
+        // Mostly upload: a download-only bar would draw it at 100/3000.
+        row({
+          id: "small",
+          host: "small.example",
+          upload: 900,
+          download: 100,
+          start_ms: NOW - 2_000,
+        }),
+        row({
+          id: "idle",
+          host: "idle.example",
+          upload: 0,
+          download: 0,
+          start_ms: NOW - 1_000,
+        }),
       ]),
     );
     const { container } = render(<Connections />);
@@ -165,14 +184,38 @@ describe("Connections", () => {
     );
   });
 
-  it("sorts by bytes transferred", async () => {
+  it("sorts by download, upload and their total", async () => {
+    listConnections.mockImplementation(async () =>
+      snapshot([row(), { ...dnsRow, upload: 9_000, download: 10 }]),
+    );
     const { container } = render(<Connections />);
     const view = within(container);
     await waitFor(() => {
       expect(view.getAllByTestId("connection-row")).toHaveLength(2);
     });
-    fireEvent.click(view.getByRole("radio", { name: t("connections.sort.traffic") }));
+    const sort = view.getByRole("combobox", { name: t("connections.sortAria") });
+    expect(sort).toHaveValue("newest");
+    fireEvent.change(sort, { target: { value: "download" } });
     expect(targets(container)).toEqual(["api.github.com:443", "1.1.1.1:53"]);
+    fireEvent.change(sort, { target: { value: "upload" } });
+    expect(targets(container)).toEqual(["1.1.1.1:53", "api.github.com:443"]);
+    // Totals: 1.1.1.1 9010 bytes, api.github.com 5120 bytes.
+    fireEvent.change(sort, { target: { value: "total" } });
+    expect(targets(container)).toEqual(["1.1.1.1:53", "api.github.com:443"]);
+  });
+
+  it("remembers the picked sort for the next visit", async () => {
+    const first = render(<Connections />);
+    fireEvent.change(
+      within(first.container).getByRole("combobox", { name: t("connections.sortAria") }),
+      { target: { value: "download" } },
+    );
+    first.unmount();
+
+    const { container } = render(<Connections />);
+    expect(
+      within(container).getByRole("combobox", { name: t("connections.sortAria") }),
+    ).toHaveValue("download");
   });
 
   it("closes one connection and removes its row at once", async () => {

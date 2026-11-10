@@ -28,7 +28,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   connectionChain,
   connectionRule,
@@ -36,7 +36,11 @@ import {
   formatDuration,
   matchesKeyword,
   processName,
+  CONNECTION_SORTS,
+  parseConnectionSort,
+  readConnectionSort,
   sortConnections,
+  writeConnectionSort,
   type ConnectionSort,
 } from "../lib/connections";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -46,8 +50,6 @@ import { t, useLanguagePreference } from "../lib/i18n";
 const POLL_MS = 1000;
 /** Rows drawn at once. The list is redrawn every poll; search narrows a longer one. */
 const MAX_ROWS = 300;
-
-const SORTS: readonly ConnectionSort[] = ["newest", "traffic"];
 
 /** Download and upload figures, coloured like the Home traffic chart. */
 function TrafficPair({ down, up }: { down: number; up: number }) {
@@ -74,7 +76,7 @@ function ConnectionItem({
   onClose,
 }: {
   row: ConnectionRow;
-  /** Download relative to the largest one in the list, 0 to 1. */
+  /** Upload plus download relative to the largest total in the list, 0 to 1. */
   usage: number;
   nowMs: number;
   onClose: (id: string) => void;
@@ -182,7 +184,7 @@ export function Connections({ active = true }: { active?: boolean }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
-  const [sort, setSort] = useState<ConnectionSort>("newest");
+  const [sort, setSort] = useState<ConnectionSort>(readConnectionSort);
   const [confirmCloseAll, setConfirmCloseAll] = useState(false);
   const [closingAll, setClosingAll] = useState(false);
   const activeRef = useRef(active);
@@ -280,8 +282,12 @@ export function Connections({ active = true }: { active?: boolean }) {
     return sortConnections(rows, sort);
   }, [all, keyword, sort]);
   const shown = sorted.length > MAX_ROWS ? sorted.slice(0, MAX_ROWS) : sorted;
-  // The row with the most download fills its background; the rest scale to it.
-  const maxDownload = shown.reduce((max, row) => Math.max(max, row.download), 0);
+  // The row with the most traffic (upload plus download) fills its background;
+  // the rest scale to it.
+  const maxTotal = shown.reduce(
+    (max, row) => Math.max(max, row.upload + row.download),
+    0,
+  );
   const count = all?.length ?? 0;
   const filtering = keyword.trim() !== "";
 
@@ -322,25 +328,24 @@ export function Connections({ active = true }: { active?: boolean }) {
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
           <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <ToggleGroup
-              type="single"
-              variant="outline"
+            <NativeSelect
               size="sm"
-              spacing={2}
+              className="w-auto shrink-0"
               value={sort}
-              onValueChange={(value) => {
-                // Radix reports "" when the pressed item is clicked again.
-                if (value) setSort(value as ConnectionSort);
+              onChange={(e) => {
+                const value = parseConnectionSort(e.target.value);
+                if (!value) return;
+                setSort(value);
+                writeConnectionSort(value);
               }}
-              className="h-auto shrink-0"
               aria-label={t("connections.sortAria")}
             >
-              {SORTS.map((id) => (
-                <ToggleGroupItem key={id} value={id}>
+              {CONNECTION_SORTS.map((id) => (
+                <NativeSelectOption key={id} value={id}>
                   {t(`connections.sort.${id}`)}
-                </ToggleGroupItem>
+                </NativeSelectOption>
               ))}
-            </ToggleGroup>
+            </NativeSelect>
             <span
               className="ml-auto min-w-0 truncate text-xs tabular-nums text-muted-foreground"
               data-testid="connections-summary"
@@ -376,7 +381,7 @@ export function Connections({ active = true }: { active?: boolean }) {
                   <ConnectionItem
                     key={row.id}
                     row={row}
-                    usage={maxDownload > 0 ? row.download / maxDownload : 0}
+                    usage={maxTotal > 0 ? (row.upload + row.download) / maxTotal : 0}
                     nowMs={nowMs}
                     onClose={closeOne}
                   />

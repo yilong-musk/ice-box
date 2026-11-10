@@ -4,13 +4,16 @@ import { describe, expect, it } from "vitest";
 import type { ConnectionRow } from "../api/contracts";
 import {
   CONNECTION_SEARCH_FIELDS,
+  CONNECTION_SORT_STORAGE_KEY,
   connectionChain,
   connectionRule,
   connectionTarget,
   formatDuration,
   matchesKeyword,
   processName,
+  readConnectionSort,
   sortConnections,
+  writeConnectionSort,
 } from "./connections";
 
 function row(patch: Partial<ConnectionRow> = {}): ConnectionRow {
@@ -97,8 +100,8 @@ describe("matchesKeyword", () => {
 
 describe("sortConnections", () => {
   const rows = [
-    row({ id: "old", start_ms: 1_000, upload: 0, download: 9_000 }),
-    row({ id: "new", start_ms: 3_000, upload: 0, download: 10 }),
+    row({ id: "old", start_ms: 1_000, upload: 20, download: 9_000 }),
+    row({ id: "new", start_ms: 3_000, upload: 700, download: 10 }),
     row({ id: "mid", start_ms: 2_000, upload: 0, download: 500 }),
   ];
   const ids = (sorted: ConnectionRow[]) => sorted.map((r) => r.id);
@@ -107,13 +110,38 @@ describe("sortConnections", () => {
     expect(ids(sortConnections(rows, "newest"))).toEqual(["new", "mid", "old"]);
   });
 
-  it("orders by bytes transferred", () => {
-    expect(ids(sortConnections(rows, "traffic"))).toEqual(["old", "mid", "new"]);
+  it("orders by upload plus download", () => {
+    // Totals: old 9020, new 710, mid 500.
+    expect(ids(sortConnections(rows, "total"))).toEqual(["old", "new", "mid"]);
+  });
+
+  it("orders by bytes downloaded", () => {
+    expect(ids(sortConnections(rows, "download"))).toEqual(["old", "mid", "new"]);
+  });
+
+  it("orders by bytes uploaded, ignoring downloads", () => {
+    expect(ids(sortConnections(rows, "upload"))).toEqual(["new", "old", "mid"]);
   });
 
   it("breaks equal start times by id so rows do not swap between polls", () => {
     const tied = [row({ id: "b", start_ms: 5 }), row({ id: "a", start_ms: 5 })];
     expect(ids(sortConnections(tied, "newest"))).toEqual(["a", "b"]);
     expect(ids(sortConnections([...tied].reverse(), "newest"))).toEqual(["a", "b"]);
+  });
+});
+
+describe("remembered connection sort", () => {
+  it("defaults to newest when nothing is stored", () => {
+    expect(readConnectionSort()).toBe("newest");
+  });
+
+  it("reads back the last written sort", () => {
+    writeConnectionSort("upload");
+    expect(readConnectionSort()).toBe("upload");
+  });
+
+  it("ignores an unknown stored value", () => {
+    window.localStorage.setItem(CONNECTION_SORT_STORAGE_KEY, "traffic");
+    expect(readConnectionSort()).toBe("newest");
   });
 });
