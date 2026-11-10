@@ -101,7 +101,7 @@ instead of losing the control surface while the runtime is still active.
 
 ## Tools
 
-The MCP server currently exposes 38 tools through the application services:
+The MCP server currently exposes 40 tools through the application services:
 
 - Status and settings: `get_status`, `get_settings`, `update_settings`.
 - Core and capture: `start_proxy_service`, `stop_proxy_service`, `start_core`,
@@ -115,6 +115,7 @@ The MCP server currently exposes 38 tools through the application services:
   `test_node_delay`.
 - Rules: `get_rule_overview`, `list_rules`, `set_rule_disabled`,
   `add_custom_rule`, `update_custom_rule`, and `remove_custom_rule`.
+- Rule-sets: `list_rule_sets` and `refresh_rule_sets`.
 - Connections: `list_connections`, `close_connection`, and
   `close_all_connections`.
 - Diagnostics: `get_logs` and `get_runtime_config`.

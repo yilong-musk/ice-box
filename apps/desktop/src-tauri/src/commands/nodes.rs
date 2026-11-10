@@ -44,15 +44,7 @@ pub async fn get_rule_set_status(
 pub async fn refresh_rule_sets(app: AppHandle) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
     run_blocking("refresh_rule_sets", move || {
         let state = app.state::<AppState>();
-        if !crate::rule_set_watch::refresh_pass(
-            state.inner(),
-            &app,
-            ice_engine::RuleSetRefreshMode::All,
-        ) {
-            // Apply was busy; the background worker re-applies shortly.
-            crate::rule_set_watch::request_refresh(ice_engine::RuleSetRefreshMode::Missing);
-        }
-        rule_set_status(state.inner())
+        refresh_rule_sets_use_case(&app, state.inner())
     })
     .await
 }

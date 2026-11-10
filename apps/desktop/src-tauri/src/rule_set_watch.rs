@@ -69,7 +69,11 @@ fn required_urls(state: &AppState) -> Option<Vec<String>> {
 
 /// One refresh pass. Returns `false` when it should be retried soon (the
 /// manager could not be opened or Apply was busy).
-pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, mode: RuleSetRefreshMode) -> bool {
+pub(crate) fn refresh_pass(
+    state: &AppState,
+    app: &impl application::AppHost,
+    mode: RuleSetRefreshMode,
+) -> bool {
     if state.workers.is_paused_or_stopping() {
         return true;
     }

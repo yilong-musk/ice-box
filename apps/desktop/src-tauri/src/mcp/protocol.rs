@@ -6,9 +6,10 @@ use crate::application::{
     current_settings, disable_active_backend_inner, ensure_tun_elevation_inner,
     get_log_view_use_case, get_runtime_config_use_case, import_subscription_file_use_case,
     list_subscriptions_use_case, lock_orchestrate, query_connections_use_case, query_rules,
-    remove_custom_rule_use_case, remove_subscription_use_case, remove_tun_elevation_inner,
-    replace_recovery_warnings, require_running_core, reset_helper_probe_cache, rule_overview,
-    save_settings_inner, set_active_subscription_use_case, set_auto_update_subscription_use_case,
+    refresh_rule_sets_use_case, remove_custom_rule_use_case, remove_subscription_use_case,
+    remove_tun_elevation_inner, replace_recovery_warnings, require_running_core,
+    reset_helper_probe_cache, rule_overview, rule_set_status, save_settings_inner,
+    set_active_subscription_use_case, set_auto_update_subscription_use_case,
     set_group_selection_use_case, set_proxy_mode_inner, set_rule_disabled_use_case,
     set_selected_node_use_case, start_core_inner, start_service, stop_core_use_case,
     subscription_share_use_case, test_node_delay_use_case, update_custom_rule_use_case,
@@ -258,6 +259,16 @@ pub fn tools() -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
+        ),
+        read_tool(
+            "list_rule_sets",
+            "List the rule-sets the active subscription and the custom rules need: where each comes from (downloaded, bundled, local, or pending when nothing usable is cached), when it was last updated and checked, its item count, and the last download error.",
+            no_args(),
+        ),
+        open_world_write_tool(
+            "refresh_rule_sets",
+            "Re-check every downloaded rule-set now with conditional requests, re-apply the config when any changed, and return the new list_rule_sets status. Subscription updates already do this in the background.",
+            no_args(),
         ),
         write_tool(
             "set_rule_disabled",
@@ -714,6 +725,8 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
             let request: ListRulesRequest = parse_args(args)?;
             to_value(query_rules(state.inner(), &request)?)
         }
+        "list_rule_sets" => to_value(rule_set_status(state.inner())?),
+        "refresh_rule_sets" => to_value(refresh_rule_sets_use_case(app, state.inner())?),
         "set_rule_disabled" => {
             let request: SetRuleDisabledRequest = parse_args(args)?;
             set_rule_disabled_use_case(app, state.inner(), request)
@@ -990,7 +1003,10 @@ mod tests {
                 open_world,
                 matches!(
                     name,
-                    "add_subscription" | "update_subscription" | "test_node_delay"
+                    "add_subscription"
+                        | "update_subscription"
+                        | "test_node_delay"
+                        | "refresh_rule_sets"
                 ),
                 "{name} openWorldHint"
             );
@@ -1107,6 +1123,26 @@ mod tests {
                 .find(|tool| tool["name"] == name)
                 .expect(name);
             assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{name}");
+        }
+    }
+
+    #[test]
+    fn rule_set_tools_take_no_arguments() {
+        for (name, read_only, open_world) in [
+            ("list_rule_sets", true, false),
+            ("refresh_rule_sets", false, true),
+        ] {
+            let tool = tools()
+                .into_iter()
+                .find(|tool| tool["name"] == name)
+                .expect(name);
+            assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{name}");
+            assert_eq!(tool["annotations"]["openWorldHint"], open_world, "{name}");
+            assert!(validate_tool_arguments(name, &json!({})).is_ok(), "{name}");
+            assert!(
+                validate_tool_arguments(name, &json!({"force": true})).is_err(),
+                "{name}"
+            );
         }
     }
 
