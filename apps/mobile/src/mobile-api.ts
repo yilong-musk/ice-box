@@ -10,6 +10,7 @@ import type {
   AppSettings,
   AppProxyMode,
   CheckAppUpdateResponse,
+  ConnectionsResponse,
   GroupSelectionResponse,
   DelayTestResponse,
   InstalledApp,
@@ -47,7 +48,6 @@ const unsupportedMcp = async (): Promise<McpStatus> => ({
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
   setHomeActive: async () => {},
-  setLogViewActive: async () => {},
   releaseRuleSearch: async () => {},
   listSubscriptions: () => invoke<SubscriptionMeta[]>("list_subscriptions"),
   listNodes: () => invoke<NodeInfo[]>("list_nodes"),
@@ -70,7 +70,15 @@ export const api = {
     listen<TrafficPoint>("traffic://sample", (event) => handler(event.payload)),
   start: () => invoke<void>("start"),
   stop: () => invoke<void>("stop"),
-  getLogView: (n: number) => invoke<string[]>("get_log_view", { req: { n } }),
+  // The phone has no Connections page.
+  listConnections: async (): Promise<ConnectionsResponse> => ({
+    running: false,
+    upload_total: 0,
+    download_total: 0,
+    connections: [],
+  }),
+  closeConnection: async () => {},
+  closeAllConnections: async () => {},
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (patch: SettingsPatch) => invoke<void>("save_settings", { patch }),

@@ -16,7 +16,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import { copyText } from "../lib/logCopy";
+import { copyText } from "../lib/clipboard";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useTransient } from "../lib/transient";
 

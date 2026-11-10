@@ -49,7 +49,6 @@ const defaults: AppSettings = {
   language: "system",
   check_app_updates: true,
   probe_exit_ip: true,
-  log_debug: false,
   tray_display_mode: "icon_and_speed",
   launch_at_login: false,
   tun: {
@@ -106,9 +105,6 @@ function settingsDiffPatch(
   }
   if (form.probe_exit_ip !== previous.probe_exit_ip) {
     patch.probe_exit_ip = form.probe_exit_ip;
-  }
-  if (form.log_debug !== previous.log_debug) {
-    patch.log_debug = form.log_debug;
   }
   if (form.tray_display_mode !== previous.tray_display_mode) {
     patch.tray_display_mode = form.tray_display_mode;
@@ -739,22 +735,15 @@ export function Settings({
             />
           </div>
 
-          {/* The Data card is desktop-only: its debug switch only filters the
-              Logs page and its button opens the data folder, and the phone
-              has neither. */}
+          {/* The Data card is desktop-only: its button opens the data folder,
+              which the phone does not have. */}
           {isPhoneShell() ? (
             <>
               <AndroidSystemCard status={status} />
               <PhoneLogsCard />
             </>
           ) : (
-            <DataCard
-              form={form}
-              setForm={setForm}
-              busy={busy}
-              loaded={loaded}
-              setError={setError}
-            />
+            <DataCard busy={busy} loaded={loaded} setError={setError} />
           )}
         </div>
       </ScrollArea>

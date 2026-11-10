@@ -64,7 +64,6 @@ const defaultSettings = {
   language: "system",
   check_app_updates: true,
   probe_exit_ip: true,
-  log_debug: false,
   tray_display_mode: "icon_and_speed",
 } as const;
 
@@ -147,7 +146,12 @@ vi.mock("./api/client", () => ({
     start: vi.fn(),
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),
-    getLogView: vi.fn().mockResolvedValue([]),
+    listConnections: vi.fn().mockResolvedValue({
+      running: true,
+      upload_total: 0,
+      download_total: 0,
+      connections: [],
+    }),
     getMcpStatus: (...args: unknown[]) => getMcpStatus(...args),
     setMcpEnabled: (...args: unknown[]) => setMcpEnabled(...args),
     restartMcp: (...args: unknown[]) => restartMcp(...args),
@@ -242,21 +246,21 @@ describe("App", () => {
     });
   });
 
-  it("lets the logs panel fill the content pane", async () => {
+  it("opens each page in the content pane", async () => {
     const view = within(render(<App />).container);
-    fireEvent.click(view.getByRole("button", { name: t("app.nav.logs") }));
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.connections") }));
     await waitFor(() => {
-      expect(view.getByTestId("logs-panel")).toBeInTheDocument();
+      expect(view.getByTestId("connections-panel")).toBeInTheDocument();
     });
 
     const main = view.getByTestId("app-main");
-    const panel = view.getByTestId("logs-panel");
-    const logView = view.getByTestId("log-view");
+    const panel = view.getByTestId("connections-panel");
     expect(main.contains(panel)).toBe(true);
-    expect(panel.contains(logView)).toBe(true);
-    expect(logView.parentElement).toBe(panel);
-    expect(view.queryByRole("button", { name: t("common.refresh") })).toBeNull();
-    expect(panel.querySelector("[data-slot='card']")).toBeNull();
+    await waitFor(() => {
+      expect(view.getByTestId("connections-empty")).toHaveTextContent(
+        t("connections.empty"),
+      );
+    });
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.home") }));
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
@@ -278,7 +282,7 @@ describe("App", () => {
     expect(view.getByTestId("settings-panel")).toBeInTheDocument();
   });
 
-  it("orders MCP, Logs, and Settings from top to bottom", async () => {
+  it("orders Connections, MCP, and Settings from top to bottom", async () => {
     const { container } = render(<App />);
     const view = within(container);
     const nav = container.querySelector('[data-slot="sidebar-menu"]');
@@ -287,8 +291,8 @@ describe("App", () => {
       .getAllByRole("button")
       .map((button) => button.textContent);
     expect(labels.slice(-3)).toEqual([
+      t("app.nav.connections"),
       t("app.nav.mcp"),
-      t("app.nav.logs"),
       t("app.nav.settings"),
     ]);
 
@@ -611,9 +615,9 @@ describe("App", () => {
     expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
-    expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.connections") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
-    expect(view.queryByTestId("logs-panel")).not.toBeInTheDocument();
+    expect(view.queryByTestId("connections-panel")).not.toBeInTheDocument();
     expect(view.queryByTestId("mcp-panel")).not.toBeInTheDocument();
     expect(restoreLaunchProxy).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -674,7 +678,7 @@ describe("App", () => {
     );
     expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
-    expect(view.queryByRole("button", { name: t("app.nav.logs") })).not.toBeInTheDocument();
+    expect(view.queryByRole("button", { name: t("app.nav.connections") })).not.toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(restoreLaunchProxy).not.toHaveBeenCalled();
     expect(setTrayUpdateAvailable).not.toHaveBeenCalled();
@@ -689,7 +693,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(view.getByRole("button", { name: t("app.nav.home") })).toBeInTheDocument();
     });
-    expect(view.getByRole("button", { name: t("app.nav.logs") })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: t("app.nav.connections") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.mcp") })).not.toBeInTheDocument();
     expect(view.queryByTestId("mcp-panel")).not.toBeInTheDocument();
   });

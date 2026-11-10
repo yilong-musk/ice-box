@@ -17,10 +17,10 @@ use crate::settings::{clash_mode_name, AppProxyMode, TunSettings};
 use crate::{tun_gate_for, BuildInput, CaptureIntent, HostPlatform, LocalTemplate};
 use ice_types::{is_android_package_name, is_plausible_clash_api_secret};
 
-/// Connection routes are INFO. The desktop Logs page filters to those plus
+/// Connection routes are INFO. The MCP `get_logs` tool filters to those plus
 /// important events unless debug mode is on; the 20 MiB cap bounds disk.
 const GENERATED_LOG_LEVEL: &str = "info";
-/// The phone has no Logs page: keep only warnings and errors, which is what an
+/// The phone has no log reader: keep only warnings and errors, which is what an
 /// exported log needs to diagnose a problem, and far less disk than one line
 /// per connection.
 const MOBILE_LOG_LEVEL: &str = "warn";

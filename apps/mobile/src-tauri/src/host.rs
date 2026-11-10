@@ -3,7 +3,6 @@
 //! Host-process state: subscriptions, settings, and the config file the
 //! tunnel process reads. Plugin calls stay in the commands.
 
-use std::io::{Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -425,11 +424,6 @@ impl MobileHost {
     /// released (see `commands::export_core_log`).
     pub fn core_log_path(&self) -> Result<std::path::PathBuf, AppError> {
         Ok(config::core_log_path(self.paths()?))
-    }
-
-    pub fn log_view(&self, n: usize) -> Result<Vec<String>, AppError> {
-        let path = config::core_log_path(self.paths()?);
-        Ok(tail_lines(&path, n.min(2000)))
     }
 
     pub fn runtime_config(&self) -> Result<String, AppError> {
@@ -986,34 +980,6 @@ fn rule_row(
         custom,
         disabled: !custom && overrides.is_rule_disabled(rule),
         rule_type: rule_type_of(rule).to_string(),
-    }
-}
-
-fn tail_lines(path: &std::path::Path, n: usize) -> Vec<String> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return Vec::new(),
-    };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let start = len.saturating_sub(1_000_000);
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return Vec::new();
-    }
-    let mut buf = String::new();
-    if file.read_to_string(&mut buf).is_err() {
-        return Vec::new();
-    }
-    let mut lines: Vec<String> = buf.lines().map(str::to_string).collect();
-    if start > 0 && !lines.is_empty() {
-        lines.remove(0);
-    }
-    if lines.len() > n {
-        lines.split_off(lines.len() - n)
-    } else {
-        lines
     }
 }
 

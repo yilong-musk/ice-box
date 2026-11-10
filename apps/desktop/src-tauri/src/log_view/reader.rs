@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::{
-    display_worthy, format_display_line, parse_app_line, parse_core_line, Source, SCAN_PER_SOURCE,
-    VIEW_MAX,
+    format_display_line, parse_app_line, parse_core_line, Source, SCAN_PER_SOURCE, VIEW_MAX,
 };
 use crate::log_tail::strip_ansi;
 use chrono::{DateTime, FixedOffset};
@@ -75,7 +74,7 @@ struct SourceReader {
 }
 
 impl SourceReader {
-    fn parse(&mut self, raw: &[u8], source: Source, debug: bool) -> Option<Line> {
+    fn parse(&mut self, raw: &[u8], source: Source) -> Option<Line> {
         #[cfg(test)]
         {
             self.parsed += 1;
@@ -85,17 +84,17 @@ impl SourceReader {
             Source::App => parse_app_line(&raw),
             Source::Core => parse_core_line(&raw),
         }?;
-        (debug || display_worthy(source, level, &raw)).then(|| Line {
+        Some(Line {
             ts,
             order: self.order,
             text: format_display_line(ts, source, level, &raw),
         })
     }
 
-    fn finish_line(&mut self, source: Source, debug: bool) {
+    fn finish_line(&mut self, source: Source) {
         if !self.skip_fragment {
             let raw = std::mem::take(&mut self.pending);
-            if let Some(mut line) = self.parse(&raw, source, debug) {
+            if let Some(mut line) = self.parse(&raw, source) {
                 if self.oversized {
                     line.text.push_str(" … [truncated]");
                 }
@@ -117,7 +116,7 @@ impl SourceReader {
         }
     }
 
-    fn refresh(&mut self, path: &Path, source: Source, debug: bool) -> io::Result<bool> {
+    fn refresh(&mut self, path: &Path, source: Source) -> io::Result<bool> {
         let meta = match std::fs::metadata(path) {
             Ok(meta) => meta,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -167,7 +166,7 @@ impl SourceReader {
             }
             for &byte in &buf[..count] {
                 if byte == b'\n' {
-                    self.finish_line(source, debug);
+                    self.finish_line(source);
                 } else if !self.skip_fragment {
                     if self.pending.len() < LINE_BYTES {
                         self.pending.push(byte);
@@ -184,7 +183,7 @@ impl SourceReader {
         self.preview = None;
         if !self.pending.is_empty() && !self.skip_fragment {
             let raw = std::mem::take(&mut self.pending);
-            self.preview = self.parse(&raw, source, debug);
+            self.preview = self.parse(&raw, source);
             self.pending = raw;
         }
         let anchor_len = self.offset.min(ANCHOR_BYTES as u64) as usize;
@@ -197,11 +196,12 @@ impl SourceReader {
 }
 
 /// Polling retains bounded parsed tails and reads only newly appended bytes.
-/// Rotation, truncation/regrowth, debug changes and source changes reset safely.
+/// Rotation, truncation/regrowth and source changes reset safely.
 #[derive(Default)]
 pub(crate) struct LogViewReader {
     sources: [SourceReader; 3],
-    debug: Option<bool>,
+    /// A read failed after some sources changed; rebuild on the next read.
+    rebuild: bool,
     n: usize,
     rendered: Vec<String>,
 }
@@ -213,14 +213,10 @@ impl LogViewReader {
         core: &Path,
         helper: Option<&Path>,
         n: usize,
-        debug: bool,
     ) -> Result<Vec<String>, AppError> {
         let n = n.min(VIEW_MAX);
-        let mut changed = self.n != n || self.debug != Some(debug);
-        if self.debug != Some(debug) {
-            self.sources = Default::default();
-            self.debug = Some(debug);
-        }
+        let mut changed = self.n != n || self.rebuild;
+        self.rebuild = false;
         for (i, (path, source)) in [
             (Some(app), Source::App),
             (Some(core), Source::Core),
@@ -234,14 +230,14 @@ impl LogViewReader {
                 self.sources[i] = SourceReader::default();
                 continue;
             };
-            match self.sources[i].refresh(path, source, debug) {
+            match self.sources[i].refresh(path, source) {
                 Ok(dirty) => changed |= dirty,
                 Err(err) => {
                     self.sources[i] = SourceReader::default();
                     changed = true;
                     if i != 2 {
                         // Force a rebuild after the next successful retry.
-                        self.debug = None;
+                        self.rebuild = true;
                         return Err(AppError::new(
                             ErrorCode::ConfigInvalid,
                             format!("read log {}: {err}", path.display()),
@@ -301,36 +297,36 @@ mod tests {
         let (app, core, dir) = fixture("incremental");
         fs::write(&app, "2026-08-23T13:47:01Z INFO one\n").unwrap();
         let mut reader = LogViewReader::default();
-        let first = reader.read(&app, &core, None, 500, false).unwrap();
+        let first = reader.read(&app, &core, None, 500).unwrap();
         assert_eq!(reader.sources[0].parsed, 1);
-        assert_eq!(reader.read(&app, &core, None, 500, false).unwrap(), first);
+        assert_eq!(reader.read(&app, &core, None, 500).unwrap(), first);
         assert_eq!(reader.sources[0].parsed, 1);
         append(&app, b"2026-08-23T13:47:02Z INFO two\n");
-        let next = reader.read(&app, &core, None, 500, false).unwrap();
+        let next = reader.read(&app, &core, None, 500).unwrap();
         assert_eq!(next.len(), 2);
         assert_eq!(reader.sources[0].parsed, 2);
-        assert_eq!(reader.read(&app, &core, None, 1, false).unwrap(), next[1..]);
+        assert_eq!(reader.read(&app, &core, None, 1).unwrap(), next[1..]);
         assert_eq!(reader.sources[0].parsed, 2);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn partial_utf8_lines_are_completed_once_and_debug_resets_filtering() {
+    fn partial_utf8_lines_are_completed_once() {
         let (app, core, dir) = fixture("partial");
         fs::write(
             &app,
-            "2026-08-23T13:47:01Z DEBUG hidden\n2026-08-23T13:47:02Z INFO ",
+            "2026-08-23T13:47:01Z DEBUG shown\n2026-08-23T13:47:02Z INFO ",
         )
         .unwrap();
         let mut reader = LogViewReader::default();
         append(&app, &"中文".as_bytes()[..2]);
-        reader.read(&app, &core, None, 500, false).unwrap();
+        reader.read(&app, &core, None, 500).unwrap();
         append(&app, &"中文".as_bytes()[2..]);
         append(&app, b"\n");
-        let view = reader.read(&app, &core, None, 500, false).unwrap();
-        assert_eq!(view.len(), 1);
-        assert!(view[0].ends_with("中文"));
-        assert_eq!(reader.read(&app, &core, None, 500, true).unwrap().len(), 2);
+        let view = reader.read(&app, &core, None, 500).unwrap();
+        assert_eq!(view.len(), 2);
+        assert!(view[0].ends_with("shown"));
+        assert!(view[1].ends_with("中文"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -339,26 +335,20 @@ mod tests {
         let (app, core, dir) = fixture("rotation");
         fs::write(&app, "2026-08-23T13:47:01Z INFO old\n").unwrap();
         let mut reader = LogViewReader::default();
-        reader.read(&app, &core, None, 500, false).unwrap();
+        reader.read(&app, &core, None, 500).unwrap();
         fs::write(&app, "2026-08-23T13:47:02Z INFO new and longer\n").unwrap();
-        let next = reader.read(&app, &core, None, 500, false).unwrap();
+        let next = reader.read(&app, &core, None, 500).unwrap();
         assert_eq!(next.len(), 1);
         assert!(next[0].ends_with("new and longer"));
         fs::rename(&app, dir.join("rotated.log")).unwrap();
         fs::write(&app, "2026-08-23T13:47:03Z INFO rotated\n").unwrap();
-        let next = reader.read(&app, &core, None, 500, false).unwrap();
+        let next = reader.read(&app, &core, None, 500).unwrap();
         assert_eq!(next.len(), 1);
         assert!(next[0].ends_with("rotated"));
         fs::write(&app, b"").unwrap();
-        assert!(reader
-            .read(&app, &core, None, 500, false)
-            .unwrap()
-            .is_empty());
+        assert!(reader.read(&app, &core, None, 500).unwrap().is_empty());
         fs::remove_file(&app).unwrap();
-        assert!(reader
-            .read(&app, &core, None, 500, false)
-            .unwrap()
-            .is_empty());
+        assert!(reader.read(&app, &core, None, 500).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -369,22 +359,16 @@ mod tests {
         fs::write(&app, line.repeat(2000)).unwrap();
         let mut reader = LogViewReader::default();
         assert_eq!(
-            reader
-                .read(&app, &core, None, usize::MAX, false)
-                .unwrap()
-                .len(),
+            reader.read(&app, &core, None, usize::MAX).unwrap().len(),
             VIEW_MAX
         );
         assert_eq!(reader.sources[0].lines.len(), VIEW_MAX);
         append(&app, &vec![b'x'; LINE_BYTES * 3]);
-        reader.read(&app, &core, None, 500, false).unwrap();
+        reader.read(&app, &core, None, 500).unwrap();
         assert!(reader.sources[0].pending.len() <= LINE_BYTES);
         assert!(reader.sources[0].bytes <= RETAINED_BYTES);
         append(&app, &"\nignored\n".repeat(SCAN_PER_SOURCE).into_bytes());
-        assert!(reader
-            .read(&app, &core, None, 500, false)
-            .unwrap()
-            .is_empty());
+        assert!(reader.read(&app, &core, None, 500).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 }

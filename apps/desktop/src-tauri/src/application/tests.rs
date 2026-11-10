@@ -88,7 +88,6 @@ fn temp_state_with_profile(label: &str, profile: &ice_config::NormalizedProfile)
         profile_cache: Mutex::new(None),
         profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        log_view_cache: Mutex::new(LogViewSlot::default()),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
         clash_live_mode_cache: Mutex::new(true),
@@ -164,7 +163,6 @@ fn temp_state_with_rules(label: &str, rules: Vec<serde_json::Value>) -> AppState
         profile_cache: Mutex::new(None),
         profile_parse_cache: std::sync::Arc::new(ice_engine::ProfileCache::new()),
         subscription_watchdog_alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        log_view_cache: Mutex::new(LogViewSlot::default()),
         helper_probe_cache: Mutex::new(None),
         tun_task_cache: Mutex::new(None),
         clash_live_mode_cache: Mutex::new(true),
@@ -1830,7 +1828,7 @@ fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
                 enabled: Some(false),
                 ..Default::default()
             }),
-            log_debug: Some(true),
+            probe_exit_ip: Some(false),
             ..SettingsPatch::default()
         },
     )
@@ -1843,7 +1841,10 @@ fn saving_tun_enabled_while_system_proxy_is_live_switches_transactionally() {
     );
     let off_disk = current_settings(&paths).unwrap();
     assert!(!off_disk.tun.enabled);
-    assert!(off_disk.log_debug, "the other patch fields still apply");
+    assert!(
+        !off_disk.probe_exit_ip,
+        "the other patch fields still apply"
+    );
     assert!(!paths.pending_settings().exists());
     let _ = fs::remove_dir_all(paths.root());
 }

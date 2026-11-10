@@ -262,6 +262,27 @@ mod tests {
     }
 
     #[test]
+    fn leftover_log_debug_field_keeps_the_other_settings() {
+        // The debug-logs switch was removed. A file that still carries it
+        // must load as-is: an invalid file would be reset to defaults.
+        let path = temp_settings_path("legacy-log-debug");
+        let json = r#"{
+            "mixed_listen": "127.0.0.1",
+            "mixed_port": 18080,
+            "clash_api_listen": "127.0.0.1",
+            "clash_api_port": 19090,
+            "selected_tag": null,
+            "auto_set_system_proxy": false,
+            "log_debug": true
+        }"#;
+        fs::write(&path, json).expect("write");
+        let outcome = load_settings_detailed(&path);
+        assert!(outcome.reset_reason.is_none(), "{:?}", outcome.reset_reason);
+        assert_eq!(outcome.settings.mixed_port, 18080);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn proxy_mode_round_trips() {
         let path = temp_settings_path("mode-roundtrip");
         save_settings(

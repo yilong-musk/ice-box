@@ -1,46 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/** A non-collapsed selection whose ends both sit inside the log view. */
-export type LogSelection = {
-  text: string;
-  anchor: Node;
-  anchorOffset: number;
-  focus: Node;
-  focusOffset: number;
-};
-
-/** Text the user has selected inside `box`, using the same string Copy would. */
-export function readLogSelection(box: HTMLElement): LogSelection | null {
-  const selection = window.getSelection();
-  if (selection == null || selection.isCollapsed || selection.rangeCount === 0) return null;
-  const anchor = selection.anchorNode;
-  const focus = selection.focusNode;
-  if (anchor == null || focus == null) return null;
-  if (!box.contains(anchor) || !box.contains(focus)) return null;
-  const text = selection.toString();
-  if (text.length === 0) return null;
-  return {
-    text,
-    anchor,
-    anchorOffset: selection.anchorOffset,
-    focus,
-    focusOffset: selection.focusOffset,
-  };
-}
-
-export function sameLogSelection(a: LogSelection | null, b: LogSelection | null): boolean {
-  if (a == null || b == null) return false;
-  return (
-    a.anchor === b.anchor &&
-    a.anchorOffset === b.anchorOffset &&
-    a.focus === b.focus &&
-    a.focusOffset === b.focusOffset
-  );
-}
-
 /**
  * Copy `text` during a user gesture. The async clipboard API is rejected by
- * some webviews; fall back to `execCommand` and put the log selection back.
+ * some webviews; fall back to `execCommand` and put the page selection back.
  */
 export async function copyText(text: string): Promise<void> {
   const clipboard = navigator.clipboard;

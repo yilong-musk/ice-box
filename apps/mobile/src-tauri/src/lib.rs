@@ -52,7 +52,6 @@ pub fn run() {
             commands::test_node_delay,
             commands::get_traffic_snapshot,
             commands::get_traffic_since,
-            commands::get_log_view,
             commands::get_runtime_config,
             commands::get_settings,
             commands::save_settings,

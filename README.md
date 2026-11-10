@@ -37,6 +37,7 @@ English · [简体中文](README.zh-CN.md)
 - **Subscriptions.** sing-box JSON, Clash, and share-link lists are detected automatically, and a local sing-box config file can be imported too. Desktop can auto-update profiles; Android refreshes on import or manual refresh. Provider traffic and expiry are shown on each subscription.
 - **Routing.** **Rule**, **Global**, and **Direct** modes, a switch for each subscription rule, and your own custom rules on top.
 - **Nodes.** Pick an exit per strategy group, test latency one node or a whole list at a time, and pin favorites.
+- **Connections.** On macOS and Windows, watch every live connection: where it goes, which rule matched, which exit it uses, and how much it has transferred. Search, sort, and close one or all of them.
 - **Capture.** System proxy or TUN on macOS and Windows; the system VPN on Android, with per-app routing (follow the rules, proxy, direct, or block).
 - **Tray.** Start and stop the proxy service and switch the mode, subscription, or exit node without opening the window. On macOS the menu bar item also shows live traffic and the menu runs delay tests.
 - **Agent access.** An opt-in local MCP service lets an Agent operate the same running session.
@@ -76,9 +77,9 @@ On macOS and Windows, TUN captures traffic at the network layer, covering apps t
 
 ## Agent access with MCP
 
-The macOS and Windows app exposes an opt-in local MCP service. Open **MCP** above **Logs** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
+The macOS and Windows app exposes an opt-in local MCP service. Open **MCP** between **Connections** and **Settings**, enable it, and copy the generated client configuration. The Agent shares the running session's settings, subscriptions, data, core, and proxy state instead of starting another runtime.
 
-- **Full tool set.** Status, settings, traffic, subscriptions, nodes and groups, rules, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
+- **Full tool set.** Status, settings, traffic, subscriptions, nodes and groups, rules, live connections, logs, diagnostics, proxy control, and protected TUN recovery. Results carry structured content when available and preserve application error codes.
 - **Safe by default.** MCP listens only on authenticated loopback with a random control token that is never included in the copied client config.
 - **Built-in stdio bridge.** The generated config launches the same executable in bridge mode, so no separate daemon or protocol adapter is needed.
 

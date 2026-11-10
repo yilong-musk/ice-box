@@ -422,10 +422,6 @@ pub struct AppSettings {
     /// skip those third-party requests.
     #[serde(default = "default_probe_exit_ip")]
     pub probe_exit_ip: bool,
-    /// Logs page shows every parsed line when true. Display-only; default
-    /// off (connections and important events). Missing field → false.
-    #[serde(default)]
-    pub log_debug: bool,
     /// macOS menu-bar item: icon + live readout, icon only, or readout only.
     /// The frontend hides the control elsewhere, but the field is stored on
     /// every platform so a settings file survives a platform move. Defaults to
@@ -477,7 +473,6 @@ impl Default for AppSettings {
             language: LanguagePreference::System,
             check_app_updates: true,
             probe_exit_ip: true,
-            log_debug: false,
             tray_display_mode: TrayDisplayMode::IconAndSpeed,
             launch_at_login: false,
         }
@@ -605,9 +600,6 @@ impl AppSettings {
         if let Some(v) = patch.probe_exit_ip {
             next.probe_exit_ip = v;
         }
-        if let Some(v) = patch.log_debug {
-            next.log_debug = v;
-        }
         if let Some(v) = patch.tray_display_mode {
             next.tray_display_mode = v;
         }
@@ -663,8 +655,6 @@ pub struct SettingsPatch {
     pub check_app_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_exit_ip: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log_debug: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tray_display_mode: Option<TrayDisplayMode>,
     /// Registered by the dedicated login-item path (the OS write must succeed

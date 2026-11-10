@@ -8,15 +8,6 @@ pub struct SetProxyModeRequest {
     pub mode: String,
 }
 
-/// Persist-only: log debug is a display filter, not a runtime-config knob.
-fn only_log_debug_changed(previous: &AppSettings, next: &AppSettings) -> bool {
-    let mut left = previous.clone();
-    let mut right = next.clone();
-    left.log_debug = false;
-    right.log_debug = false;
-    left == right && previous.log_debug != next.log_debug
-}
-
 /// Persist-only: the exit probe is a privacy/UI preference. It is not part of
 /// the sing-box runtime config, so changing it must never apply or reload the
 /// live core (including a TUN stop/reconfigure/start transition).
@@ -300,10 +291,6 @@ pub(super) fn save_settings_inner_with_autostart(
         return Ok(());
     }
     if crate::app_update::only_check_app_updates_changed(&previous_for_apply, &settings) {
-        persist_settings(&state.paths.settings(), &settings, host_platform())?;
-        return Ok(());
-    }
-    if only_log_debug_changed(&previous_for_apply, &settings) {
         persist_settings(&state.paths.settings(), &settings, host_platform())?;
         return Ok(());
     }

@@ -3,13 +3,11 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, ConnectionsResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
   setHomeActive: (active: boolean) => invoke<void>("set_home_active", { active }),
-  setLogViewActive: (active: boolean) =>
-    invoke<void>("set_log_view_active", { active }),
   releaseRuleSearch: () => invoke<void>("release_rule_keyword_cache"),
   listSubscriptions: () => invoke<SubscriptionMeta[]>("list_subscriptions"),
   listNodes: () => invoke<NodeInfo[]>("list_nodes"),
@@ -60,8 +58,10 @@ export const api = {
   ensureTunElevation: () => invoke<void>("ensure_tun_elevation"),
   /** Remove the Windows TUN scheduled task (one UAC prompt). */
   removeTunElevation: () => invoke<void>("remove_tun_elevation"),
-  getLogView: (n: number) =>
-    invoke<string[]>("get_log_view", { req: { n } }),
+  listConnections: () => invoke<ConnectionsResponse>("list_connections"),
+  closeConnection: (id: string) =>
+    invoke<void>("close_connection", { req: { id } }),
+  closeAllConnections: () => invoke<void>("close_all_connections"),
   getRuntimeConfig: () => invoke<string>("get_runtime_config"),
   revealDataDir: () => invoke<void>("reveal_data_dir"),
   /** Copy the session-only Mixed command (Rust owns the text and clipboard). */

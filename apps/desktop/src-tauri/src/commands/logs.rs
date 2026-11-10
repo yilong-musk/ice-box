@@ -3,22 +3,6 @@
 use super::*;
 
 #[tauri::command]
-pub fn set_log_view_active(app: AppHandle, active: bool) {
-    if let Some(state) = app.try_state::<crate::AppState>() {
-        crate::application::set_log_view_retained(state.inner(), active);
-    }
-}
-
-#[tauri::command]
-pub async fn get_log_view(app: AppHandle, req: LogViewRequest) -> Result<Vec<String>, AppError> {
-    run_blocking("get_log_view", move || {
-        let state = app.state::<AppState>();
-        get_log_view_use_case(state.inner(), req)
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn get_runtime_config(app: AppHandle) -> Result<String, AppError> {
     run_blocking("get_runtime_config", move || {
         let state = app.state::<AppState>();

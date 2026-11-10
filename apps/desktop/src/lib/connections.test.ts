@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { describe, expect, it } from "vitest";
+import type { ConnectionRow } from "../api/contracts";
+import {
+  connectionChain,
+  connectionRule,
+  connectionTarget,
+  formatBytes,
+  formatDuration,
+  matchesKeyword,
+  processName,
+  sortConnections,
+} from "./connections";
+
+function row(patch: Partial<ConnectionRow> = {}): ConnectionRow {
+  return {
+    id: "a",
+    network: "tcp",
+    inbound: "mixed/mixed-in",
+    source: "127.0.0.1:51234",
+    host: "api.github.com",
+    destination_ip: "",
+    destination_port: "443",
+    process_path: "/usr/bin/curl",
+    upload: 100,
+    download: 1000,
+    start_ms: 1_000,
+    chains: ["node-a", "proxy"],
+    rule: "domain_suffix=github.com => route(proxy)",
+    ...patch,
+  };
+}
+
+describe("connection labels", () => {
+  it("names the destination by host, then by IP", () => {
+    expect(connectionTarget(row())).toBe("api.github.com:443");
+    expect(
+      connectionTarget(row({ host: "", destination_ip: "1.1.1.1", destination_port: "53" })),
+    ).toBe("1.1.1.1:53");
+    expect(
+      connectionTarget(row({ host: "", destination_ip: "2001:db8::1", destination_port: "53" })),
+    ).toBe("[2001:db8::1]:53");
+    expect(connectionTarget(row({ destination_port: "" }))).toBe("api.github.com");
+    expect(connectionTarget(row({ host: "", destination_port: "" }))).toBe("");
+  });
+
+  it("shows the chain from route target to exit node", () => {
+    expect(connectionChain(row())).toBe("proxy → node-a");
+    expect(connectionChain(row({ chains: ["direct"] }))).toBe("direct");
+    expect(connectionChain(row({ chains: [] }))).toBe("");
+  });
+
+  it("drops the action from the rule", () => {
+    expect(connectionRule(row())).toBe("domain_suffix=github.com");
+    expect(connectionRule(row({ rule: "final" }))).toBe("final");
+  });
+
+  it("reduces a process path to its executable", () => {
+    expect(processName("/usr/bin/curl")).toBe("curl");
+    expect(processName("C:\\Program Files\\App\\app.exe")).toBe("app.exe");
+    expect(processName("/Applications/Safari.app/Contents/MacOS/Safari (alice)")).toBe("Safari");
+    expect(processName("curl")).toBe("curl");
+    expect(processName("")).toBe("");
+  });
+});
+
+describe("formatters", () => {
+  it("formats durations by magnitude", () => {
+    expect(formatDuration(-5)).toBe("0s");
+    expect(formatDuration(42_900)).toBe("42s");
+    expect(formatDuration(185_000)).toBe("3m 05s");
+    expect(formatDuration(3_720_000)).toBe("1h 02m");
+    expect(formatDuration(183_600_000)).toBe("2d 03h");
+  });
+
+  it("formats byte totals by magnitude", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(5 * 1024 ** 2)).toBe("5.00 MB");
+    expect(formatBytes(1.2 * 1024 ** 3)).toBe("1.20 GB");
+  });
+});
+
+describe("matchesKeyword", () => {
+  it("searches host, chain, rule and process without case", () => {
+    expect(matchesKeyword(row(), "")).toBe(true);
+    expect(matchesKeyword(row(), "  GitHub ")).toBe(true);
+    expect(matchesKeyword(row(), "node-a")).toBe(true);
+    expect(matchesKeyword(row(), "domain_suffix")).toBe(true);
+    expect(matchesKeyword(row(), "curl")).toBe(true);
+    expect(matchesKeyword(row(), "udp")).toBe(false);
+    expect(matchesKeyword(row({ host: "", destination_ip: "1.1.1.1" }), "1.1.1")).toBe(true);
+  });
+});
+
+describe("sortConnections", () => {
+  const rows = [
+    row({ id: "old", start_ms: 1_000, upload: 0, download: 9_000 }),
+    row({ id: "new", start_ms: 3_000, upload: 0, download: 10 }),
+    row({ id: "mid", start_ms: 2_000, upload: 0, download: 500 }),
+  ];
+  const ids = (sorted: ConnectionRow[]) => sorted.map((r) => r.id);
+
+  it("puts the newest connection first by default", () => {
+    expect(ids(sortConnections(rows, "newest"))).toEqual(["new", "mid", "old"]);
+  });
+
+  it("orders by bytes transferred", () => {
+    expect(ids(sortConnections(rows, "traffic"))).toEqual(["old", "mid", "new"]);
+  });
+
+  it("breaks equal start times by id so rows do not swap between polls", () => {
+    const tied = [row({ id: "b", start_ms: 5 }), row({ id: "a", start_ms: 5 })];
+    expect(ids(sortConnections(tied, "newest"))).toEqual(["a", "b"]);
+    expect(ids(sortConnections([...tied].reverse(), "newest"))).toEqual(["a", "b"]);
+  });
+});

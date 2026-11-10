@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyText, readLogSelection, sameLogSelection } from "./logCopy";
+import { copyText } from "./clipboard";
 
 function selectText(node: Text, start: number, end: number): void {
   const range = document.createRange();
@@ -12,43 +12,6 @@ function selectText(node: Text, start: number, end: number): void {
   selection.removeAllRanges();
   selection.addRange(range);
 }
-
-describe("readLogSelection", () => {
-  afterEach(() => {
-    window.getSelection()?.removeAllRanges();
-    document.body.replaceChildren();
-  });
-
-  it("returns the selected slice when both ends are inside the log view", () => {
-    const box = document.createElement("pre");
-    const line = document.createElement("div");
-    line.textContent = "INFO ready";
-    box.appendChild(line);
-    document.body.appendChild(box);
-    selectText(line.firstChild as Text, 5, 10);
-
-    const selected = readLogSelection(box);
-    expect(selected?.text).toBe("ready");
-    expect(sameLogSelection(selected, readLogSelection(box))).toBe(true);
-  });
-
-  it("ignores a selection that leaves the log view", () => {
-    const box = document.createElement("pre");
-    const line = document.createElement("div");
-    line.textContent = "INFO ready";
-    box.appendChild(line);
-    const outside = document.createTextNode("outside");
-    document.body.append(box, outside);
-    const range = document.createRange();
-    range.setStart(line.firstChild as Text, 0);
-    range.setEnd(outside, 3);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-
-    expect(readLogSelection(box)).toBeNull();
-  });
-});
 
 describe("copyText", () => {
   afterEach(() => {
@@ -68,7 +31,7 @@ describe("copyText", () => {
     expect(writeText).toHaveBeenCalledWith("INFO ready");
   });
 
-  it("falls back to execCommand and restores the log selection", async () => {
+  it("falls back to execCommand and restores the page selection", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("denied"));
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,

@@ -4,6 +4,7 @@
 //! This layer does not import Tauri; shell integration uses `AppHost`.
 
 mod common;
+mod connections;
 mod core;
 mod exit_probe;
 mod host;
@@ -15,6 +16,7 @@ mod subscription;
 mod tun;
 
 pub(crate) use common::*;
+pub(crate) use connections::*;
 pub(crate) use core::*;
 pub(crate) use host::{AppHost, AppResources};
 pub(crate) use logs::*;

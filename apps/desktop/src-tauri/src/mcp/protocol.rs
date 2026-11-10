@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::application::{
-    add_custom_rule_use_case, add_subscription_use_case, broadcast_state_change, collect_nodes,
-    collect_status, current_settings, disable_active_backend_inner, ensure_tun_elevation_inner,
+    add_custom_rule_use_case, add_subscription_use_case, broadcast_state_change,
+    close_all_connections_use_case, close_connection_use_case, collect_nodes, collect_status,
+    current_settings, disable_active_backend_inner, ensure_tun_elevation_inner,
     get_log_view_use_case, get_runtime_config_use_case, import_subscription_file_use_case,
-    list_subscriptions_use_case, lock_orchestrate, query_rules, remove_custom_rule_use_case,
-    remove_subscription_use_case, remove_tun_elevation_inner, replace_recovery_warnings,
-    require_running_core, reset_helper_probe_cache, rule_overview, save_settings_inner,
-    set_active_subscription_use_case, set_auto_update_subscription_use_case,
+    list_subscriptions_use_case, lock_orchestrate, query_connections_use_case, query_rules,
+    remove_custom_rule_use_case, remove_subscription_use_case, remove_tun_elevation_inner,
+    replace_recovery_warnings, require_running_core, reset_helper_probe_cache, rule_overview,
+    save_settings_inner, set_active_subscription_use_case, set_auto_update_subscription_use_case,
     set_group_selection_use_case, set_proxy_mode_inner, set_rule_disabled_use_case,
     set_selected_node_use_case, start_core_inner, start_service, stop_core_use_case,
     subscription_share_use_case, test_node_delay_use_case, update_custom_rule_use_case,
     update_subscription_use_case, AddCustomRuleRequest, AddSubscriptionRequest,
-    GroupSelectionRequest, IdRequest, ImportSubscriptionFileRequest, ListRulesRequest,
-    LogViewRequest, RemoveCustomRuleRequest, SetActiveRequest, SetAutoUpdateRequest,
-    SetProxyModeRequest, SetRuleDisabledRequest, SettingsPatch, TagRequest,
-    UpdateCustomRuleRequest,
+    CloseConnectionRequest, GroupSelectionRequest, IdRequest, ImportSubscriptionFileRequest,
+    ListRulesRequest, LogViewRequest, QueryConnectionsRequest, RemoveCustomRuleRequest,
+    SetActiveRequest, SetAutoUpdateRequest, SetProxyModeRequest, SetRuleDisabledRequest,
+    SettingsPatch, TagRequest, UpdateCustomRuleRequest,
 };
 use crate::AppState;
 use ice_config::{AppError, ErrorCode};
@@ -305,8 +306,38 @@ pub fn tools() -> Vec<Value> {
             }),
         ),
         read_tool(
+            "list_connections",
+            "List live connections of the running core, newest first: destination, protocol, \
+             outbound chain (exit node first), matched rule, process, bytes transferred and \
+             start time. `total` counts every live connection, `matched` those the keyword \
+             matched. While the core is stopped, `running` is false and the list is empty.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": ["string", "null"]},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::application::QUERY_CONNECTIONS_MAX_LIMIT
+                    }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        write_tool(
+            "close_connection",
+            "Close one live connection by the id `list_connections` reports. \
+             The application behind it usually reconnects.",
+            id_schema(),
+        ),
+        write_tool(
+            "close_all_connections",
+            "Close every live connection of the running core.",
+            no_args(),
+        ),
+        read_tool(
             "get_logs",
-            "Read a bounded tail of the application and core logs.",
+            "Read a bounded tail of the application and core logs, every parsed line included.",
             json!({
                 "type": "object",
                 "properties": {"n": {"type": "integer", "minimum": 1, "maximum": MAX_LOG_LINES}},
@@ -392,7 +423,6 @@ fn settings_patch_schema() -> Value {
             "language": {"type": "string", "enum": ["system", "zh", "en"]},
             "check_app_updates": {"type": "boolean"},
             "probe_exit_ip": {"type": "boolean"},
-            "log_debug": {"type": "boolean"},
             "tray_display_mode": {"type": "string", "enum": ["icon_and_speed", "icon", "speed"]},
             "launch_at_login": {"type": "boolean"}
         },
@@ -696,6 +726,19 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
         "remove_custom_rule" => {
             let request: RemoveCustomRuleRequest = parse_args(args)?;
             remove_custom_rule_use_case(app, state.inner(), request)
+        }
+        "list_connections" => {
+            let request: QueryConnectionsRequest = parse_args(args)?;
+            to_value(query_connections_use_case(state.inner(), &request)?)
+        }
+        "close_connection" => {
+            let request: CloseConnectionRequest = parse_args(args)?;
+            close_connection_use_case(state.inner(), request)?;
+            Ok(json!({"ok": true}))
+        }
+        "close_all_connections" => {
+            close_all_connections_use_case(state.inner())?;
+            Ok(json!({"ok": true}))
         }
         "get_logs" => {
             let n = args
@@ -1025,6 +1068,37 @@ mod tests {
             &json!({"patch": {"mixed_port": 18080}})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn connection_tools_validate_their_arguments() {
+        assert!(validate_tool_arguments("list_connections", &json!({})).is_ok());
+        assert!(validate_tool_arguments(
+            "list_connections",
+            &json!({"keyword": "github", "limit": 50})
+        )
+        .is_ok());
+        assert!(validate_tool_arguments("list_connections", &json!({"limit": 0})).is_err());
+        assert!(validate_tool_arguments("list_connections", &json!({"limit": 2001})).is_err());
+        assert!(validate_tool_arguments("list_connections", &json!({"host": "x"})).is_err());
+        assert!(validate_tool_arguments("close_connection", &json!({})).is_err());
+        assert!(validate_tool_arguments(
+            "close_connection",
+            &json!({"id": "7a5f6f0e-6c1b-4f0e-9d0a-000000000001"})
+        )
+        .is_ok());
+        assert!(validate_tool_arguments("close_all_connections", &json!({"id": "x"})).is_err());
+        for (name, read_only) in [
+            ("list_connections", true),
+            ("close_connection", false),
+            ("close_all_connections", false),
+        ] {
+            let tool = tools()
+                .into_iter()
+                .find(|tool| tool["name"] == name)
+                .expect(name);
+            assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{name}");
+        }
     }
 
     #[test]
