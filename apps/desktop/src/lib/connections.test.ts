@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ConnectionRow } from "../api/contracts";
 import {
   CONNECTION_SEARCH_FIELDS,
@@ -131,6 +131,10 @@ describe("sortConnections", () => {
 });
 
 describe("remembered connection sort", () => {
+  afterEach(() => {
+    window.localStorage.removeItem(CONNECTION_SORT_STORAGE_KEY);
+  });
+
   it("defaults to newest when nothing is stored", () => {
     expect(readConnectionSort()).toBe("newest");
   });

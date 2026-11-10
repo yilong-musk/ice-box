@@ -4,7 +4,6 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 import { THEME_STORAGE_KEY } from "../lib/theme";
-import { CONNECTION_SORT_STORAGE_KEY } from "../lib/connections";
 import { applyStoredLanguage, LANGUAGE_STORAGE_KEY } from "../lib/i18n";
 
 function ensureLocalStorage() {
@@ -90,7 +89,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   window.localStorage.removeItem(THEME_STORAGE_KEY);
-  window.localStorage.removeItem(CONNECTION_SORT_STORAGE_KEY);
   // Reset storage and the in-memory language store together so the next test
   // starts from the same preference that storage reports.
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);

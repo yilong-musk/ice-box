@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRow, ConnectionsResponse } from "../api/contracts";
+import { CONNECTION_SORT_STORAGE_KEY } from "../lib/connections";
 import { t } from "../lib/i18n";
 import { Connections } from "./Connections";
 
@@ -84,6 +85,7 @@ describe("Connections", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    window.localStorage.removeItem(CONNECTION_SORT_STORAGE_KEY);
   });
 
   it("lists each connection with its route, rule, process and totals", async () => {
@@ -206,6 +208,10 @@ describe("Connections", () => {
 
   it("remembers the picked sort for the next visit", async () => {
     const first = render(<Connections />);
+    // Let the first poll settle so no state update lands after unmount.
+    await waitFor(() => {
+      expect(within(first.container).getAllByTestId("connection-row")).toHaveLength(2);
+    });
     fireEvent.change(
       within(first.container).getByRole("combobox", { name: t("connections.sortAria") }),
       { target: { value: "download" } },
@@ -216,6 +222,9 @@ describe("Connections", () => {
     expect(
       within(container).getByRole("combobox", { name: t("connections.sortAria") }),
     ).toHaveValue("download");
+    await waitFor(() => {
+      expect(within(container).getAllByTestId("connection-row")).toHaveLength(2);
+    });
   });
 
   it("closes one connection and removes its row at once", async () => {

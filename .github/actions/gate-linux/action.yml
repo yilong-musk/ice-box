@@ -39,17 +39,19 @@ runs:
           'APT::Sandbox::User "root";' \
           | sudo tee /etc/apt/apt.conf.d/99ci-archive-cache >/dev/null
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
         echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
     - uses: actions/cache@v6
       with:
         path: ${{ steps.apt-cache-dir.outputs.dir }}
-        # A new runner image or package list saves a fresh cache, seeded from
+        # A new runner image, package list or Playwright version (whose
+        # install-deps packages land here too) saves a fresh cache, seeded from
         # the closest older one so only changed packages are downloaded.
-        key: apt-${{ steps.apt-cache-dir.outputs.image }}-${{ hashFiles('.github/actions/gate-linux/action.yml') }}
+        key: apt-${{ steps.apt-cache-dir.outputs.image }}-${{ hashFiles('.github/actions/gate-linux/action.yml', 'apps/website/package-lock.json') }}
         restore-keys: |
           apt-${{ steps.apt-cache-dir.outputs.image }}-
-          apt-${{ runner.os }}-
+          apt-${{ steps.apt-cache-dir.outputs.os }}-
 
     - name: Install system dependencies
       shell: bash
