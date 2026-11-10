@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { t } from "./i18n";
 import {
   displayMemoryMb,
   formatMemory,
   formatMemoryPart,
   memoryAvailable,
+  memoryBands,
   memoryLabel,
   memoryMb,
   memoryTone,
   memoryToneFor,
 } from "./memory";
+
+// jsdom derives its user agent from the host OS; pin the classifier so the
+// default bands do not depend on where the suite runs.
+vi.mock("@platform/windowChrome", () => ({ isMacosHost: () => false }));
 
 const MB = 1024 * 1024;
 
@@ -39,6 +44,16 @@ describe("memoryTone", () => {
     expect(memoryTone(99)).toBe("warn");
     expect(memoryTone(100)).toBe("bad");
     expect(memoryTone(1024)).toBe("bad");
+  });
+
+  it("shifts both bands up by 20 MB on macOS", () => {
+    const macos = memoryBands(true);
+    expect(macos).toEqual({ warnMb: 80, badMb: 120 });
+    expect(memoryBands(false)).toEqual({ warnMb: 60, badMb: 100 });
+    expect(memoryTone(79, macos)).toBe("ok");
+    expect(memoryTone(80, macos)).toBe("warn");
+    expect(memoryTone(119, macos)).toBe("warn");
+    expect(memoryTone(120, macos)).toBe("bad");
   });
 });
 

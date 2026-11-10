@@ -14,6 +14,15 @@ vi.mock("@platform/shell", () => ({
   isPhoneShell: () => phoneShell.value,
 }));
 
+// jsdom derives its user agent from the host OS; pin the classifier so the
+// memory bands do not depend on where the suite runs.
+const macosHost = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@platform/windowChrome", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@platform/windowChrome")>();
+  return { ...actual, isMacosHost: () => macosHost.value };
+});
+
 const getStatus = vi.fn();
 const getMcpStatus = vi.fn();
 const listNodes = vi.fn();
@@ -422,6 +431,36 @@ describe("Home", () => {
     expect(view.getByTestId("home-memory-tick-100")).toHaveStyle({ left: "66.67%" });
     expect(view.getByTestId("home-memory-tick-150")).toHaveTextContent("150 MB");
     expect(view.queryByTestId("home-memory-tick-105")).toBeNull();
+  });
+
+  it("shifts the memory bands and scale up by 20 MB on macOS", async () => {
+    macosHost.value = true;
+    try {
+      getStatus.mockResolvedValue(
+        statusWithMemory({
+          app_bytes: 50 * 1024 * 1024,
+          core_bytes: 22 * 1024 * 1024,
+          total_bytes: 72 * 1024 * 1024,
+        }),
+      );
+
+      const { container } = render(<Home />);
+      const view = within(container);
+
+      await waitFor(() => {
+        expect(view.getByTestId("home-health-memory")).toHaveTextContent("72 MB");
+      });
+      // 72 MB is yellow against the baseline bands and green on macOS.
+      expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-ok");
+      expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "18.33%" });
+      expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "41.67%" });
+      expect(view.getByTestId("home-memory-tick-80")).toHaveStyle({ left: "66.67%" });
+      expect(view.getByTestId("home-memory-tick-120")).toHaveTextContent("120 MB");
+      expect(view.queryByTestId("home-memory-tick-60")).toBeNull();
+      expect(view.queryByTestId("home-memory-tick-100")).toBeNull();
+    } finally {
+      macosHost.value = false;
+    }
   });
 
   it("keeps the memory breakdown adding up to the figure it labels", async () => {

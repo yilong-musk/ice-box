@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { MemoryUsage } from "../api/client";
+import { isMacosHost } from "@platform/windowChrome";
 import { t } from "./i18n";
 import type { Tone } from "./tone";
 
@@ -53,10 +54,38 @@ export function memoryLabel(memory: MemoryUsage | null | undefined): string {
     : t("common.dash");
 }
 
-/** Color band by the displayed value: <60 MB green, 60–99 yellow, ≥100 red. */
-export function memoryTone(mb: number): Tone {
-  if (mb < 60) return "ok";
-  if (mb < 100) return "warn";
+/** Where the yellow and red bands start, in whole MB. */
+export interface MemoryBands {
+  warnMb: number;
+  badMb: number;
+}
+
+/** Baseline bands: <60 MB green, 60–99 yellow, ≥100 red. */
+const BASE_BANDS: MemoryBands = { warnMb: 60, badMb: 100 };
+
+/** macOS shifts both bands up by this much. Its app figure is the physical
+ * footprint of a process that also hosts AppKit and the WebKit UI side, which
+ * idles around 50 MB where the Windows private working set idles around 15. */
+const MACOS_BAND_SHIFT_MB = 20;
+
+/** Bands for this host: the baseline, shifted up on macOS (<80 green,
+ * 80–119 yellow, ≥120 red). */
+export function memoryBands(macos: boolean = isMacosHost()): MemoryBands {
+  return macos
+    ? {
+        warnMb: BASE_BANDS.warnMb + MACOS_BAND_SHIFT_MB,
+        badMb: BASE_BANDS.badMb + MACOS_BAND_SHIFT_MB,
+      }
+    : BASE_BANDS;
+}
+
+/** Color band by the displayed value, against this host's bands. */
+export function memoryTone(
+  mb: number,
+  bands: MemoryBands = memoryBands(),
+): Tone {
+  if (mb < bands.warnMb) return "ok";
+  if (mb < bands.badMb) return "warn";
   return "bad";
 }
 
