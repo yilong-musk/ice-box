@@ -26,6 +26,9 @@ esac
 echo "== rust toolchain pins =="
 bash "$ROOT/scripts/check-toolchain-pins.sh"
 
+echo "== documentation versions =="
+bash "$ROOT/scripts/check-doc-versions.sh"
+
 if [[ "$SCOPE" == all || "$SCOPE" == rust ]]; then
   echo "== cargo fmt --check =="
   cargo fmt --check

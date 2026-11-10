@@ -19,8 +19,8 @@
 #   fixtures  release, updater, signing, and Android script fixtures, plus
 #             `bash -n` on changed shell scripts; also selected by the
 #             version sources and CHANGELOG.md that release preflight reads
-# `cargo fmt --check` and the Rust toolchain pin check run on every
-# invocation. Docs-only changes run nothing else. A path that matches no
+# `cargo fmt --check`, the Rust toolchain pin check, and the documentation
+# version check run on every invocation. Docs-only changes run nothing else. A path that matches no
 # bucket, a change to this script, or a missing merge base falls back to
 # --full.
 #
@@ -208,6 +208,9 @@ cargo fmt --check
 
 echo "== rust toolchain pins =="
 bash scripts/check-toolchain-pins.sh
+
+echo "== documentation versions =="
+bash scripts/check-doc-versions.sh
 
 if [[ "$run_rust" == 1 ]]; then
   echo "== cargo clippy =="
