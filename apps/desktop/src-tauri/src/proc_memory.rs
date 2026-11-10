@@ -26,6 +26,46 @@
 
 use std::io;
 
+use serde::Serialize;
+
+/// Where the Home memory readout turns yellow and red, in whole MB.
+///
+/// The bands travel with the figure because they depend on how it was
+/// measured: the UI must not guess the platform to pick them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct MemoryBands {
+    /// The readout is yellow from this value up.
+    pub warn_mb: u32,
+    /// The readout is red from this value up.
+    pub bad_mb: u32,
+}
+
+/// Baseline bands: below 60 MB green, 60–99 yellow, 100 and above red.
+const BASE_BANDS: MemoryBands = MemoryBands {
+    warn_mb: 60,
+    bad_mb: 100,
+};
+
+/// macOS starts both bands this much higher. Its app figure is the physical
+/// footprint of a process that also hosts AppKit and the WebKit UI side, which
+/// idles around 50 MB where the Windows private working set idles around 15.
+#[cfg(any(target_os = "macos", test))]
+const MACOS_BAND_SHIFT_MB: u32 = 20;
+
+/// Bands for the figure [`process_memory_bytes`] reports on this platform.
+#[cfg(target_os = "macos")]
+pub const MEMORY_BANDS: MemoryBands = MemoryBands {
+    warn_mb: BASE_BANDS.warn_mb + MACOS_BAND_SHIFT_MB,
+    bad_mb: BASE_BANDS.bad_mb + MACOS_BAND_SHIFT_MB,
+};
+
+/// Bands for the figure [`process_memory_bytes`] reports on this platform.
+#[cfg(not(target_os = "macos"))]
+pub const MEMORY_BANDS: MemoryBands = BASE_BANDS;
+
+// The yellow band must start below the red one on every platform.
+const _: () = assert!(MEMORY_BANDS.warn_mb < MEMORY_BANDS.bad_mb);
+
 /// Memory footprint of `pid` in bytes.
 ///
 /// Errors are expected (process gone, no permission): callers treat them as
@@ -115,6 +155,18 @@ pub fn process_memory_bytes(pid: u32) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bands_are_the_baseline_shifted_up_on_macos() {
+        assert_eq!((BASE_BANDS.warn_mb, BASE_BANDS.bad_mb), (60, 100));
+        let shift = if cfg!(target_os = "macos") {
+            MACOS_BAND_SHIFT_MB
+        } else {
+            0
+        };
+        assert_eq!(MEMORY_BANDS.warn_mb, BASE_BANDS.warn_mb + shift);
+        assert_eq!(MEMORY_BANDS.bad_mb, BASE_BANDS.bad_mb + shift);
+    }
 
     #[test]
     fn own_process_memory_is_readable() {

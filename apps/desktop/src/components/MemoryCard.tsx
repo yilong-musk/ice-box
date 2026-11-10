@@ -4,11 +4,12 @@
  * Home memory card: the total footprint, a stacked bar split into core and
  * app, and a legend with each part's figure.
  *
- * The bar is drawn against a scale that ends where the red band starts (100 MB,
- * or 120 MB on macOS), so how full it is shows how close usage is to that
- * band. Above it the scale grows to the next 50 MB step, so the red mark stays
- * readable and the bar shows how far into the red band usage has gone. The bar
- * and the total take the colour of the band the total falls in.
+ * The bar is drawn against a scale that ends where the red band starts (the
+ * sample's `bad_mb`: 100 MB, or 120 MB on macOS), so how full it is shows how
+ * close usage is to that band. Above it the scale grows in 50 MB steps past
+ * the red mark, so that mark stays readable and the bar shows how far into the
+ * red band usage has gone. The bar and the total take the colour of the band
+ * the total falls in.
  */
 
 import type { MemoryUsage } from "@/api/contracts";
@@ -17,8 +18,8 @@ import { t } from "@/lib/i18n";
 import {
   displayMemoryMb,
   formatMemory,
+  DEFAULT_MEMORY_BANDS,
   formatMemoryPart,
-  memoryBands,
   memoryLabel,
   memoryMb,
   memoryToneFor,
@@ -26,8 +27,9 @@ import {
 import { TONE_BG, TONE_TEXT, type Tone } from "@/lib/tone";
 import { cn } from "@/lib/utils";
 
-/** Past the red band's start the scale grows in these steps, never ending
- * just past that mark. */
+/** Past the red band's start the scale grows in these steps, counted from
+ * that mark: the end label is always at least one step away from the red
+ * mark's label, whatever the bands are. */
 const SCALE_STEP_MB = 50;
 
 /** An inner label closer than this share of the bar to either end is dropped
@@ -39,7 +41,7 @@ const MIN_LABEL_GAP = 0.12;
 function memoryScaleMb(totalMb: number, badMb: number): number {
   return totalMb <= badMb
     ? badMb
-    : Math.ceil(totalMb / SCALE_STEP_MB) * SCALE_STEP_MB;
+    : badMb + Math.ceil((totalMb - badMb) / SCALE_STEP_MB) * SCALE_STEP_MB;
 }
 
 /** Core segment: the full band colour. */
@@ -80,12 +82,12 @@ export function MemoryCard({
   // Rounded per-part figures, the same ones the legend prints.
   const coreMb = memory?.core_bytes != null ? memoryMb(memory.core_bytes) : 0;
   const appMb = memory?.app_bytes != null ? memoryMb(memory.app_bytes) : 0;
-  const bands = memoryBands();
-  const scale = memoryScaleMb(memory ? displayMemoryMb(memory) : 0, bands.badMb);
+  const bands = memory?.bands ?? DEFAULT_MEMORY_BANDS;
+  const scale = memoryScaleMb(memory ? displayMemoryMb(memory) : 0, bands.bad_mb);
   // Scale labels: the start, and where the bar turns yellow and red. Past the
   // red mark the scale grows, and its end gets a label of its own.
-  const baseTicks = [0, bands.warnMb, bands.badMb];
-  const ticks = scale > bands.badMb ? [...baseTicks, scale] : baseTicks;
+  const baseTicks = [0, bands.warn_mb, bands.bad_mb];
+  const ticks = scale > bands.bad_mb ? [...baseTicks, scale] : baseTicks;
   const labels = ticks.filter(
     (mb) =>
       mb === 0 ||

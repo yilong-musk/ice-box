@@ -14,15 +14,6 @@ vi.mock("@platform/shell", () => ({
   isPhoneShell: () => phoneShell.value,
 }));
 
-// jsdom derives its user agent from the host OS; pin the classifier so the
-// memory bands do not depend on where the suite runs.
-const macosHost = vi.hoisted(() => ({ value: false }));
-
-vi.mock("@platform/windowChrome", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@platform/windowChrome")>();
-  return { ...actual, isMacosHost: () => macosHost.value };
-});
-
 const getStatus = vi.fn();
 const getMcpStatus = vi.fn();
 const listNodes = vi.fn();
@@ -105,6 +96,7 @@ const tunStatus = {
     app_bytes: 38 * 1024 * 1024,
     core_bytes: null,
     total_bytes: 38 * 1024 * 1024,
+    bands: { warn_mb: 60, bad_mb: 100 },
   },
 } as const;
 
@@ -270,6 +262,7 @@ describe("Home", () => {
     app_bytes: number | null;
     core_bytes: number | null;
     total_bytes: number;
+    bands?: { warn_mb: number; bad_mb: number };
   }, coreStatus: "running" | "stopped" = "running") {
     return {
       core: {
@@ -284,7 +277,8 @@ describe("Home", () => {
       system_proxy_recorded: true,
       system_proxy_available: true,
       ...tunStatus,
-      memory,
+      // Baseline bands unless the case sends its own, as a backend would.
+      memory: { bands: { warn_mb: 60, bad_mb: 100 }, ...memory },
     };
   }
 
@@ -433,34 +427,55 @@ describe("Home", () => {
     expect(view.queryByTestId("home-memory-tick-105")).toBeNull();
   });
 
-  it("shifts the memory bands and scale up by 20 MB on macOS", async () => {
-    macosHost.value = true;
-    try {
-      getStatus.mockResolvedValue(
-        statusWithMemory({
-          app_bytes: 50 * 1024 * 1024,
-          core_bytes: 22 * 1024 * 1024,
-          total_bytes: 72 * 1024 * 1024,
-        }),
-      );
+  it("draws the bands and scale the backend sends", async () => {
+    // The macOS backend reports bands 20 MB above the baseline.
+    getStatus.mockResolvedValue(
+      statusWithMemory({
+        app_bytes: 50 * 1024 * 1024,
+        core_bytes: 22 * 1024 * 1024,
+        total_bytes: 72 * 1024 * 1024,
+        bands: { warn_mb: 80, bad_mb: 120 },
+      }),
+    );
 
-      const { container } = render(<Home />);
-      const view = within(container);
+    const { container } = render(<Home />);
+    const view = within(container);
 
-      await waitFor(() => {
-        expect(view.getByTestId("home-health-memory")).toHaveTextContent("72 MB");
-      });
-      // 72 MB is yellow against the baseline bands and green on macOS.
-      expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-ok");
-      expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "18.33%" });
-      expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "41.67%" });
-      expect(view.getByTestId("home-memory-tick-80")).toHaveStyle({ left: "66.67%" });
-      expect(view.getByTestId("home-memory-tick-120")).toHaveTextContent("120 MB");
-      expect(view.queryByTestId("home-memory-tick-60")).toBeNull();
-      expect(view.queryByTestId("home-memory-tick-100")).toBeNull();
-    } finally {
-      macosHost.value = false;
-    }
+    await waitFor(() => {
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("72 MB");
+    });
+    // 72 MB is yellow against the baseline bands and green against these.
+    expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-ok");
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "18.33%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "41.67%" });
+    expect(view.getByTestId("home-memory-tick-80")).toHaveStyle({ left: "66.67%" });
+    expect(view.getByTestId("home-memory-tick-120")).toHaveTextContent("120 MB");
+    expect(view.queryByTestId("home-memory-tick-60")).toBeNull();
+    expect(view.queryByTestId("home-memory-tick-100")).toBeNull();
+  });
+
+  it("grows the scale from the red mark so its label keeps clear of the end", async () => {
+    // 121 MB against a 120 MB red mark: a scale rounded to the next multiple
+    // of 50 would end at 150, only a fifth of the bar past the 120 label.
+    getStatus.mockResolvedValue(
+      statusWithMemory({
+        app_bytes: 91 * 1024 * 1024,
+        core_bytes: 30 * 1024 * 1024,
+        total_bytes: 121 * 1024 * 1024,
+        bands: { warn_mb: 80, bad_mb: 120 },
+      }),
+    );
+
+    const { container } = render(<Home />);
+    const view = within(container);
+
+    await waitFor(() => {
+      expect(view.getByTestId("home-health-memory")).toHaveTextContent("121 MB");
+    });
+    expect(view.getByTestId("home-memory-tick-120")).toHaveStyle({ left: "70.59%" });
+    expect(view.getByTestId("home-memory-tick-170")).toHaveTextContent("170 MB");
+    expect(view.queryByTestId("home-memory-tick-150")).toBeNull();
+    expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-destructive");
   });
 
   it("keeps the memory breakdown adding up to the figure it labels", async () => {
