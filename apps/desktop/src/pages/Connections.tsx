@@ -25,7 +25,6 @@ import {
   ItemContent,
   ItemDescription,
   ItemGroup,
-  ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -70,10 +69,13 @@ function documentHidden(): boolean {
 
 function ConnectionItem({
   row,
+  usage,
   nowMs,
   onClose,
 }: {
   row: ConnectionRow;
+  /** Download relative to the largest one in the list, 0 to 1. */
+  usage: number;
   nowMs: number;
   onClose: (id: string) => void;
 }) {
@@ -82,8 +84,21 @@ function ConnectionItem({
   const rule = connectionRule(row);
   const process = processName(row.process_path);
   return (
-    <Item size="sm" className="pl-0 pr-3" data-testid="connection-row">
-      <ItemContent className="min-w-0">
+    <Item
+      size="sm"
+      className="relative rounded-md px-2 transition-colors hover:bg-muted/50"
+      data-testid="connection-row"
+    >
+      {usage > 0 ? (
+        // Drawn first so the row content paints over it.
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 rounded-md bg-linear-to-r from-ok/5 to-ok/20 transition-[width] duration-500"
+          style={{ width: `${usage * 100}%` }}
+          data-testid="connection-usage"
+        />
+      ) : null}
+      <ItemContent className="relative min-w-0">
         <ItemTitle
           className="w-full min-w-0"
           title={row.source ? `${row.source} → ${target}` : target}
@@ -137,7 +152,7 @@ function ConnectionItem({
           </span>
         </ItemDescription>
       </ItemContent>
-      <ItemActions>
+      <ItemActions className="relative">
         {/* Fixed width so the rows do not shift as the figures change. */}
         <span
           className="w-40 shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground"
@@ -245,6 +260,8 @@ export function Connections({ active = true }: { active?: boolean }) {
     return sortConnections(rows, sort);
   }, [all, keyword, sort]);
   const shown = sorted.length > MAX_ROWS ? sorted.slice(0, MAX_ROWS) : sorted;
+  // The row with the most download fills its background; the rest scale to it.
+  const maxDownload = shown.reduce((max, row) => Math.max(max, row.download), 0);
   const count = all?.length ?? 0;
   const filtering = keyword.trim() !== "";
 
@@ -333,16 +350,16 @@ export function Connections({ active = true }: { active?: boolean }) {
               scrollHideDelay={600}
               className="min-h-0 flex-1 overflow-hidden"
             >
-              <ItemGroup aria-label={t("connections.listAria")} className="gap-0">
-                {shown.map((row, index) => (
-                  <div key={row.id}>
-                    {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                    <ConnectionItem
-                      row={row}
-                      nowMs={nowMs}
-                      onClose={closeOne}
-                    />
-                  </div>
+              {/* Rows are told apart by spacing and their usage bars, not rules. */}
+              <ItemGroup aria-label={t("connections.listAria")} className="gap-1">
+                {shown.map((row) => (
+                  <ConnectionItem
+                    key={row.id}
+                    row={row}
+                    usage={maxDownload > 0 ? row.download / maxDownload : 0}
+                    nowMs={nowMs}
+                    onClose={closeOne}
+                  />
                 ))}
               </ItemGroup>
               {sorted.length > MAX_ROWS ? (

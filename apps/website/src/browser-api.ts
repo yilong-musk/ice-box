@@ -158,25 +158,44 @@ type DemoConnection = {
   process: string;
   /** Seconds the connection had been open when the demo started. */
   ageSec: number;
+  /** Bytes already transferred when the demo started. */
+  upBytes: number;
+  downBytes: number;
+  /** Bytes per second from then on. */
   up: number;
   down: number;
 };
 
+const MB = 1024 * 1024;
+
+/**
+ * Downloads span about one order of magnitude, so every row's usage bar is
+ * visible next to the largest one. Each rate is small next to its starting
+ * total, so the ratios hold for the minutes someone looks at the demo.
+ */
 const DEMO_CONNECTIONS: DemoConnection[] = [
-  { host: "api.github.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=github.com => route(proxy)", process: "/usr/bin/git", ageSec: 12, up: 2_400, down: 96_000 },
-  { host: "rr4---sn-ogul7n7s.googlevideo.com", port: "443", network: "udp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-youtube => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 187, up: 18_000, down: 1_150_000 },
-  { host: "chatgpt.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-openai => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 431, up: 900, down: 5_200 },
-  { host: "registry.npmjs.org", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "final", process: "/usr/local/bin/node", ageSec: 3, up: 1_100, down: 148_000 },
-  { host: "www.bilibili.com", port: "443", network: "tcp", chains: ["direct"], rule: "rule_set=geosite-cn => route(direct)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 64, up: 600, down: 22_000 },
-  { host: "mtalk.google.com", port: "5228", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=google.com => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 3_720, up: 0, down: 0 },
-  { host: "", port: "123", network: "udp", chains: ["direct"], rule: "ip_is_private => route(direct)", process: "", ageSec: 28, up: 0, down: 0 },
-  { host: "slack.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=slack.com => route(proxy)", process: "/Applications/Slack.app/Contents/MacOS/Slack", ageSec: 912, up: 300, down: 1_400 },
+  { host: "api.github.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=github.com => route(proxy)", process: "/usr/bin/git", ageSec: 12, upBytes: 0.6 * MB, downBytes: 18 * MB, up: 2_400, down: 60_000 },
+  { host: "rr4---sn-ogul7n7s.googlevideo.com", port: "443", network: "udp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-youtube => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 187, upBytes: 1.2 * MB, downBytes: 48 * MB, up: 3_000, down: 160_000 },
+  { host: "chatgpt.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "rule_set=geosite-openai => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 431, upBytes: 0.9 * MB, downBytes: 11 * MB, up: 900, down: 12_000 },
+  { host: "registry.npmjs.org", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "final", process: "/usr/local/bin/node", ageSec: 3, upBytes: 0.2 * MB, downBytes: 7 * MB, up: 1_100, down: 90_000 },
+  { host: "www.bilibili.com", port: "443", network: "tcp", chains: ["direct"], rule: "rule_set=geosite-cn => route(direct)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 64, upBytes: 0.4 * MB, downBytes: 26 * MB, up: 600, down: 85_000 },
+  { host: "mtalk.google.com", port: "5228", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=google.com => route(proxy)", process: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ageSec: 3_720, upBytes: 0.1 * MB, downBytes: 2.5 * MB, up: 0, down: 0 },
+  { host: "", port: "123", network: "udp", chains: ["direct"], rule: "ip_is_private => route(direct)", process: "", ageSec: 28, upBytes: 0.05 * MB, downBytes: 1.8 * MB, up: 0, down: 0 },
+  { host: "slack.com", port: "443", network: "tcp", chains: [TOKYO_NODE, "proxy"], rule: "domain_suffix=slack.com => route(proxy)", process: "/Applications/Slack.app/Contents/MacOS/Slack", ageSec: 912, upBytes: 0.3 * MB, downBytes: 4 * MB, up: 300, down: 2_000 },
 ];
 
 /** Milliseconds before a closed demo connection is dialled again. */
 const DEMO_RECONNECT_MS = 4000;
 
-type LiveDemoConnection = { id: string; startMs: number; reopenAtMs: number };
+type LiveDemoConnection = {
+  id: string;
+  startMs: number;
+  /** When the counters started growing at the template rates. */
+  countFromMs: number;
+  /** A reconnected connection starts from zero bytes. */
+  fresh: boolean;
+  reopenAtMs: number;
+};
 
 let demoConnectionSequence = 0;
 let demoConnectionState: LiveDemoConnection[] | null = null;
@@ -185,12 +204,14 @@ function liveDemoConnections(): LiveDemoConnection[] {
   demoConnectionState ??= DEMO_CONNECTIONS.map((template) => ({
     id: `demo-connection-${++demoConnectionSequence}`,
     startMs: demoNowMs() - template.ageSec * 1000,
+    countFromMs: demoNowMs(),
+    fresh: false,
     reopenAtMs: 0,
   }));
   return demoConnectionState;
 }
 
-/** Live connections with counters that grow with their age. */
+/** Live connections with counters that keep growing. */
 function demoConnections(): ConnectionsResponse {
   if (!running) {
     return { running: false, upload_total: 0, download_total: 0, connections: [] };
@@ -204,9 +225,11 @@ function demoConnections(): ConnectionsResponse {
       // The app behind a closed connection dials again.
       live.id = `demo-connection-${++demoConnectionSequence}`;
       live.startMs = live.reopenAtMs;
+      live.countFromMs = live.reopenAtMs;
+      live.fresh = true;
       live.reopenAtMs = 0;
     }
-    const seconds = Math.max(0, (now - live.startMs) / 1000);
+    const seconds = Math.max(0, (now - live.countFromMs) / 1000);
     connections.push({
       id: live.id,
       network: template.network,
@@ -216,8 +239,8 @@ function demoConnections(): ConnectionsResponse {
       destination_ip: template.host ? "" : "192.168.1.1",
       destination_port: template.port,
       process_path: template.process,
-      upload: Math.round(4_096 + template.up * seconds),
-      download: Math.round(16_384 + template.down * seconds),
+      upload: Math.round((live.fresh ? 4_096 : template.upBytes) + template.up * seconds),
+      download: Math.round((live.fresh ? 16_384 : template.downBytes) + template.down * seconds),
       start_ms: live.startMs,
       chains: template.chains,
       rule: template.rule,
@@ -225,8 +248,8 @@ function demoConnections(): ConnectionsResponse {
   });
   return {
     running: true,
-    upload_total: 48 * 1024 * 1024 + connections.reduce((sum, row) => sum + row.upload, 0),
-    download_total: 1_900 * 1024 * 1024 + connections.reduce((sum, row) => sum + row.download, 0),
+    upload_total: 48 * MB + connections.reduce((sum, row) => sum + row.upload, 0),
+    download_total: 1_900 * MB + connections.reduce((sum, row) => sum + row.download, 0),
     connections,
   };
 }

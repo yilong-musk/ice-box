@@ -116,6 +116,36 @@ describe("Connections", () => {
     expect(within(traffic).getByTestId("traffic-up")).toHaveTextContent("↑ 1.0 KB");
   });
 
+  it("scales each row's background to the largest download", async () => {
+    listConnections.mockImplementation(async () =>
+      snapshot([
+        row({ id: "big", host: "big.example", download: 4000, start_ms: NOW - 3_000 }),
+        row({ id: "small", host: "small.example", download: 1000, start_ms: NOW - 2_000 }),
+        row({ id: "idle", host: "idle.example", download: 0, start_ms: NOW - 1_000 }),
+      ]),
+    );
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(3);
+    });
+    const usage = (target: string) => {
+      const item = view
+        .getAllByTestId("connection-row")
+        .find((el) => el.textContent?.includes(target));
+      return item?.querySelector<HTMLElement>("[data-testid='connection-usage']") ?? null;
+    };
+    expect(usage("big.example")?.style.width).toBe("100%");
+    expect(usage("small.example")?.style.width).toBe("25%");
+    expect(usage("idle.example")).toBeNull();
+
+    // Narrowing the list rescales to the largest row still shown.
+    fireEvent.change(view.getByLabelText(t("connections.searchAria")), {
+      target: { value: "small" },
+    });
+    expect(usage("small.example")?.style.width).toBe("100%");
+  });
+
   it("filters by keyword and reports how many match", async () => {
     const { container } = render(<Connections />);
     const view = within(container);
