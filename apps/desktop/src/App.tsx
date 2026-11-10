@@ -14,13 +14,13 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ArrowLeftRight,
   ArrowUpCircle,
   Bot,
   House,
   LayoutGrid,
   ListFilter,
   Rss,
-  ScrollText,
   Settings as SettingsIcon,
   Waypoints,
 } from "lucide-react";
@@ -30,7 +30,7 @@ import { Nodes } from "./pages/Nodes";
 import { Apps } from "./pages/Apps";
 import { Subscriptions } from "./pages/Subscriptions";
 import { Rules } from "./pages/Rules";
-import { Logs } from "./pages/Logs";
+import { Connections } from "./pages/Connections";
 import { Mcp } from "./pages/Mcp";
 import { Settings } from "./pages/Settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -74,7 +74,7 @@ type Tab =
   | "rules"
   | "settings"
   | "mcp"
-  | "logs";
+  | "connections";
 
 const SIDEBAR_WIDTH = "11rem";
 
@@ -86,7 +86,7 @@ const NodesPage = memo(Nodes);
 const AppsPage = memo(Apps);
 const SubscriptionsPage = memo(Subscriptions);
 const RulesPage = memo(Rules);
-const LogsPage = memo(Logs);
+const ConnectionsPage = memo(Connections);
 const SettingsPage = memo(Settings);
 const McpPage = memo(Mcp);
 
@@ -185,8 +185,8 @@ const NAV_ITEMS: {
   { id: "apps", labelKey: "app.nav.apps", icon: LayoutGrid },
   { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
   { id: "subs", labelKey: "app.nav.subs", icon: Rss },
+  { id: "connections", labelKey: "app.nav.connections", icon: ArrowLeftRight },
   { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
-  { id: "logs", labelKey: "app.nav.logs", icon: ScrollText },
   { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
 ];
 
@@ -389,7 +389,7 @@ function AppShell() {
   const desktop = isDesktopShell();
   const navItems = NAV_ITEMS.filter((item) => {
     if (item.id === "mcp") return desktop;
-    if (item.id === "logs") return !phone;
+    if (item.id === "connections") return !phone;
     // Phones move the node list into Home and reuse the tab slot for Apps.
     if (item.id === "apps") return phone;
     if (item.id === "nodes") return !phone;
@@ -428,9 +428,9 @@ function AppShell() {
           <RulesPage onNavigate={selectTab} active={tab === "rules"} />
         </TabPane>
       )}
-      {!phone && visited.has("logs") && (
-        <TabPane active={tab === "logs"}>
-          <LogsPage active={tab === "logs"} />
+      {!phone && visited.has("connections") && (
+        <TabPane active={tab === "connections"}>
+          <ConnectionsPage active={tab === "connections"} />
         </TabPane>
       )}
       {visited.has("settings") && (

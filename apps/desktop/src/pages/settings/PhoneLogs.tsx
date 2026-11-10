@@ -28,7 +28,7 @@ export function PhoneLogsCard() {
   }
 
   return (
-    <SettingsSection title={t("app.nav.logs")}>
+    <SettingsSection title={t("settings.logs")}>
       <SettingsRow
         description={
           <>

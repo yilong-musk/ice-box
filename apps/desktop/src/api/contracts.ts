@@ -219,8 +219,6 @@ export type AppSettings = {
    * Defaults to on; turn off to skip third-party Cloudflare trace requests.
    */
   probe_exit_ip: boolean;
-  /** Logs page shows every parsed line. Default is connections and important events. */
-  log_debug: boolean;
   /** macOS menu-bar item: icon + live speed, icon only, or speed only. */
   tray_display_mode: TrayDisplayMode;
   /**
@@ -344,7 +342,6 @@ export type SettingsPatch = {
   language?: "system" | "zh" | "en";
   check_app_updates?: boolean;
   probe_exit_ip?: boolean;
-  log_debug?: boolean;
   tray_display_mode?: TrayDisplayMode;
   /** Registered by the dedicated login-item path, not the form autosave. */
   launch_at_login?: boolean;
@@ -470,7 +467,10 @@ export interface CoreApi {
   listenTrafficSample(handler: (payload: TrafficPoint) => void): Promise<() => void>;
   start(): Promise<void>;
   stop(): Promise<void>;
-  getLogView(n: number): Promise<string[]>;
+  /** Live connections of the running core; empty with `running: false` while it is stopped. */
+  listConnections(): Promise<ConnectionsResponse>;
+  closeConnection(id: string): Promise<void>;
+  closeAllConnections(): Promise<void>;
   getRuntimeConfig(): Promise<string>;
   getSettings(): Promise<AppSettings>;
   saveSettings(patch: SettingsPatch): Promise<void>;
@@ -501,6 +501,42 @@ export interface CoreApi {
   addCustomRule(rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;
   updateCustomRule(fingerprint: string, rule: Record<string, unknown>): Promise<{ ok: boolean; fingerprint: string; apply_warning?: AppErrorPayload }>;
   removeCustomRule(fingerprint: string): Promise<{ ok: boolean; apply_warning?: AppErrorPayload }>;
+}
+
+/** One live connection tracked by the core. */
+export interface ConnectionRow {
+  id: string;
+  /** `tcp` or `udp`. */
+  network: string;
+  /** Inbound as `type/tag`, for example `mixed/mixed-in`. */
+  inbound: string;
+  /** Client address as `ip:port`; empty when unknown. */
+  source: string;
+  /** Destination domain; empty for a bare-IP destination. */
+  host: string;
+  /** Destination IP; empty when the destination is a domain. */
+  destination_ip: string;
+  destination_port: string;
+  /** Process path where the core could resolve it; otherwise empty. */
+  process_path: string;
+  /** Bytes sent and received so far. */
+  upload: number;
+  download: number;
+  /** Creation time in Unix milliseconds; null when the core's timestamp did not parse. */
+  start_ms: number | null;
+  /** Outbound chain, exit node first, route target last. */
+  chains: string[];
+  /** Matched route rule with its action, or `final`. */
+  rule: string;
+}
+
+export interface ConnectionsResponse {
+  /** False while the core is not running; the list is then empty. */
+  running: boolean;
+  /** Bytes the core has relayed since it started. */
+  upload_total: number;
+  download_total: number;
+  connections: ConnectionRow[];
 }
 
 /** Desktop capture: system proxy, TUN recovery, and the privileged helper. */
@@ -536,8 +572,8 @@ export interface DesktopShellApi {
   /** Android: open the system VPN screen. No-op on desktop. */
   openVpnSettings(): Promise<void>;
   /**
-   * Android: save the core log through the system save dialog. Desktop has
-   * the Logs page instead and never calls it.
+   * Android: save the core log through the system save dialog. Desktop opens
+   * the data folder instead and never calls it.
    */
   exportCoreLog(): Promise<"saved" | "cancelled">;
   listenAppUpdateProgress(handler: (payload: UpdateProgressPayload) => void): Promise<() => void>;
@@ -545,8 +581,6 @@ export interface DesktopShellApi {
   setTrayUpdateAvailable(version: string | null): Promise<void>;
   /** Home is visible. Desktop status polls refresh live group `now` only then. */
   setHomeActive(active: boolean): Promise<void>;
-  /** Logs page visibility. Closing it drops the parsed tails; a later read does not rebuild them. */
-  setLogViewActive(active: boolean): Promise<void>;
   /** Drop the lowercase rule index built for keyword search. */
   releaseRuleSearch(): Promise<void>;
 }

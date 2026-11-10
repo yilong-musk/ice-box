@@ -151,7 +151,6 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       launch_at_login: false,
       tun: tunSettings,
@@ -347,21 +346,16 @@ describe("Settings", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("persists turning on debug logs", async () => {
+  it("keeps the data folder in its own card", async () => {
     const { container } = render(<Settings />);
     const view = within(container);
     await waitFor(() => {
-      expect(view.getByLabelText(t("settings.logDebug"))).toBeInTheDocument();
+      expect(view.getByText(t("settings.openDataDir"))).toBeInTheDocument();
     });
     const inboundCard = view
       .getByText(t("settings.inbound"))
       .closest('[data-slot="card"]');
     expect(inboundCard).toBeTruthy();
-    expect(
-      within(inboundCard as HTMLElement).queryByLabelText(
-        t("settings.logDebug"),
-      ),
-    ).toBeNull();
     expect(
       within(inboundCard as HTMLElement).queryByText(t("settings.openDataDir")),
     ).toBeNull();
@@ -372,20 +366,7 @@ describe("Settings", () => {
     expect(
       within(dataCard as HTMLElement).getByText(t("settings.openDataDir")),
     ).toBeInTheDocument();
-    const toggle = within(dataCard as HTMLElement).getByLabelText(
-      t("settings.logDebug"),
-    );
-    expect(toggle).not.toBeChecked();
-    fireEvent.click(toggle);
-    await waitFor(
-      () => {
-        expect(saveSettings).toHaveBeenCalledWith(
-          expect.objectContaining({ log_debug: true }),
-        );
-      },
-      { timeout: 2000 },
-    );
-    expect(toggle).toBeChecked();
+    expect(within(dataCard as HTMLElement).queryByRole("switch")).toBeNull();
   });
 
   it("leaves the app-owned Clash API port out of the form and the patch", async () => {
@@ -437,7 +418,6 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
@@ -481,7 +461,6 @@ describe("Settings", () => {
       language: "system" as const,
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     };
@@ -603,10 +582,9 @@ describe("Settings", () => {
     ).not.toBeInTheDocument();
     expect(view.getByText(t("settings.system"))).toBeInTheDocument();
     expect(view.getByRole("button", { name: t("settings.alwaysOnAction") })).toBeInTheDocument();
-    // No Logs page and no reachable data folder on the phone.
+    // No reachable data folder on the phone.
     expect(view.queryByText(t("settings.data"))).not.toBeInTheDocument();
     expect(view.queryByText(t("settings.openDataDir"))).not.toBeInTheDocument();
-    expect(view.queryByLabelText(t("settings.logDebug"))).not.toBeInTheDocument();
   });
 
   it("exports the core log from the phone Logs card", async () => {
@@ -615,7 +593,7 @@ describe("Settings", () => {
     const { container } = render(<Settings />);
     const view = within(container);
     const button = await view.findByRole("button", { name: t("settings.exportLogs") });
-    expect(view.getByText(t("app.nav.logs"))).toBeInTheDocument();
+    expect(view.getByText(t("settings.logs"))).toBeInTheDocument();
 
     // A dismissed save dialog is not reported as exported.
     fireEvent.click(button);
@@ -820,7 +798,6 @@ describe("Settings", () => {
       language: "en",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });
@@ -858,7 +835,6 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       launch_at_login: false,
       tun: tunSettings,
@@ -906,7 +882,6 @@ describe("Settings", () => {
       language: "en",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       launch_at_login: false,
       tun: tunSettings,
@@ -953,7 +928,6 @@ describe("Settings", () => {
       language: "en",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       launch_at_login: false,
       tun: tunSettings,
@@ -1083,7 +1057,6 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: true,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       tun: { ...tunSettings, enabled: true },
     });
@@ -1854,7 +1827,6 @@ describe("Settings", () => {
       language: "system",
       check_app_updates: false,
       probe_exit_ip: true,
-      log_debug: false,
       tray_display_mode: "icon_and_speed",
       tun: tunSettings,
     });

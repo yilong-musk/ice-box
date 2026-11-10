@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, expect, it } from "vitest";
-import { formatQuota, formatRate } from "./traffic";
+import { formatBytes, formatQuota, formatRate } from "./traffic";
+
+describe("formatBytes", () => {
+  it("formats byte totals by magnitude", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(5 * 1024 ** 2)).toBe("5.00 MB");
+    expect(formatBytes(1.2 * 1024 ** 3)).toBe("1.20 GB");
+  });
+});
 
 describe("formatRate", () => {
   it("formats bytes per second", () => {
     expect(formatRate(512)).toBe("512 B/s");
     expect(formatRate(2048)).toBe("2.0 KB/s");
     expect(formatRate(5 * 1024 * 1024)).toBe("5.00 MB/s");
+    expect(formatRate(2 * 1024 ** 3)).toBe("2.00 GB/s");
   });
 });
 

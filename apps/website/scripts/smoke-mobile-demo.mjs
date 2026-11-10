@@ -271,7 +271,7 @@ try {
 
   // Settings must match the Android app: the VPN service is the only capture,
   // so the desktop TUN mode, privileged helper, and launch at login stay
-  // hidden; with no Logs page, so does the debug-logs switch.
+  // hidden; with no reachable data folder, so does the Data card's button.
   await frame
     .getByTestId("phone-tab-bar")
     .getByRole("button", { name: "Settings", exact: true })
@@ -285,7 +285,7 @@ try {
   await settings
     .locator('[data-slot="card-title"]', { hasText: /^System$/ })
     .waitFor({ timeout: 8000 });
-  for (const desktopOnly of ["TUN Mode", "Install Helper", "Launch at login", "Debug logs"]) {
+  for (const desktopOnly of ["TUN Mode", "Install Helper", "Launch at login", "Open Data Directory"]) {
     if ((await settings.getByText(desktopOnly, { exact: true }).count()) !== 0) {
       throw new Error(`phone Settings must not show the desktop-only "${desktopOnly}"`);
     }

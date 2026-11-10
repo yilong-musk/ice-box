@@ -20,7 +20,7 @@ vi.mock("../api/client", () => ({
   formatInvokeError: (error: unknown) => String(error),
 }));
 
-vi.mock("../lib/logCopy", () => ({
+vi.mock("../lib/clipboard", () => ({
   copyText: (...args: unknown[]) => copyText(...args),
 }));
 

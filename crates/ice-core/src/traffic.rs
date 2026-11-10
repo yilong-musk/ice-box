@@ -128,6 +128,11 @@ impl TrafficMonitor {
         lock_inner(&self.shared).desired.is_some()
     }
 
+    /// The Clash API target the stream follows: the running core's endpoints.
+    pub fn endpoints(&self) -> Option<HealthEndpoints> {
+        lock_inner(&self.shared).desired.clone()
+    }
+
     pub fn snapshot(&self) -> TrafficSnapshot {
         let inner = lock_inner(&self.shared);
         TrafficSnapshot {

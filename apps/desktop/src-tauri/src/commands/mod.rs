@@ -2,6 +2,7 @@
 
 //! Tauri IPC commands.
 
+mod connections;
 mod core;
 mod logs;
 mod mcp;
@@ -14,6 +15,7 @@ mod tun;
 
 use crate::application::*;
 use crate::tray::{self, TrayLanguage};
+pub use connections::*;
 pub use core::*;
 pub use logs::*;
 pub use mcp::*;

@@ -35,7 +35,7 @@ the running application. It exits with the Agent's stdio session.
 ## Enable and connect
 
 1. Start ice-box and open **MCP** in the desktop navigation. From top to bottom,
-   the final entries are **MCP**, **Logs**, and **Settings**.
+   the final entries are **Connections**, **MCP**, and **Settings**.
 2. Enable **MCP Service**.
 3. Copy the generated client configuration.
 4. Add that configuration to an MCP-capable Agent client and start or restart
@@ -101,7 +101,7 @@ instead of losing the control surface while the runtime is still active.
 
 ## Tools
 
-The MCP server currently exposes 35 tools through the application services:
+The MCP server currently exposes 38 tools through the application services:
 
 - Status and settings: `get_status`, `get_settings`, `update_settings`.
 - Core and capture: `start_proxy_service`, `stop_proxy_service`, `start_core`,
@@ -115,6 +115,8 @@ The MCP server currently exposes 35 tools through the application services:
   `test_node_delay`.
 - Rules: `get_rule_overview`, `list_rules`, `set_rule_disabled`,
   `add_custom_rule`, `update_custom_rule`, and `remove_custom_rule`.
+- Connections: `list_connections`, `close_connection`, and
+  `close_all_connections`.
 - Diagnostics: `get_logs` and `get_runtime_config`.
 - Protected capture recovery: `recover_tun`, `install_tun_helper`,
   `uninstall_tun_helper`, `ensure_tun_elevation`, and
@@ -126,6 +128,19 @@ and keeps its position) or delete it with `remove_custom_rule`.
 `update_custom_rule` validates the new rule exactly like `add_custom_rule`:
 removed `geoip`/`geosite` matchers, unknown `rule_set` references, and
 non-numeric or out-of-range `port`/`source_port` values are rejected.
+
+`list_connections` returns the core's live connections newest first, at most
+200 by default (`limit`, up to 2000). `keyword` narrows the list to
+connections whose host, IP, port, network, inbound, source, process, rule, or
+outbound chain contains it, ignoring case. `total` counts every live
+connection and `matched` those the keyword matched, so a cut list is
+recognizable. `close_connection` takes an `id` from that list.
+
+`get_logs` returns the last `n` lines (200 by default) of the application and
+core logs merged by time. By default it keeps warnings, errors, application
+INFO, core lifecycle events, and the outbound each connection took; it hides
+DEBUG and TRACE lines, other core INFO chatter, and the core's harmless DNS
+`unpack request` errors. `all: true` returns every parsed line.
 
 Results use MCP text content plus structured content when the result is an
 object. Tool failures set `isError` and return the application error code and

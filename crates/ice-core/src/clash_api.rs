@@ -81,22 +81,54 @@ fn shared_agent() -> ureq::Agent {
 }
 
 fn clash_get(endpoints: &HealthEndpoints, path: &str) -> Result<String, CoreError> {
+    clash_get_capped(endpoints, path, 256 * 1024)
+}
+
+fn clash_get_capped(
+    endpoints: &HealthEndpoints,
+    path: &str,
+    max_bytes: u64,
+) -> Result<String, CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
     let agent = shared_agent();
     let response = apply_clash_auth(agent.get(&url), endpoints)
         .call()
         .map_err(|e| clash_api_err(path, e))?;
     let status = response.status();
-    let mut body = String::new();
+    // Read one byte past the cap so an oversized body is reported as such
+    // instead of reaching the JSON parser cut short.
+    let mut raw = Vec::new();
     response
         .into_reader()
-        .take(256 * 1024)
-        .read_to_string(&mut body)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut raw)
         .map_err(|e| clash_api_err(path, format!("read: {e}")))?;
+    if raw.len() as u64 > max_bytes {
+        return Err(clash_api_err(
+            path,
+            format!("response exceeds {} KiB", max_bytes / 1024),
+        ));
+    }
+    let body = String::from_utf8(raw).map_err(|e| clash_api_err(path, format!("read: {e}")))?;
     if !(200..300).contains(&status) {
         return Err(clash_api_err(path, format!("HTTP {status}: {body}")));
     }
     Ok(body)
+}
+
+fn clash_delete(endpoints: &HealthEndpoints, path: &str) -> Result<(), CoreError> {
+    let url = format!("{}{}", base_url(endpoints)?, path);
+    let agent = shared_agent();
+    let response = apply_clash_auth(agent.delete(&url), endpoints)
+        .call()
+        .map_err(|e| clash_api_err(path, e))?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        let mut text = String::new();
+        let _ = response.into_reader().take(512).read_to_string(&mut text);
+        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
+    }
+    Ok(())
 }
 
 /// `GET /version` — used by the health probe to prove the Clash API is the
@@ -462,6 +494,159 @@ fn traffic_stream_ended(err: &std::io::Error) -> bool {
     )
 }
 
+/// Upper bound for one `GET /connections` body. A connection is a few hundred
+/// bytes of JSON, so this holds tens of thousands of them.
+const CONNECTIONS_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// One live connection tracked by the core (`GET /connections`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionInfo {
+    pub id: String,
+    /// `tcp` or `udp`.
+    pub network: String,
+    /// Inbound as `type/tag` (for example `mixed/mixed-in`), or the bare type.
+    pub inbound: String,
+    /// Client address as `ip:port`; empty when the core did not record one.
+    pub source: String,
+    /// Sniffed or requested domain; empty for a bare-IP destination.
+    pub host: String,
+    /// Destination IP; empty when the destination is a domain.
+    pub destination_ip: String,
+    pub destination_port: String,
+    /// Process path where the core could resolve it; otherwise empty.
+    pub process_path: String,
+    /// Bytes sent and received over this connection so far.
+    pub upload: u64,
+    pub download: u64,
+    /// RFC 3339 creation time as the core reports it.
+    pub start: String,
+    /// Outbound chain from the exit node up to the group the route picked
+    /// (Clash order: leaf first).
+    pub chains: Vec<String>,
+    /// Matched route rule with its action, or `final`.
+    pub rule: String,
+}
+
+/// Live connections plus the core's running byte totals.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectionsSnapshot {
+    pub upload_total: u64,
+    pub download_total: u64,
+    pub connections: Vec<ConnectionInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionsResponse {
+    #[serde(default, rename = "uploadTotal")]
+    upload_total: u64,
+    #[serde(default, rename = "downloadTotal")]
+    download_total: u64,
+    /// `null` when the core tracks no connection.
+    #[serde(default)]
+    connections: Option<Vec<ConnectionEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionEntry {
+    id: String,
+    #[serde(default)]
+    metadata: ConnectionMetadata,
+    #[serde(default)]
+    upload: u64,
+    #[serde(default)]
+    download: u64,
+    #[serde(default)]
+    start: String,
+    #[serde(default)]
+    chains: Option<Vec<String>>,
+    #[serde(default)]
+    rule: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ConnectionMetadata {
+    #[serde(default)]
+    network: String,
+    #[serde(default, rename = "type")]
+    inbound: String,
+    #[serde(default, rename = "sourceIP")]
+    source_ip: String,
+    #[serde(default, rename = "sourcePort")]
+    source_port: String,
+    #[serde(default, rename = "destinationIP")]
+    destination_ip: String,
+    #[serde(default, rename = "destinationPort")]
+    destination_port: String,
+    #[serde(default)]
+    host: String,
+    #[serde(default, rename = "processPath")]
+    process_path: String,
+}
+
+/// `ip:port`, with IPv6 bracketed. Empty when the core recorded no address.
+fn join_host_port(ip: &str, port: &str) -> String {
+    if ip.is_empty() {
+        return String::new();
+    }
+    if port.is_empty() || port == "0" {
+        return ip.to_string();
+    }
+    if ip.contains(':') {
+        format!("[{ip}]:{port}")
+    } else {
+        format!("{ip}:{port}")
+    }
+}
+
+fn connections_from_body(body: &str) -> Result<ConnectionsSnapshot, CoreError> {
+    let parsed: ConnectionsResponse = serde_json::from_str(body)
+        .map_err(|e| clash_api_err("/connections", format!("parse: {e}")))?;
+    let connections = parsed
+        .connections
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| ConnectionInfo {
+            id: entry.id,
+            network: entry.metadata.network,
+            inbound: entry.metadata.inbound,
+            source: join_host_port(&entry.metadata.source_ip, &entry.metadata.source_port),
+            host: entry.metadata.host,
+            destination_ip: entry.metadata.destination_ip,
+            destination_port: entry.metadata.destination_port,
+            process_path: entry.metadata.process_path,
+            upload: entry.upload,
+            download: entry.download,
+            start: entry.start,
+            chains: entry.chains.unwrap_or_default(),
+            rule: entry.rule,
+        })
+        .collect();
+    Ok(ConnectionsSnapshot {
+        upload_total: parsed.upload_total,
+        download_total: parsed.download_total,
+        connections,
+    })
+}
+
+/// Live connections (`GET /connections`). The core leaves its own DNS
+/// lookups out of this list.
+pub fn connections(endpoints: &HealthEndpoints) -> Result<ConnectionsSnapshot, CoreError> {
+    let body = clash_get_capped(endpoints, "/connections", CONNECTIONS_MAX_BYTES)?;
+    connections_from_body(&body)
+}
+
+/// Close one connection (`DELETE /connections/{id}`). An id the core no
+/// longer tracks is not an error: the connection is already gone.
+pub fn close_connection(endpoints: &HealthEndpoints, id: &str) -> Result<(), CoreError> {
+    let path = format!("/connections/{}", percent_encode_path(id));
+    clash_delete(endpoints, &path)
+}
+
+/// Close every connection (`DELETE /connections`).
+pub fn close_all_connections(endpoints: &HealthEndpoints) -> Result<(), CoreError> {
+    clash_delete(endpoints, "/connections")
+}
+
 fn percent_encode_path(s: &str) -> String {
     urlencoding::encode(s).into_owned()
 }
@@ -480,6 +665,12 @@ pub struct RecordedRequest {
     pub body: String,
     pub authorization: Option<String>,
 }
+
+/// `GET /connections` body served by [`MockClashApi`], in the shape sing-box
+/// 1.14 writes: one proxied TCP connection and one direct UDP connection.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub const MOCK_CONNECTIONS_BODY: &str = r#"{"downloadTotal":4096,"uploadTotal":1024,"memory":1,"connections":[{"chains":["node-a","proxy"],"download":3000,"id":"7a5f6f0e-6c1b-4f0e-9d0a-000000000001","metadata":{"destinationIP":"","destinationPort":"443","dnsMode":"normal","host":"api.github.com","network":"tcp","processPath":"/usr/bin/curl","sourceIP":"127.0.0.1","sourcePort":"51234","type":"mixed/mixed-in"},"rule":"domain_suffix=github.com => route(proxy)","rulePayload":"","start":"2026-11-10T11:40:00.123456789+08:00","upload":800},{"chains":["direct"],"download":1096,"id":"7a5f6f0e-6c1b-4f0e-9d0a-000000000002","metadata":{"destinationIP":"2001:db8::1","destinationPort":"53","dnsMode":"normal","host":"","network":"udp","processPath":"","sourceIP":"fd00::2","sourcePort":"40000","type":"tun/tun-in"},"rule":"final","rulePayload":"","start":"2026-11-10T03:40:05Z","upload":224}]}"#;
 
 /// Test-only stateful mock of the sing-box Clash API, shared with the desktop crate's
 /// orchestrate tests. It serves `GET /configs` with the current mode and applies a mode
@@ -646,6 +837,18 @@ impl MockClashApi {
                                     body.len(),
                                     body
                                 )
+                            }
+                            ("GET", "/connections") if is_2xx => {
+                                let body = MOCK_CONNECTIONS_BODY;
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                )
+                            }
+                            ("DELETE", p) if is_2xx && p.starts_with("/connections") => {
+                                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    .to_string()
                             }
                             ("PATCH", "/configs") if is_2xx => {
                                 "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -849,6 +1052,95 @@ mod tests {
         let endpoints = HealthEndpoints::new("0.0.0.0", 19090);
         let err = proxy_delay(&endpoints, "n1", 1000, DELAY_TEST_URL).expect_err("reject");
         assert!(err.to_string().contains("loopback"));
+    }
+
+    #[test]
+    fn connections_parse_the_core_snapshot() {
+        let server = MockClashApi::start(200, "Rule");
+        let snapshot = connections(&server.endpoints()).expect("connections");
+        assert_eq!(snapshot.upload_total, 1024);
+        assert_eq!(snapshot.download_total, 4096);
+        assert_eq!(snapshot.connections.len(), 2);
+        let tcp = &snapshot.connections[0];
+        assert_eq!(tcp.id, "7a5f6f0e-6c1b-4f0e-9d0a-000000000001");
+        assert_eq!(tcp.network, "tcp");
+        assert_eq!(tcp.inbound, "mixed/mixed-in");
+        assert_eq!(tcp.source, "127.0.0.1:51234");
+        assert_eq!(tcp.host, "api.github.com");
+        assert_eq!(tcp.destination_ip, "");
+        assert_eq!(tcp.destination_port, "443");
+        assert_eq!(tcp.process_path, "/usr/bin/curl");
+        assert_eq!((tcp.upload, tcp.download), (800, 3000));
+        assert_eq!(tcp.chains, vec!["node-a", "proxy"]);
+        assert_eq!(tcp.rule, "domain_suffix=github.com => route(proxy)");
+        assert_eq!(tcp.start, "2026-11-10T11:40:00.123456789+08:00");
+        let udp = &snapshot.connections[1];
+        assert_eq!(udp.source, "[fd00::2]:40000");
+        assert_eq!(udp.destination_ip, "2001:db8::1");
+        assert_eq!(udp.rule, "final");
+    }
+
+    #[test]
+    fn a_body_over_the_cap_is_a_size_error_not_a_parse_error() {
+        let server = MockClashApi::start(200, "Rule");
+        let len = MOCK_CONNECTIONS_BODY.len() as u64;
+        let body = clash_get_capped(&server.endpoints(), "/connections", len).expect("at the cap");
+        assert_eq!(body, MOCK_CONNECTIONS_BODY);
+        let err = clash_get_capped(&server.endpoints(), "/connections", len - 1)
+            .expect_err("over the cap");
+        assert!(err.to_string().contains("response exceeds"), "err: {err}");
+    }
+
+    #[test]
+    fn connections_accept_an_idle_core() {
+        // Go marshals an empty slice it never allocated as `null`.
+        let snapshot =
+            connections_from_body(r#"{"downloadTotal":0,"uploadTotal":0,"connections":null}"#)
+                .expect("idle snapshot");
+        assert_eq!(snapshot, ConnectionsSnapshot::default());
+        let sparse = connections_from_body(r#"{"connections":[{"id":"x","chains":null}]}"#)
+            .expect("sparse entry");
+        assert_eq!(sparse.connections[0].id, "x");
+        assert!(sparse.connections[0].chains.is_empty());
+        assert_eq!(sparse.connections[0].source, "");
+    }
+
+    #[test]
+    fn close_connection_deletes_by_id_with_bearer() {
+        let server = MockClashApi::start(204, "Rule");
+        let endpoints = server
+            .endpoints()
+            .with_secret("iceboxtestclashapisecret000001");
+        close_connection(&endpoints, "7a5f6f0e-6c1b-4f0e-9d0a-000000000001").expect("close one");
+        close_all_connections(&endpoints).expect("close all");
+        std::thread::sleep(Duration::from_millis(100));
+        let reqs = server.requests.lock().unwrap();
+        let deletes: Vec<&RecordedRequest> = reqs.iter().filter(|r| r.method == "DELETE").collect();
+        assert_eq!(deletes.len(), 2);
+        assert_eq!(
+            deletes[0].path,
+            "/connections/7a5f6f0e-6c1b-4f0e-9d0a-000000000001"
+        );
+        assert_eq!(deletes[1].path, "/connections");
+        assert!(deletes
+            .iter()
+            .all(|r| r.authorization.as_deref() == Some("Bearer iceboxtestclashapisecret000001")));
+    }
+
+    #[test]
+    fn close_connection_escapes_the_id() {
+        let server = MockClashApi::start(204, "Rule");
+        close_connection(&server.endpoints(), "a/b?c").expect("close");
+        std::thread::sleep(Duration::from_millis(100));
+        let reqs = server.requests.lock().unwrap();
+        assert_eq!(reqs[0].path, "/connections/a%2Fb%3Fc");
+    }
+
+    #[test]
+    fn close_connection_non_2xx_is_error() {
+        let server = MockClashApi::start(500, "Rule");
+        let err = close_all_connections(&server.endpoints()).expect_err("500");
+        assert!(err.to_string().contains("500"), "err: {err}");
     }
 
     // --- Slice 4c: runtime mode switch against the shared mock Clash API server ---

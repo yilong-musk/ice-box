@@ -101,11 +101,6 @@ pub struct SetAppProxyRequest {
 }
 
 #[derive(Deserialize)]
-pub struct LogViewRequest {
-    pub n: usize,
-}
-
-#[derive(Deserialize)]
 pub struct SetRuleDisabledRequest {
     pub fingerprint: String,
     pub disabled: bool,
@@ -746,17 +741,6 @@ pub fn get_traffic_since(
         .map(|snapshot| TunnelPhase::parse(&snapshot.phase) == TunnelPhase::Connected)
         .unwrap_or(false);
     host.traffic_since(cursor, live)
-}
-
-#[tauri::command]
-pub fn get_log_view(
-    app: AppHandle,
-    host: State<'_, Mutex<MobileHost>>,
-    tunnel: State<'_, Tunnel<Wry>>,
-    req: LogViewRequest,
-) -> Result<Vec<String>, AppError> {
-    let host = ready(&app, &host, &tunnel)?;
-    host.log_view(req.n)
 }
 
 #[tauri::command]

@@ -5,6 +5,9 @@ use super::*;
 #[derive(Deserialize)]
 pub struct LogViewRequest {
     pub n: usize,
+    /// Keep DEBUG/TRACE and core chatter the default view hides.
+    #[serde(default)]
+    pub all: bool,
 }
 
 /// Cap core/helper logs at 20 MiB by dropping the oldest 5 MiB of the same
@@ -101,50 +104,8 @@ fn truncate_helper_core_log(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Parsed log tails. Retained only while the Logs page is open. Each source
-/// keeps up to a megabyte, and that page is the only reader.
-#[derive(Default)]
-pub(crate) struct LogViewSlot {
-    active: bool,
-    reader: Option<LogViewCache>,
-}
-
-impl LogViewSlot {
-    pub(crate) fn set_active(&mut self, active: bool) {
-        self.active = active;
-        if !active {
-            self.reader = None;
-        }
-    }
-
-    fn read(
-        &mut self,
-        app: &std::path::Path,
-        core: &std::path::Path,
-        helper: Option<&std::path::Path>,
-        n: usize,
-        debug: bool,
-    ) -> Result<Vec<String>, AppError> {
-        if !self.active {
-            // A read that finishes after the page closes must not rebuild the
-            // tails `set_active(false)` just dropped.
-            let mut transient = LogViewCache::default();
-            return transient.read(app, core, helper, n, debug);
-        }
-        self.reader
-            .get_or_insert_with(LogViewCache::default)
-            .read(app, core, helper, n, debug)
-    }
-}
-
-/// `active` retains parsed tails. Leaving the page drops them and ignores
-/// later reads until the page is open again.
-pub(crate) fn set_log_view_retained(state: &AppState, active: bool) {
-    if let Ok(mut slot) = state.log_view_cache.lock() {
-        slot.set_active(active);
-    }
-}
-
+/// Merged tail of the app and core logs for the MCP `get_logs` tool: the
+/// lines worth attention by default, every parsed line with `all`.
 pub(crate) fn get_log_view_use_case(
     state: &AppState,
     req: LogViewRequest,
@@ -160,21 +121,12 @@ pub(crate) fn get_log_view_use_case(
     .then(ice_tun_sys::elevated_core_log_path)
     .flatten();
     let extra_core_log = extra_core_log.as_deref();
-    let debug = current_settings(&state.paths)
-        .map(|s| s.log_debug)
-        .unwrap_or(false);
-    // Serialize readers so overlapping polls cannot duplicate appended
-    // lines or replace a newer cursor with an older snapshot.
-    let mut slot = state
-        .log_view_cache
-        .lock()
-        .map_err(|_| AppError::new(ErrorCode::ConfigInvalid, "log view cache poisoned"))?;
-    slot.read(
+    crate::log_view::read_log_view(
         &state.paths.app_log(),
         &state.paths.core_log(),
         extra_core_log,
         req.n,
-        debug,
+        req.all,
     )
 }
 
@@ -191,55 +143,4 @@ pub(crate) fn get_runtime_config_use_case(state: &AppState) -> Result<String, Ap
             format!("redact runtime config: {e}"),
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn a_read_after_close_does_not_keep_the_parsed_tail() {
-        let dir = std::env::temp_dir().join(format!(
-            "ice-box-log-slot-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("dir");
-        let app = dir.join("app.log");
-        let core = dir.join("core.log");
-        fs::write(
-            &app,
-            "2026-08-23T13:47:01.123456Z  INFO ice_core: sing-box ready\n",
-        )
-        .expect("app log");
-        fs::write(&core, "").expect("core log");
-
-        let mut slot = LogViewSlot::default();
-        slot.set_active(true);
-        let lines = slot.read(&app, &core, None, 20, false).expect("open read");
-        assert!(
-            lines.iter().any(|line| line.contains("sing-box ready")),
-            "open read should show the app line, got {lines:?}"
-        );
-        assert!(slot.reader.is_some(), "an open page keeps the parsed tail");
-
-        slot.set_active(false);
-        assert!(slot.reader.is_none());
-        let again = slot
-            .read(&app, &core, None, 20, false)
-            .expect("closed read");
-        assert!(
-            again.iter().any(|line| line.contains("sing-box ready")),
-            "a late read can still return lines"
-        );
-        assert!(
-            slot.reader.is_none(),
-            "a read after close must not rebuild the cached tail"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
 }

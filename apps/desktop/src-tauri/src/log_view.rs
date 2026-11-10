@@ -1,30 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Merged user-facing log view.
+//! Merged log view for the MCP `get_logs` tool.
 //!
-//! Display-only concern: merges the app log (ice-box.log, `tracing` format) and the
-//! core log (sing-box.log, sing-box format) into one time-ordered view. The default
-//! view keeps lines with user value (WARN/ERROR/FATAL, app INFO, core lifecycle
-//! INFO, and per-connection outbound routing). Debug mode skips that filter and
-//! shows every parsed line. Core `hijack-dns` unpack failures stay hidden in the
-//! default view (session noise, not capture failure). Connection lines render as
-//! `LEVEL TIME TARGET → NODE`. Raw log files are never modified — the filter
-//! applies only at read/display time.
+//! Merges the app log (ice-box.log, `tracing` format) and the core log
+//! (sing-box.log, sing-box format) into one time-ordered view. The default
+//! view keeps lines worth an Agent's attention (WARN/ERROR/FATAL, app INFO,
+//! core lifecycle INFO, and per-connection outbound routing); core
+//! `hijack-dns` unpack failures stay hidden (session noise, not capture
+//! failure). `all` skips that filter and keeps every parsed line. Lines render
+//! as `LEVEL TIME MESSAGE`; connection lines as `LEVEL TIME TARGET → NODE`.
+//! Raw log files are never modified.
 
-#[cfg(test)]
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
-
-#[cfg(test)]
-use ice_config::AppError;
+use ice_config::{AppError, ErrorCode};
 
 use crate::log_tail::LOG_TAIL_MAX;
 
 mod reader;
-pub(crate) use reader::LogViewReader;
 
-/// Lines scanned per source so filtering still yields up to `VIEW_MAX` lines.
+/// Lines scanned per source, bounding the work behind one view.
 const SCAN_PER_SOURCE: usize = 3000;
 const VIEW_MAX: usize = LOG_TAIL_MAX;
 
@@ -140,7 +136,7 @@ fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
     Some((dt, level))
 }
 
-/// Default (non-debug) view: WARN/ERROR/FATAL, app INFO, core lifecycle and
+/// Default view: WARN/ERROR/FATAL, app INFO, core lifecycle and
 /// per-connection routing. DEBUG/TRACE and other core INFO stay hidden.
 /// `text` is the original file line (used for INFO keyword matching).
 fn display_worthy(source: Source, level: Level, text: &str) -> bool {
@@ -163,7 +159,7 @@ fn display_worthy(source: Source, level: Level, text: &str) -> bool {
 
 /// sing-box logs `hijack-dns` payloads that fail to parse as DNS (STUN/mDNS
 /// glued to a UDP session, truncated IPv6 `:53`, etc.) as ERROR. They do not
-/// mean capture is down; hide them from the merged view only.
+/// mean capture is down; hide them from the default view only.
 fn core_dns_unpack_noise(text: &str) -> bool {
     text.contains("process DNS packet: unpack request")
 }
@@ -298,7 +294,7 @@ fn format_display_line(
 
 /// Read the merged log view: app + core tails, sorted by time, capped at `n`.
 ///
-/// `debug` skips the user-facing filter and keeps every parsed line (still
+/// `all` skips the default filter and keeps every parsed line (still
 /// compact-formatted). `helper_core_log` is the privileged helper's core log
 /// destination (`/var/log/ice-box-core.log`): while TUN capture runs through
 /// the helper, the elevated core's output lands there instead of the app-data
@@ -307,16 +303,46 @@ fn format_display_line(
 ///
 /// Lines with identical timestamps keep file read order (app, then core, then
 /// the helper core log). Display lines use a compact timestamp and omit source
-/// tags; the filter never touches the log files themselves.
-#[cfg(test)]
-pub fn read_log_view(
+/// tags; the filter never touches the log files themselves. Each call reads
+/// the tails afresh; nothing is kept between calls.
+pub(crate) fn read_log_view(
     app_log: &Path,
     core_log: &Path,
     helper_core_log: Option<&Path>,
     n: usize,
-    debug: bool,
+    all: bool,
 ) -> Result<Vec<String>, AppError> {
-    LogViewReader::default().read(app_log, core_log, helper_core_log, n, debug)
+    let n = n.min(VIEW_MAX);
+    let read = |path: &Path, source| {
+        reader::read_tail(path, source, all).map_err(|err| {
+            AppError::new(
+                ErrorCode::ConfigInvalid,
+                format!("read log {}: {err}", path.display()),
+            )
+        })
+    };
+    let mut sources = vec![read(app_log, Source::App)?, read(core_log, Source::Core)?];
+    if let Some(helper) = helper_core_log {
+        // Best-effort: the helper log may be missing or unreadable.
+        sources.push(reader::read_tail(helper, Source::Core, all).unwrap_or_default());
+    }
+    let mut lines: Vec<(usize, usize, reader::Line)> = sources
+        .into_iter()
+        .enumerate()
+        .flat_map(|(source, lines)| {
+            lines
+                .into_iter()
+                .enumerate()
+                .map(move |(order, line)| (source, order, line))
+        })
+        .collect();
+    lines.sort_by_key(|(source, order, line)| (line.ts, *source, *order));
+    let skip = lines.len().saturating_sub(n);
+    Ok(lines
+        .into_iter()
+        .skip(skip)
+        .map(|(_, _, line)| line.text)
+        .collect())
 }
 
 #[cfg(test)]
@@ -516,11 +542,16 @@ mod tests {
         )
         .unwrap();
 
+        let all = read_log_view(&app, &core, None, 500, true).unwrap();
+        assert_eq!(all.len(), 7, "all keeps every parsed line: {all:?}");
+        assert!(all[3].starts_with("DEBUG 08-23 13:47:04 "));
+        assert!(all[4].contains("[TCP] dial example.com:443"));
+
         let view = read_log_view(&app, &core, None, 500, false).unwrap();
         assert_eq!(
             view.len(),
             5,
-            "debug hidden, outbound routing kept: {view:?}"
+            "debug and core chatter hidden, outbound routing kept: {view:?}"
         );
         assert!(
             view.iter()
@@ -560,8 +591,8 @@ mod tests {
     }
 
     #[test]
-    fn debug_view_keeps_core_chatter_and_trace() {
-        let dir = temp_dir("debug");
+    fn all_view_keeps_core_chatter_and_trace() {
+        let dir = temp_dir("chatter");
         fs::create_dir_all(&dir).unwrap();
         let app = dir.join("ice-box.log");
         let core = dir.join("sing-box.log");
@@ -592,22 +623,22 @@ mod tests {
             ]
         );
 
-        let debug = read_log_view(&app, &core, None, 500, true).unwrap();
+        let view = read_log_view(&app, &core, None, 500, true).unwrap();
         assert!(
-            debug.iter().any(|l| l.contains("probe loop tick")),
-            "debug keeps TRACE/DEBUG: {debug:?}"
+            view.iter().any(|l| l.contains("probe loop tick")),
+            "keeps TRACE/DEBUG: {view:?}"
         );
         assert!(
-            debug.iter().any(|l| l.contains("[TCP] dial")),
-            "debug keeps other core INFO: {debug:?}"
+            view.iter().any(|l| l.contains("[TCP] dial")),
+            "keeps other core INFO: {view:?}"
         );
         assert!(
-            debug.iter().any(|l| l.contains("unpack request")),
-            "debug keeps DNS unpack noise: {debug:?}"
+            view.iter().any(|l| l.contains("unpack request")),
+            "keeps DNS unpack noise: {view:?}"
         );
         assert!(
-            debug.iter().any(|l| l.contains("example.com:443 → direct")),
-            "debug still compact-formats connections: {debug:?}"
+            view.iter().any(|l| l.contains("example.com:443 → direct")),
+            "compact-formats connections: {view:?}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
