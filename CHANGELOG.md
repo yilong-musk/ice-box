@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-10
+
 ### Added
 
 - Connections page on macOS and Windows, in place of Logs. It lists every
