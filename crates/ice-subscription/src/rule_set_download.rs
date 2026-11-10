@@ -31,17 +31,6 @@ pub enum RuleSetRefreshMode {
     All,
 }
 
-impl RuleSetRefreshMode {
-    /// The wider of two requested modes, for coalescing requests.
-    pub fn max(self, other: Self) -> Self {
-        if self == Self::All || other == Self::All {
-            Self::All
-        } else {
-            Self::Missing
-        }
-    }
-}
-
 /// How long an unused cached rule-set is kept.
 pub const RULE_SET_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -135,6 +124,9 @@ fn record_failure(cache_dir: &Path, url: &str, message: &str) {
 }
 
 /// Refresh the URLs in `urls` that `mode` selects.
+///
+/// Sidecars are read, changed and written back without a lock: callers run
+/// one refresh or prune pass at a time per cache directory.
 pub fn refresh_rule_sets<F: HttpFetcher + ?Sized>(
     fetcher: &F,
     cache_dir: &Path,

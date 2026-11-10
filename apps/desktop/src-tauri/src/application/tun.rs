@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Home「重试恢复」 and MCP `recover_tun`: on-demand retry of TUN recovery
+/// Home "Retry recovery" and MCP `recover_tun`: on-demand retry of TUN recovery
 /// (`docs/tun.md`). Runs the journal recovery driver under the
 /// orchestration lock; never enables capture. Returns the warnings left when
 /// cleanup is still uncertain.

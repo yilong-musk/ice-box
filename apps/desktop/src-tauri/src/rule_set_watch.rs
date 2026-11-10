@@ -15,6 +15,7 @@
 //! download is retried without re-checking the others.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use ice_engine::RuleSetRefreshMode;
@@ -32,6 +33,9 @@ const POLL: Duration = Duration::from_secs(3);
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 /// A requested pass should re-check every cached copy.
 static FULL: AtomicBool = AtomicBool::new(false);
+/// Held for a whole pass so the worker and a manual refresh (UI or MCP)
+/// never download or write the same cache and sidecar files at once.
+static PASS: Mutex<()> = Mutex::new(());
 /// New content was downloaded but not applied yet (Apply was busy). Kept
 /// apart from the download result: the retry finds every URL fresh and
 /// would otherwise never apply.
@@ -68,15 +72,13 @@ fn required_urls(state: &AppState) -> Option<Vec<String>> {
 }
 
 /// One refresh pass. Returns `false` when it should be retried soon (the
-/// manager could not be opened or Apply was busy).
+/// workers were paused during a full pass, the manager could not be opened,
+/// or Apply was busy). Waits for a pass already running elsewhere.
 pub(crate) fn refresh_pass(
     state: &AppState,
     app: &impl application::AppHost,
     mode: RuleSetRefreshMode,
 ) -> bool {
-    if state.workers.is_paused_or_stopping() {
-        return true;
-    }
     // A full pass that cannot start keeps its mode for the retry.
     let not_started = || {
         if mode == RuleSetRefreshMode::All {
@@ -84,6 +86,11 @@ pub(crate) fn refresh_pass(
         }
         false
     };
+    if state.workers.is_paused_or_stopping() {
+        // A missing-only pass is redone by the next tick anyway.
+        return mode == RuleSetRefreshMode::Missing || not_started();
+    }
+    let _pass = PASS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(urls) = required_urls(state) else {
         return not_started();
     };

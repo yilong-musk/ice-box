@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Home「重试恢复」. See [`recover_tun_use_case`].
+/// Home "Retry recovery". See [`recover_tun_use_case`].
 #[tauri::command]
 pub async fn recover_tun(app: AppHandle) -> Result<Vec<ice_config::UiMessage>, AppError> {
     run_blocking("recover_tun", move || {

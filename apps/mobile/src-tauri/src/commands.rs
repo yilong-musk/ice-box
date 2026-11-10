@@ -179,6 +179,10 @@ const RULE_SET_CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 static LAST_RULE_SET_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// Held for the download phase so overlapping refresh tasks never write the
+/// same cache and sidecar files at once.
+static RULE_SET_PASS: Mutex<()> = Mutex::new(());
+
 /// Whether a background rule-set check is due; records the check when it is.
 fn rule_set_check_due() -> bool {
     let mut last = LAST_RULE_SET_CHECK
@@ -238,6 +242,9 @@ async fn refresh_rule_sets_now(app: &AppHandle, mode: RuleSetRefreshMode) {
     };
     let (sub_paths, cache_dir, urls) = inputs;
     let changed = run_blocking("rule_set_refresh", move || {
+        let _pass = RULE_SET_PASS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ice_subscription::prune_rule_set_cache(
             &cache_dir,
             &urls,
