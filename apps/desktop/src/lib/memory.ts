@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { MemoryUsage } from "../api/client";
+import type { MemoryBands, MemoryUsage } from "../api/client";
 import { t } from "./i18n";
 import type { Tone } from "./tone";
 
@@ -53,16 +53,27 @@ export function memoryLabel(memory: MemoryUsage | null | undefined): string {
     : t("common.dash");
 }
 
-/** Color band by the displayed value: <60 MB green, 60–99 yellow, ≥100 red. */
-export function memoryTone(mb: number): Tone {
-  if (mb < 60) return "ok";
-  if (mb < 100) return "warn";
+/** Bands for a card with no sample yet. A real sample always carries the
+ * bands of the platform that measured it; the UI never picks them itself. */
+export const DEFAULT_MEMORY_BANDS: Readonly<MemoryBands> = Object.freeze({
+  warn_mb: 60,
+  bad_mb: 100,
+});
+
+/** Color band by the displayed value: green below `warn_mb`, yellow up to
+ * `bad_mb`, red from there. */
+export function memoryTone(mb: number, bands: MemoryBands): Tone {
+  if (mb < bands.warn_mb) return "ok";
+  if (mb < bands.bad_mb) return "warn";
   return "bad";
 }
 
-/** Band for the row, `null` while the row shows `—` (no color claim). */
+/** Band for the row against the sample's own bands, `null` while the row
+ * shows `—` (no color claim). */
 export function memoryToneFor(
   memory: MemoryUsage | null | undefined,
 ): Tone | null {
-  return memoryAvailable(memory) ? memoryTone(displayMemoryMb(memory)) : null;
+  return memoryAvailable(memory)
+    ? memoryTone(displayMemoryMb(memory), memory.bands)
+    : null;
 }

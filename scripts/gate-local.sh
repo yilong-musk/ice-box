@@ -19,10 +19,10 @@
 #   fixtures  release, updater, signing, and Android script fixtures, plus
 #             `bash -n` on changed shell scripts; also selected by the
 #             version sources and CHANGELOG.md that release preflight reads
-# `cargo fmt --check` and the Rust toolchain pin check run on every
-# invocation. Docs-only changes run nothing else. A path that matches no
-# bucket, a change to this script, or a missing merge base falls back to
-# --full.
+# `cargo fmt --check`, the Rust toolchain pin check, and the documentation
+# version check run on every invocation. Docs-only changes run nothing else.
+# A path that matches no bucket, a change to this script, or a missing merge
+# base falls back to --full.
 #
 # GATE_LOCAL_BASE overrides the base ref (default: origin/main, then main).
 # Intentionally lighter than scripts/gate.sh (no desktop vite build, and the
@@ -198,7 +198,7 @@ fi
 [[ "$run_fixtures" == 1 ]] && scope+=(fixtures)
 # Assigned in two statements: bash 3.2 (macOS /bin/bash) cannot parse a
 # command substitution nested inside a parameter expansion inside quotes.
-scope_label="${scope[*]:-fmt only}"
+scope_label="${scope[*]:-fmt, toolchain pins, doc versions only}"
 [[ "$full" == 1 ]] && scope_label+=" (full)"
 echo "gate-local: scope = $scope_label"
 [[ "$dry_run" == 1 ]] && exit 0
@@ -208,6 +208,9 @@ cargo fmt --check
 
 echo "== rust toolchain pins =="
 bash scripts/check-toolchain-pins.sh
+
+echo "== documentation versions =="
+bash scripts/check-doc-versions.sh
 
 if [[ "$run_rust" == 1 ]]; then
   echo "== cargo clippy =="
@@ -284,6 +287,9 @@ if [[ "$run_fixtures" == 1 ]]; then
 
   echo "== toolchain pin fixtures =="
   bash scripts/test-check-toolchain-pins.sh
+
+  echo "== documentation version fixtures =="
+  bash scripts/test-check-doc-versions.sh
 
   echo "== changelog release fixtures =="
   bash scripts/test-changelog-release.sh

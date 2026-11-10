@@ -352,11 +352,13 @@ export const api = {
             app_bytes: 38 * 1024 * 1024,
             core_bytes: 14 * 1024 * 1024,
             total_bytes: 52 * 1024 * 1024,
+            bands: { warn_mb: 60, bad_mb: 100 },
           }
         : {
             app_bytes: 38 * 1024 * 1024,
             core_bytes: null,
             total_bytes: 38 * 1024 * 1024,
+            bands: { warn_mb: 60, bad_mb: 100 },
           },
       traffic_capture: running ? "system_proxy" : "inactive",
       configured_tun: settings.tun.enabled,

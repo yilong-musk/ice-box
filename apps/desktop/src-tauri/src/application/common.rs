@@ -155,6 +155,8 @@ pub struct MemoryUsage {
     /// Sum of the readable parts; `0` when nothing could be read (the UI shows
     /// `—` rather than a fake number).
     pub total_bytes: u64,
+    /// Where the readout turns yellow and red for this platform's metric.
+    pub bands: crate::proc_memory::MemoryBands,
 }
 
 /// The exit Home shows. Member lists stay on the Nodes page and the tray.
@@ -980,6 +982,7 @@ fn memory_usage(state: &AppState, running: bool) -> MemoryUsage {
         app_bytes,
         core_bytes,
         total_bytes,
+        bands: crate::proc_memory::MEMORY_BANDS,
     };
     if !(running && usage.core_bytes.is_none()) {
         *slot = Some(CachedMemory {

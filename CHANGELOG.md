@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Home memory card's colour bands start 20 MB higher on macOS (green
+  below 80 MB, yellow from 80, red from 120) and its bar scale follows. The
+  macOS app figure idles around 50 MB where Windows idles around 15, because
+  the macOS main process also hosts AppKit and the WebKit UI side, so the
+  shared bands showed a healthy idle state as yellow.
+
 ## [0.3.1] - 2026-11-09
 
 ### Fixed

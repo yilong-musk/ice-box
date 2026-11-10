@@ -97,7 +97,22 @@ struct MemoryUsage {
     app_bytes: Option<u64>,
     core_bytes: Option<u64>,
     total_bytes: u64,
+    bands: MemoryBands,
 }
+
+/// Where the memory readout turns yellow and red, in whole MB. Same wire
+/// shape as the desktop shell's bands.
+#[derive(Clone, Copy, Serialize)]
+struct MemoryBands {
+    warn_mb: u32,
+    bad_mb: u32,
+}
+
+/// The baseline bands; the phone reports the core figure only.
+const MEMORY_BANDS: MemoryBands = MemoryBands {
+    warn_mb: 60,
+    bad_mb: 100,
+};
 
 #[derive(Clone, Serialize)]
 struct ProbeFreshness {
@@ -217,6 +232,7 @@ pub fn status_response(
             app_bytes: None,
             core_bytes,
             total_bytes: core_bytes.unwrap_or(0),
+            bands: MEMORY_BANDS,
         },
         proxy_recovery_warning: Vec::new(),
         system_proxy_applied: None,

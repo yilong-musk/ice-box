@@ -26,6 +26,9 @@ esac
 echo "== rust toolchain pins =="
 bash "$ROOT/scripts/check-toolchain-pins.sh"
 
+echo "== documentation versions =="
+bash "$ROOT/scripts/check-doc-versions.sh"
+
 if [[ "$SCOPE" == all || "$SCOPE" == rust ]]; then
   echo "== cargo fmt --check =="
   cargo fmt --check
@@ -69,6 +72,9 @@ if [[ "$SCOPE" == all || "$SCOPE" == frontend ]]; then
 
   echo "== toolchain pin fixtures =="
   bash "$ROOT/scripts/test-check-toolchain-pins.sh"
+
+  echo "== documentation version fixtures =="
+  bash "$ROOT/scripts/test-check-doc-versions.sh"
 
   echo "== changelog release fixtures =="
   bash "$ROOT/scripts/test-changelog-release.sh"

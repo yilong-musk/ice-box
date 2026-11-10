@@ -47,11 +47,20 @@ export type TunStatus =
  * Windows. Only the core and the app's main process are measured — WebView
  * helpers and the privileged helper daemon are out of scope. `null` parts are
  * unreadable (e.g. a privileged macOS core); `total_bytes` sums what was
- * read. */
+ * read. `bands` are the colour thresholds for that platform's metric: the
+ * backend owns them, so the UI never guesses the platform. */
 export type MemoryUsage = {
   app_bytes: number | null;
   core_bytes: number | null;
   total_bytes: number;
+  bands: MemoryBands;
+};
+
+/** Where the memory readout turns yellow (`warn_mb`) and red (`bad_mb`), in
+ * whole MB. */
+export type MemoryBands = {
+  warn_mb: number;
+  bad_mb: number;
 };
 
 
