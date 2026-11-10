@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Connections page sorts from a drop-down: newest, total traffic,
+  download or upload. Download and upload each sort by that direction alone.
+  The choice is remembered across restarts.
+- Each connection's row background now shows its share of total traffic
+  (upload plus download) instead of download alone.
+
 ## [0.3.2] - 2026-11-10
 
 ### Added
