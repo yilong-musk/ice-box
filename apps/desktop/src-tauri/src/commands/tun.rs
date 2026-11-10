@@ -2,19 +2,12 @@
 
 use super::*;
 
-/// Home「重试恢复」: on-demand retry of TUN recovery (`docs/tun.md`). Runs
-/// the journal recovery driver under the orchestration lock; never enables
-/// capture. Returns a warning message when cleanup is still uncertain.
+/// Home「重试恢复」. See [`recover_tun_use_case`].
 #[tauri::command]
 pub async fn recover_tun(app: AppHandle) -> Result<Vec<ice_config::UiMessage>, AppError> {
     run_blocking("recover_tun", move || {
         let state = app.state::<AppState>();
-        let _orch = lock_orchestrate(&state)?;
-        state.capture.refresh_backend()?;
-        let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
-        let warning = state.capture.recover(&mut **core)?;
-        replace_recovery_warnings(&state, warning.clone());
-        Ok(warning)
+        recover_tun_use_case(&app, &state)
     })
     .await
 }
@@ -35,10 +28,7 @@ pub async fn stop_system_proxy(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn install_helper(app: AppHandle) -> Result<(), AppError> {
     run_blocking("install_helper", move || {
-        let result = crate::helper_install::install_helper_inner(&app);
-        let state = app.state::<AppState>();
-        reset_helper_probe_cache(&state);
-        result
+        crate::helper_install::install_helper_use_case(&app)
     })
     .await
 }
@@ -49,10 +39,7 @@ pub async fn install_helper(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn uninstall_helper(app: AppHandle) -> Result<(), AppError> {
     run_blocking("uninstall_helper", move || {
-        let result = crate::helper_install::uninstall_helper_inner(&app);
-        let state = app.state::<AppState>();
-        reset_helper_probe_cache(&state);
-        result
+        crate::helper_install::uninstall_helper_use_case(&app)
     })
     .await
 }

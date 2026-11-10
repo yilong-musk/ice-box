@@ -5,19 +5,19 @@ use crate::application::{
     close_all_connections_use_case, close_connection_use_case, collect_nodes, collect_status,
     current_settings, disable_active_backend_inner, ensure_tun_elevation_inner,
     get_log_view_use_case, get_runtime_config_use_case, import_subscription_file_use_case,
-    list_subscriptions_use_case, lock_orchestrate, query_connections_use_case, query_rules,
+    list_subscriptions_use_case, query_connections_use_case, query_rules, recover_tun_use_case,
     refresh_rule_sets_use_case, remove_custom_rule_use_case, remove_subscription_use_case,
-    remove_tun_elevation_inner, replace_recovery_warnings, require_running_core,
-    reset_helper_probe_cache, rule_overview, rule_set_status, save_settings_inner,
+    remove_tun_elevation_inner, rule_overview, rule_set_status, save_settings_inner,
     set_active_subscription_use_case, set_auto_update_subscription_use_case,
     set_group_selection_use_case, set_proxy_mode_inner, set_rule_disabled_use_case,
-    set_selected_node_use_case, start_core_inner, start_service, stop_core_use_case,
-    subscription_share_use_case, test_node_delay_use_case, update_custom_rule_use_case,
-    update_subscription_use_case, AddCustomRuleRequest, AddSubscriptionRequest,
-    CloseConnectionRequest, GroupSelectionRequest, IdRequest, ImportSubscriptionFileRequest,
-    ListRulesRequest, LogViewRequest, QueryConnectionsRequest, RemoveCustomRuleRequest,
-    SetActiveRequest, SetAutoUpdateRequest, SetProxyModeRequest, SetRuleDisabledRequest,
-    SettingsPatch, TagRequest, UpdateCustomRuleRequest,
+    set_selected_node_use_case, start_core_use_case, start_service, stop_core_use_case,
+    subscription_share_use_case, test_node_delay_use_case, traffic_since_use_case,
+    traffic_snapshot_use_case, update_custom_rule_use_case, update_subscription_use_case,
+    AddCustomRuleRequest, AddSubscriptionRequest, CloseConnectionRequest, GroupSelectionRequest,
+    IdRequest, ImportSubscriptionFileRequest, ListRulesRequest, LogViewRequest,
+    QueryConnectionsRequest, RemoveCustomRuleRequest, SetActiveRequest, SetAutoUpdateRequest,
+    SetProxyModeRequest, SetRuleDisabledRequest, SettingsPatch, TagRequest,
+    UpdateCustomRuleRequest,
 };
 use crate::AppState;
 use ice_config::{AppError, ErrorCode};
@@ -642,10 +642,7 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
             Ok(json!({"ok": true}))
         }
         "start_core" => {
-            let orchestrate = lock_orchestrate(state.inner())?;
-            start_core_inner(app, state.inner())?;
-            drop(orchestrate);
-            broadcast_state_change(app);
+            start_core_use_case(app, state.inner())?;
             Ok(json!({"ok": true}))
         }
         "stop_core" => {
@@ -666,14 +663,10 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
             )?;
             Ok(json!({"ok": true}))
         }
-        "get_traffic_snapshot" => {
-            require_running_core(state.inner())?;
-            to_value(state.traffic.snapshot())
-        }
+        "get_traffic_snapshot" => to_value(traffic_snapshot_use_case(state.inner())?),
         "get_traffic_since" => {
-            require_running_core(state.inner())?;
             let cursor = args.get("cursor").and_then(Value::as_u64);
-            to_value(state.traffic.snapshot_since(cursor))
+            to_value(traffic_since_use_case(state.inner(), cursor)?)
         }
         "list_subscriptions" => list_subscriptions_use_case(state.inner()),
         "add_subscription" => {
@@ -771,30 +764,13 @@ fn dispatch_tool(app: &AppHandle, name: &str, args: Value) -> Result<Value, AppE
         "get_runtime_config" => Ok(json!({
             "config": get_runtime_config_use_case(state.inner())?
         })),
-        "recover_tun" => {
-            let _orchestrate = lock_orchestrate(state.inner())?;
-            state.capture.refresh_backend()?;
-            let mut core = state
-                .core
-                .lock()
-                .map_err(|_| AppError::new(ErrorCode::LockPoisoned, "core lock poisoned"))?;
-            let warnings = state.capture.recover(&mut **core)?;
-            replace_recovery_warnings(state.inner(), warnings.clone());
-            drop(core);
-            drop(_orchestrate);
-            broadcast_state_change(app);
-            to_value(warnings)
-        }
+        "recover_tun" => to_value(recover_tun_use_case(app, state.inner())?),
         "install_tun_helper" => {
-            crate::helper_install::install_helper_inner(app)?;
-            reset_helper_probe_cache(state.inner());
-            broadcast_state_change(app);
+            crate::helper_install::install_helper_use_case(app)?;
             Ok(json!({"ok": true}))
         }
         "uninstall_tun_helper" => {
-            crate::helper_install::uninstall_helper_inner(app)?;
-            reset_helper_probe_cache(state.inner());
-            broadcast_state_change(app);
+            crate::helper_install::uninstall_helper_use_case(app)?;
             Ok(json!({"ok": true}))
         }
         "ensure_tun_elevation" => {

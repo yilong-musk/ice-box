@@ -280,6 +280,30 @@ fn cores_differ(bundle: &Option<String>, installed: &Option<String>) -> bool {
     }
 }
 
+/// Install the helper (Settings and MCP `install_tun_helper`), then drop the
+/// cached helper probe whatever the outcome, so the backend sees the new
+/// state at once.
+pub fn install_helper_use_case(app: &tauri::AppHandle) -> Result<(), AppError> {
+    let result = install_helper_inner(app);
+    after_helper_change(app);
+    result
+}
+
+/// Uninstall the helper (Settings and MCP `uninstall_tun_helper`); see
+/// [`install_helper_use_case`].
+pub fn uninstall_helper_use_case(app: &tauri::AppHandle) -> Result<(), AppError> {
+    let result = uninstall_helper_inner(app);
+    after_helper_change(app);
+    result
+}
+
+fn after_helper_change(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        crate::application::reset_helper_probe_cache(state.inner());
+    }
+    crate::application::broadcast_state_change(app);
+}
+
 /// Install the privileged helper through the system authorization dialog.
 /// Prompts the user for their admin password; nothing is mutated before the
 /// dialog is authorized, and cancellation leaves the system untouched.

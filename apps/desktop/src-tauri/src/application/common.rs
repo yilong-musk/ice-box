@@ -117,6 +117,21 @@ pub(crate) fn require_running_core(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Cumulative traffic of the running core (the Home chart and MCP).
+pub(crate) fn traffic_snapshot_use_case(state: &AppState) -> Result<TrafficSnapshot, AppError> {
+    require_running_core(state)?;
+    Ok(state.traffic.snapshot())
+}
+
+/// Traffic samples after `cursor` (the Home chart and MCP).
+pub(crate) fn traffic_since_use_case(
+    state: &AppState,
+    cursor: Option<u64>,
+) -> Result<TrafficDelta, AppError> {
+    require_running_core(state)?;
+    Ok(state.traffic.snapshot_since(cursor))
+}
+
 pub(crate) fn clash_endpoints(
     paths: &AppPaths,
     settings: &AppSettings,
