@@ -64,7 +64,6 @@ import { useThemePreference } from "./lib/theme";
 import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
 import { PaneVisibleContext } from "./lib/paneVisibility";
-import logo from "./assets/logo.png";
 
 type Tab =
   | "home"
@@ -467,7 +466,7 @@ function AppShell() {
           data-testid="phone-shell"
         >
           <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
-            <StatusLogo src={logo} status={status} className="size-7" />
+            <StatusLogo status={status} className="size-12" />
             <div className="min-w-0 flex-1">
               <h1 className="font-heading text-sm font-medium tracking-tight">
                 ice-box
@@ -568,7 +567,7 @@ function AppShell() {
                   data-tauri-drag-region
                   data-testid="app-brand-row"
                 >
-                  <StatusLogo src={logo} status={status} className="size-7" />
+                  <StatusLogo status={status} className="size-12" />
                   <h1 className="font-heading text-sm font-medium tracking-tight">
                     ice-box
                   </h1>

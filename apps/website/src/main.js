@@ -2,7 +2,8 @@
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
-import logoUrl from "../../desktop/src/assets/logo.png";
+import faviconUrl from "../../desktop/public/favicon.png";
+import logoUrl from "../../desktop/src/assets/switch-logo/logo@4x.png";
 import { version as appVersion } from "../../desktop/package.json";
 import {
   LANGUAGE_STORAGE_KEY,
@@ -36,7 +37,7 @@ const REPO_URL = "https://github.com/yilong-musk/ice-box";
 const favicon = document.createElement("link");
 favicon.rel = "icon";
 favicon.type = "image/png";
-favicon.href = logoUrl;
+favicon.href = faviconUrl;
 document.head.appendChild(favicon);
 
 /** Resolved before the first render, so the first paint is already localized
@@ -92,7 +93,7 @@ root.innerHTML = `
   <div class="backdrop" aria-hidden="true"><span class="glow glow-a"></span><span class="glow glow-b"></span><span class="glow glow-c"></span><span class="grid"></span></div>
   <header class="site-nav">
     <div class="nav-inner page-wrap">
-      <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="28" height="28"><span>ice-box</span></a>
+      <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="48" height="48"><span>ice-box</span></a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#features" ${t("nav.features")}></a>
         <a href="#demo" ${t("nav.demo")}></a>
@@ -212,7 +213,7 @@ root.innerHTML = `
   <footer class="site-footer">
     <div class="footer-inner page-wrap">
       <div class="footer-brand">
-        <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="24" height="24"><span>ice-box</span></a>
+        <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="48" height="48"><span>ice-box</span></a>
       </div>
       <nav class="footer-links" aria-label="Footer">
         <a href="${REPO_URL}" target="_blank" rel="noreferrer">${icon("github", "icon icon-xs")}<span ${t("footer.source")}></span></a>

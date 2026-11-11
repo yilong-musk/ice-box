@@ -30,7 +30,7 @@ describe("StatusLogo", () => {
     (core) => {
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status(core)} />
+          <StatusLogo status={status(core)} />
         </TooltipProvider>,
       );
       expect(screen.getByTestId("status-logo")).toHaveAttribute("data-core", core);
@@ -43,7 +43,7 @@ describe("StatusLogo", () => {
   it("is a button so the label can open without a pointer", () => {
     render(
       <TooltipProvider>
-        <StatusLogo src="logo.png" status={status("running")} />
+        <StatusLogo status={status("running")} />
       </TooltipProvider>,
     );
     const logo = screen.getByTestId("status-logo");
@@ -56,7 +56,7 @@ describe("StatusLogo", () => {
     try {
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status("running")} />
+          <StatusLogo status={status("running")} />
         </TooltipProvider>,
       );
       const logo = screen.getByTestId("status-logo");
@@ -88,7 +88,7 @@ describe("StatusLogo", () => {
       phoneShell.value = true;
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status("running")} />
+          <StatusLogo status={status("running")} />
         </TooltipProvider>,
       );
       return t("app.logo.core", { state: t("home.coreStatus.running") });

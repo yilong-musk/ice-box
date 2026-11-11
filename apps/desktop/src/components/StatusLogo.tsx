@@ -3,22 +3,34 @@
 /**
  * App logo that mirrors the core state, replacing the Home "core status" row.
  *
- * unknown/stopped: the plain logo; starting/stopping: amber; running: green;
- * error: red. The glow breathes only while the app is in the foreground and
- * holds still otherwise. Visuals live in `index.css` under `.status-logo`,
- * keyed on `data-core` and `data-active`.
+ * The logo is the pixel switch (docs/brand/switch-logo): its port lights show
+ * the core state, each state as a 3-second loop of 45 frames in one horizontal
+ * strip. unknown looks like stopped. The loop plays only while the app is in
+ * the foreground; otherwise the state's still frame is shown. Visuals live in
+ * `index.css` under `.status-logo`, keyed on `data-core` and `data-active`.
  *
  * Desktop shows the label on hover. The phone shell has no hover, so a tap
  * toggles it and it stays up for a fixed time, whatever the pointer does.
  */
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { type CSSProperties, useEffect, useState, useSyncExternalStore } from "react";
 import { isPhoneShell } from "@platform/shell";
 
 import type { CoreStatus, StatusResponse } from "@/api/contracts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+
+import errorStill from "@/assets/switch-logo/error-still.png";
+import errorStrip from "@/assets/switch-logo/error.png";
+import runningStill from "@/assets/switch-logo/running-still.png";
+import runningStrip from "@/assets/switch-logo/running.png";
+import startingStill from "@/assets/switch-logo/starting-still.png";
+import startingStrip from "@/assets/switch-logo/starting.png";
+import stoppedStill from "@/assets/switch-logo/stopped-still.png";
+import stoppedStrip from "@/assets/switch-logo/stopped.png";
+import stoppingStill from "@/assets/switch-logo/stopping-still.png";
+import stoppingStrip from "@/assets/switch-logo/stopping.png";
 
 export type LogoCore = CoreStatus | "unknown";
 
@@ -37,6 +49,15 @@ export function logoLabel(core: LogoCore): string {
       core === "unknown" ? t("common.dash") : t(`home.coreStatus.${core}`),
   });
 }
+
+/** The loop strip and still frame for each core state. */
+const SPRITES: Record<CoreStatus, { strip: string; still: string }> = {
+  stopped: { strip: stoppedStrip, still: stoppedStill },
+  starting: { strip: startingStrip, still: startingStill },
+  running: { strip: runningStrip, still: runningStill },
+  stopping: { strip: stoppingStrip, still: stoppingStill },
+  error: { strip: errorStrip, still: errorStill },
+};
 
 /** True while the page is visible and its window has focus. */
 function isForeground(): boolean {
@@ -63,16 +84,15 @@ function useForeground(): boolean {
 const TAP_LABEL_MS = 3000;
 
 export function StatusLogo({
-  src,
   status,
   className,
 }: {
-  src: string;
   status: StatusResponse | null;
   className?: string;
 }) {
   const core = logoCore(status);
   const label = logoLabel(core);
+  const sprite = SPRITES[core === "unknown" ? "stopped" : core];
   const phone = isPhoneShell();
   const active = useForeground();
   const [tapOpen, setTapOpen] = useState(false);
@@ -114,7 +134,16 @@ export function StatusLogo({
           data-active={active ? "" : undefined}
           data-testid="status-logo"
         >
-          <img src={src} alt="" draggable={false} />
+          <span
+            aria-hidden="true"
+            className="status-logo-art"
+            style={
+              {
+                "--logo-strip": `url("${sprite.strip}")`,
+                "--logo-still": `url("${sprite.still}")`,
+              } as CSSProperties
+            }
+          />
         </button>
       </TooltipTrigger>
       {/* The phone logo sits at the top edge, so its label opens below; the

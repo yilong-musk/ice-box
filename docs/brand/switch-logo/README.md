@@ -7,9 +7,12 @@ pixelfx's `ice/ice-crystal` effect.
 
 <img src="assets/logo@4x.png" alt="ice-box switch logo" width="192">
 
-This directory holds the source and the rendered assets. The app does not use
-them yet: the app icons, favicon, and the Home status logo still use
-`apps/desktop/src/assets/logo.png`.
+This directory holds the source and the rendered assets. The app uses them:
+the Home status logo plays the state loops, and the app icons, tray icon,
+favicon, website brand mark, and README logo come from the plain logo. The
+app's copies live in `apps/desktop/src/assets/switch-logo/` and
+`apps/desktop/src-tauri/icons/tray.png`; the app icons are generated with
+`tauri icon` from a 1024 px nearest-neighbour upscale of `assets/logo.png`.
 
 ## Core states
 
@@ -56,9 +59,9 @@ step the background across the strip:
 }
 ```
 
-Scale by whole numbers (96, 144, 192 px) to keep the pixels crisp. At 32 and
-16 px the art has to be shrunk and goes soft; small icons will need a
-hand-drawn version.
+Scale by whole numbers (96, 144, 192 px) to keep the pixels crisp. The app
+icons and favicon are downscaled from the 48 px art; at 32 and 16 px it goes
+soft, so small icons still need a hand-drawn version.
 
 ## Regenerating
 

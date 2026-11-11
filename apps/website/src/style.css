@@ -254,6 +254,7 @@ main {
 .brand img {
   border-radius: 7px;
   object-fit: cover;
+  image-rendering: pixelated;
 }
 
 .nav-links {
