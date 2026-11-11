@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The website is redesigned: a new hero, the desktop and Android Live Demos
+  side by side, feature cards, an Agent (MCP) section, and download cards
+  with each platform's requirements. It has a light/dark switch shared with
+  the Live Demos, and follows the system theme by default.
+- The tagline is now "The best sing-box GUI" on the website and in the
+  READMEs.
 - Android Home folds the VPN switch, the current node and the outbound mode
   into one card: connection state and node on the left, a round power button
   on the right, and a segmented mode picker with a one-line hint below. The

@@ -2,43 +2,8 @@
 
 /* Live phone demo: the real Android UI in an iframe, framed in a Pixel-style
    shell. The aspect ratio and chrome mirror `apps/website/scripts/capture-mobile.mjs`,
-   while the stage scales the whole device to fit the landing page. */
-
-.phone-demo {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 64px;
-  padding-block: 8px 96px;
-}
-
-.phone-demo-copy {
-  max-width: 460px;
-}
-
-.phone-demo-kicker {
-  margin: 0 0 10px;
-  color: var(--green);
-  font: 11px var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.phone-demo-copy h2 {
-  margin: 0 0 14px;
-  font-size: clamp(26px, 2.6vw, 38px);
-  font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: -0.04em;
-  text-wrap: pretty;
-}
-
-.phone-demo-body {
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.65;
-}
+   while the stage scales the whole device to fit the landing page. The section
+   around it is laid out in `style.css`. */
 
 .phone-demo-stage {
   display: flex;
@@ -225,30 +190,8 @@
   pointer-events: none;
 }
 
-/* Stack at the same breakpoint as the laptop shell above (`style.css`), so the
-   two demos keep one rhythm on narrow screens. */
 @media (max-width: 1100px) {
-  .phone-demo {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 36px;
-    justify-items: center;
-    padding-block: 0 72px;
-    text-align: center;
-  }
-
-  .phone-demo-copy {
-    max-width: 560px;
-  }
-
   .phone-demo-stage {
     width: min(100%, 336px);
-  }
-}
-
-/* Phones only show the Android demo, so its introduction is redundant: drop
-   the copy and let the phone frame follow the hero directly. */
-@media (max-width: 800px) {
-  .phone-demo-copy {
-    display: none;
   }
 }
