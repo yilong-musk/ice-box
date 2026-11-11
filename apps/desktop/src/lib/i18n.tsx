@@ -146,6 +146,9 @@ const zh = {
   "home.tunMode": "TUN 模式",
   "home.trafficTitle": "流量",
   "home.trafficDesc": "最近 60 秒上下行",
+  "home.stats.connections": "当前连接",
+  "home.stats.upload": "累计上传",
+  "home.stats.download": "累计下载",
   "home.goToSubs": "前往订阅页导入",
   "home.autoSwitchHint": "导入订阅后会自动切换到节点分流。",
 
@@ -701,6 +704,9 @@ const en: Record<MessageKey, string> = {
   "home.tunMode": "TUN Mode",
   "home.trafficTitle": "Traffic",
   "home.trafficDesc": "Up/down over the last 60 seconds",
+  "home.stats.connections": "Connections",
+  "home.stats.upload": "Total Upload",
+  "home.stats.download": "Total Download",
   "home.goToSubs": "Import subscriptions",
   "home.autoSwitchHint": "Node routing switches automatically after importing.",
 

@@ -28,6 +28,7 @@ import {
 } from "../lib/nodes";
 import { MemoryCard } from "../components/MemoryCard";
 import { TrafficChart } from "../components/TrafficChart";
+import { ConnectionStatsCard } from "../components/ConnectionStatsCard";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -792,7 +793,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           "grid gap-3",
           phone
             ? "grid-cols-1"
-            : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+            : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
         <Card size="sm" className="w-full min-w-0">
@@ -1041,9 +1042,17 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         )}
 
         {!phone && (
+          <ConnectionStatsCard
+            className="col-span-2 col-start-2 row-start-2"
+            running={running}
+            active={active}
+          />
+        )}
+
+        {!phone && (
           <Card
             size="sm"
-            className="col-span-2 col-start-2 row-span-2 row-start-2 flex min-h-0 w-full min-w-0 flex-col"
+            className="col-span-2 col-start-2 row-start-3 flex min-h-0 w-full min-w-0 flex-col"
           >
             <CardHeader className="shrink-0">
               <CardTitle className="text-xs font-medium text-muted-foreground">

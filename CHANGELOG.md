@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP tools `list_rule_sets` and `refresh_rule_sets`: read where each
   rule-set comes from and when it was last checked, and re-check them all on
   demand, like the Rules page.
+- Home shows a strip above the traffic chart with the current connection
+  count and the total download and upload since the core started (macOS and
+  Windows).
 
 ### Changed
 
