@@ -469,6 +469,8 @@ export interface CoreApi {
   stop(): Promise<void>;
   /** Live connections of the running core; empty with `running: false` while it is stopped. */
   listConnections(): Promise<ConnectionsResponse>;
+  /** Connection count and relayed bytes without the rows (Home strip). */
+  getConnectionStats(): Promise<ConnectionStats>;
   closeConnection(id: string): Promise<void>;
   closeAllConnections(): Promise<void>;
   getRuntimeConfig(): Promise<string>;
@@ -528,6 +530,15 @@ export interface ConnectionRow {
   chains: string[];
   /** Matched route rule with its action, or `final`. */
   rule: string;
+}
+
+/** Totals of {@link ConnectionsResponse} without the rows. */
+export interface ConnectionStats {
+  /** False while the core is not running; the figures are then zero. */
+  running: boolean;
+  count: number;
+  upload_total: number;
+  download_total: number;
 }
 
 export interface ConnectionsResponse {

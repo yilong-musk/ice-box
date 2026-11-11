@@ -42,6 +42,20 @@ pub struct ConnectionsResponse {
     pub connections: Vec<ConnectionRow>,
 }
 
+/// Connection count and relayed bytes for the Home strip: the totals of
+/// [`ConnectionsResponse`] without the rows, so a once-a-second poll does not
+/// carry every connection across the IPC bridge.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct ConnectionStats {
+    /// False while the core is not running; the figures are then zero.
+    pub running: bool,
+    /// Live connections, counted like the Connections page lists them.
+    pub count: usize,
+    /// Bytes the core has relayed since it started.
+    pub upload_total: u64,
+    pub download_total: u64,
+}
+
 #[derive(Deserialize)]
 pub struct CloseConnectionRequest {
     pub id: String,
@@ -192,6 +206,15 @@ fn connections_response(snapshot: ice_core::ConnectionsSnapshot) -> ConnectionsR
     }
 }
 
+fn connection_stats(snapshot: &ice_core::ConnectionsSnapshot) -> ConnectionStats {
+    ConnectionStats {
+        running: true,
+        count: snapshot.connections.len(),
+        upload_total: snapshot.upload_total,
+        download_total: snapshot.download_total,
+    }
+}
+
 /// The running core's Clash API. The traffic stream already follows it, so a
 /// poll reads no files and keeps the port the core started with even after
 /// `settings.json` changes. Settings are the fallback for a running core
@@ -213,6 +236,16 @@ pub(crate) fn list_connections_use_case(state: &AppState) -> Result<ConnectionsR
     let endpoints = live_endpoints(state)?;
     let snapshot = ice_core::connections(&endpoints).map_err(AppError::from)?;
     Ok(connections_response(snapshot))
+}
+
+/// Same source and stopped-core rule as [`list_connections_use_case`].
+pub(crate) fn connection_stats_use_case(state: &AppState) -> Result<ConnectionStats, AppError> {
+    if state.core_snapshot.load().state.status != CoreStatus::Running {
+        return Ok(ConnectionStats::default());
+    }
+    let endpoints = live_endpoints(state)?;
+    let snapshot = ice_core::connections(&endpoints).map_err(AppError::from)?;
+    Ok(connection_stats(&snapshot))
 }
 
 pub(crate) fn close_connection_use_case(
@@ -418,6 +451,15 @@ mod tests {
                 rule: "final".into(),
             }],
         };
+        assert_eq!(
+            connection_stats(&snapshot),
+            ConnectionStats {
+                running: true,
+                count: 1,
+                upload_total: 10,
+                download_total: 20,
+            }
+        );
         let response = connections_response(snapshot);
         assert!(response.running);
         assert_eq!((response.upload_total, response.download_total), (10, 20));

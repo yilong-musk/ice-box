@@ -10,9 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP tools `list_rule_sets` and `refresh_rule_sets`: read where each
   rule-set comes from and when it was last checked, and re-check them all on
   demand, like the Rules page.
+- Home shows a strip above the traffic chart with the current connection
+  count and the total download and upload since the core started (macOS and
+  Windows).
 
 ### Changed
 
+- Android Home folds the VPN switch, the current node and the outbound mode
+  into one card: connection state and node on the left, a round power button
+  on the right, and a segmented mode picker with a one-line hint below. The
+  separate Outbound Mode card is gone.
+- The desktop Outbound Mode card is a list with an icon per mode; the
+  selected mode is tinted and checked, and hovering a mode explains it.
 - The Connections page sorts from a drop-down: newest, total traffic,
   download or upload. Download and upload each sort by that direction alone.
   The choice is remembered across restarts.

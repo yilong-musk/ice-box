@@ -3,7 +3,7 @@
 /** Desktop transport implementation of the shared application contract. */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, ConnectionsResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
+import type { ApiContract, AppErrorPayload, AppSettings, AppProxyMode, CheckAppUpdateResponse, ConnectionStats, ConnectionsResponse, DelayTestResponse, GroupSelectionResponse, InstalledApp, ListRulesRequest, ListRulesResponse, McpStatus, NodeInfo, ProxyMode, RuleOverview, RuleSetStatus, SettingsPatch, StatusResponse, SubscriptionAutoUpdateInterval, SubscriptionMeta, TrafficDelta, TrafficPoint, TrafficSnapshot, UiMessage, UpdateProgressPayload } from "./contracts";
 
 export const api = {
   getStatus: () => invoke<StatusResponse>("get_status"),
@@ -59,6 +59,7 @@ export const api = {
   /** Remove the Windows TUN scheduled task (one UAC prompt). */
   removeTunElevation: () => invoke<void>("remove_tun_elevation"),
   listConnections: () => invoke<ConnectionsResponse>("list_connections"),
+  getConnectionStats: () => invoke<ConnectionStats>("get_connection_stats"),
   closeConnection: (id: string) =>
     invoke<void>("close_connection", { req: { id } }),
   closeAllConnections: () => invoke<void>("close_all_connections"),

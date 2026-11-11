@@ -28,6 +28,8 @@ import {
 } from "../lib/nodes";
 import { MemoryCard } from "../components/MemoryCard";
 import { TrafficChart } from "../components/TrafficChart";
+import { ConnectionStatsCard } from "../components/ConnectionStatsCard";
+import { ProxyModePicker } from "../components/ProxyModePicker";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -44,7 +46,6 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
@@ -61,11 +62,16 @@ type Props = {
   onStatus?: (status: StatusResponse) => void;
 };
 
-const PROXY_MODE_KEYS = [
-  ["rule", "home.mode.rule"],
-  ["global", "home.mode.global"],
-  ["direct", "home.mode.direct"],
-] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
+type TunnelStatus = NonNullable<StatusResponse["tunnel_status"]>;
+
+/** Phone VPN state line: label and dot colour per tunnel status. */
+const VPN_STATE: Record<TunnelStatus, { labelKey: MessageKey; dotClassName: string }> = {
+  connected: { labelKey: "home.vpnState.connected", dotClassName: "bg-ok" },
+  connecting: { labelKey: "home.vpnState.connecting", dotClassName: "animate-pulse bg-warn" },
+  disconnecting: { labelKey: "home.vpnState.disconnecting", dotClassName: "animate-pulse bg-warn" },
+  error: { labelKey: "home.vpnState.error", dotClassName: "bg-destructive" },
+  stopped: { labelKey: "home.vpnState.disconnected", dotClassName: "bg-muted-foreground/40" },
+};
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
@@ -538,6 +544,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     tunnel === "connected" ||
     tunnel === "connecting" ||
     tunnel === "disconnecting";
+  const vpnConnected = tunnel === "connected";
+  const vpnState = VPN_STATE[tunnel] ?? VPN_STATE.stopped;
 
   function onToggleProxy() {
     if (phone) {
@@ -706,6 +714,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       : configuredTun
         ? t("home.power.startTun")
         : t("home.power.startSystem");
+  // One wiring for the phone's round button and the desktop's labelled one.
+  const powerButtonProps = {
+    type: "button",
+    variant: powerOn ? "default" : "outline",
+    disabled: !canToggle,
+    "aria-pressed": powerOn,
+    "aria-label": powerTitle,
+    onClick: onToggleProxy,
+    "data-testid": "home-power-button",
+  } as const;
+  const tunUnavailableText =
+    formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable");
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
 
@@ -792,9 +812,64 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           "grid gap-3",
           phone
             ? "grid-cols-1"
-            : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+            : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
+        {phone ? (
+          <Card size="sm" className="w-full min-w-0" data-testid="home-power-card">
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span
+                    className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+                    data-testid="home-vpn-state"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn("size-2 shrink-0 rounded-full", vpnState.dotClassName)}
+                    />
+                    {t(vpnState.labelKey)}
+                  </span>
+                  <span
+                    className="truncate text-base font-semibold"
+                    title={currentNodeLabel}
+                    data-testid="home-current-node"
+                  >
+                    {currentNodeLabel}
+                  </span>
+                </div>
+                <Button
+                  {...powerButtonProps}
+                  size="icon"
+                  className={cn(
+                    "size-12 shrink-0 rounded-full",
+                    vpnConnected && "bg-ok text-white hover:bg-ok/90",
+                  )}
+                  title={powerTitle}
+                >
+                  <Power className="size-5" />
+                  <span className="sr-only">{powerTitle}</span>
+                </Button>
+              </div>
+              {tunCardVisible && (
+                <div className="flex min-w-0 items-center gap-3 text-xs">
+                  <span className="shrink-0 font-medium text-muted-foreground">
+                    {t("home.tunMode")}
+                  </span>
+                  <span className="min-w-0 truncate text-muted-foreground" title={tunUnavailableText}>
+                    {tunUnavailableText}
+                  </span>
+                </div>
+              )}
+              <ProxyModePicker
+                variant="segmented"
+                value={proxyMode}
+                disabled={modeBusy || busy}
+                onChange={(mode) => void onSetMode(mode)}
+              />
+            </CardContent>
+          </Card>
+        ) : (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader>
             <CardTitle className="text-xs font-medium text-muted-foreground">
@@ -802,35 +877,16 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            {phone || proxyAvailable || configuredTun || tunActive ? (
+            {proxyAvailable || configuredTun || tunActive ? (
               <div className="flex w-full flex-1 flex-col justify-between gap-3">
                 <Button
-                  type="button"
+                  {...powerButtonProps}
                   size="lg"
-                  variant={powerOn ? "default" : "outline"}
                   className="h-auto min-h-11 w-full justify-center gap-2 py-2"
-                  disabled={!canToggle}
-                  aria-pressed={powerOn}
-                  aria-label={powerTitle}
-                  onClick={onToggleProxy}
                 >
                   <Power />
                   <span className="text-sm font-medium">{powerTitle}</span>
                 </Button>
-                {phone && (
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                      {t("home.outbound.node")}
-                    </span>
-                    <span
-                      className="min-w-0 flex-1 truncate text-right text-sm font-medium"
-                      title={currentNodeLabel}
-                      data-testid="home-current-node"
-                    >
-                      {currentNodeLabel}
-                    </span>
-                  </div>
-                )}
                 {tunCardVisible && (
                   <div className="flex items-center gap-3 whitespace-nowrap">
                     <span className="text-xs font-medium text-muted-foreground">
@@ -839,9 +895,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     {configuredTun && !tunActive && !tunAvailable && (
                       <span
                         className="min-w-0 truncate text-xs text-muted-foreground"
-                        title={formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                        title={tunUnavailableText}
                       >
-                        {formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                        {tunUnavailableText}
                       </span>
                     )}
                     {!phone && (
@@ -922,7 +978,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             )}
           </CardContent>
         </Card>
+        )}
 
+        {!phone && (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader className="[container-type:normal]">
             <CardTitle className="whitespace-nowrap text-xs font-medium text-muted-foreground">
@@ -930,34 +988,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              orientation={phone ? "horizontal" : "vertical"}
-              spacing={2}
+            <ProxyModePicker
+              variant="list"
               value={proxyMode}
-              onValueChange={(value) => {
-                if (value === "rule" || value === "global" || value === "direct") {
-                  void onSetMode(value);
-                }
-              }}
               disabled={modeBusy || busy}
-              className={cn("flex w-full", phone ? "flex-row" : "flex-1 flex-col")}
-              aria-label={t("home.modeAria")}
-            >
-              {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
-                <ToggleGroupItem
-                  key={mode}
-                  value={mode}
-                  className={cn("h-auto flex-1", phone ? "min-w-0" : "w-full")}
-                >
-                  {t(labelKey)}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+              onChange={(mode) => void onSetMode(mode)}
+            />
           </CardContent>
         </Card>
+        )}
 
         {!phone && <MemoryCard memory={memory} coreRunning={running} />}
 
@@ -1041,9 +1080,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         )}
 
         {!phone && (
+          <ConnectionStatsCard
+            className="col-span-2 col-start-2 row-start-2"
+            running={running}
+            active={active}
+            paused={modeBusy || busy}
+          />
+        )}
+
+        {!phone && (
           <Card
             size="sm"
-            className="col-span-2 col-start-2 row-span-2 row-start-2 flex min-h-0 w-full min-w-0 flex-col"
+            className="col-span-2 col-start-2 row-start-3 flex min-h-0 w-full min-w-0 flex-col"
           >
             <CardHeader className="shrink-0">
               <CardTitle className="text-xs font-medium text-muted-foreground">

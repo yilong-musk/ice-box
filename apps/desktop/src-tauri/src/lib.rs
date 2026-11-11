@@ -417,6 +417,7 @@ pub fn run() {
             commands::ensure_tun_elevation,
             commands::remove_tun_elevation,
             commands::list_connections,
+            commands::get_connection_stats,
             commands::close_connection,
             commands::close_all_connections,
             commands::get_runtime_config,

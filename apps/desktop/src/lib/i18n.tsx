@@ -79,6 +79,9 @@ const zh = {
   "home.mode.rule": "规则",
   "home.mode.global": "全局",
   "home.mode.direct": "直连",
+  "home.modeHint.rule": "按路由规则分流，规则决定走代理还是直连",
+  "home.modeHint.global": "全部流量都经过当前节点",
+  "home.modeHint.direct": "全部流量直连，不经过代理",
   "home.empty.runningTitle": "仅直连模式运行中",
   "home.empty.runningDesc":
     "当前没有订阅节点，所有流量直接连接。导入订阅后会自动切换到节点分流。需要时用上方大按钮接管流量（系统代理或 TUN）。",
@@ -115,6 +118,11 @@ const zh = {
   "home.power.vpnStop": "断开 VPN",
   "home.power.vpnOn": "VPN 已连接",
   "home.power.vpnOff": "点击连接 VPN",
+  "home.vpnState.connected": "已连接",
+  "home.vpnState.connecting": "连接中…",
+  "home.vpnState.disconnecting": "断开中…",
+  "home.vpnState.disconnected": "未连接",
+  "home.vpnState.error": "连接出错",
   "home.warn.vpnPermission": "连接 VPN 需要系统授权。点击连接后按系统提示允许。",
   "home.warn.proxyOutOfSync": "系统代理未接管或已不同步",
   "home.warn.permissionRequired":
@@ -146,6 +154,9 @@ const zh = {
   "home.tunMode": "TUN 模式",
   "home.trafficTitle": "流量",
   "home.trafficDesc": "最近 60 秒上下行",
+  "home.stats.connections": "当前连接",
+  "home.stats.upload": "累计上传",
+  "home.stats.download": "累计下载",
   "home.goToSubs": "前往订阅页导入",
   "home.autoSwitchHint": "导入订阅后会自动切换到节点分流。",
 
@@ -632,6 +643,9 @@ const en: Record<MessageKey, string> = {
   "home.mode.rule": "Rule",
   "home.mode.global": "Global",
   "home.mode.direct": "Direct",
+  "home.modeHint.rule": "Routing rules decide what goes through the proxy",
+  "home.modeHint.global": "All traffic goes through the current node",
+  "home.modeHint.direct": "All traffic connects directly, no proxy",
   "home.empty.runningTitle": "Running in direct-only mode",
   "home.empty.runningDesc":
     "There are no subscription nodes, so all traffic connects directly. Importing a subscription switches to node-based routing automatically. Use the big button above to capture traffic (system proxy or TUN) when needed.",
@@ -668,6 +682,11 @@ const en: Record<MessageKey, string> = {
   "home.power.vpnStop": "Disconnect VPN",
   "home.power.vpnOn": "VPN is connected",
   "home.power.vpnOff": "Tap to connect VPN",
+  "home.vpnState.connected": "Connected",
+  "home.vpnState.connecting": "Connecting…",
+  "home.vpnState.disconnecting": "Disconnecting…",
+  "home.vpnState.disconnected": "Not connected",
+  "home.vpnState.error": "Connection error",
   "home.warn.vpnPermission":
     "Connecting the VPN needs system permission. Tap connect and allow the system prompt.",
   "home.warn.proxyOutOfSync": "System proxy is not applied or out of sync",
@@ -701,6 +720,9 @@ const en: Record<MessageKey, string> = {
   "home.tunMode": "TUN Mode",
   "home.trafficTitle": "Traffic",
   "home.trafficDesc": "Up/down over the last 60 seconds",
+  "home.stats.connections": "Connections",
+  "home.stats.upload": "Total Upload",
+  "home.stats.download": "Total Download",
   "home.goToSubs": "Import subscriptions",
   "home.autoSwitchHint": "Node routing switches automatically after importing.",
 
