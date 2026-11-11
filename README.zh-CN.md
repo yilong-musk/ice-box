@@ -6,7 +6,7 @@
 
 # ice-box
 
-**代理，保持简单。**
+**最好的 sing-box GUI。**
 
 面向 macOS、Windows 与 Android 的轻量代理客户端。<br>
 上手简单、启动迅速、运行安静，并对 Agent 友好——基于 [sing-box](https://github.com/SagerNet/sing-box) 内核。

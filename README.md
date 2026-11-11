@@ -6,7 +6,7 @@
 
 # ice-box
 
-**Proxy, kept simple.**
+**The best sing-box GUI.**
 
 A lightweight proxy client for macOS, Windows, and Android.<br>
 Easy to set up, quick to start, quiet once it runs, and agent-friendly — built on a [sing-box](https://github.com/SagerNet/sing-box) core.
