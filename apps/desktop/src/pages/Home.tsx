@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePaneVisible } from "@/lib/paneVisibility";
-import { Check, Copy, Globe, MoveRight, Power, Split, Terminal, type LucideIcon } from "lucide-react";
+import { Copy, Power, Terminal } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -29,6 +29,7 @@ import {
 import { MemoryCard } from "../components/MemoryCard";
 import { TrafficChart } from "../components/TrafficChart";
 import { ConnectionStatsCard } from "../components/ConnectionStatsCard";
+import { ProxyModePicker } from "../components/ProxyModePicker";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -45,7 +46,6 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
@@ -62,22 +62,16 @@ type Props = {
   onStatus?: (status: StatusResponse) => void;
 };
 
-const PROXY_MODE_KEYS = [
-  ["rule", "home.mode.rule"],
-  ["global", "home.mode.global"],
-  ["direct", "home.mode.direct"],
-] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
+type TunnelStatus = NonNullable<StatusResponse["tunnel_status"]>;
 
-/** Mode segmented control: icon and one-line hint per mode. */
-const PROXY_MODE_META: Record<ProxyMode, { icon: LucideIcon; hintKey: MessageKey }> = {
-  rule: { icon: Split, hintKey: "home.modeHint.rule" },
-  global: { icon: Globe, hintKey: "home.modeHint.global" },
-  direct: { icon: MoveRight, hintKey: "home.modeHint.direct" },
+/** Phone VPN state line: label and dot colour per tunnel status. */
+const VPN_STATE: Record<TunnelStatus, { labelKey: MessageKey; dotClassName: string }> = {
+  connected: { labelKey: "home.vpnState.connected", dotClassName: "bg-ok" },
+  connecting: { labelKey: "home.vpnState.connecting", dotClassName: "animate-pulse bg-warn" },
+  disconnecting: { labelKey: "home.vpnState.disconnecting", dotClassName: "animate-pulse bg-warn" },
+  error: { labelKey: "home.vpnState.error", dotClassName: "bg-destructive" },
+  stopped: { labelKey: "home.vpnState.disconnected", dotClassName: "bg-muted-foreground/40" },
 };
-
-/** Segment inside the muted track; the selected one is raised. */
-const MODE_SEGMENT_CLASS =
-  "min-w-0 flex-1 gap-1.5 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-sm";
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
@@ -551,14 +545,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     tunnel === "connecting" ||
     tunnel === "disconnecting";
   const vpnConnected = tunnel === "connected";
-  const vpnStateLabel =
-    tunnel === "connected"
-      ? t("home.vpnState.connected")
-      : tunnel === "connecting"
-        ? t("home.vpnState.connecting")
-        : tunnel === "disconnecting"
-          ? t("home.vpnState.disconnecting")
-          : t("home.vpnState.disconnected");
+  const vpnState = VPN_STATE[tunnel] ?? VPN_STATE.stopped;
 
   function onToggleProxy() {
     if (phone) {
@@ -727,6 +714,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
       : configuredTun
         ? t("home.power.startTun")
         : t("home.power.startSystem");
+  // One wiring for the phone's round button and the desktop's labelled one.
+  const powerButtonProps = {
+    type: "button",
+    variant: powerOn ? "default" : "outline",
+    disabled: !canToggle,
+    "aria-pressed": powerOn,
+    "aria-label": powerTitle,
+    onClick: onToggleProxy,
+    "data-testid": "home-power-button",
+  } as const;
+  const tunUnavailableText =
+    formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable");
   const permissionRequired = status?.tun_status === "permission_required";
   const recoveryRequired = status?.tun_status === "recovery_required";
 
@@ -827,16 +826,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   >
                     <span
                       aria-hidden="true"
-                      className={cn(
-                        "size-2 shrink-0 rounded-full",
-                        vpnConnected
-                          ? "bg-ok"
-                          : vpnActive
-                            ? "animate-pulse bg-warn"
-                            : "bg-muted-foreground/40",
-                      )}
+                      className={cn("size-2 shrink-0 rounded-full", vpnState.dotClassName)}
                     />
-                    {vpnStateLabel}
+                    {t(vpnState.labelKey)}
                   </span>
                   <span
                     className="truncate text-base font-semibold"
@@ -847,61 +839,34 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   </span>
                 </div>
                 <Button
-                  type="button"
+                  {...powerButtonProps}
                   size="icon"
-                  variant={powerOn ? "default" : "outline"}
                   className={cn(
                     "size-12 shrink-0 rounded-full",
                     vpnConnected && "bg-ok text-white hover:bg-ok/90",
                   )}
-                  disabled={!canToggle}
-                  aria-pressed={powerOn}
-                  aria-label={powerTitle}
                   title={powerTitle}
-                  onClick={onToggleProxy}
-                  data-testid="home-power-button"
                 >
                   <Power className="size-5" />
                   <span className="sr-only">{powerTitle}</span>
                 </Button>
               </div>
-              {tunCardVisible && configuredTun && !tunActive && !tunAvailable && (
-                <p className="truncate text-xs text-muted-foreground">
-                  {formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
-                </p>
+              {tunCardVisible && (
+                <div className="flex min-w-0 items-center gap-3 text-xs">
+                  <span className="shrink-0 font-medium text-muted-foreground">
+                    {t("home.tunMode")}
+                  </span>
+                  <span className="min-w-0 truncate text-muted-foreground" title={tunUnavailableText}>
+                    {tunUnavailableText}
+                  </span>
+                </div>
               )}
-              <div className="flex flex-col gap-2">
-                <ToggleGroup
-                  type="single"
-                  spacing={1}
-                  value={proxyMode}
-                  onValueChange={(value) => {
-                    if (value === "rule" || value === "global" || value === "direct") {
-                      void onSetMode(value);
-                    }
-                  }}
-                  disabled={modeBusy || busy}
-                  className="flex w-full rounded-xl bg-muted p-1"
-                  aria-label={t("home.modeAria")}
-                >
-                  {PROXY_MODE_KEYS.map(([mode, labelKey]) => {
-                    const Icon = PROXY_MODE_META[mode].icon;
-                    return (
-                      <ToggleGroupItem
-                        key={mode}
-                        value={mode}
-                        className={cn("h-9", MODE_SEGMENT_CLASS)}
-                      >
-                        <Icon aria-hidden="true" />
-                        {t(labelKey)}
-                      </ToggleGroupItem>
-                    );
-                  })}
-                </ToggleGroup>
-                <p className="px-1 text-xs text-muted-foreground" data-testid="home-mode-hint">
-                  {t(PROXY_MODE_META[proxyMode].hintKey)}
-                </p>
-              </div>
+              <ProxyModePicker
+                variant="segmented"
+                value={proxyMode}
+                disabled={modeBusy || busy}
+                onChange={(mode) => void onSetMode(mode)}
+              />
             </CardContent>
           </Card>
         ) : (
@@ -915,14 +880,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             {proxyAvailable || configuredTun || tunActive ? (
               <div className="flex w-full flex-1 flex-col justify-between gap-3">
                 <Button
-                  type="button"
+                  {...powerButtonProps}
                   size="lg"
-                  variant={powerOn ? "default" : "outline"}
                   className="h-auto min-h-11 w-full justify-center gap-2 py-2"
-                  disabled={!canToggle}
-                  aria-pressed={powerOn}
-                  aria-label={powerTitle}
-                  onClick={onToggleProxy}
                 >
                   <Power />
                   <span className="text-sm font-medium">{powerTitle}</span>
@@ -935,9 +895,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     {configuredTun && !tunActive && !tunAvailable && (
                       <span
                         className="min-w-0 truncate text-xs text-muted-foreground"
-                        title={formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                        title={tunUnavailableText}
                       >
-                        {formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                        {tunUnavailableText}
                       </span>
                     )}
                     {!phone && (
@@ -1028,39 +988,12 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            <ToggleGroup
-              type="single"
-              orientation="vertical"
-              spacing={1}
+            <ProxyModePicker
+              variant="list"
               value={proxyMode}
-              onValueChange={(value) => {
-                if (value === "rule" || value === "global" || value === "direct") {
-                  void onSetMode(value);
-                }
-              }}
               disabled={modeBusy || busy}
-              className="flex w-full flex-1 flex-col"
-              aria-label={t("home.modeAria")}
-            >
-              {PROXY_MODE_KEYS.map(([mode, labelKey]) => {
-                const { icon: Icon, hintKey } = PROXY_MODE_META[mode];
-                return (
-                  <ToggleGroupItem
-                    key={mode}
-                    value={mode}
-                    title={t(hintKey)}
-                    className="group/mode h-auto w-full flex-1 justify-start gap-2.5 rounded-lg px-2.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=on]:bg-ok/12 data-[state=on]:font-semibold data-[state=on]:text-foreground hover:data-[state=on]:bg-ok/15 [&>svg:first-child]:group-data-[state=on]/mode:text-ok"
-                  >
-                    <Icon aria-hidden="true" />
-                    <span className="flex-1 text-left">{t(labelKey)}</span>
-                    <Check
-                      aria-hidden="true"
-                      className="text-ok opacity-0 transition-opacity group-data-[state=on]/mode:opacity-100"
-                    />
-                  </ToggleGroupItem>
-                );
-              })}
-            </ToggleGroup>
+              onChange={(mode) => void onSetMode(mode)}
+            />
           </CardContent>
         </Card>
         )}
@@ -1151,6 +1084,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             className="col-span-2 col-start-2 row-start-2"
             running={running}
             active={active}
+            paused={modeBusy || busy}
           />
         )}
 

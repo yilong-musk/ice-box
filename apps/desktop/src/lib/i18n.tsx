@@ -122,6 +122,7 @@ const zh = {
   "home.vpnState.connecting": "连接中…",
   "home.vpnState.disconnecting": "断开中…",
   "home.vpnState.disconnected": "未连接",
+  "home.vpnState.error": "连接出错",
   "home.warn.vpnPermission": "连接 VPN 需要系统授权。点击连接后按系统提示允许。",
   "home.warn.proxyOutOfSync": "系统代理未接管或已不同步",
   "home.warn.permissionRequired":
@@ -685,6 +686,7 @@ const en: Record<MessageKey, string> = {
   "home.vpnState.connecting": "Connecting…",
   "home.vpnState.disconnecting": "Disconnecting…",
   "home.vpnState.disconnected": "Not connected",
+  "home.vpnState.error": "Connection error",
   "home.warn.vpnPermission":
     "Connecting the VPN needs system permission. Tap connect and allow the system prompt.",
   "home.warn.proxyOutOfSync": "System proxy is not applied or out of sync",

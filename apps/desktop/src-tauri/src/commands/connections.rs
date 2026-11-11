@@ -12,6 +12,15 @@ pub async fn list_connections(app: AppHandle) -> Result<ConnectionsResponse, App
 }
 
 #[tauri::command]
+pub async fn get_connection_stats(app: AppHandle) -> Result<ConnectionStats, AppError> {
+    run_blocking("get_connection_stats", move || {
+        let state = app.state::<AppState>();
+        connection_stats_use_case(state.inner())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn close_connection(app: AppHandle, req: CloseConnectionRequest) -> Result<(), AppError> {
     run_blocking("close_connection", move || {
         let state = app.state::<AppState>();

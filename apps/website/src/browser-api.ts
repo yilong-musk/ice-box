@@ -6,6 +6,7 @@ import type {
   AppProxyMode,
   CheckAppUpdateResponse,
   ConnectionRow,
+  ConnectionStats,
   ConnectionsResponse,
   DelayTestResponse,
   GroupSelectionResponse,
@@ -638,6 +639,11 @@ export const api = {
   async listConnections(): Promise<ConnectionsResponse> {
     await delay(40);
     return demoConnections();
+  },
+  async getConnectionStats(): Promise<ConnectionStats> {
+    await delay(40);
+    const { running: live, connections, upload_total, download_total } = demoConnections();
+    return { running: live, count: connections.length, upload_total, download_total };
   },
   async closeConnection(id: string): Promise<void> {
     await delay(40);

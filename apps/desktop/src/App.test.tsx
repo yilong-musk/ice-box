@@ -146,6 +146,12 @@ vi.mock("./api/client", () => ({
     start: vi.fn(),
     stop: vi.fn(),
     listSubscriptions: vi.fn().mockResolvedValue([]),
+    getConnectionStats: vi.fn().mockResolvedValue({
+      running: true,
+      count: 0,
+      upload_total: 0,
+      download_total: 0,
+    }),
     listConnections: vi.fn().mockResolvedValue({
       running: true,
       upload_total: 0,
