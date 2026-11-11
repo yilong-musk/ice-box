@@ -116,7 +116,7 @@ root.innerHTML = `
         <a class="button button-primary button-large hero-download" href="#download">${icon("download")}<span class="hero-download-label"></span></a>
         <a class="button button-ghost button-large" href="#demo">${icon("play")}<span ${t("hero.tryDemo")}></span></a>
       </div>
-      <p class="hero-meta reveal"><span ${t("hero.platforms")}></span><span class="dot-sep"></span><span>GPL-3.0</span><span class="dot-sep"></span><span>sing-box</span></p>
+      <p class="hero-meta reveal"><span ${t("hero.platforms")}></span><span class="dot-sep"></span><span>GPL-3.0-or-later</span><span class="dot-sep"></span><span>sing-box</span></p>
     </section>
 
     <section class="demo-section page-wrap" id="demo">
@@ -179,7 +179,7 @@ root.innerHTML = `
         <div class="terminal-body">
           <p class="term-line term-user"><span class="term-prompt">›</span><span ${t("agent.prompt")}></span></p>
           <p class="term-line term-call"><span class="term-tool">ice-box.set_proxy_mode</span><span class="term-args">{"mode":"global"}</span><span class="term-ok">${icon("check", "icon icon-xs")}</span></p>
-          <p class="term-line term-call"><span class="term-tool">ice-box.list_connections</span><span class="term-args">{"limit":3}</span><span class="term-ok">${icon("check", "icon icon-xs")}</span></p>
+          <p class="term-line term-call"><span class="term-tool">ice-box.list_connections</span><span class="term-args">{}</span><span class="term-ok">${icon("check", "icon icon-xs")}</span></p>
           <p class="term-line term-reply" ${t("agent.reply")}></p>
           <p class="term-line term-config"><span class="term-comment">// mcpServers.ice-box</span><br><span class="term-key">"command"</span>: <span class="term-str">".../ice-box"</span>,<br><span class="term-key">"args"</span>: [<span class="term-str">"--mcp-stdio"</span>, <span class="term-str">"--data-dir"</span>, <span class="term-str">"..."</span>]</p>
         </div>
@@ -268,38 +268,47 @@ function updatePhoneClock() {
 updatePhoneClock();
 window.setInterval(updatePhoneClock, 30_000);
 
-/** The phone frame draws Android system chrome, so its status bar follows the
- * same stored theme the embedded app uses. */
-function applyPhoneFrameTheme() {
-  parts.phoneFrame.dataset.theme = resolveTheme(readThemePreference());
-}
-
 /**
  * Site theme. The page shares `ice-box.theme` with the Live Demo, so a pick
  * here also switches both embedded apps (they bridge the storage event), and
  * a pick inside a demo switches the page. `index.html` sets `data-theme`
  * before the first paint; this keeps it current.
  */
-function siteTheme() {
+
+/** The visitor's pick when storage is blocked. It holds for this visit only,
+ * so it also keeps an OS theme change from reverting the pick. */
+let sessionTheme = null;
+
+/** The theme the embedded apps resolve from the shared stored preference. */
+function storedTheme() {
   return resolveTheme(readThemePreference());
 }
 
-function themeToggleLabel(next) {
-  return marketingText(
+function siteTheme() {
+  return sessionTheme ?? storedTheme();
+}
+
+/** The toggle's label names the theme a click switches to. */
+function syncThemeToggle() {
+  const label = marketingText(
     siteTheme() === "dark" ? "nav.themeToLight" : "nav.themeToDark",
-    next,
+    language,
   );
+  parts.themeToggle.setAttribute("aria-label", label);
+  parts.themeToggle.title = label;
 }
 
 function applySiteTheme() {
-  const theme = siteTheme();
+  const appTheme = storedTheme();
+  const theme = sessionTheme ?? appTheme;
   document.documentElement.dataset.theme = theme;
   document
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", theme === "dark" ? "#07090b" : "#f6f8f7");
-  parts.themeToggle.setAttribute("aria-label", themeToggleLabel(language));
-  parts.themeToggle.title = themeToggleLabel(language);
-  applyPhoneFrameTheme();
+  // The phone frame draws Android system chrome around the embedded app, so
+  // it follows the app's theme, which a session-only pick does not reach.
+  parts.phoneFrame.dataset.theme = appTheme;
+  syncThemeToggle();
 }
 
 applySiteTheme();
@@ -312,10 +321,10 @@ parts.themeToggle.addEventListener("click", () => {
   const next = siteTheme() === "dark" ? "light" : "dark";
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    sessionTheme = null;
   } catch {
     // Blocked storage: the page switches, the demos keep their own theme.
-    document.documentElement.dataset.theme = next;
-    return;
+    sessionTheme = next;
   }
   applySiteTheme();
 });
@@ -409,8 +418,7 @@ function applyCopy(next) {
   applyDownloadCopy(language);
   parts.demoFrame.title = marketingText("demo.iframeTitle", language);
   parts.phoneDemoFrame.title = marketingText("phoneDemo.iframeTitle", language);
-  parts.themeToggle.setAttribute("aria-label", themeToggleLabel(language));
-  parts.themeToggle.title = themeToggleLabel(language);
+  syncThemeToggle();
   parts.languageToggle.textContent = marketingText("nav.languageToggle", language);
   parts.languageToggle.setAttribute(
     "aria-label",

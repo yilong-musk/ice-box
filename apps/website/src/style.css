@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* Landing page. Dark only: the page frames the Live Demo, which carries its
-   own light/dark theme inside the iframes. */
+/* Landing page. Dark by default, with a light theme under
+   `:root[data-theme="light"]`. The site toggle shares `ice-box.theme` with the
+   Live Demo, so the page and both embedded apps switch together. */
 
 :root {
   --bg: #07090b;
@@ -1187,49 +1188,59 @@ main {
 
 /* ---------- Reveal ---------- */
 
-.reveal {
+/* The fade-in is a keyframe animation rather than a transition so it leaves
+   each element's own `transition` and hover `transform` alone. The fill mode
+   is `backwards` only: the start frame holds through the stagger delay, and
+   once the animation ends the element's own styles apply again. */
+.reveal:not(.is-visible) {
   opacity: 0;
   transform: translateY(18px);
-  transition: opacity 0.8s var(--ease), transform 0.8s var(--ease);
 }
 
 .reveal.is-visible {
-  opacity: 1;
-  transform: none;
+  animation: reveal-in 0.8s var(--ease) var(--reveal-delay, 0s) backwards;
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .feature-grid .reveal:nth-child(2),
-.download-grid .reveal:nth-child(2) {
-  transition-delay: 0.06s;
+.download-grid .reveal:nth-child(2),
+.hero .reveal:nth-child(2) {
+  --reveal-delay: 0.06s;
 }
 
 .feature-grid .reveal:nth-child(3),
-.download-grid .reveal:nth-child(3) {
-  transition-delay: 0.12s;
-}
-
-.feature-grid .reveal:nth-child(4) {
-  transition-delay: 0.18s;
-}
-
-.feature-grid .reveal:nth-child(5) {
-  transition-delay: 0.24s;
-}
-
-.hero .reveal:nth-child(2) {
-  transition-delay: 0.06s;
-}
-
+.download-grid .reveal:nth-child(3),
 .hero .reveal:nth-child(3) {
-  transition-delay: 0.12s;
+  --reveal-delay: 0.12s;
 }
 
+.feature-grid .reveal:nth-child(4),
 .hero .reveal:nth-child(4) {
-  transition-delay: 0.18s;
+  --reveal-delay: 0.18s;
 }
 
+.feature-grid .reveal:nth-child(5),
 .hero .reveal:nth-child(5) {
-  transition-delay: 0.24s;
+  --reveal-delay: 0.24s;
+}
+
+.feature-grid .reveal:nth-child(6) {
+  --reveal-delay: 0.3s;
+}
+
+.feature-grid .reveal:nth-child(7) {
+  --reveal-delay: 0.36s;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1237,10 +1248,11 @@ main {
     scroll-behavior: auto;
   }
 
-  .reveal {
+  .reveal,
+  .reveal.is-visible {
     opacity: 1;
     transform: none;
-    transition: none;
+    animation: none;
   }
 
   .pulse-dot::after {

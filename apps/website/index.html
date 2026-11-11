@@ -9,13 +9,18 @@
     <script>
       // Same rule as the app's theme.ts: set the theme before first paint so a
       // light-mode visitor never sees a dark flash.
-      try {
-        var pref = localStorage.getItem("ice-box.theme");
-        var dark = pref === "dark" || (pref !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+      (function () {
+        var pref = null;
+        try {
+          pref = localStorage.getItem("ice-box.theme");
+        } catch (e) {
+          // Blocked storage: fall back to the system preference, as theme.ts does.
+        }
+        var dark =
+          pref === "dark" ||
+          (pref !== "light" && typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.dataset.theme = dark ? "dark" : "light";
-      } catch (e) {
-        document.documentElement.dataset.theme = "dark";
-      }
+      })();
     </script>
   </head>
   <body>
