@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePaneVisible } from "@/lib/paneVisibility";
-import { Copy, Power, Terminal } from "lucide-react";
+import { Check, Copy, Globe, MoveRight, Power, Split, Terminal, type LucideIcon } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -67,6 +67,17 @@ const PROXY_MODE_KEYS = [
   ["global", "home.mode.global"],
   ["direct", "home.mode.direct"],
 ] as const satisfies ReadonlyArray<readonly [ProxyMode, MessageKey]>;
+
+/** Mode segmented control: icon and one-line hint per mode. */
+const PROXY_MODE_META: Record<ProxyMode, { icon: LucideIcon; hintKey: MessageKey }> = {
+  rule: { icon: Split, hintKey: "home.modeHint.rule" },
+  global: { icon: Globe, hintKey: "home.modeHint.global" },
+  direct: { icon: MoveRight, hintKey: "home.modeHint.direct" },
+};
+
+/** Segment inside the muted track; the selected one is raised. */
+const MODE_SEGMENT_CLASS =
+  "min-w-0 flex-1 gap-1.5 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-sm";
 
 const GROUP_TYPES = ["selector", "urltest", "fallback", "loadbalance"];
 
@@ -539,6 +550,15 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     tunnel === "connected" ||
     tunnel === "connecting" ||
     tunnel === "disconnecting";
+  const vpnConnected = tunnel === "connected";
+  const vpnStateLabel =
+    tunnel === "connected"
+      ? t("home.vpnState.connected")
+      : tunnel === "connecting"
+        ? t("home.vpnState.connecting")
+        : tunnel === "disconnecting"
+          ? t("home.vpnState.disconnecting")
+          : t("home.vpnState.disconnected");
 
   function onToggleProxy() {
     if (phone) {
@@ -796,6 +816,95 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             : "min-h-0 flex-1 grid-cols-3 grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
+        {phone ? (
+          <Card size="sm" className="w-full min-w-0" data-testid="home-power-card">
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span
+                    className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+                    data-testid="home-vpn-state"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        vpnConnected
+                          ? "bg-ok"
+                          : vpnActive
+                            ? "animate-pulse bg-warn"
+                            : "bg-muted-foreground/40",
+                      )}
+                    />
+                    {vpnStateLabel}
+                  </span>
+                  <span
+                    className="truncate text-base font-semibold"
+                    title={currentNodeLabel}
+                    data-testid="home-current-node"
+                  >
+                    {currentNodeLabel}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={powerOn ? "default" : "outline"}
+                  className={cn(
+                    "size-12 shrink-0 rounded-full",
+                    vpnConnected && "bg-ok text-white hover:bg-ok/90",
+                  )}
+                  disabled={!canToggle}
+                  aria-pressed={powerOn}
+                  aria-label={powerTitle}
+                  title={powerTitle}
+                  onClick={onToggleProxy}
+                  data-testid="home-power-button"
+                >
+                  <Power className="size-5" />
+                  <span className="sr-only">{powerTitle}</span>
+                </Button>
+              </div>
+              {tunCardVisible && configuredTun && !tunActive && !tunAvailable && (
+                <p className="truncate text-xs text-muted-foreground">
+                  {formatUiMessage(status?.tun_unavailable_reason) || t("home.tunUnavailable")}
+                </p>
+              )}
+              <div className="flex flex-col gap-2">
+                <ToggleGroup
+                  type="single"
+                  spacing={1}
+                  value={proxyMode}
+                  onValueChange={(value) => {
+                    if (value === "rule" || value === "global" || value === "direct") {
+                      void onSetMode(value);
+                    }
+                  }}
+                  disabled={modeBusy || busy}
+                  className="flex w-full rounded-xl bg-muted p-1"
+                  aria-label={t("home.modeAria")}
+                >
+                  {PROXY_MODE_KEYS.map(([mode, labelKey]) => {
+                    const Icon = PROXY_MODE_META[mode].icon;
+                    return (
+                      <ToggleGroupItem
+                        key={mode}
+                        value={mode}
+                        className={cn("h-9", MODE_SEGMENT_CLASS)}
+                      >
+                        <Icon aria-hidden="true" />
+                        {t(labelKey)}
+                      </ToggleGroupItem>
+                    );
+                  })}
+                </ToggleGroup>
+                <p className="px-1 text-xs text-muted-foreground" data-testid="home-mode-hint">
+                  {t(PROXY_MODE_META[proxyMode].hintKey)}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader>
             <CardTitle className="text-xs font-medium text-muted-foreground">
@@ -803,7 +912,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col">
-            {phone || proxyAvailable || configuredTun || tunActive ? (
+            {proxyAvailable || configuredTun || tunActive ? (
               <div className="flex w-full flex-1 flex-col justify-between gap-3">
                 <Button
                   type="button"
@@ -818,20 +927,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   <Power />
                   <span className="text-sm font-medium">{powerTitle}</span>
                 </Button>
-                {phone && (
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                      {t("home.outbound.node")}
-                    </span>
-                    <span
-                      className="min-w-0 flex-1 truncate text-right text-sm font-medium"
-                      title={currentNodeLabel}
-                      data-testid="home-current-node"
-                    >
-                      {currentNodeLabel}
-                    </span>
-                  </div>
-                )}
                 {tunCardVisible && (
                   <div className="flex items-center gap-3 whitespace-nowrap">
                     <span className="text-xs font-medium text-muted-foreground">
@@ -923,7 +1018,9 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
             )}
           </CardContent>
         </Card>
+        )}
 
+        {!phone && (
         <Card size="sm" className="w-full min-w-0">
           <CardHeader className="[container-type:normal]">
             <CardTitle className="whitespace-nowrap text-xs font-medium text-muted-foreground">
@@ -933,10 +1030,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
           <CardContent className="flex flex-1 flex-col">
             <ToggleGroup
               type="single"
-              variant="outline"
-              size="sm"
-              orientation={phone ? "horizontal" : "vertical"}
-              spacing={2}
+              orientation="vertical"
+              spacing={1}
               value={proxyMode}
               onValueChange={(value) => {
                 if (value === "rule" || value === "global" || value === "direct") {
@@ -944,21 +1039,31 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 }
               }}
               disabled={modeBusy || busy}
-              className={cn("flex w-full", phone ? "flex-row" : "flex-1 flex-col")}
+              className="flex w-full flex-1 flex-col"
               aria-label={t("home.modeAria")}
             >
-              {PROXY_MODE_KEYS.map(([mode, labelKey]) => (
-                <ToggleGroupItem
-                  key={mode}
-                  value={mode}
-                  className={cn("h-auto flex-1", phone ? "min-w-0" : "w-full")}
-                >
-                  {t(labelKey)}
-                </ToggleGroupItem>
-              ))}
+              {PROXY_MODE_KEYS.map(([mode, labelKey]) => {
+                const { icon: Icon, hintKey } = PROXY_MODE_META[mode];
+                return (
+                  <ToggleGroupItem
+                    key={mode}
+                    value={mode}
+                    title={t(hintKey)}
+                    className="group/mode h-auto w-full flex-1 justify-start gap-2.5 rounded-lg px-2.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=on]:bg-ok/12 data-[state=on]:font-semibold data-[state=on]:text-foreground hover:data-[state=on]:bg-ok/15 [&>svg:first-child]:group-data-[state=on]/mode:text-ok"
+                  >
+                    <Icon aria-hidden="true" />
+                    <span className="flex-1 text-left">{t(labelKey)}</span>
+                    <Check
+                      aria-hidden="true"
+                      className="text-ok opacity-0 transition-opacity group-data-[state=on]/mode:opacity-100"
+                    />
+                  </ToggleGroupItem>
+                );
+              })}
             </ToggleGroup>
           </CardContent>
         </Card>
+        )}
 
         {!phone && <MemoryCard memory={memory} coreRunning={running} />}
 

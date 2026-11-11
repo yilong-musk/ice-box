@@ -256,7 +256,7 @@ try {
     throw new Error("favorites must stay scoped to the demo subscription");
   }
 
-  const power = frame.locator('[data-testid="home-panel"] button[data-size="lg"]');
+  const power = frame.locator('[data-testid="home-panel"] [data-testid="home-power-button"]');
   if ((await power.textContent())?.trim() !== "Disconnect VPN") {
     throw new Error("phone demo must boot with the VPN connected");
   }

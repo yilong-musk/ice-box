@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Android Home folds the VPN switch, the current node and the outbound mode
+  into one card: connection state and node on the left, a round power button
+  on the right, and a segmented mode picker with a one-line hint below. The
+  separate Outbound Mode card is gone.
+- The desktop Outbound Mode card is a list with an icon per mode; the
+  selected mode is tinted and checked, and hovering a mode explains it.
 - The Connections page sorts from a drop-down: newest, total traffic,
   download or upload. Download and upload each sort by that direction alone.
   The choice is remembered across restarts.

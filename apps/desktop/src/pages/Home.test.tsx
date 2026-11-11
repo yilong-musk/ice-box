@@ -1472,9 +1472,7 @@ describe("Home", () => {
     );
     expect(view.queryByText(t("home.inboundTitle"))).toBeNull();
     expect(view.queryByText(t("home.trafficTitle"))).toBeNull();
-    const statusCard = view
-      .getByText(t("home.proxyStatus"))
-      .closest("[data-slot=card]") as HTMLElement;
+    const statusCard = view.getByTestId("home-power-card");
     expect(within(statusCard).getByTestId("home-current-node")).toHaveTextContent(
       "Proxies → HK-1",
     );
