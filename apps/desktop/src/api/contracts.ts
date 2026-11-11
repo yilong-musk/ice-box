@@ -494,7 +494,7 @@ export interface CoreApi {
   exportSubscriptionSingbox(id: string, name: string, title: string): Promise<"saved" | "cancelled">;
   getRuleOverview(): Promise<RuleOverview>;
   getRuleSetStatus(): Promise<RuleSetStatus[]>;
-  /** Download every needed rule-set now (ignoring the daily interval); resolves with the new status. */
+  /** Re-check every needed rule-set now; resolves with the new status. */
   refreshRuleSets(): Promise<RuleSetStatus[]>;
   listRules(req: ListRulesRequest): Promise<ListRulesResponse>;
   setRuleDisabled(fingerprint: string, disabled: boolean): Promise<{ ok: boolean; disabled: boolean; apply_warning?: AppErrorPayload }>;

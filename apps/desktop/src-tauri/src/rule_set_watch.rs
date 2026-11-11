@@ -7,14 +7,18 @@
 //! `AppPaths::rule_set_cache_dir`. The config builder picks them up on the
 //! next Apply; when a pass downloads new content it re-applies right away.
 //!
-//! A pass runs shortly after launch, every [`TICK`], and soon after
-//! [`request_refresh`] (called when a subscription is added, updated or
-//! switched). Each URL is fetched at most once per
-//! [`ice_engine::RULE_SET_REFRESH_INTERVAL`] unless forced.
+//! Cached copies are re-checked only with the subscriptions: a full pass
+//! ([`RuleSetRefreshMode::All`]) follows every subscription update (manual
+//! or automatic) and the manual "refresh rule-sets". Every other pass
+//! (shortly after launch, every [`TICK`], after a switch or removal) only
+//! downloads sets that have no cached copy yet, so a set that failed to
+//! download is retried without re-checking the others.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use ice_engine::RuleSetRefreshMode;
 use tauri::{AppHandle, Manager};
 
 use crate::application;
@@ -27,17 +31,21 @@ const TICK: Duration = Duration::from_secs(60 * 60);
 const POLL: Duration = Duration::from_secs(3);
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
-static FORCE: AtomicBool = AtomicBool::new(false);
+/// A requested pass should re-check every cached copy.
+static FULL: AtomicBool = AtomicBool::new(false);
+/// Held for a whole pass so the worker and a manual refresh (UI or MCP)
+/// never download or write the same cache and sidecar files at once.
+static PASS: Mutex<()> = Mutex::new(());
 /// New content was downloaded but not applied yet (Apply was busy). Kept
 /// apart from the download result: the retry finds every URL fresh and
 /// would otherwise never apply.
 static APPLY_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Ask the worker for a pass soon. `force` re-checks URLs that are still
-/// within their refresh interval (a manual "refresh rule-sets").
-pub(crate) fn request_refresh(force: bool) {
-    if force {
-        FORCE.store(true, Ordering::SeqCst);
+/// Ask the worker for a pass soon. Returns at once, so a subscription
+/// update never waits for rule-set downloads.
+pub(crate) fn request_refresh(mode: RuleSetRefreshMode) {
+    if mode == RuleSetRefreshMode::All {
+        FULL.store(true, Ordering::SeqCst);
     }
     REQUESTED.store(true, Ordering::SeqCst);
 }
@@ -64,13 +72,27 @@ fn required_urls(state: &AppState) -> Option<Vec<String>> {
 }
 
 /// One refresh pass. Returns `false` when it should be retried soon (the
-/// manager could not be opened or Apply was busy).
-pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, force: bool) -> bool {
+/// workers were paused during a full pass, the manager could not be opened,
+/// or Apply was busy). Waits for a pass already running elsewhere.
+pub(crate) fn refresh_pass(
+    state: &AppState,
+    app: &impl application::AppHost,
+    mode: RuleSetRefreshMode,
+) -> bool {
+    // A full pass that cannot start keeps its mode for the retry.
+    let not_started = || {
+        if mode == RuleSetRefreshMode::All {
+            FULL.store(true, Ordering::SeqCst);
+        }
+        false
+    };
     if state.workers.is_paused_or_stopping() {
-        return true;
+        // A missing-only pass is redone by the next tick anyway.
+        return mode == RuleSetRefreshMode::Missing || not_started();
     }
+    let _pass = PASS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(urls) = required_urls(state) else {
-        return false;
+        return not_started();
     };
     let cache_dir = state.paths.rule_set_cache_dir();
     ice_engine::prune_rule_set_cache(&cache_dir, &urls, ice_engine::RULE_SET_CACHE_MAX_IDLE);
@@ -80,21 +102,22 @@ pub(crate) fn refresh_pass(state: &AppState, app: &AppHandle, force: bool) -> bo
         return true;
     }
     let Ok(mgr) = application::subscription_manager(state) else {
-        return false;
+        return not_started();
     };
     // Network phase without the orchestrate lock.
-    let reports = mgr.refresh_rule_sets(
-        &cache_dir,
-        &urls,
-        ice_engine::RULE_SET_REFRESH_INTERVAL,
-        force,
-    );
+    let reports = mgr.refresh_rule_sets(&cache_dir, &urls, mode);
     let changed = reports.iter().filter(|r| r.changed()).count();
     let failed = reports
         .iter()
         .filter(|r| matches!(r.outcome, ice_engine::RuleSetRefresh::Failed(_)))
         .count();
-    tracing::info!(total = reports.len(), changed, failed, "rule-set refresh");
+    tracing::info!(
+        ?mode,
+        total = reports.len(),
+        changed,
+        failed,
+        "rule-set refresh"
+    );
     if changed > 0 {
         APPLY_PENDING.store(true, Ordering::SeqCst);
     }
@@ -128,16 +151,21 @@ pub fn spawn_rule_set_watchdog(app: AppHandle) {
         }
         // Run the first pass right away.
         let mut next_tick = Instant::now();
-        // A pass whose Apply was deferred re-runs; cached files make it cheap.
+        // A pass whose Apply was deferred re-runs as a missing-only pass, so
+        // nothing is fetched again.
         let mut retry = false;
         loop {
             let requested = REQUESTED.swap(false, Ordering::SeqCst);
             if requested || retry || Instant::now() >= next_tick {
-                let force = FORCE.swap(false, Ordering::SeqCst);
+                let mode = if FULL.swap(false, Ordering::SeqCst) {
+                    RuleSetRefreshMode::All
+                } else {
+                    RuleSetRefreshMode::Missing
+                };
                 let Some(state) = app.try_state::<AppState>() else {
                     return;
                 };
-                retry = !refresh_pass(state.inner(), &app, force);
+                retry = !refresh_pass(state.inner(), &app, mode);
                 next_tick = Instant::now() + TICK;
             }
             if !cancel.wait(if retry { Duration::from_secs(15) } else { POLL }) {

@@ -24,8 +24,7 @@ pub async fn get_status(app: AppHandle) -> Result<StatusResponse, AppError> {
 pub async fn get_traffic_snapshot(app: AppHandle) -> Result<TrafficSnapshot, AppError> {
     run_blocking("get_traffic_snapshot", move || {
         let state = app.state::<AppState>();
-        require_running_core(&state)?;
-        Ok(state.traffic.snapshot())
+        traffic_snapshot_use_case(&state)
     })
     .await
 }
@@ -37,8 +36,7 @@ pub async fn get_traffic_since(
 ) -> Result<TrafficDelta, AppError> {
     run_blocking("get_traffic_since", move || {
         let state = app.state::<AppState>();
-        require_running_core(&state)?;
-        Ok(state.traffic.snapshot_since(cursor))
+        traffic_since_use_case(&state, cursor)
     })
     .await
 }

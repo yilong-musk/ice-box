@@ -31,9 +31,10 @@ pub use ice_subscription::{
     subscription_share_text, write_subscription_error, write_subscription_success,
     AutoUpdateInterval, DefaultFetcher, DirectFetcher, FetchResponse, HttpFetcher,
     MemorySubscriptionManager, MockFetchMode, MockFetcher, ProfileCache, RuleSetCacheMeta,
-    RuleSetRefresh, RuleSetRefreshReport, RuleSetStatus, SubscriptionError, SubscriptionFormat,
-    SubscriptionIndex, SubscriptionManager, SubscriptionMeta, SubscriptionPaths, SubscriptionProxy,
-    SubscriptionShareKind, SubscriptionSource, RULE_SET_CACHE_MAX_IDLE, RULE_SET_REFRESH_INTERVAL,
+    RuleSetRefresh, RuleSetRefreshMode, RuleSetRefreshReport, RuleSetStatus, SubscriptionError,
+    SubscriptionFormat, SubscriptionIndex, SubscriptionManager, SubscriptionMeta,
+    SubscriptionPaths, SubscriptionProxy, SubscriptionShareKind, SubscriptionSource,
+    RULE_SET_CACHE_MAX_IDLE,
 };
 pub use ice_types::{AppError, UiMessage, ENGINE_COMPAT_CORE_VERSION};
 

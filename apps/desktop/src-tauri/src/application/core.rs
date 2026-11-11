@@ -165,6 +165,15 @@ pub(crate) fn stop_core_use_case(app: &impl AppHost, state: &AppState) -> Result
     result
 }
 
+/// Start the core without taking over OS traffic (MCP `start_core`).
+pub(crate) fn start_core_use_case(app: &impl AppHost, state: &AppState) -> Result<(), AppError> {
+    let orchestrate = lock_orchestrate(state)?;
+    start_core_inner(app, state)?;
+    drop(orchestrate);
+    broadcast_state_change(app);
+    Ok(())
+}
+
 pub(crate) fn stop_core_with_binary(state: &AppState, binary: PathBuf) -> Result<(), AppError> {
     state.shutdown_requested.store(true, Ordering::SeqCst);
     let result = match state.orchestrate.lock() {

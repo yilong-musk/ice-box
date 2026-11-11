@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// Home "Retry recovery" and MCP `recover_tun`: on-demand retry of TUN recovery
+/// (`docs/tun.md`). Runs the journal recovery driver under the
+/// orchestration lock; never enables capture. Returns the warnings left when
+/// cleanup is still uncertain.
+pub(crate) fn recover_tun_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+) -> Result<Vec<UiMessage>, AppError> {
+    let orchestrate = lock_orchestrate(state)?;
+    state.capture.refresh_backend()?;
+    let mut core = state.core.lock().map_err(|_| lock_poisoned("core"))?;
+    let warnings = state.capture.recover(&mut **core)?;
+    replace_recovery_warnings(state, warnings.clone());
+    drop(core);
+    drop(orchestrate);
+    broadcast_state_change(app);
+    Ok(warnings)
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn tun_task_paths(
     app: &impl AppHost,

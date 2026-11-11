@@ -465,6 +465,20 @@ pub(crate) fn rule_set_status(
     ))
 }
 
+/// Re-check every rule-set the profile needs now (the manual refresh of the
+/// Rules page and MCP), re-apply when anything changed, and return the new
+/// status. Blocks on the downloads.
+pub(crate) fn refresh_rule_sets_use_case(
+    app: &impl AppHost,
+    state: &AppState,
+) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
+    if !crate::rule_set_watch::refresh_pass(state, app, ice_engine::RuleSetRefreshMode::All) {
+        // Apply was busy; the background worker re-applies shortly.
+        crate::rule_set_watch::request_refresh(ice_engine::RuleSetRefreshMode::Missing);
+    }
+    rule_set_status(state)
+}
+
 /// Query rules with server-side filtering + pagination. Never ships the full rule list
 /// over IPC: big subscriptions (up to 10k rules) stay cheap for the UI.
 pub(crate) fn query_rules(

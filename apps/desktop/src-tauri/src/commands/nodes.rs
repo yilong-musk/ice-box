@@ -38,17 +38,13 @@ pub async fn get_rule_set_status(
     .await
 }
 
-/// Download every rule-set the profile needs now, ignoring the daily
-/// interval, re-apply when anything changed, and return the new status.
+/// Re-check every rule-set the profile needs now, re-apply when anything
+/// changed, and return the new status.
 #[tauri::command]
 pub async fn refresh_rule_sets(app: AppHandle) -> Result<Vec<ice_engine::RuleSetStatus>, AppError> {
     run_blocking("refresh_rule_sets", move || {
         let state = app.state::<AppState>();
-        if !crate::rule_set_watch::refresh_pass(state.inner(), &app, true) {
-            // Apply was busy; the background worker re-applies shortly.
-            crate::rule_set_watch::request_refresh(false);
-        }
-        rule_set_status(state.inner())
+        refresh_rule_sets_use_case(&app, state.inner())
     })
     .await
 }
