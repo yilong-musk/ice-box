@@ -51,6 +51,22 @@ describe("StatusLogo", () => {
     expect(logo).toHaveAttribute("type", "button");
   });
 
+  it("uses the 48 px set by default and the 32 px set when asked", () => {
+    const { rerender } = render(
+      <TooltipProvider>
+        <StatusLogo status={status("running")} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("status-logo")).toHaveAttribute("data-size", "48");
+
+    rerender(
+      <TooltipProvider>
+        <StatusLogo status={status("running")} size={32} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("status-logo")).toHaveAttribute("data-size", "32");
+  });
+
   it("breathes only while the app is in the foreground", () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     try {

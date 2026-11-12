@@ -251,10 +251,31 @@ main {
   white-space: nowrap;
 }
 
-.brand img {
+.brand-logo {
+  display: block;
+  width: 48px;
+  height: 48px;
   border-radius: 7px;
-  object-fit: cover;
+  background: var(--brand-logo-still) 0 0 / 100% 100% no-repeat;
   image-rendering: pixelated;
+}
+
+/* The running state is a 45-frame strip; step through it over three seconds. */
+@media (prefers-reduced-motion: no-preference) {
+  .brand-logo {
+    background-image: var(--brand-logo-strip);
+    background-size: 4500% 100%;
+    animation: brand-logo-loop 3s steps(45, jump-none) infinite;
+  }
+}
+
+@keyframes brand-logo-loop {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: 100% 0;
+  }
 }
 
 .nav-links {
@@ -1148,11 +1169,12 @@ main {
 }
 
 .footer-inner {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px 32px;
-  padding-block: 24px 20px;
+  justify-content: space-between;
+  gap: 12px 32px;
+  padding-block: 24px;
 }
 
 .footer-links {
@@ -1176,13 +1198,10 @@ main {
 }
 
 .footer-legal {
-  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
   color: var(--faint);
   font: 12px var(--mono);
 }
@@ -1435,7 +1454,7 @@ main {
 
 
   .footer-inner {
-    grid-template-columns: minmax(0, 1fr);
+    justify-content: flex-start;
   }
 
   .site-footer {

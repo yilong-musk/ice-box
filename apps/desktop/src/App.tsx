@@ -466,7 +466,7 @@ function AppShell() {
           data-testid="phone-shell"
         >
           <header className="flex shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
-            <StatusLogo status={status} className="size-12" />
+            <StatusLogo status={status} size={32} />
             <div className="min-w-0 flex-1">
               <h1 className="font-heading text-sm font-medium tracking-tight">
                 ice-box
@@ -567,7 +567,7 @@ function AppShell() {
                   data-tauri-drag-region
                   data-testid="app-brand-row"
                 >
-                  <StatusLogo status={status} className="size-12" />
+                  <StatusLogo status={status} />
                   <h1 className="font-heading text-sm font-medium tracking-tight">
                     ice-box
                   </h1>

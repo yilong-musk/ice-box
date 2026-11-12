@@ -31,6 +31,16 @@ import stoppedStill from "@/assets/switch-logo/stopped-still.png";
 import stoppedStrip from "@/assets/switch-logo/stopped.png";
 import stoppingStill from "@/assets/switch-logo/stopping-still.png";
 import stoppingStrip from "@/assets/switch-logo/stopping.png";
+import errorStill32 from "@/assets/switch-logo/32/error-still.png";
+import errorStrip32 from "@/assets/switch-logo/32/error.png";
+import runningStill32 from "@/assets/switch-logo/32/running-still.png";
+import runningStrip32 from "@/assets/switch-logo/32/running.png";
+import startingStill32 from "@/assets/switch-logo/32/starting-still.png";
+import startingStrip32 from "@/assets/switch-logo/32/starting.png";
+import stoppedStill32 from "@/assets/switch-logo/32/stopped-still.png";
+import stoppedStrip32 from "@/assets/switch-logo/32/stopped.png";
+import stoppingStill32 from "@/assets/switch-logo/32/stopping-still.png";
+import stoppingStrip32 from "@/assets/switch-logo/32/stopping.png";
 
 export type LogoCore = CoreStatus | "unknown";
 
@@ -50,13 +60,22 @@ export function logoLabel(core: LogoCore): string {
   });
 }
 
-/** The loop strip and still frame for each core state. */
-const SPRITES: Record<CoreStatus, { strip: string; still: string }> = {
+/** The 48 px loop strip and still frame for each core state. */
+const SPRITES_48: Record<CoreStatus, { strip: string; still: string }> = {
   stopped: { strip: stoppedStrip, still: stoppedStill },
   starting: { strip: startingStrip, still: startingStill },
   running: { strip: runningStrip, still: runningStill },
   stopping: { strip: stoppingStrip, still: stoppingStill },
   error: { strip: errorStrip, still: errorStill },
+};
+
+/** The 32 px set, redrawn for the phone header rather than downscaled. */
+const SPRITES_32: Record<CoreStatus, { strip: string; still: string }> = {
+  stopped: { strip: stoppedStrip32, still: stoppedStill32 },
+  starting: { strip: startingStrip32, still: startingStill32 },
+  running: { strip: runningStrip32, still: runningStill32 },
+  stopping: { strip: stoppingStrip32, still: stoppingStill32 },
+  error: { strip: errorStrip32, still: errorStill32 },
 };
 
 /** True while the page is visible and its window has focus. */
@@ -85,14 +104,19 @@ const TAP_LABEL_MS = 3000;
 
 export function StatusLogo({
   status,
+  size = 48,
   className,
 }: {
   status: StatusResponse | null;
+  /** 48 on desktop, 32 in the phone header; each has its own redrawn strips. */
+  size?: 32 | 48;
   className?: string;
 }) {
   const core = logoCore(status);
   const label = logoLabel(core);
-  const sprite = SPRITES[core === "unknown" ? "stopped" : core];
+  const sprite = (size === 32 ? SPRITES_32 : SPRITES_48)[
+    core === "unknown" ? "stopped" : core
+  ];
   const phone = isPhoneShell();
   const active = useForeground();
   const [tapOpen, setTapOpen] = useState(false);
@@ -129,8 +153,9 @@ export function StatusLogo({
         <button
           type="button"
           aria-label={label}
-          className={cn("status-logo", className)}
+          className={cn("status-logo", size === 32 ? "size-8" : "size-12", className)}
           data-core={core}
+          data-size={size}
           data-active={active ? "" : undefined}
           data-testid="status-logo"
         >
