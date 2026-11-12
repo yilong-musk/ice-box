@@ -66,10 +66,24 @@ const NODE_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 /// holding a handle, so the managed menu state stays free of the platform icon.
 pub(crate) const TRAY_ID: &str = "ice-box";
 
-/// The system tray icon: the plain switch logo at its native 48 px. It is
-/// embedded instead of reusing the window icon so the tray keeps the brand
-/// mark even if the bundle icon set changes.
+/// Tray bitmaps written by `docs/brand/switch-logo/tools/export.mjs`.
+///
+/// macOS gets the plain mark cropped to its opaque pixels (`tray.png`, 44×27).
+/// [`size_macos_tray_icon`] draws that at 22×13.5 pt. Windows and Linux paint
+/// the tray icon into a square slot, so they get the same mark at 2×,
+/// letterboxed onto 88×88 (`tray-square.png`). The square canvas keeps the
+/// mark's 44×27 proportions.
+#[cfg(target_os = "macos")]
 const TRAY_ICON: &[u8] = include_bytes!("../icons/tray.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray-square.png");
+
+/// Point size of `icons/tray.png`: its pixel size divided by 2, so a 2×
+/// display maps one bitmap pixel to one device pixel.
+#[cfg(any(target_os = "macos", test))]
+const TRAY_POINT_WIDTH: f64 = 22.0;
+#[cfg(any(target_os = "macos", test))]
+const TRAY_POINT_HEIGHT: f64 = 13.5;
 
 /// Emitted when the tray update prompt is clicked: the window opens Settings →
 /// App Updates, the same destination as the sidebar arrow.
@@ -1400,13 +1414,17 @@ fn on_open_update(app: &AppHandle) {
     let _ = app.emit(UPDATE_PROMPT_EVENT, ());
 }
 
-/// The tray-icon crate sizes every macOS menu bar image to 18 pt. The switch
-/// is nearly square and has almost no transparent margin to crop, so at 18 pt
-/// it reads smaller than the old cube. Enlarge it to 22 pt, the menu bar height
-/// minus a point; the two-line speed readout is 22 pt tall, so the status item
-/// keeps its height.
+/// Give the macOS status item the cropped tray bitmap's point size.
+///
+/// tray-icon first scales every menu-bar image to 18 pt tall. The plain mark
+/// occupies 44×27 pixels of the 48×48 canvas (12 empty rows above, 9 below),
+/// so a 22 pt slot showed about 20×12 pt of switch and scaled 48 px onto the
+/// 44 device pixels of 22 pt @2x. `tray.png` is that 44×27 crop. Drawing it at
+/// 22×13.5 pt maps one bitmap pixel to one device pixel on a 2× display.
+/// A 22 pt height would place 27 source rows on 44 device pixels and make the
+/// item about 36 pt wide.
 #[cfg(target_os = "macos")]
-fn enlarge_macos_tray_icon(tray: &tauri::tray::TrayIcon<Wry>) {
+fn size_macos_tray_icon(tray: &tauri::tray::TrayIcon<Wry>) {
     let _ = tray.with_inner_tray_icon(|tray| {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
@@ -1420,9 +1438,7 @@ fn enlarge_macos_tray_icon(tray: &tauri::tray::TrayIcon<Wry>) {
         let Some(image) = button.image() else {
             return;
         };
-        let size = image.size();
-        let height = 22.0;
-        image.setSize(NSSize::new(size.width / size.height * height, height));
+        image.setSize(NSSize::new(TRAY_POINT_WIDTH, TRAY_POINT_HEIGHT));
     });
 }
 
@@ -1675,7 +1691,7 @@ pub fn setup_tray(app: &AppHandle, language: TrayLanguage) -> tauri::Result<()> 
     let _tray = builder.build(app)?;
     #[cfg(target_os = "macos")]
     {
-        enlarge_macos_tray_icon(&_tray);
+        size_macos_tray_icon(&_tray);
         crate::tray_delay::install_menu_watch(&_tray);
         attach_delay_buttons(app, &seeded_node_model, &labels);
     }
@@ -2606,6 +2622,35 @@ pub fn set_update_available(app: &AppHandle, version: Option<String>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_bitmaps_match_the_menu_bar_point_size() {
+        // `size_macos_tray_icon` draws tray.png at half its pixel size, which
+        // is 1:1 on a 2× display. The square bitmap is the same mark at 2×,
+        // letterboxed for the other platforms' square tray slots.
+        let (w, h) = png_ihdr(include_bytes!("../icons/tray.png"));
+        // Point size is the bitmap at @2x. Compare in pixels so the check does
+        // not depend on floating-point equality.
+        assert_eq!(
+            (w, h),
+            (
+                (TRAY_POINT_WIDTH * 2.0).round() as u32,
+                (TRAY_POINT_HEIGHT * 2.0).round() as u32,
+            )
+        );
+        let (w, h) = png_ihdr(include_bytes!("../icons/tray-square.png"));
+        assert_eq!((w, h), (88, 88));
+    }
+
+    fn png_ihdr(bytes: &[u8]) -> (u32, u32) {
+        assert!(bytes.len() >= 24, "png shorter than an IHDR");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&bytes[12..16], b"IHDR");
+        (
+            u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+        )
+    }
 
     #[test]
     fn tray_labels_cover_supported_languages() {

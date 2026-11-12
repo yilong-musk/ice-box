@@ -2,7 +2,7 @@
 //
 // Shared drawing for the small ice-box switch logos. The 48 px effect keeps the
 // full detail; these variants redraw the same mark on a 24 or 32 px grid, with
-// fewer, larger ports and one-pixel lights so the state still reads.
+// fewer, larger ports and two-pixel lights so the state still reads.
 
 import { fit, hex, mix, rand, TAU, WHITE } from "../../core/index.js";
 
@@ -97,7 +97,7 @@ export function drawLogo(p, t, o, size) {
     }
   for (const [x, y] of rim) put(x, y, C[1]);
 
-  // Ports: fewer columns, wider pixels, one-pixel lights on the top edge.
+  // Ports: fewer columns, wider pixels, two-pixel lights on the top edge.
   const { cols, rows, pw, ph: portH, rgap } = G;
   const areaW = cols * pw + (cols - 1);
   const px0 = X0 + Math.floor((X1 - X0 + 1 - areaW) / 2);

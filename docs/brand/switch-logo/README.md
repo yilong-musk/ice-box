@@ -9,12 +9,15 @@ pixelfx's `ice/ice-crystal` effect.
 
 This directory holds the source and the rendered assets. The app uses the
 48 px set: the Home status logo plays the state loops, and the app icons, tray
-icon, favicon, and README logo come from the plain logo; the website brand mark
-plays the running loop and the phone header uses the 32 px set. The 24 and
-32 px sets are redrawn on those grids for small surfaces. The app's copies live
-in `apps/desktop/src/assets/switch-logo/` (48 px at the top level, 32 px under
-`32/`) and `apps/desktop/src-tauri/icons/tray.png`; the app icons are generated
-with `tauri icon` from a 1024 px nearest-neighbour upscale of `assets/logo.png`.
+icon, and favicon come from the plain logo. The README logo is `logo.gif`,
+rendered from the `running` loop. The website brand mark plays that loop and
+the phone header uses the 32 px set. The 24 and 32 px sets are redrawn on
+those grids for small surfaces. `export.mjs` writes the assets here, copies
+the 48 px set (and the 32 px set under `32/`) to
+`apps/desktop/src/assets/switch-logo/`, writes
+`apps/desktop/src-tauri/icons/tray.png` and `tray-square.png`, and refits the
+Android adaptive foregrounds. The other app icons are generated with
+`tauri icon` from a 1024 px nearest-neighbour upscale of `assets/logo.png`.
 
 ## Core states
 
@@ -23,7 +26,9 @@ keeps its ice shading, glints, cold light, and frost motes, while one glassy
 sheen crosses the front per loop.
 
 The still PNGs are flat: no glows, glints, or sheen. The strips and `logo.gif`
-keep the light effects.
+keep the light effects. Each still freezes a phase that shows its state:
+`starting` at 0.215 (two columns lit on the 48 and 32 px grids), `stopping`
+at 0.4, and the others at 0.95.
 
 | State | Still | Port lights |
 | --- | --- | --- |
@@ -112,11 +117,26 @@ cp docs/brand/switch-logo/fx/switch-logo.js \
 node docs/brand/switch-logo/tools/export.mjs /path/to/pixelfx
 ```
 
-`export.mjs` rewrites the assets under `assets/`, including `logo.gif`, the
-24 and 32 px sets. To look at an effect on its own, use pixelfx's tools from
-the checkout, for example `node tools/render.mjs brand/switch-logo --opts
-'{"state":"running"}' --gif` (the GIF needs ffmpeg), or
-`node tools/render.mjs brand/switch-logo-24 --zoom 8` for a contact sheet.
+`export.mjs` rewrites the assets under `assets/`, including `logo.gif` and the
+24 and 32 px sets. It then copies the 48 and 32 px files the app bundles into
+`apps/desktop/src/assets/switch-logo/`, writes the tray bitmaps, and rewrites
+`mipmap-*/ic_launcher_foreground.png` so the plain logo sits inside the 66 dp
+keyline circle (1 dp of margin). Run it again after `tauri icon`, which fills
+the 108 dp foreground with the whole canvas and would crop the switch under a
+launcher mask. The legacy `ic_launcher.png` files stay as `tauri icon` wrote
+them.
+
+`icons/tray.png` is the plain logo cropped to its opaque pixels (44×27). macOS
+draws it at 22×13.5 pt, so a 2× display maps one bitmap pixel to one device
+pixel. The mark is 44×27, so a 22 pt height would be about 36 pt wide and
+would scale 27 source rows onto 44 device pixels. `icons/tray-square.png` is
+the same crop at 2×, letterboxed onto 88×88 for Windows and Linux, which draw
+the tray icon into a square slot.
+
+To look at an effect on its own, use pixelfx's tools from the checkout, for
+example `node tools/render.mjs brand/switch-logo --opts '{"state":"running"}'
+--gif` (the GIF needs ffmpeg), or `node tools/render.mjs brand/switch-logo-24
+--zoom 8` for a contact sheet.
 
 Options the 48 px effect takes (`--opts` JSON):
 

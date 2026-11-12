@@ -199,8 +199,10 @@
      row. Each state's loop is a strip of 45 frames played at 15 fps. It plays
      only while the app is in the foreground (`data-active`), so a hidden or
      background window does not repaint every frame; otherwise, and for
-     reduced-motion users, the state's still frame is shown. Keep the size a
-     whole multiple of 48px so the pixels stay crisp. */
+     reduced-motion users, the state's still frame is shown. Desktop uses the
+     48 px set at 48 px and the phone header uses the 32 px set at 32 px, each
+     on its own grid. A larger desktop mark should be a whole multiple of
+     48 px so those pixels stay crisp. */
   .status-logo {
     @apply relative inline-flex shrink-0 cursor-default rounded-md border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring;
   }
