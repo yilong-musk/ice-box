@@ -8,7 +8,7 @@
 // switch-logo-24.js, switch-logo-32.js and _switch-logo-small.js. Writes, under
 // docs/brand/switch-logo/assets:
 //   logo.png, logo@4x.png             the plain logo, still, transparent
-//   logo.gif                          the running loop as a 288 px looping GIF
+//   logo.gif                          the running loop as a 288x210 px looping GIF
 //   states/<state>.png                a horizontal strip of the state's loop, 48 px frames, transparent
 //   states/<state>-still.png, @4x     one still frame of the state, transparent
 //   states-24/, states-32/            the same set redrawn at 24 px and 32 px
@@ -72,11 +72,21 @@ function writeManifest(file, frame, frames, duration) {
 // The README uses a GIF because Markdown cannot play the CSS sprite. GIF has
 // 1-bit transparency, so the faint glow and motes fall away; 6x and 7 cs keep
 // the pixels crisp and the loop as close to 15 fps as GIF's timing allows.
+// The 48 px canvas has empty rows above and below the mark; trim most of them
+// so the README does not carry a tall band of transparent padding.
+const GIF_TOP = 8, GIF_H = 35;
+
+function cropRows(rgba, w, y0, h) {
+  const o = new Uint8ClampedArray(w * h * 4);
+  o.set(rgba.subarray(y0 * w * 4, (y0 + h) * w * 4));
+  return o;
+}
+
 function writeRunningGif(fx) {
   const [W, H] = fx.meta.size;
   const r = lib.renderFrames(fx, { fps: FPS, bg: "none", actor: false, options: { state: "running" } });
-  const frames = r.frames.map((f) => crop(f.clear, r.w, r.margin, W, H));
-  const gif = encodeGif(W, H, frames, { scale: 6, delay: 7 });
+  const frames = r.frames.map((f) => cropRows(crop(f.clear, r.w, r.margin, W, H), W, GIF_TOP, GIF_H));
+  const gif = encodeGif(W, GIF_H, frames, { scale: 6, delay: 7 });
   writeFileSync(join(out, "logo.gif"), gif);
   return gif.length;
 }

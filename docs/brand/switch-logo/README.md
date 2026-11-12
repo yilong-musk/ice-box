@@ -59,7 +59,7 @@ top level; the 24 and 32 px sets are self-contained under `states-24/` and
 | File | Contents |
 | --- | --- |
 | `logo.png`, `logo@4x.png` | The plain 48 px logo, still |
-| `logo.gif` | The 48 px `running` loop as a 288 px looping GIF, for surfaces that cannot run the CSS animation |
+| `logo.gif` | The 48 px `running` loop as a 288x210 px looping GIF, for surfaces that cannot run the CSS animation |
 | `states/<state>.png` | The 48 px state loop as one horizontal strip: 45 frames of 48 × 48, left to right |
 | `states/<state>-still.png`, `@4x` | One still frame of the 48 px state |
 | `states-24/`, `states-32/` | The same set redrawn at 24 and 32 px: `logo`, `<state>`, `<state>-still` and `@4x` copies, plus a `manifest.json` |
