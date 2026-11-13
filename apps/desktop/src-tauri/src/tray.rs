@@ -1404,6 +1404,7 @@ fn show_main_window(app: &AppHandle) {
     }
     let _ = win.show();
     let _ = win.set_focus();
+    crate::square_window_corners(&win);
 }
 
 /// Tray update prompt: bring the window forward and let it open Settings → App
