@@ -9,21 +9,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ComponentType,
   type CSSProperties,
   type ReactNode,
 } from "react";
-import {
-  ArrowLeftRight,
-  ArrowUpCircle,
-  Bot,
-  House,
-  LayoutGrid,
-  ListFilter,
-  Rss,
-  Settings as SettingsIcon,
-  Waypoints,
-} from "lucide-react";
+import { ArrowUpCircle } from "lucide-react";
 import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/client";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
@@ -34,6 +23,7 @@ import { Connections } from "./pages/Connections";
 import { Mcp } from "./pages/Mcp";
 import { Settings } from "./pages/Settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { NavIcon } from "@/components/NavIcon";
 import { StatusLogo } from "@/components/StatusLogo";
 import {
   Sidebar,
@@ -177,16 +167,15 @@ function KeptPane({
 const NAV_ITEMS: {
   id: Tab;
   labelKey: MessageKey;
-  icon: ComponentType<{ className?: string }>;
 }[] = [
-  { id: "home", labelKey: "app.nav.home", icon: House },
-  { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
-  { id: "apps", labelKey: "app.nav.apps", icon: LayoutGrid },
-  { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
-  { id: "subs", labelKey: "app.nav.subs", icon: Rss },
-  { id: "connections", labelKey: "app.nav.connections", icon: ArrowLeftRight },
-  { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
-  { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
+  { id: "home", labelKey: "app.nav.home" },
+  { id: "nodes", labelKey: "app.nav.nodes" },
+  { id: "apps", labelKey: "app.nav.apps" },
+  { id: "rules", labelKey: "app.nav.rules" },
+  { id: "subs", labelKey: "app.nav.subs" },
+  { id: "connections", labelKey: "app.nav.connections" },
+  { id: "mcp", labelKey: "app.nav.mcp" },
+  { id: "settings", labelKey: "app.nav.settings" },
 ];
 
 function TitleBar({ label }: { label: string }) {
@@ -495,21 +484,26 @@ function AppShell() {
             aria-label={t("app.nav.aria")}
             className="phone-tab-bar grid shrink-0 grid-cols-5 border-t border-sidebar-border bg-sidebar"
           >
-            {navItems.map(({ id, labelKey, icon: Icon }) => (
+            {navItems.map(({ id, labelKey }) => (
               <button
                 key={id}
                 type="button"
                 aria-label={t(labelKey)}
                 aria-current={tab === id ? "page" : undefined}
                 className={cn(
-                  "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-xs leading-tight",
+                  // 8px padding, 16px glyph, 4px gap, 16px line. Each step is a
+                  // multiple of 4px and the row is top-aligned, so the glyph
+                  // origin stays on a device pixel at 100%, 125%, 150% and
+                  // 200%. Centering it in this 56px row left it at 10.5px,
+                  // which blurs crispEdges off 2x.
+                  "flex min-h-14 min-w-0 flex-col items-center gap-1 px-1 py-2 text-xs leading-4",
                   tab === id
                     ? "font-medium text-primary"
                     : "text-sidebar-foreground/70",
                 )}
                 onClick={() => selectTab(id)}
               >
-                <Icon className="size-4 shrink-0" />
+                <NavIcon name={id} />
                 <span className="w-full text-center">
                   {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
                 </span>
@@ -543,7 +537,7 @@ function AppShell() {
             <SidebarContent>
               <SidebarGroup>
                 <SidebarMenu aria-label={t("app.nav.aria")}>
-                  {navItems.map(({ id, labelKey, icon: Icon }) => (
+                  {navItems.map(({ id, labelKey }) => (
                     <SidebarMenuItem key={id}>
                       <SidebarMenuButton
                         type="button"
@@ -552,7 +546,7 @@ function AppShell() {
                         className="text-sm"
                         onClick={() => selectTab(id)}
                       >
-                        <Icon className="size-4" />
+                        <NavIcon name={id} />
                         <span>{t(labelKey)}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

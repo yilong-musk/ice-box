@@ -92,7 +92,8 @@
     --chart-5: oklch(0.4 0.008 270);
     --ok: oklch(0.48 0.13 152);
     --warn: oklch(0.55 0.13 65);
-    --radius: 0.8rem;
+    /* Square controls. rounded-sm through rounded-4xl all follow this. */
+    --radius: 0px;
     --sidebar: oklch(0.955 0.003 270);
     --sidebar-foreground: oklch(0.26 0.008 270);
     --sidebar-primary: oklch(0.27 0.008 270);
@@ -229,4 +230,23 @@
   to {
     background-position: 100% 0;
   }
+}
+
+/* Pills and one-off radii do not follow --radius: switches, dots, bars,
+   toasts, the power button, scrollbar thumbs. Unlayered so this beats the
+   utility. Portaled nodes (toasts, tooltips) are covered by the class, not
+   by a #root scope. */
+.rounded-full,
+.rounded,
+.rounded-\[2px\] {
+  border-radius: 0;
+}
+
+/* Navigation glyphs (docs/brand/nav-icons). One ink, filled with the button's
+   text color. Shown at their 16px grid; the button around them is unchanged. */
+.nav-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
 }

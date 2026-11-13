@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Sidebar and phone tab-bar icons are monochrome pixel glyphs. They take the
+  button's text color. The buttons around them are unchanged.
+- Controls are square: buttons, cards, fields, dialogs, switches, dots, bars
+  and the power button no longer use rounded corners.
+
 ## [0.3.4] - 2026-11-13
 
 ### Changed

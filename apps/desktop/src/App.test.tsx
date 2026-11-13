@@ -293,9 +293,9 @@ describe("App", () => {
     const view = within(container);
     const nav = container.querySelector('[data-slot="sidebar-menu"]');
     expect(nav).not.toBeNull();
-    const labels = within(nav as HTMLElement)
-      .getAllByRole("button")
-      .map((button) => button.textContent);
+    const buttons = within(nav as HTMLElement).getAllByRole("button");
+    expect(buttons.every((button) => button.querySelector("svg.nav-icon"))).toBe(true);
+    const labels = buttons.map((button) => button.textContent);
     expect(labels.slice(-3)).toEqual([
       t("app.nav.connections"),
       t("app.nav.mcp"),
@@ -614,10 +614,12 @@ describe("App", () => {
     });
     expect(view.getByTestId("app-main")).toHaveClass("pt-3");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
-    expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    const home = view.getByRole("button", { name: t("app.nav.home") });
+    expect(home).toHaveAttribute("aria-current", "page");
+    // Top-aligned 8px padding, not justify-center: a centered 16px glyph in
+    // this row sits at 10.5px and blurs off 2x.
+    expect(home).toHaveClass("py-2", "leading-4");
+    expect(home).not.toHaveClass("justify-center", "leading-tight");
     expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();

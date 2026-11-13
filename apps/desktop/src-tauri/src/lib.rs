@@ -185,7 +185,68 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+        square_window_corners(&window);
     }
+}
+
+/// Near-zero radius that AppKit keeps. `-[NSWindow _setCornerRadius:]` treats
+/// `<= 0` as "clear the override", and a titled window (this overlay title bar
+/// included) then snaps back to the 16pt system mask.
+#[cfg(target_os = "macos")]
+const WINDOW_CORNER_RADIUS: f64 = 0.01;
+
+/// Square the macOS window mask.
+///
+/// No public API does this. The private setter stores an associated radius and
+/// rebuilds the corner mask; `0.01` collapses that mask to a 1pt cap, which
+/// reads as a square corner. A future OS may ignore the selector, so a missing
+/// one is skipped instead of crashing.
+///
+/// Rebuilding that mask off the main thread throws and aborts the process.
+/// Tray Quit and Cmd+Q run `request_tray_quit` on a `spawn_blocking` worker,
+/// and the failure path that keeps the app open calls this after showing the
+/// window. An off-thread caller is queued onto the main thread; setup, tray
+/// menus, and the focus watchdog are already there and apply it immediately.
+pub(crate) fn square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    #[cfg(target_os = "macos")]
+    {
+        if objc2::MainThreadMarker::new().is_none() {
+            // `run_on_main_thread` borrows its receiver for the call, so the
+            // closure needs its own handle.
+            let scheduled = window.clone();
+            let _ = window
+                .clone()
+                .run_on_main_thread(move || apply_square_window_corners(&scheduled));
+            return;
+        }
+        apply_square_window_corners(window);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+    }
+}
+
+/// Apply the corner override. The caller is on the main thread.
+#[cfg(target_os = "macos")]
+fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    let Ok(ptr) = window.ns_window() else {
+        return;
+    };
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: `ns_window` is this webview's live NSWindow, and the caller is
+    // on the main thread. The selector only stores an associated radius and
+    // invalidates the corner mask; the window is not retained or released.
+    let ns_window = unsafe { &*ptr.cast::<objc2::runtime::AnyObject>() };
+    let selector = objc2::sel!(_setCornerRadius:);
+    let responds: objc2::runtime::Bool =
+        unsafe { objc2::msg_send![ns_window, respondsToSelector: selector] };
+    if !responds.as_bool() {
+        return;
+    }
+    let () = unsafe { objc2::msg_send![ns_window, _setCornerRadius: WINDOW_CORNER_RADIUS] };
 }
 
 fn bootstrap_data_dir(
