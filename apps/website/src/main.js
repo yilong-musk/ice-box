@@ -2,7 +2,9 @@
 
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
-import logoUrl from "../../desktop/src/assets/logo.png";
+import faviconUrl from "../../desktop/public/favicon.png";
+import runningStill from "../../desktop/src/assets/switch-logo/running-still.png";
+import runningStrip from "../../desktop/src/assets/switch-logo/running.png";
 import { version as appVersion } from "../../desktop/package.json";
 import {
   LANGUAGE_STORAGE_KEY,
@@ -36,7 +38,7 @@ const REPO_URL = "https://github.com/yilong-musk/ice-box";
 const favicon = document.createElement("link");
 favicon.rel = "icon";
 favicon.type = "image/png";
-favicon.href = logoUrl;
+favicon.href = faviconUrl;
 document.head.appendChild(favicon);
 
 /** Resolved before the first render, so the first paint is already localized
@@ -92,7 +94,7 @@ root.innerHTML = `
   <div class="backdrop" aria-hidden="true"><span class="glow glow-a"></span><span class="glow glow-b"></span><span class="glow glow-c"></span><span class="grid"></span></div>
   <header class="site-nav">
     <div class="nav-inner page-wrap">
-      <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="28" height="28"><span>ice-box</span></a>
+      <a class="brand" href="#top"><span class="brand-logo" aria-hidden="true" style="--brand-logo-still: url('${runningStill}'); --brand-logo-strip: url('${runningStrip}')"></span><span>ice-box</span></a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#features" ${t("nav.features")}></a>
         <a href="#demo" ${t("nav.demo")}></a>
@@ -211,15 +213,12 @@ root.innerHTML = `
   </main>
   <footer class="site-footer">
     <div class="footer-inner page-wrap">
-      <div class="footer-brand">
-        <a class="brand" href="#top"><img src="${logoUrl}" alt="" width="24" height="24"><span>ice-box</span></a>
-      </div>
+      <p class="footer-legal"><span>© 2026 ice-box</span><span class="dot-sep"></span><span ${t("footer.license")}></span><span class="dot-sep"></span><span>${displayVersion}</span></p>
       <nav class="footer-links" aria-label="Footer">
         <a href="${REPO_URL}" target="_blank" rel="noreferrer">${icon("github", "icon icon-xs")}<span ${t("footer.source")}></span></a>
         <a href="${REPO_URL}/releases" target="_blank" rel="noreferrer"><span ${t("footer.releases")}></span></a>
         <a href="${REPO_URL}/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer"><span ${t("footer.changelog")}></span></a>
       </nav>
-      <p class="footer-legal"><span>© 2026 ice-box</span><span class="dot-sep"></span><span ${t("footer.license")}></span><span class="dot-sep"></span><span>${displayVersion}</span></p>
     </div>
   </footer>
 `;

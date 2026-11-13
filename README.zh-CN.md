@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://yilong-musk.github.io/ice-box/">
-  <img src="apps/desktop/src/assets/logo.png" alt="ice-box logo" width="112">
+  <img src="docs/brand/switch-logo/assets/logo.gif" alt="ice-box logo" width="144">
 </a>
 
 # ice-box

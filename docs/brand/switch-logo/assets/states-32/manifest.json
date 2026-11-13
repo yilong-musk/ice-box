@@ -1,0 +1,16 @@
+{
+  "frame": [
+    32,
+    32
+  ],
+  "frames": 45,
+  "fps": 15,
+  "duration": 3,
+  "states": [
+    "stopped",
+    "starting",
+    "running",
+    "stopping",
+    "error"
+  ]
+}

@@ -30,7 +30,7 @@ describe("StatusLogo", () => {
     (core) => {
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status(core)} />
+          <StatusLogo status={status(core)} />
         </TooltipProvider>,
       );
       expect(screen.getByTestId("status-logo")).toHaveAttribute("data-core", core);
@@ -43,7 +43,7 @@ describe("StatusLogo", () => {
   it("is a button so the label can open without a pointer", () => {
     render(
       <TooltipProvider>
-        <StatusLogo src="logo.png" status={status("running")} />
+        <StatusLogo status={status("running")} />
       </TooltipProvider>,
     );
     const logo = screen.getByTestId("status-logo");
@@ -51,12 +51,28 @@ describe("StatusLogo", () => {
     expect(logo).toHaveAttribute("type", "button");
   });
 
+  it("uses the 48 px set by default and the 32 px set when asked", () => {
+    const { rerender } = render(
+      <TooltipProvider>
+        <StatusLogo status={status("running")} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("status-logo")).toHaveAttribute("data-size", "48");
+
+    rerender(
+      <TooltipProvider>
+        <StatusLogo status={status("running")} size={32} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId("status-logo")).toHaveAttribute("data-size", "32");
+  });
+
   it("breathes only while the app is in the foreground", () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     try {
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status("running")} />
+          <StatusLogo status={status("running")} />
         </TooltipProvider>,
       );
       const logo = screen.getByTestId("status-logo");
@@ -88,7 +104,7 @@ describe("StatusLogo", () => {
       phoneShell.value = true;
       render(
         <TooltipProvider>
-          <StatusLogo src="logo.png" status={status("running")} />
+          <StatusLogo status={status("running")} />
         </TooltipProvider>,
       );
       return t("app.logo.core", { state: t("home.coreStatus.running") });
