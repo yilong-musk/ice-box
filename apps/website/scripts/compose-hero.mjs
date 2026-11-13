@@ -1,41 +1,41 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
 /**
- * Compose the README product shot: the desktop window on the left with the
- * Android phone shell on the right, over a dark gradient backdrop.
+ * Screenshot the landing-page showcase for the README product shot.
  *
- * Reads the desktop and phone captures, so run the capture scripts first:
- *   bash scripts/capture-demo-home.sh
- *   bash scripts/capture-demo-mobile.sh
+ * The shot is the website itself: the pixel laptop, the pixel phone, and the
+ * page background, with the Live Demos loaded inside in capture mode so
+ * traffic, clocks, and timestamps stay reproducible. It does not restage the
+ * captures in a separate frame.
+ *
+ *   bash scripts/capture-docs.sh
  *   (cd apps/website && npm run capture-hero)
  *
  * Writes:
  *   docs/images/hero.png            hero.zh-CN.png
  */
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const CANVAS = { width: 2400, height: 1440 };
-
-/** Composition in canvas CSS pixels; image heights follow the source aspect. */
-const LAYOUT = {
-  desktop: { left: 70, top: 136, width: 1620, radius: 22 },
-  phone: { right: 48, bottom: 90, width: 620 },
-};
+const PREVIEW_PORT = 4179;
+const VIEWPORT = { width: 1440, height: 1200 };
 
 const TARGETS = [
   {
     language: "en",
-    desktop: "docs/images/home.png",
-    mobile: "docs/images/mobile-home.png",
+    locale: "en-US",
+    desktopLabel: "Stop System Proxy",
+    phoneLabel: "Disconnect VPN",
     output: "docs/images/hero.png",
   },
   {
     language: "zh",
-    desktop: "docs/images/home.zh-CN.png",
-    mobile: "docs/images/mobile-home.zh-CN.png",
+    locale: "zh-CN",
+    desktopLabel: "关闭系统代理",
+    phoneLabel: "断开 VPN",
     output: "docs/images/hero.zh-CN.png",
   },
 ];
@@ -44,80 +44,156 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const websiteDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(websiteDir, "../..");
 
-function dataUri(relativePath) {
-  const file = path.join(repoRoot, relativePath);
-  return `data:image/png;base64,${fs.readFileSync(file).toString("base64")}`;
+function waitForOutput(child, pattern, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn) => (arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(arg);
+    };
+    const timer = setTimeout(
+      () => finish(reject)(new Error(`Timed out waiting for preview server (${timeoutMs}ms)`)),
+      timeoutMs,
+    );
+    const onData = (chunk) => {
+      const text = String(chunk);
+      process.stderr.write(text);
+      if (pattern.test(text)) finish(resolve)();
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.once("exit", (code) => {
+      finish(reject)(new Error(`Preview server exited early with code ${code}`));
+    });
+  });
 }
 
-/** Intrinsic pixel size of a PNG from its IHDR chunk. */
-function pngSize(relativePath) {
-  const buffer = fs.readFileSync(path.join(repoRoot, relativePath));
-  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+function viteBin() {
+  return path.join(websiteDir, "node_modules", "vite", "bin", "vite.js");
 }
 
-function composeHtml(target) {
-  const desktopSize = pngSize(target.desktop);
-  const phoneSize = pngSize(target.mobile);
-  const desktopHeight = (LAYOUT.desktop.width * desktopSize.height) / desktopSize.width;
-  const phoneHeight = (LAYOUT.phone.width * phoneSize.height) / phoneSize.width;
-  const desktop = dataUri(target.desktop);
-  const phone = dataUri(target.mobile);
+async function buildSite() {
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [viteBin(), "build"], {
+      cwd: websiteDir,
+      stdio: "inherit",
+    });
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Website build failed with code ${code}`));
+    });
+  });
+}
 
-  return `<!doctype html>
-<html lang="${target.language}">
-  <head>
-    <meta charset="UTF-8" />
-    <style>
-      * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; }
-      body {
-        position: relative;
-        width: ${CANVAS.width}px;
-        height: ${CANVAS.height}px;
-        overflow: hidden;
-        background:
-          radial-gradient(1600px 1200px at 16% 6%, rgba(44, 104, 102, 0.7), transparent 60%),
-          radial-gradient(1400px 1200px at 88% 10%, rgba(58, 64, 128, 0.65), transparent 62%),
-          radial-gradient(1200px 1000px at 74% 96%, rgba(104, 50, 84, 0.6), transparent 60%),
-          linear-gradient(150deg, #0a1117 0%, #0f1a22 52%, #080b0f 100%);
+/**
+ * The landing page embeds the live demos. README shots need the frozen mock
+ * (`?capture=1` in browser-api.ts), which is read from each iframe's own
+ * location, so reload them before waiting on their contents.
+ */
+async function useCaptureDemos(page) {
+  await page.evaluate(() => {
+    for (const iframe of document.querySelectorAll(".showcase iframe")) {
+      const url = new URL(iframe.getAttribute("src"), window.location.href);
+      url.searchParams.set("capture", "1");
+      if (iframe.src !== url.href) iframe.src = url.href;
+    }
+  });
+}
+
+/**
+ * Wait until the capture-mode document is attached. A one-shot contentFrame()
+ * is null while a lazy iframe has not started, and it can still point at the
+ * pre-capture document for a beat after src changes.
+ */
+async function demoFrame(page, selector) {
+  const iframe = page.locator(selector);
+  await iframe.waitFor({ state: "attached", timeout: 30_000 });
+  await page.waitForFunction(
+    (sel) => {
+      const el = document.querySelector(sel);
+      if (!(el instanceof HTMLIFrameElement)) return false;
+      try {
+        const win = el.contentWindow;
+        const doc = el.contentDocument;
+        if (!win || !doc || doc.readyState !== "complete") return false;
+        return new URL(win.location.href).searchParams.get("capture") === "1";
+      } catch {
+        return false;
       }
-      .desktop {
-        position: absolute;
-        left: ${LAYOUT.desktop.left}px;
-        top: ${LAYOUT.desktop.top}px;
-        width: ${LAYOUT.desktop.width}px;
-        border-radius: ${LAYOUT.desktop.radius}px;
-        overflow: hidden;
-        background: #131416;
-        box-shadow:
-          0 0 0 1px rgba(255, 255, 255, 0.08),
-          0 48px 90px rgba(0, 0, 0, 0.58),
-          0 12px 30px rgba(0, 0, 0, 0.42);
-      }
-      .desktop img {
-        display: block;
-        width: 100%;
-        height: ${desktopHeight}px;
-      }
-      .phone {
-        position: absolute;
-        bottom: ${LAYOUT.phone.bottom}px;
-        right: ${LAYOUT.phone.right}px;
-        width: ${LAYOUT.phone.width}px;
-        filter: drop-shadow(0 42px 60px rgba(0, 0, 0, 0.55));
-      }
-      .phone img {
-        display: block;
-        width: 100%;
-        height: ${phoneHeight}px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="desktop"><img src="${desktop}" alt="" /></div>
-    <div class="phone"><img src="${phone}" alt="" /></div>
-  </body>
-</html>`;
+    },
+    selector,
+    { timeout: 30_000 },
+  );
+  const frame = await (await iframe.elementHandle())?.contentFrame();
+  if (!frame) throw new Error(`No frame for ${selector}`);
+  return frame;
+}
+
+/**
+ * The demo reconciles a stored language with its mocked settings file, which
+ * can put English back. Re-apply through the app's own language event until
+ * the power button shows the target label.
+ */
+async function waitForLanguage(frame, target, label) {
+  await frame.waitForFunction(
+    ({ language, label }) => {
+      const shown = Array.from(document.querySelectorAll("button")).some(
+        (button) => button.getAttribute("aria-label") === label || button.textContent?.trim() === label,
+      );
+      if (shown) return true;
+      window.localStorage.setItem("ice-box.language", language);
+      window.dispatchEvent(new CustomEvent("ice-box-language", { detail: language }));
+      return false;
+    },
+    { language: target.language, label },
+    { timeout: 30_000, polling: 100 },
+  );
+}
+
+async function waitForFonts(page, frames) {
+  await page.evaluate(() => document.fonts.ready);
+  for (const frame of frames) {
+    await frame.evaluate(() => document.fonts.ready);
+  }
+}
+
+async function waitForShowcase(page, target) {
+  await page.locator(".showcase").scrollIntoViewIfNeeded();
+  await useCaptureDemos(page);
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll(".showcase .reveal")].every((el) =>
+      el.classList.contains("is-visible"),
+    ),
+  );
+
+  const desktop = await demoFrame(page, ".demo-screen iframe");
+  const phone = await demoFrame(page, ".phone-viewport iframe");
+  await waitForLanguage(desktop, target, target.desktopLabel);
+  await waitForLanguage(phone, target, target.phoneLabel);
+
+  const landingIp = (
+    await desktop.getByTestId("home-outbound-ip").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (!landingIp || !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(landingIp)) {
+    throw new Error(`Desktop demo landing IP was not ready, got ${JSON.stringify(landingIp)}`);
+  }
+  const node = (
+    await phone.getByTestId("home-current-node").textContent({ timeout: 15_000 })
+  )?.trim();
+  if (!node || node === "—") {
+    throw new Error(`Phone demo node was not ready, got ${JSON.stringify(node)}`);
+  }
+
+  // Settings reconciliation is one-shot and can land after the first matching
+  // paint. Check again once the home data is up, then shoot.
+  await waitForLanguage(desktop, target, target.desktopLabel);
+  await waitForLanguage(phone, target, target.phoneLabel);
+  await waitForFonts(page, [desktop, phone]);
+  await page.locator(".phone-clock").evaluate((el) => {
+    el.textContent = "12:00";
+  });
 }
 
 if (!fs.existsSync(path.join(websiteDir, "node_modules/playwright"))) {
@@ -128,39 +204,67 @@ if (!fs.existsSync(path.join(websiteDir, "node_modules/playwright"))) {
   process.exit(1);
 }
 
-const missingSources = TARGETS.flatMap((target) => [target.desktop, target.mobile]).filter(
-  (relativePath) => !fs.existsSync(path.join(repoRoot, relativePath)),
+await buildSite();
+const preview = spawn(
+  process.execPath,
+  [viteBin(), "preview", "--host", "127.0.0.1", "--port", String(PREVIEW_PORT), "--strictPort"],
+  { cwd: websiteDir, stdio: ["ignore", "pipe", "pipe"] },
 );
-if (missingSources.length > 0) {
-  console.error(
-    "compose-hero: missing source screenshots:\n" +
-      missingSources.map((file) => `  ${file}`).join("\n") +
-      "\nRun the capture scripts first:\n" +
-      "  bash scripts/capture-demo-home.sh\n" +
-      "  bash scripts/capture-demo-mobile.sh",
-  );
-  process.exit(1);
-}
 
-const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage({ viewport: CANVAS, deviceScaleFactor: 1 });
-  for (const target of TARGETS) {
-    await page.setContent(composeHtml(target), { waitUntil: "load" });
-    await page.evaluate(async () => {
-      await document.fonts.ready;
-      await Promise.all(
-        Array.from(document.images, (image) =>
-          image.complete ? Promise.resolve() : image.decode(),
-        ),
-      );
-    });
-    const png = await page.screenshot({ type: "png" });
-    const outFile = path.join(repoRoot, target.output);
-    fs.mkdirSync(path.dirname(outFile), { recursive: true });
-    fs.writeFileSync(outFile, png);
-    console.log(`Wrote ${target.output}`);
+  await waitForOutput(preview, /Local:/, 30_000);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const target of TARGETS) {
+      const context = await browser.newContext({
+        viewport: VIEWPORT,
+        deviceScaleFactor: 2,
+        locale: target.locale,
+        colorScheme: "dark",
+        // Frozen capture timestamps render in this zone, so the axis does not
+        // follow the machine clock. Reduced motion stops the background motes
+        // and the reveal fade, which would otherwise move between runs.
+        timezoneId: "UTC",
+        reducedMotion: "reduce",
+      });
+      try {
+        await context.addInitScript((language) => {
+          window.localStorage.setItem("ice-box.theme", "dark");
+          window.localStorage.setItem("ice-box.language", language);
+          // The memory bar transitions its width for 500ms. A shot taken during
+          // that glide lands on a different edge every run. Kill transitions
+          // before first paint so the bar is at its final width.
+          const style = document.createElement("style");
+          style.textContent = "*, *::before, *::after { transition: none !important; }";
+          document.documentElement.appendChild(style);
+        }, target.language);
+        const page = await context.newPage();
+        await page.goto(`http://127.0.0.1:${PREVIEW_PORT}/`, {
+          waitUntil: "domcontentloaded",
+          timeout: 60_000,
+        });
+        await waitForShowcase(page, target);
+        const box = await page.locator(".showcase").boundingBox();
+        if (!box) throw new Error("Showcase is not visible");
+        const pad = 28;
+        const clip = {
+          x: Math.max(0, box.x - pad),
+          y: Math.max(0, box.y - pad),
+          width: Math.min(VIEWPORT.width - Math.max(0, box.x - pad), box.width + pad * 2),
+          height: Math.min(VIEWPORT.height - Math.max(0, box.y - pad), box.height + pad * 2),
+        };
+        const png = await page.screenshot({ type: "png", clip });
+        const outFile = path.join(repoRoot, target.output);
+        fs.mkdirSync(path.dirname(outFile), { recursive: true });
+        fs.writeFileSync(outFile, png);
+        console.log(`Wrote ${target.output}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
   }
 } finally {
-  await browser.close();
+  preview.kill("SIGTERM");
 }

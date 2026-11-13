@@ -175,8 +175,8 @@ bash scripts/capture-docs.sh
 
 The release runs the full local gate rather than the scoped default. The gate
 does not touch documentation screenshots; `capture-docs.sh` recaptures them when
-the version or the UI changed, and recomposes the README product shot from them
-on every run.
+the version or the UI changed, and screenshots the landing-page showcase for
+the README product shot on every run.
 
 The capture scripts write the desktop and phone screenshots plus their version
 files to `docs/images/`. Those intermediates are ignored by git; commit only the

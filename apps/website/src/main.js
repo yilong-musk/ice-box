@@ -28,6 +28,7 @@ import {
   marketingText,
   resolveInitialLanguage,
 } from "./i18n";
+import { phoneStatusIcons } from "./phone-status-icons.js";
 import "./phone-demo.css";
 import "./style.css";
 
@@ -45,31 +46,337 @@ document.head.appendChild(favicon);
  * (the static index.html keeps its English copy as the no-JS fallback). */
 let language = resolveInitialLanguage();
 
-/** Lucide-style 24px stroke icons, inlined so the page needs no icon font. */
-const ICON_PATHS = {
-  download: '<path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
-  play: '<path d="m7 4 13 8-13 8V4Z"/>',
-  arrowRight: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
-  external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-  github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
-  check: '<path d="M20 6 9 17l-5-5"/>',
-  rss: '<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
-  split: '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.17-2.83L3 3"/><path d="m15 9 6-6"/>',
-  server: '<rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01"/><path d="M6 17h.01"/>',
-  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
-  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
-  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M7 6h.01"/><path d="M11 6h.01"/>',
-  sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/>',
-  bot: '<path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
-  laptop: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/>',
-  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
-  smartphone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
-  moon: '<path d="M20.99 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.78 9.79Z"/>',
+/** 16×16 pixel sprites, one cell per character, in the same 1px grid as the
+ * switch logo. `#` is a filled pixel. Drawn here so the page needs no icon font. */
+const PIXEL_ICONS = {
+  download: [
+    "................",
+    ".......##.......",
+    ".......##.......",
+    ".......##.......",
+    "......####......",
+    ".....##..##.....",
+    "....##....##....",
+    ".......##.......",
+    "................",
+    "...##########...",
+    "...#........#...",
+    "...##########...",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  play: [
+    "................",
+    "................",
+    ".....##.........",
+    ".....###........",
+    ".....####.......",
+    ".....#####......",
+    ".....######.....",
+    ".....#####......",
+    ".....####.......",
+    ".....###........",
+    ".....##.........",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  arrowRight: [
+    "................",
+    "................",
+    "................",
+    "................",
+    "......##........",
+    "......###.......",
+    "..########......",
+    "......###.......",
+    "......##........",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  check: [
+    "................",
+    "................",
+    "................",
+    "............##..",
+    "...........##...",
+    "..........##....",
+    "..##.....##.....",
+    "...##...##......",
+    "....##.##.......",
+    ".....###........",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  rss: [
+    "................",
+    "................",
+    "..############..",
+    "..#..........#..",
+    "..#..######..#..",
+    "..#..........#..",
+    "..#..####....#..",
+    "..#..........#..",
+    "..#..######..#..",
+    "..#..........#..",
+    "..############..",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  split: [
+    "................",
+    "................",
+    "..##........##..",
+    "...##......##...",
+    "....##....##....",
+    ".....##..##.....",
+    "......####......",
+    ".......##.......",
+    ".......##.......",
+    ".......##.......",
+    ".......##.......",
+    ".......##.......",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  server: [
+    "................",
+    "................",
+    "................",
+    "..############..",
+    "..#.##.....##.#.",
+    "..############..",
+    "................",
+    "..############..",
+    "..#.##.....##.#.",
+    "..############..",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  activity: [
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "............##..",
+    "...........##...",
+    "..........##....",
+    "..##########....",
+    "..........##....",
+    "...........##...",
+    "............##..",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  shield: [
+    "................",
+    "................",
+    "....########....",
+    "...##......##...",
+    "..##........##..",
+    "..##........##..",
+    "..##........##..",
+    "...##......##...",
+    "....##....##....",
+    ".....##..##.....",
+    "......####......",
+    ".......##.......",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  panel: [
+    "................",
+    "................",
+    "..############..",
+    "..#........#.#..",
+    "..############..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..############..",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  sparkles: [
+    "................",
+    "................",
+    "................",
+    "................",
+    "...........##...",
+    "..........##....",
+    ".........##.....",
+    "..##....##......",
+    "...##..##.......",
+    "....####........",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  bot: [
+    "................",
+    ".......##.......",
+    ".......##.......",
+    "....########....",
+    "...##..##..##...",
+    "...##..##..##...",
+    "....########....",
+    "......#..#......",
+    ".....##..##.....",
+    "....##....##....",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+  laptop: [
+    "................",
+    "..############..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..############..",
+    ".##############.",
+    "......####......",
+    "......####......",
+    "................",
+    "................",
+  ],
+  monitor: [
+    "..############..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..#..........#..",
+    "..############..",
+    ".......##.......",
+    ".......##.......",
+    ".......##.......",
+    ".....######.....",
+    ".....######.....",
+    "................",
+    "................",
+  ],
+  smartphone: [
+    "................",
+    "....########....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#......#....",
+    "....#..##..#....",
+    "....#......#....",
+    "....########....",
+    "................",
+    "................",
+  ],
+  sun: [
+    ".......##.......",
+    "................",
+    "..##........##..",
+    "....########....",
+    "...##########...",
+    "...##########...",
+    "##.##########.##",
+    "...##########...",
+    "...##########...",
+    "....########....",
+    "..##........##..",
+    "................",
+    ".......##.......",
+    "................",
+    "................",
+    "................",
+  ],
+  moon: [
+    "................",
+    ".....######.....",
+    "...####.........",
+    "..###...........",
+    ".###............",
+    ".###............",
+    ".###............",
+    "..###...........",
+    "...####.........",
+    ".....######.....",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+  ],
+};
+
+/** The mark stays the original stroke icon; a 16px octocat does not read. */
+const STROKE_ICONS = {
+  github:
+    '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
 };
 
 function icon(name, className = "icon") {
-  return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+  const stroke = STROKE_ICONS[name];
+  if (stroke) {
+    return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${stroke}</svg>`;
+  }
+  const rows = PIXEL_ICONS[name];
+  const rects = [];
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y];
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === "#") rects.push(`<rect x="${x}" y="${y}" width="1" height="1"/>`);
+    }
+  }
+  return `<svg class="${className} pixel-icon" viewBox="0 0 16 16" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">${rects.join("")}</svg>`;
 }
 
 /** `data-i18n` fills textContent, `data-i18n-html` fills trusted markup from
@@ -91,27 +398,19 @@ const PLATFORM_ICON = { macos: "laptop", windows: "monitor", android: "smartphon
 const root = document.querySelector("#root");
 
 root.innerHTML = `
-  <div class="backdrop" aria-hidden="true"><span class="glow glow-a"></span><span class="glow glow-b"></span><span class="glow glow-c"></span><span class="grid"></span></div>
+  <div class="backdrop" aria-hidden="true"><span class="grid"></span><span class="mote"></span><span class="mote"></span><span class="mote"></span><span class="mote"></span><span class="mote"></span><span class="mote"></span></div>
   <header class="site-nav">
     <div class="nav-inner page-wrap">
-      <a class="brand" href="#top"><span class="brand-logo" aria-hidden="true" style="--brand-logo-still: url('${runningStill}'); --brand-logo-strip: url('${runningStrip}')"></span><span>ice-box</span></a>
-      <nav class="nav-links" aria-label="Primary">
-        <a href="#features" ${t("nav.features")}></a>
-        <a href="#demo" ${t("nav.demo")}></a>
-        <a href="#agent" ${t("nav.agent")}></a>
-        <a href="#download" ${t("nav.download")}></a>
-      </nav>
+      <a class="brand" href="#top"><span class="brand-logo" aria-hidden="true" style="--brand-logo-still: url('${runningStill}'); --brand-logo-strip: url('${runningStrip}')"></span><span class="brand-name">ice-box</span></a>
       <div class="nav-actions">
         <a class="icon-button" href="${REPO_URL}" target="_blank" rel="noreferrer" aria-label="GitHub">${icon("github")}</a>
         <button class="icon-button nav-theme" type="button"><span class="theme-icon theme-icon-dark">${icon("moon")}</span><span class="theme-icon theme-icon-light">${icon("sun")}</span></button>
         <button class="nav-language" type="button"></button>
-        <a class="button button-primary button-small nav-download" href="#download">${icon("download")}<span ${t("nav.download")}></span></a>
       </div>
     </div>
   </header>
   <main id="top">
     <section class="hero page-wrap">
-      <a class="hero-badge reveal" href="${REPO_URL}" target="_blank" rel="noreferrer"><span class="pulse-dot"></span><span class="hero-badge-version">${displayVersion}</span><span ${t("hero.badge")}></span>${icon("arrowRight", "icon icon-xs")}</a>
       <h1 class="reveal" data-i18n-html="hero.title"></h1>
       <p class="hero-subtitle reveal" ${t("hero.subtitle")}></p>
       <div class="hero-actions reveal">
@@ -123,7 +422,7 @@ root.innerHTML = `
 
     <section class="demo-section page-wrap" id="demo">
       <div class="showcase">
-        <div class="macbook reveal"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html" loading="lazy"></iframe></div></div><span class="macbook-camera" aria-hidden="true"></span></div><div class="macbook-base" aria-hidden="true"></div></div>
+        <div class="macbook reveal"><div class="macbook-lid"><div class="macbook-screen"><div class="demo-screen"><span class="demo-window-lights" aria-hidden="true"><i></i><i></i><i></i></span><iframe src="./demo.html" loading="lazy"></iframe></div></div></div><div class="macbook-base" aria-hidden="true"></div></div>
         <div class="phone-float reveal" id="android-demo">
         <div class="phone-demo-stage">
           <div class="phone-frame">
@@ -131,11 +430,7 @@ root.innerHTML = `
             <div class="phone-screen">
               <div class="phone-status-bar" aria-hidden="true">
                 <span class="phone-clock"></span>
-                <div class="phone-status-icons">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12.65 10A5.99 5.99 0 0 0 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 0 0 5.65-4H17v4h4v-4h2v-4H12.65ZM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2Z" fill="currentColor"/></svg>
-                  <svg width="14" height="12" viewBox="0 0 14 12" fill="none"><path d="M1 4.2C2.6 2.8 4.7 2 7 2s4.4.8 6 2.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.1 6.7C4.2 5.7 5.5 5.1 7 5.1s2.8.6 3.9 1.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M5.2 9.1C5.8 8.5 6.4 8.2 7 8.2s1.2.3 1.8.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="7" cy="10.4" r="0.9" fill="currentColor"/></svg>
-                  <svg width="22" height="11" viewBox="0 0 22 11" fill="none"><rect x="0.5" y="0.5" width="19" height="10" rx="2.5" stroke="currentColor" stroke-opacity="0.85"/><rect x="2" y="2" width="14.5" height="7" rx="1.4" fill="currentColor"/><rect x="20.2" y="3.5" width="1.5" height="4" rx="0.75" fill="currentColor" fill-opacity="0.85"/></svg>
-                </div>
+                <div class="phone-status-icons">${phoneStatusIcons}</div>
               </div>
               <div class="phone-viewport">
                 <iframe src="./mobile-demo.html" loading="lazy"></iframe>
@@ -303,7 +598,7 @@ function applySiteTheme() {
   document.documentElement.dataset.theme = theme;
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#07090b" : "#f6f8f7");
+    ?.setAttribute("content", theme === "dark" ? "#0b1020" : "#e7f4fb");
   // The phone frame draws Android system chrome around the embedded app, so
   // it follows the app's theme, which a session-only pick does not reach.
   parts.phoneFrame.dataset.theme = appTheme;

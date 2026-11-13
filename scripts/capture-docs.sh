@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Refresh the documentation screenshots and recompose the README hero.
+# Refresh the documentation screenshots. The README hero is a shot of the
+# landing-page showcase, not a separately staged frame.
 #
 # The desktop and Android Home captures are retaken only when the app version
 # or the relevant UI files changed, or a capture is missing (see
