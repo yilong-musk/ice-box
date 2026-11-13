@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The desktop Live Demo window no longer has a blue outline. The laptop shell is unchanged.
 - Sidebar and phone tab-bar icons are monochrome pixel glyphs. They take the
   button's text color. The buttons around them are unchanged.
 - Controls are square: buttons, cards, fields, dialogs, switches, dots, bars
