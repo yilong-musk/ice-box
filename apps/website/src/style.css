@@ -45,14 +45,16 @@
   --bg-raised: #ffffff;
   --ink: #151a3d;
   --ink-soft: #1c3050;
-  /* Contrast on #e7f4fb: muted ~7.2, faint ~4.8, ice ~6.4, accent ~5.9. */
+  /* Contrast on #e7f4fb: muted 6.5, faint 4.6, ice 6.8, accent 5.7. */
   --muted: #3d5a72;
-  --faint: #5a7388;
+  --faint: #577085;
   --line: #b7d0e4;
   --line-strong: #2c58aa;
   --ice: #0e568f;
   --ice-bright: #1a6cb5;
   --accent: #0b6e3f;
+  /* Page lamps and checkmarks. Neon #5dff9a is ~1.2:1 on this paper. */
+  --led: var(--accent);
   --shadow: #151a3d;
   --surface: #ffffff;
   --surface-hover: #f4fbff;
@@ -572,6 +574,8 @@ main {
   z-index: 3;
   top: 10px;
   left: 12px;
+  /* The third lamp sits on the dark screen, not on the page paper. */
+  --led: #5dff9a;
 }
 
 .demo-window-lights i,
@@ -764,6 +768,8 @@ main {
   --line-strong: #2c58aa;
   --accent: #5dff9a;
   --ice: #62c8f4;
+  /* Same neon lamp as the dark theme; the light-theme --led is for paper. */
+  --led: #5dff9a;
   border: 2px solid #2c58aa;
   background: #0b1020;
   box-shadow:
@@ -944,7 +950,8 @@ main {
 .download-yours {
   padding: 4px 8px;
   background: var(--green-deep);
-  color: var(--green);
+  /* #5dff9a on this fill is ~4.2:1 at 11px. Ice ink clears 4.5 on both themes. */
+  color: #eefbff;
   font: 600 11px var(--mono);
 }
 

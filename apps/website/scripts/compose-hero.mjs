@@ -4,7 +4,8 @@
  * Screenshot the landing-page showcase for the README product shot.
  *
  * The shot is the website itself: the pixel laptop, the pixel phone, and the
- * page background, with the Live Demos loaded inside. It does not restage the
+ * page background, with the Live Demos loaded inside in capture mode so
+ * traffic, clocks, and timestamps stay reproducible. It does not restage the
  * captures in a separate frame.
  *
  *   bash scripts/capture-docs.sh
@@ -87,17 +88,54 @@ async function buildSite() {
 }
 
 /**
- * The demo reconciles a stored language with its mocked settings file, which
- * can put English back. Re-apply through the app's own language event until
- * the power button shows the target label.
+ * The landing page embeds the live demos. README shots need the frozen mock
+ * (`?capture=1` in browser-api.ts), which is read from each iframe's own
+ * location, so reload them before waiting on their contents.
+ */
+async function useCaptureDemos(page) {
+  await page.evaluate(() => {
+    for (const iframe of document.querySelectorAll(".showcase iframe")) {
+      const url = new URL(iframe.getAttribute("src"), window.location.href);
+      url.searchParams.set("capture", "1");
+      if (iframe.src !== url.href) iframe.src = url.href;
+    }
+  });
+}
+
+/**
+ * Wait until the capture-mode document is attached. A one-shot contentFrame()
+ * is null while a lazy iframe has not started, and it can still point at the
+ * pre-capture document for a beat after src changes.
  */
 async function demoFrame(page, selector) {
-  const handle = await page.locator(selector).elementHandle();
-  const frame = await handle?.contentFrame();
+  const iframe = page.locator(selector);
+  await iframe.waitFor({ state: "attached", timeout: 30_000 });
+  await page.waitForFunction(
+    (sel) => {
+      const el = document.querySelector(sel);
+      if (!(el instanceof HTMLIFrameElement)) return false;
+      try {
+        const win = el.contentWindow;
+        const doc = el.contentDocument;
+        if (!win || !doc || doc.readyState !== "complete") return false;
+        return new URL(win.location.href).searchParams.get("capture") === "1";
+      } catch {
+        return false;
+      }
+    },
+    selector,
+    { timeout: 30_000 },
+  );
+  const frame = await (await iframe.elementHandle())?.contentFrame();
   if (!frame) throw new Error(`No frame for ${selector}`);
   return frame;
 }
 
+/**
+ * The demo reconciles a stored language with its mocked settings file, which
+ * can put English back. Re-apply through the app's own language event until
+ * the power button shows the target label.
+ */
 async function waitForLanguage(frame, target, label) {
   await frame.waitForFunction(
     ({ language, label }) => {
@@ -114,8 +152,16 @@ async function waitForLanguage(frame, target, label) {
   );
 }
 
+async function waitForFonts(page, frames) {
+  await page.evaluate(() => document.fonts.ready);
+  for (const frame of frames) {
+    await frame.evaluate(() => document.fonts.ready);
+  }
+}
+
 async function waitForShowcase(page, target) {
   await page.locator(".showcase").scrollIntoViewIfNeeded();
+  await useCaptureDemos(page);
   await page.waitForFunction(() =>
     [...document.querySelectorAll(".showcase .reveal")].every((el) =>
       el.classList.contains("is-visible"),
@@ -140,9 +186,11 @@ async function waitForShowcase(page, target) {
     throw new Error(`Phone demo node was not ready, got ${JSON.stringify(node)}`);
   }
 
-  // Charts settle a beat after the numbers. Freeze the status clock so the
-  // shot does not depend on the wall time.
-  await page.waitForTimeout(600);
+  // Settings reconciliation is one-shot and can land after the first matching
+  // paint. Check again once the home data is up, then shoot.
+  await waitForLanguage(desktop, target, target.desktopLabel);
+  await waitForLanguage(phone, target, target.phoneLabel);
+  await waitForFonts(page, [desktop, phone]);
   await page.locator(".phone-clock").evaluate((el) => {
     el.textContent = "12:00";
   });
@@ -173,11 +221,22 @@ try {
         deviceScaleFactor: 2,
         locale: target.locale,
         colorScheme: "dark",
+        // Frozen capture timestamps render in this zone, so the axis does not
+        // follow the machine clock. Reduced motion stops the background motes
+        // and the reveal fade, which would otherwise move between runs.
+        timezoneId: "UTC",
+        reducedMotion: "reduce",
       });
       try {
         await context.addInitScript((language) => {
           window.localStorage.setItem("ice-box.theme", "dark");
           window.localStorage.setItem("ice-box.language", language);
+          // The memory bar transitions its width for 500ms. A shot taken during
+          // that glide lands on a different edge every run. Kill transitions
+          // before first paint so the bar is at its final width.
+          const style = document.createElement("style");
+          style.textContent = "*, *::before, *::after { transition: none !important; }";
+          document.documentElement.appendChild(style);
         }, target.language);
         const page = await context.newPage();
         await page.goto(`http://127.0.0.1:${PREVIEW_PORT}/`, {
