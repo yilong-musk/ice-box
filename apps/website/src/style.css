@@ -551,7 +551,6 @@ main {
   transform: translate(-50%, -50%);
   overflow: hidden;
   background: #111;
-  box-shadow: 0 0 0 2px #2c58aa;
 }
 
 .demo-screen iframe {
