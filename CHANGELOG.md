@@ -5,6 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-13
+
+### Changed
+
+- The ice-cube mark is now a pixel-art network switch cut from ice crystal.
+  Desktop and Android app icons, the tray icon, the favicon, and the README
+  logo all use it. On macOS the menu-bar icon is larger so the switch reads at
+  that size.
+- On Home, the status logo plays the switch's port lights for the core state:
+  dark when stopped, an amber sweep while starting or stopping, steady green
+  while running, and a red flash when the core errors.
+- The website is redrawn in the same pixel-switch language, with hard edges and
+  the ice-crystal palette. The section links and the hero badge are gone, and
+  the README product shot is a capture of that page.
+
 ## [0.3.3] - 2026-11-11
 
 ### Added
