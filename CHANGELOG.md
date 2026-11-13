@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the ice-crystal palette. The section links and the hero badge are gone, and
   the README product shot is a capture of that page.
 
+### Fixed
+
+- Website download buttons show an arrow pointing down into a tray. The first
+  pixel drawing pointed up.
+
 ## [0.3.3] - 2026-11-11
 
 ### Added
