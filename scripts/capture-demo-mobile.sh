@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Capture the phone Home view in a current-generation Pixel-style shell as a
+# Capture the phone Home view in the website phone shell as a
 # local source for the composed README product shot (hero*.png):
 #   docs/images/mobile-home.png      mobile-home.zh-CN.png
 # These captures are ignored by git.
@@ -43,14 +43,16 @@ ui_changed() {
   git diff --name-only HEAD -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
     apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
-    apps/website/src/browser-api.ts apps/website/src/phone-api.ts
+    apps/website/src/browser-api.ts apps/website/src/phone-api.ts \
+    apps/website/src/phone-demo.css apps/website/src/phone-status-icons.js
 }
 
 untracked_ui() {
   git ls-files --others --exclude-standard -- \
     apps/desktop/src apps/mobile/src apps/mobile/capture.html \
     apps/mobile/vite.config.ts apps/website/scripts/capture-mobile.mjs \
-    apps/website/src/browser-api.ts apps/website/src/phone-api.ts
+    apps/website/src/browser-api.ts apps/website/src/phone-api.ts \
+    apps/website/src/phone-demo.css apps/website/src/phone-status-icons.js
 }
 
 CURRENT_VERSION="$(current_version)"

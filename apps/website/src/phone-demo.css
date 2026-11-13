@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* Live phone demo: the real Android UI in an iframe, framed in a Pixel-style
-   shell. The aspect ratio and chrome mirror `apps/website/scripts/capture-mobile.mjs`,
-   while the stage scales the whole device to fit the landing page. The section
-   around it is laid out in `style.css`. */
+/* Live phone demo: the real Android UI in an iframe, framed in the same
+   ice-crystal pixel chassis as the desktop shell. The README phone capture
+   inlines this file (`scripts/capture-mobile.mjs`), so shell changes show up
+   in the next documentation screenshot. The stage scales the device to fit
+   the landing page; the section around it is laid out in `style.css`. */
 
 .phone-demo-stage {
   display: flex;
@@ -15,24 +16,13 @@
 .phone-frame {
   position: relative;
   width: 100%;
-  padding: 16px 14px;
-  border-radius: 48px;
-  background: linear-gradient(
-    145deg,
-    #6d6e72 0%,
-    #303135 8%,
-    #121315 26%,
-    #0c0d0f 62%,
-    #232427 88%,
-    #55565a 100%
-  );
+  padding: 12px;
+  border: 4px solid #2c58aa;
+  background: #151a3d;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    0 28px 56px rgba(0, 0, 0, 0.6),
-    0 4px 14px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.9);
+    inset 4px 4px 0 #3a8bd8,
+    inset -4px -4px 0 #0b1020,
+    8px 8px 0 #070b16;
 }
 
 /* Volume and power buttons on the right edge; the SIM tray sits on the left. */
@@ -40,11 +30,9 @@
 .phone-frame::after {
   content: "";
   position: absolute;
-  right: -3px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: linear-gradient(180deg, #5a5b5f, #26272a 45%, #4a4b4f);
-  box-shadow: inset 0 0 1px rgba(255, 255, 255, 0.25);
+  right: -8px;
+  width: 4px;
+  background: #2c58aa;
 }
 
 .phone-frame::before {
@@ -59,13 +47,11 @@
 
 .phone-sim {
   position: absolute;
-  left: -2px;
+  left: -8px;
   top: 220px;
-  width: 2px;
-  height: 26px;
-  border-radius: 1px;
-  background: #202124;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  width: 4px;
+  height: 24px;
+  background: #212f6b;
 }
 
 .phone-screen {
@@ -73,9 +59,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 32px;
-  background: #000;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.95);
+  background: #0b1020;
+  box-shadow: inset 0 0 0 2px #0b1020;
 }
 
 .phone-status-bar {
@@ -117,6 +102,10 @@
   display: block;
 }
 
+.phone-status-icons .pixel-icon {
+  shape-rendering: crispEdges;
+}
+
 .phone-viewport {
   position: relative;
   aspect-ratio: 390 / 868;
@@ -149,18 +138,15 @@
   z-index: 2;
   bottom: 10px;
   left: 50%;
-  width: 104px;
+  width: 48px;
   height: 4px;
   transform: translateX(-50%);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+  background: #dcfbff;
   pointer-events: none;
 }
 
 .phone-frame[data-theme="light"] .phone-gesture {
-  background: rgba(20, 22, 24, 0.6);
-  box-shadow: 0 0 2px rgba(255, 255, 255, 0.6);
+  background: #151a3d;
 }
 
 .phone-camera {
@@ -168,26 +154,11 @@
   z-index: 2;
   top: 6px;
   left: 50%;
-  width: 11px;
-  height: 11px;
+  width: 8px;
+  height: 8px;
   transform: translateX(-50%);
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #1c2430 0%, #05070a 55%, #000 100%);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 0 2px rgba(90, 130, 200, 0.35);
-}
-
-/* Inner screen highlight, above the app but below the gesture bar. */
-.phone-screen::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 0 14px rgba(0, 0, 0, 0.3);
-  pointer-events: none;
+  background: #0b1020;
+  box-shadow: inset 0 0 0 2px #2c58aa;
 }
 
 @media (max-width: 1100px) {
