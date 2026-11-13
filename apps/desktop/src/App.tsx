@@ -9,21 +9,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ComponentType,
   type CSSProperties,
   type ReactNode,
 } from "react";
-import {
-  ArrowLeftRight,
-  ArrowUpCircle,
-  Bot,
-  House,
-  LayoutGrid,
-  ListFilter,
-  Rss,
-  Settings as SettingsIcon,
-  Waypoints,
-} from "lucide-react";
+import { ArrowUpCircle } from "lucide-react";
 import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/client";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
@@ -34,6 +23,7 @@ import { Connections } from "./pages/Connections";
 import { Mcp } from "./pages/Mcp";
 import { Settings } from "./pages/Settings";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { NavIcon } from "@/components/NavIcon";
 import { StatusLogo } from "@/components/StatusLogo";
 import {
   Sidebar,
@@ -177,16 +167,15 @@ function KeptPane({
 const NAV_ITEMS: {
   id: Tab;
   labelKey: MessageKey;
-  icon: ComponentType<{ className?: string }>;
 }[] = [
-  { id: "home", labelKey: "app.nav.home", icon: House },
-  { id: "nodes", labelKey: "app.nav.nodes", icon: Waypoints },
-  { id: "apps", labelKey: "app.nav.apps", icon: LayoutGrid },
-  { id: "rules", labelKey: "app.nav.rules", icon: ListFilter },
-  { id: "subs", labelKey: "app.nav.subs", icon: Rss },
-  { id: "connections", labelKey: "app.nav.connections", icon: ArrowLeftRight },
-  { id: "mcp", labelKey: "app.nav.mcp", icon: Bot },
-  { id: "settings", labelKey: "app.nav.settings", icon: SettingsIcon },
+  { id: "home", labelKey: "app.nav.home" },
+  { id: "nodes", labelKey: "app.nav.nodes" },
+  { id: "apps", labelKey: "app.nav.apps" },
+  { id: "rules", labelKey: "app.nav.rules" },
+  { id: "subs", labelKey: "app.nav.subs" },
+  { id: "connections", labelKey: "app.nav.connections" },
+  { id: "mcp", labelKey: "app.nav.mcp" },
+  { id: "settings", labelKey: "app.nav.settings" },
 ];
 
 function TitleBar({ label }: { label: string }) {
@@ -495,7 +484,7 @@ function AppShell() {
             aria-label={t("app.nav.aria")}
             className="phone-tab-bar grid shrink-0 grid-cols-5 border-t border-sidebar-border bg-sidebar"
           >
-            {navItems.map(({ id, labelKey, icon: Icon }) => (
+            {navItems.map(({ id, labelKey }) => (
               <button
                 key={id}
                 type="button"
@@ -509,7 +498,7 @@ function AppShell() {
                 )}
                 onClick={() => selectTab(id)}
               >
-                <Icon className="size-4 shrink-0" />
+                <NavIcon name={id} />
                 <span className="w-full text-center">
                   {t(id === "subs" ? "app.nav.subsTab" : labelKey)}
                 </span>
@@ -543,7 +532,7 @@ function AppShell() {
             <SidebarContent>
               <SidebarGroup>
                 <SidebarMenu aria-label={t("app.nav.aria")}>
-                  {navItems.map(({ id, labelKey, icon: Icon }) => (
+                  {navItems.map(({ id, labelKey }) => (
                     <SidebarMenuItem key={id}>
                       <SidebarMenuButton
                         type="button"
@@ -552,7 +541,7 @@ function AppShell() {
                         className="text-sm"
                         onClick={() => selectTab(id)}
                       >
-                        <Icon className="size-4" />
+                        <NavIcon name={id} />
                         <span>{t(labelKey)}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

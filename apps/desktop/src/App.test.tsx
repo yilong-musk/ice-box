@@ -293,9 +293,9 @@ describe("App", () => {
     const view = within(container);
     const nav = container.querySelector('[data-slot="sidebar-menu"]');
     expect(nav).not.toBeNull();
-    const labels = within(nav as HTMLElement)
-      .getAllByRole("button")
-      .map((button) => button.textContent);
+    const buttons = within(nav as HTMLElement).getAllByRole("button");
+    expect(buttons.every((button) => button.querySelector("svg.nav-icon"))).toBe(true);
+    const labels = buttons.map((button) => button.textContent);
     expect(labels.slice(-3)).toEqual([
       t("app.nav.connections"),
       t("app.nav.mcp"),
