@@ -491,7 +491,12 @@ function AppShell() {
                 aria-label={t(labelKey)}
                 aria-current={tab === id ? "page" : undefined}
                 className={cn(
-                  "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-xs leading-tight",
+                  // 8px padding, 16px glyph, 4px gap, 16px line. Each step is a
+                  // multiple of 4px and the row is top-aligned, so the glyph
+                  // origin stays on a device pixel at 100%, 125%, 150% and
+                  // 200%. Centering it in this 56px row left it at 10.5px,
+                  // which blurs crispEdges off 2x.
+                  "flex min-h-14 min-w-0 flex-col items-center gap-1 px-1 py-2 text-xs leading-4",
                   tab === id
                     ? "font-medium text-primary"
                     : "text-sidebar-foreground/70",

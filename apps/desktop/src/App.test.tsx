@@ -614,10 +614,12 @@ describe("App", () => {
     });
     expect(view.getByTestId("app-main")).toHaveClass("pt-3");
     expect(view.queryByTestId("app-brand-row")).not.toBeInTheDocument();
-    expect(view.getByRole("button", { name: t("app.nav.home") })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    const home = view.getByRole("button", { name: t("app.nav.home") });
+    expect(home).toHaveAttribute("aria-current", "page");
+    // Top-aligned 8px padding, not justify-center: a centered 16px glyph in
+    // this row sits at 10.5px and blurs off 2x.
+    expect(home).toHaveClass("py-2", "leading-4");
+    expect(home).not.toHaveClass("justify-center", "leading-tight");
     expect(view.getByRole("button", { name: t("app.nav.apps") })).toBeInTheDocument();
     expect(view.queryByRole("button", { name: t("app.nav.nodes") })).not.toBeInTheDocument();
     expect(view.getByTestId("nodes-panel")).toBeInTheDocument();
