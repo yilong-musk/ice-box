@@ -307,7 +307,10 @@ export function Connections({ active = true }: { active?: boolean }) {
     setApplyWarning(null);
     try {
       const result = await api.addCustomRule(rule);
-      if (activeRef.current && result.apply_warning) {
+      // The page stays mounted while its tab is hidden. Dropping the result
+      // when `active` is false would leave Add disabled and hide a failed apply.
+      setError(null);
+      if (result.apply_warning) {
         setApplyWarning(
           t("rules.savedButApplyFailed", {
             detail: formatInvokeError(result.apply_warning),
@@ -315,9 +318,11 @@ export function Connections({ active = true }: { active?: boolean }) {
         );
       }
     } catch (e) {
-      if (activeRef.current) throw new Error(formatInvokeError(e));
+      const message = formatInvokeError(e);
+      setError(message);
+      throw new Error(message);
     } finally {
-      if (activeRef.current) setRuleBusy(false);
+      setRuleBusy(false);
     }
   }
 
