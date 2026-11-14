@@ -10,12 +10,16 @@ import { Connections } from "./Connections";
 const listConnections = vi.fn();
 const closeConnection = vi.fn();
 const closeAllConnections = vi.fn();
+const listNodes = vi.fn();
+const addCustomRule = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     listConnections: (...args: unknown[]) => listConnections(...args),
     closeConnection: (...args: unknown[]) => closeConnection(...args),
     closeAllConnections: (...args: unknown[]) => closeAllConnections(...args),
+    listNodes: (...args: unknown[]) => listNodes(...args),
+    addCustomRule: (...args: unknown[]) => addCustomRule(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -80,6 +84,10 @@ describe("Connections", () => {
     listConnections.mockImplementation(async () => snapshot([row(), dnsRow]));
     closeConnection.mockResolvedValue(undefined);
     closeAllConnections.mockResolvedValue(undefined);
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
+    addCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-new" });
   });
 
   afterEach(() => {
@@ -501,6 +509,57 @@ describe("Connections", () => {
     await waitFor(() => {
       expect(targets(container)).toEqual(["api.github.com:443"]);
     });
+  });
+
+  it("opens a new custom rule prefilled from the destination, with the default exit", async () => {
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+
+    const github = view.getAllByTestId("connection-row")[1];
+    fireEvent.click(
+      within(github).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    expect(closeConnection).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByText(t("ruleForm.title"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t("ruleForm.matcherType"))).toHaveValue("domain_suffix");
+    expect(screen.getByLabelText(t("ruleForm.matchValue"))).toHaveValue("api.github.com");
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toHaveValue("direct");
+
+    fireEvent.click(screen.getByRole("button", { name: t("ruleForm.add") }));
+    await waitFor(() => {
+      expect(addCustomRule).toHaveBeenCalledWith({
+        domain_suffix: ["api.github.com"],
+        outbound: "direct",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    const dns = view.getAllByTestId("connection-row")[0];
+    fireEvent.click(
+      within(dns).getByRole("button", {
+        name: t("connections.editRule", { target: "1.1.1.1:53" }),
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText(t("ruleForm.matchValue"))).toHaveValue("1.1.1.1/32");
+    });
+    expect(screen.getByLabelText(t("ruleForm.matcherType"))).toHaveValue("ip_cidr");
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toHaveValue("direct");
+    expect(
+      within(screen.getByLabelText(t("ruleForm.outbound"))).getByRole("option", {
+        name: "node-a",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("draws a bounded number of rows and says the list is cut", async () => {

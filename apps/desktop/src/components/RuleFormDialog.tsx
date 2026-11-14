@@ -26,16 +26,24 @@ import {
 } from "../lib/rules";
 import { t, useLanguagePreference } from "../lib/i18n";
 
+/** Prefill for a new rule. Outbound is not included; the form default is kept. */
+type RuleFormDraft = {
+  matcherKey: string;
+  text: string;
+};
+
 type RuleFormDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy: boolean;
   /** Custom rule being edited; null when adding a new one. */
   editing?: RuleRow | null;
+  /** Prefill when adding. Ignored while editing. */
+  draft?: RuleFormDraft | null;
   /** Throws with a user-facing message when the add fails. */
   onAdd: (rule: Record<string, unknown>) => Promise<void>;
   /** Throws with a user-facing message when the update fails. */
-  onUpdate: (fingerprint: string, rule: Record<string, unknown>) => Promise<void>;
+  onUpdate?: (fingerprint: string, rule: Record<string, unknown>) => Promise<void>;
 };
 
 /** In-app modal for adding or editing a custom rule (radix Dialog). */
@@ -44,6 +52,7 @@ function RuleFormDialog({
   onOpenChange,
   busy,
   editing = null,
+  draft = null,
   onAdd,
   onUpdate,
 }: RuleFormDialogProps) {
@@ -65,13 +74,22 @@ function RuleFormDialog({
       setMatcherValue(values.text);
       setMatcherBool(values.bool);
       setOutbound(values.outbound);
+      return;
+    }
+    const draftDef = draft
+      ? RULE_MATCHER_DEFS.find((def) => def.key === draft.matcherKey)
+      : undefined;
+    if (draft && draftDef && draftDef.kind !== "boolean") {
+      setMatcherKey(draftDef.key);
+      setMatcherValue(draftDef.lowercase ? draft.text.toLowerCase() : draft.text);
     } else {
       setMatcherKey("domain_suffix");
       setMatcherValue("");
-      setMatcherBool(true);
-      setOutbound("direct");
     }
-  }, [open, editing]);
+    setMatcherBool(true);
+    // A draft names the address only. The exit stays the form default.
+    setOutbound("direct");
+  }, [open, editing, draft]);
 
   useEffect(() => {
     if (!open) return;
@@ -117,6 +135,7 @@ function RuleFormDialog({
     setCustomError(null);
     try {
       if (editing) {
+        if (!onUpdate) return;
         await onUpdate(editing.fingerprint, previewRule);
       } else {
         await onAdd(previewRule);

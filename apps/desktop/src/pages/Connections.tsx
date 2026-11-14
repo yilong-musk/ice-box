@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Settings, X } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -9,7 +9,8 @@ import {
   type ConnectionsResponse,
 } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ErrorAlert } from "../components/StatusAlert";
+import { RuleFormDialog } from "../components/RuleFormDialog";
+import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +33,9 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import {
   connectionChain,
   connectionRule,
+  connectionRuleDraft,
   connectionTarget,
+  type ConnectionRuleDraft,
   formatDuration,
   matchesKeyword,
   processName,
@@ -74,12 +77,14 @@ function ConnectionItem({
   usage,
   nowMs,
   onClose,
+  onEdit,
 }: {
   row: ConnectionRow;
   /** Upload plus download relative to the largest total in the list, 0 to 1. */
   usage: number;
   nowMs: number;
   onClose: (id: string) => void;
+  onEdit: (row: ConnectionRow) => void;
 }) {
   const target = connectionTarget(row) || t("common.dash");
   const chain = connectionChain(row);
@@ -165,7 +170,19 @@ function ConnectionItem({
         <Button
           type="button"
           size="icon-sm"
-          variant="ghost"
+          variant="outline"
+          className="shrink-0"
+          aria-label={t("connections.editRule", { target })}
+          title={t("connections.editRule", { target })}
+          onClick={() => onEdit(row)}
+        >
+          <Settings aria-hidden="true" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          className="shrink-0"
           aria-label={t("connections.close", { target })}
           title={t("connections.close", { target })}
           onClick={() => onClose(row.id)}
@@ -187,6 +204,10 @@ export function Connections({ active = true }: { active?: boolean }) {
   const [sort, setSort] = useState<ConnectionSort>(readConnectionSort);
   const [confirmCloseAll, setConfirmCloseAll] = useState(false);
   const [closingAll, setClosingAll] = useState(false);
+  const [ruleFormOpen, setRuleFormOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState<ConnectionRuleDraft | null>(null);
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [applyWarning, setApplyWarning] = useState<string | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
   // Ids whose close request has not settled. A poll the core answered before
@@ -276,6 +297,30 @@ export function Connections({ active = true }: { active?: boolean }) {
     }
   }, [nextGeneration]);
 
+  const openRuleForm = useCallback((row: ConnectionRow) => {
+    setRuleDraft(connectionRuleDraft(row));
+    setRuleFormOpen(true);
+  }, []);
+
+  async function onAddCustomRule(rule: Record<string, unknown>) {
+    setRuleBusy(true);
+    setApplyWarning(null);
+    try {
+      const result = await api.addCustomRule(rule);
+      if (activeRef.current && result.apply_warning) {
+        setApplyWarning(
+          t("rules.savedButApplyFailed", {
+            detail: formatInvokeError(result.apply_warning),
+          }),
+        );
+      }
+    } catch (e) {
+      if (activeRef.current) throw new Error(formatInvokeError(e));
+    } finally {
+      if (activeRef.current) setRuleBusy(false);
+    }
+  }
+
   const all = data?.connections;
   const sorted = useMemo(() => {
     const rows = (all ?? []).filter((row) => matchesKeyword(row, keyword));
@@ -302,6 +347,11 @@ export function Connections({ active = true }: { active?: boolean }) {
       data-testid="connections-panel"
     >
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
+      {applyWarning && (
+        <WarnAlert className="shrink-0" role="alert">
+          {applyWarning}
+        </WarnAlert>
+      )}
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
@@ -384,6 +434,7 @@ export function Connections({ active = true }: { active?: boolean }) {
                     usage={maxTotal > 0 ? (row.upload + row.download) / maxTotal : 0}
                     nowMs={nowMs}
                     onClose={closeOne}
+                    onEdit={openRuleForm}
                   />
                 ))}
               </ItemGroup>
@@ -396,6 +447,16 @@ export function Connections({ active = true }: { active?: boolean }) {
           )}
         </CardContent>
       </Card>
+      <RuleFormDialog
+        open={ruleFormOpen}
+        onOpenChange={(open) => {
+          setRuleFormOpen(open);
+          if (!open) setRuleDraft(null);
+        }}
+        busy={ruleBusy}
+        draft={ruleDraft}
+        onAdd={onAddCustomRule}
+      />
       <ConfirmDialog
         open={confirmCloseAll}
         title={t("connections.closeAllTitle")}
