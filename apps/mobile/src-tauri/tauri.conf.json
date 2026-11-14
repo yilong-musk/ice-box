@@ -35,7 +35,7 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug",
-      "versionCode": 3004
+      "versionCode": 3005
     }
   }
 }

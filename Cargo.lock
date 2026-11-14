@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "ice-app"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-engine",
  "serde",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "block2",
  "chrono",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "ice-box-mobile"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "ice-app",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "ice-config-guard"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-rule-set",
  "ice-types",
@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "ice-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "ice-spawn",
@@ -1800,14 +1800,14 @@ dependencies = [
 
 [[package]]
 name = "ice-elevate"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ice-engine"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-config",
  "ice-subscription",
@@ -1818,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "ice-helper"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-config-guard",
  "ice-spawn",
@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "ice-proxy-sys"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "ice-rule-set"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "flate2",
  "regex-syntax",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "ice-spawn"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "libc",
  "tracing",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "ice-subscription"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-helper-proto"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-types",
  "serde",
@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-journal"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "ice-types",
@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-launcher"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "ice-config-guard",
  "ice-spawn",
@@ -1923,14 +1923,14 @@ dependencies = [
 
 [[package]]
 name = "ice-tun-pin"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "ice-tun-sys"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "ice-config-guard",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "ice-types"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4367,7 +4367,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-tunnel"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde",
  "serde_json",
