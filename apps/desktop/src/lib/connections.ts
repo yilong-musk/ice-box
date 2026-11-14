@@ -44,6 +44,84 @@ export function parseConnectionSort(value: string): ConnectionSort | null {
   return isConnectionSort(value) ? value : null;
 }
 
+/**
+ * Prefill for a new custom rule taken from a connection's destination.
+ * Outbound is omitted so the form keeps its default exit.
+ */
+export type ConnectionRuleDraft = {
+  matcherKey: "domain_suffix" | "ip_cidr";
+  text: string;
+};
+
+const IPV4_OCTET = /^(?:0|[1-9]\d{0,2})$/;
+
+function isIPv4(value: string): boolean {
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => IPV4_OCTET.test(part) && Number(part) <= 255);
+}
+
+/** `::1`, `2001:db8::1`, and IPv4-mapped tails such as `::ffff:192.0.2.1`. */
+function isIPv6(value: string): boolean {
+  if (!value.includes(":") || value.split("::").length > 2) return false;
+  if (value === "::") return true;
+  const halves = value.split("::");
+  const groups = halves.flatMap((half) => (half === "" ? [] : half.split(":")));
+  if (groups.length === 0 || groups.some((group) => group === "")) return false;
+  if (halves.length === 1 && groups.length !== 8) return false;
+  if (halves.length === 2 && groups.length > 7) return false;
+  return groups.every((group, index) => {
+    if (index === groups.length - 1 && group.includes(".")) return isIPv4(group);
+    return /^[0-9a-fA-F]{1,4}$/.test(group);
+  });
+}
+
+/**
+ * Host prefix for an address. sing-box `ip_cidr` is a prefix, so a bare IP
+ * would be rejected; `/32` and `/128` match that one address.
+ */
+function toIpCidr(raw: string): string | null {
+  let value = raw.trim();
+  if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
+  const zone = value.indexOf("%");
+  if (zone !== -1) value = value.slice(0, zone);
+  if (!value) return null;
+
+  const slash = value.indexOf("/");
+  const addr = slash === -1 ? value : value.slice(0, slash);
+  const prefix = slash === -1 ? "" : value.slice(slash + 1);
+  if (prefix !== "" && !/^\d+$/.test(prefix)) return null;
+  const bits = prefix === "" ? null : Number(prefix);
+
+  if (isIPv4(addr)) {
+    if (bits !== null && bits > 32) return null;
+    return `${addr}/${bits ?? 32}`;
+  }
+  if (isIPv6(addr)) {
+    if (bits !== null && bits > 128) return null;
+    return `${addr.toLowerCase()}/${bits ?? 128}`;
+  }
+  return null;
+}
+
+/**
+ * Matcher prefill from the destination address type.
+ *
+ * A hostname becomes a `domain_suffix` rule. An IP (in `host` or
+ * `destination_ip`) becomes `ip_cidr`. The port is not part of the address,
+ * and the connection's outbound is left for the form default.
+ */
+export function connectionRuleDraft(row: ConnectionRow): ConnectionRuleDraft | null {
+  const host = row.host.trim().replace(/\.+$/, "");
+  if (host) {
+    const cidr = toIpCidr(host);
+    if (cidr) return { matcherKey: "ip_cidr", text: cidr };
+    return { matcherKey: "domain_suffix", text: host.toLowerCase() };
+  }
+  const cidr = toIpCidr(row.destination_ip);
+  return cidr ? { matcherKey: "ip_cidr", text: cidr } : null;
+}
+
 /** `host:port`, falling back to the destination IP (IPv6 bracketed). */
 export function connectionTarget(row: ConnectionRow): string {
   const host =

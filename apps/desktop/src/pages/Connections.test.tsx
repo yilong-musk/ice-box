@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Activity } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionRow, ConnectionsResponse } from "../api/contracts";
 import { CONNECTION_SORT_STORAGE_KEY } from "../lib/connections";
@@ -10,12 +11,16 @@ import { Connections } from "./Connections";
 const listConnections = vi.fn();
 const closeConnection = vi.fn();
 const closeAllConnections = vi.fn();
+const listNodes = vi.fn();
+const addCustomRule = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     listConnections: (...args: unknown[]) => listConnections(...args),
     closeConnection: (...args: unknown[]) => closeConnection(...args),
     closeAllConnections: (...args: unknown[]) => closeAllConnections(...args),
+    listNodes: (...args: unknown[]) => listNodes(...args),
+    addCustomRule: (...args: unknown[]) => addCustomRule(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -80,6 +85,10 @@ describe("Connections", () => {
     listConnections.mockImplementation(async () => snapshot([row(), dnsRow]));
     closeConnection.mockResolvedValue(undefined);
     closeAllConnections.mockResolvedValue(undefined);
+    listNodes.mockResolvedValue([
+      { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
+    ]);
+    addCustomRule.mockResolvedValue({ ok: true, fingerprint: "fp-new" });
   });
 
   afterEach(() => {
@@ -501,6 +510,196 @@ describe("Connections", () => {
     await waitFor(() => {
       expect(targets(container)).toEqual(["api.github.com:443"]);
     });
+  });
+
+  it("opens a new custom rule prefilled from the destination, with the default exit", async () => {
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+
+    const github = view.getAllByTestId("connection-row")[1];
+    fireEvent.click(
+      within(github).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    expect(closeConnection).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByText(t("ruleForm.title"))).toBeInTheDocument();
+    expect(screen.getByLabelText(t("ruleForm.matcherType"))).toHaveValue("domain_suffix");
+    expect(screen.getByLabelText(t("ruleForm.matchValue"))).toHaveValue("api.github.com");
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toHaveValue("direct");
+
+    fireEvent.click(screen.getByRole("button", { name: t("ruleForm.add") }));
+    await waitFor(() => {
+      expect(addCustomRule).toHaveBeenCalledWith({
+        domain_suffix: ["api.github.com"],
+        outbound: "direct",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    const dns = view.getAllByTestId("connection-row")[0];
+    fireEvent.click(
+      within(dns).getByRole("button", {
+        name: t("connections.editRule", { target: "1.1.1.1:53" }),
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText(t("ruleForm.matchValue"))).toHaveValue("1.1.1.1/32");
+    });
+    expect(screen.getByLabelText(t("ruleForm.matcherType"))).toHaveValue("ip_cidr");
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toHaveValue("direct");
+    expect(
+      within(screen.getByLabelText(t("ruleForm.outbound"))).getByRole("option", {
+        name: "node-a",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not dismiss a custom-rule save that is still in flight", async () => {
+    let finishAdd: (value: unknown) => void = () => {};
+    addCustomRule.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishAdd = resolve;
+        }),
+    );
+    const { container } = render(<Connections />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(
+      within(view.getAllByTestId("connection-row")[1]).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: t("ruleForm.add") }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("ruleForm.add") })).toBeDisabled();
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.pointerDown(document.querySelector("[data-slot=dialog-overlay]")!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(addCustomRule).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishAdd({ ok: true, fingerprint: "fp-new" });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows a custom-rule failure that settles after the page is left, and Add stays usable", async () => {
+    let failAdd: (reason: unknown) => void = () => {};
+    addCustomRule.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          failAdd = reject;
+        }),
+    );
+    const { container, rerender } = render(<Connections active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(
+      within(view.getAllByTestId("connection-row")[1]).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: t("ruleForm.add") }));
+    rerender(<Connections active={false} />);
+    await act(async () => {
+      failAdd("core.api_failed");
+      await Promise.resolve();
+    });
+    rerender(<Connections active />);
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("core.api_failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("ruleForm.add") })).toBeEnabled();
+    // The open dialog marks the page inert, so the page alert is hidden from the tree.
+    expect(view.getByRole("alert", { hidden: true })).toHaveTextContent("core.api_failed");
+  });
+
+  it("keeps an apply warning that settles after the page is left", async () => {
+    const warning = { code: "config.invalid", message: "reload failed" };
+    let finishAdd: (value: unknown) => void = () => {};
+    addCustomRule.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishAdd = resolve;
+        }),
+    );
+    const { container, rerender } = render(<Connections active />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(
+      within(view.getAllByTestId("connection-row")[1]).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: t("ruleForm.add") }));
+    rerender(<Connections active={false} />);
+    await act(async () => {
+      finishAdd({ ok: true, fingerprint: "fp-new", apply_warning: warning });
+      await Promise.resolve();
+    });
+    rerender(<Connections active />);
+
+    expect(view.getByRole("alert")).toHaveTextContent(
+      t("rules.savedButApplyFailed", { detail: String(warning) }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps an in-progress custom rule when the page is hidden and shown", async () => {
+    const { container, rerender } = render(
+      <Activity mode="visible">
+        <Connections />
+      </Activity>,
+    );
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getAllByTestId("connection-row")).toHaveLength(2);
+    });
+    fireEvent.click(
+      within(view.getAllByTestId("connection-row")[1]).getByRole("button", {
+        name: t("connections.editRule", { target: "api.github.com:443" }),
+      }),
+    );
+    const value = await screen.findByLabelText(t("ruleForm.matchValue"));
+    fireEvent.change(value, { target: { value: "kept.example" } });
+
+    rerender(
+      <Activity mode="hidden">
+        <Connections />
+      </Activity>,
+    );
+    rerender(
+      <Activity mode="visible">
+        <Connections />
+      </Activity>,
+    );
+
+    expect(screen.getByLabelText(t("ruleForm.matchValue"))).toHaveValue("kept.example");
+    expect(screen.getByLabelText(t("ruleForm.outbound"))).toHaveValue("direct");
   });
 
   it("draws a bounded number of rows and says the list is cut", async () => {
