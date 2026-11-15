@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Each connection row has an edit button that opens the new custom-rule dialog,
+  filled from the destination address (domain suffix, or IP as a host prefix).
+  The outbound stays at the form default.
+
+### Changed
+
+- Switches use the active green when on, so the enabled state reads at a glance.
+
 ## [0.3.5] - 2026-11-14
 
 ### Changed

@@ -7,6 +7,7 @@ import {
   CONNECTION_SORT_STORAGE_KEY,
   connectionChain,
   connectionRule,
+  connectionRuleDraft,
   connectionTarget,
   formatDuration,
   matchesKeyword,
@@ -52,6 +53,46 @@ describe("connection labels", () => {
     expect(connectionChain(row())).toBe("proxy → node-a");
     expect(connectionChain(row({ chains: ["direct"] }))).toBe("direct");
     expect(connectionChain(row({ chains: [] }))).toBe("");
+  });
+
+  it("prefills a custom rule from the destination address type", () => {
+    expect(connectionRuleDraft(row())).toEqual({
+      matcherKey: "domain_suffix",
+      text: "api.github.com",
+    });
+    expect(
+      connectionRuleDraft(row({ host: "API.GitHub.COM." })),
+    ).toEqual({ matcherKey: "domain_suffix", text: "api.github.com" });
+    // A hostname wins over a resolved IP; the port is not part of the address.
+    expect(
+      connectionRuleDraft(row({ destination_ip: "1.2.3.4", destination_port: "443" })),
+    ).toEqual({ matcherKey: "domain_suffix", text: "api.github.com" });
+    expect(
+      connectionRuleDraft(row({ host: "1.1.1.1", destination_port: "53" })),
+    ).toEqual({ matcherKey: "ip_cidr", text: "1.1.1.1/32" });
+    expect(
+      connectionRuleDraft(
+        row({ host: "", destination_ip: "1.1.1.1", destination_port: "53" }),
+      ),
+    ).toEqual({ matcherKey: "ip_cidr", text: "1.1.1.1/32" });
+    expect(
+      connectionRuleDraft(
+        row({ host: "", destination_ip: "2001:DB8::1", destination_port: "53" }),
+      ),
+    ).toEqual({ matcherKey: "ip_cidr", text: "2001:db8::1/128" });
+    expect(
+      connectionRuleDraft(row({ host: "", destination_ip: "fe80::1%en0" })),
+    ).toEqual({ matcherKey: "ip_cidr", text: "fe80::1/128" });
+    expect(
+      connectionRuleDraft(row({ host: "[::1]", destination_ip: "" })),
+    ).toEqual({ matcherKey: "ip_cidr", text: "::1/128" });
+    expect(connectionRuleDraft(row({ host: "", destination_ip: "1.1.1.1/24" }))).toEqual({
+      matcherKey: "ip_cidr",
+      text: "1.1.1.1/24",
+    });
+    expect(connectionRuleDraft(row({ host: "", destination_ip: "", destination_port: "443" }))).toBe(
+      null,
+    );
   });
 
   it("drops the action from the rule", () => {

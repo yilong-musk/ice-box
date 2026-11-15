@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { api, type NodeInfo, type RuleRow } from "../api/client";
@@ -26,16 +26,24 @@ import {
 } from "../lib/rules";
 import { t, useLanguagePreference } from "../lib/i18n";
 
+/** Prefill for a new rule. Outbound is not included; the form default is kept. */
+type RuleFormDraft = {
+  matcherKey: string;
+  text: string;
+};
+
 type RuleFormDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   busy: boolean;
   /** Custom rule being edited; null when adding a new one. */
   editing?: RuleRow | null;
+  /** Prefill when adding. Ignored while editing. */
+  draft?: RuleFormDraft | null;
   /** Throws with a user-facing message when the add fails. */
   onAdd: (rule: Record<string, unknown>) => Promise<void>;
   /** Throws with a user-facing message when the update fails. */
-  onUpdate: (fingerprint: string, rule: Record<string, unknown>) => Promise<void>;
+  onUpdate?: (fingerprint: string, rule: Record<string, unknown>) => Promise<void>;
 };
 
 /** In-app modal for adding or editing a custom rule (radix Dialog). */
@@ -44,6 +52,7 @@ function RuleFormDialog({
   onOpenChange,
   busy,
   editing = null,
+  draft = null,
   onAdd,
   onUpdate,
 }: RuleFormDialogProps) {
@@ -55,9 +64,20 @@ function RuleFormDialog({
   const [nodeOptions, setNodeOptions] = useState<NodeInfo[]>([]);
   const [customError, setCustomError] = useState<string | null>(null);
   const composingRef = useRef(false);
+  // True after the dialog has opened, until it closes. <Activity> tears the
+  // effect down while the tab is hidden and runs it again on the way back;
+  // that must not wipe edits made before the switch.
+  const wasOpenRef = useRef(false);
+  const fieldId = useId();
+  const matcherTypeId = `${fieldId}-matcher-type`;
+  const matcherBoolId = `${fieldId}-matcher-bool`;
+  const matchValueId = `${fieldId}-match-value`;
+  const outboundId = `${fieldId}-outbound`;
 
   useLayoutEffect(() => {
-    if (!open) return;
+    const opening = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (!opening) return;
     setCustomError(null);
     if (editing) {
       const values = customRuleFormValues(editing.rule);
@@ -65,13 +85,22 @@ function RuleFormDialog({
       setMatcherValue(values.text);
       setMatcherBool(values.bool);
       setOutbound(values.outbound);
+      return;
+    }
+    const draftDef = draft
+      ? RULE_MATCHER_DEFS.find((def) => def.key === draft.matcherKey)
+      : undefined;
+    if (draft && draftDef && draftDef.kind !== "boolean") {
+      setMatcherKey(draftDef.key);
+      setMatcherValue(draftDef.lowercase ? draft.text.toLowerCase() : draft.text);
     } else {
       setMatcherKey("domain_suffix");
       setMatcherValue("");
-      setMatcherBool(true);
-      setOutbound("direct");
     }
-  }, [open, editing]);
+    setMatcherBool(true);
+    // A draft names the address only. The exit stays the form default.
+    setOutbound("direct");
+  }, [open, editing, draft]);
 
   useEffect(() => {
     if (!open) return;
@@ -117,6 +146,7 @@ function RuleFormDialog({
     setCustomError(null);
     try {
       if (editing) {
+        if (!onUpdate) return;
         await onUpdate(editing.fingerprint, previewRule);
       } else {
         await onAdd(previewRule);
@@ -129,6 +159,13 @@ function RuleFormDialog({
     }
   }
 
+  // Cancel is disabled while a save is in flight. Escape and an outside click
+  // must not close the dialog either: the request would still finish, and a
+  // failure stored on the closed dialog is cleared the next time it opens.
+  function blockDismissWhileBusy(event: { preventDefault: () => void }) {
+    if (busy) event.preventDefault();
+  }
+
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -139,6 +176,10 @@ function RuleFormDialog({
         <DialogPrimitive.Content
           data-slot="dialog-content"
           className="fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border bg-background p-5 shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+          onEscapeKeyDown={blockDismissWhileBusy}
+          onPointerDownOutside={blockDismissWhileBusy}
+          onFocusOutside={blockDismissWhileBusy}
+          onInteractOutside={blockDismissWhileBusy}
         >
           <div className="flex flex-col gap-1.5">
             <DialogPrimitive.Title
@@ -156,11 +197,11 @@ function RuleFormDialog({
           </div>
           <FieldGroup className="flex flex-col gap-2.5">
             <Field>
-              <FieldLabel htmlFor="rule-matcher-type">
+              <FieldLabel htmlFor={matcherTypeId}>
                 {t("ruleForm.matcherType")}
               </FieldLabel>
               <NativeSelect
-                id="rule-matcher-type"
+                id={matcherTypeId}
                 aria-label={t("ruleForm.matcherType")}
                 value={matcherKey}
                 onChange={(e) => {
@@ -178,12 +219,12 @@ function RuleFormDialog({
             </Field>
             {previewDef?.kind === "boolean" ? (
               <Field>
-                <FieldLabel htmlFor="rule-matcher-bool">
+                <FieldLabel htmlFor={matcherBoolId}>
                   {t(previewDef.label)}
                 </FieldLabel>
                 <Field orientation="horizontal">
                   <Checkbox
-                    id="rule-matcher-bool"
+                    id={matcherBoolId}
                     checked={matcherBool}
                     onCheckedChange={(checked) =>
                       setMatcherBool(checked === true)
@@ -197,11 +238,11 @@ function RuleFormDialog({
               </Field>
             ) : (
               <Field>
-                <FieldLabel htmlFor="rule-match-value">
+                <FieldLabel htmlFor={matchValueId}>
                   {t("ruleForm.matchValue")}
                 </FieldLabel>
                 <Input
-                  id="rule-match-value"
+                  id={matchValueId}
                   type="text"
                   aria-label={t("ruleForm.matchValue")}
                   className={lowercaseInput ? "lowercase" : undefined}
@@ -234,11 +275,11 @@ function RuleFormDialog({
               </Field>
             )}
             <Field>
-              <FieldLabel htmlFor="rule-outbound">
+              <FieldLabel htmlFor={outboundId}>
                 {t("ruleForm.outbound")}
               </FieldLabel>
               <NativeSelect
-                id="rule-outbound"
+                id={outboundId}
                 aria-label={t("ruleForm.outbound")}
                 value={outbound}
                 onChange={(e) => setOutbound(e.target.value)}
