@@ -211,6 +211,23 @@ describe("Subscriptions", () => {
     expect(clearNodesSnapshot).not.toHaveBeenCalled();
   });
 
+  it("renders share, update, and delete as icon buttons", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    for (const label of [t("subs.share"), t("common.update"), t("common.delete")]) {
+      const button = view.getByRole("button", { name: label });
+      expect(button.querySelector("svg")).toBeInTheDocument();
+      expect(button).not.toHaveTextContent(label);
+      expect(button).toHaveAttribute("title", label);
+    }
+  });
+
   it("shows 更新中 on the row update button while updating", async () => {
     listSubscriptions.mockResolvedValue([sampleMeta()]);
     let resolveUpdate: () => void = () => {};
@@ -610,12 +627,16 @@ describe("Subscriptions", () => {
     );
     expect(view.queryByText("Traffic: 11.84 GB | 150 GB")).toBeNull();
     expect(view.queryByTestId(`sub-traffic-${otherId}`)).toBeNull();
-    // The used share is drawn as a progress bar, green while well under quota.
-    const bar = view.getByRole("progressbar", { name: t("subs.trafficBar") });
-    expect(bar).toHaveAttribute("aria-valuenow", "7.89");
-    expect(bar.firstElementChild).toHaveStyle({ width: "7.89%" });
-    expect(bar.firstElementChild?.className).toContain("bg-ok");
-    expect(view.queryByTestId(`sub-traffic-bar-${otherId}`)).toBeNull();
+    // Remaining quota washes the row like a connection, green while well under
+    // the limit. 11.84/150 used leaves 92.11%.
+    const row = view.getByText("sub-a").closest("[data-slot=item]");
+    const wash = view.getByTestId(`sub-remaining-${sampleMeta().id}`);
+    expect(row).toHaveClass("bg-muted");
+    expect(wash).toHaveStyle({ width: "92.11%" });
+    expect(wash.className).toContain("from-ok/5");
+    expect(wash.className).toContain("to-ok/20");
+    expect(view.queryByRole("progressbar")).toBeNull();
+    expect(view.queryByTestId(`sub-remaining-${otherId}`)).toBeNull();
   });
 
   it("merges header counters with a long-term expiry entry", async () => {

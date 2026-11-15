@@ -48,11 +48,11 @@ export type SubscriptionTrafficView = {
   /** `到期 2026-09-26` / `长期有效` / `已过期 2026-01-01`; `null` when unknown. */
   expiry: string | null;
   /** Used share of the quota, 0–1 (capped at 1); `null` unless both used and
-   * total are known, so the list draws a progress bar only for a real ratio. */
+   * total are known, so the list can wash the row by how much remains. */
   ratio: number | null;
 };
 
-/** Bar colour by used share: under 80% green, 80–94% yellow, 95%+ red. */
+/** Wash colour by used share: under 80% green, 80–94% yellow, 95%+ red. */
 export function trafficTone(ratio: number): Tone {
   if (ratio < 0.8) return "ok";
   if (ratio < 0.95) return "warn";
@@ -65,8 +65,8 @@ export function trafficTone(ratio: number): Tone {
  * embedded in the proxy list (`Traffic: 11.84 GB | 150 GB`,
  * `剩余流量：1023.64 GB`, `套餐到期：长期有效`). Providers word and scale those
  * entries differently, so the values are parsed and re-rendered in one format:
- * `<used>/<total>` plus a dated or long-term expiry; the used share is
- * drawn as a progress bar rather than printed.
+ * `<used>/<total>` plus a dated or long-term expiry; remaining quota is a
+ * row wash, like the connection list, rather than a separate bar.
  *
  * `null` when neither side can be determined. A past expiry is worded as
  * expired (`已过期 …`); the list does not colour it.
