@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../lib/i18n";
+import { formatLocale, t } from "../lib/i18n";
 import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
@@ -209,6 +209,23 @@ describe("Subscriptions", () => {
       expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
     });
     expect(clearNodesSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("renders share, update, and delete as icon buttons", async () => {
+    listSubscriptions.mockResolvedValue([sampleMeta()]);
+
+    const { container } = render(<Subscriptions />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("sub-a")).toBeInTheDocument();
+    });
+
+    for (const label of [t("subs.share"), t("common.update"), t("common.delete")]) {
+      const button = view.getByRole("button", { name: label });
+      expect(button.querySelector("svg")).toBeInTheDocument();
+      expect(button).not.toHaveTextContent(label);
+      expect(button).toHaveAttribute("title", label);
+    }
   });
 
   it("shows 更新中 on the row update button while updating", async () => {
@@ -460,13 +477,17 @@ describe("Subscriptions", () => {
     });
   });
 
-  it("shows group/rule/dns stats and parse warnings", async () => {
+  it("shows only the update time, not format or profile stats", async () => {
+    const updated = "2026-11-13T01:28:47.000Z";
     listSubscriptions.mockResolvedValue([
       sampleMeta({
         name: "flower",
-        group_count: 21,
-        rule_count: 4270,
+        format: "sing_box",
+        node_count: 44,
+        group_count: 2,
+        rule_count: 3,
         has_dns: true,
+        last_updated: updated,
         parse_warnings: [
           { key: "parse.groupUnknownMember", params: { name: "x", member: "y" } },
         ],
@@ -478,14 +499,51 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("flower")).toBeInTheDocument();
     });
-    expect(view.getByText(t("subs.summaryGroups", { n: 21 }), { exact: false })).toBeInTheDocument();
-    expect(view.getByText(t("subs.summaryRules", { n: 4270 }), { exact: false })).toBeInTheDocument();
-    expect(view.getByText(t("subs.hasDns"), { exact: false })).toBeInTheDocument();
+    const expected = new Date(updated).toLocaleString(formatLocale());
+    const line = view.getByText(expected);
+    const title = line.closest("[data-slot=item-title]");
+    expect(title).not.toBeNull();
+    expect(title).toContainElement(view.getByText("flower"));
+    expect(line.closest("[data-slot=item-description]")).toBeNull();
+    expect(line).toHaveTextContent(expected);
+    // The removed summary line printed the format and the profile stats. The
+    // suite renders English, so check the strings the row would actually show.
+    const row = view.getByText("flower").closest("[data-slot=item]");
+    expect(row).not.toBeNull();
+    for (const gone of ["sing_box", "44 nodes", "2 groups", "3 rules", "DNS"]) {
+      expect(row?.textContent ?? "").not.toContain(gone);
+    }
     expect(
       view.getByText(t("parse.groupUnknownMember", { name: "x", member: "y" }), {
         exact: false,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the update time on its own line on the phone", async () => {
+    phoneShell.value = true;
+    const updated = "2026-11-13T01:28:47.000Z";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({
+        name: "flower",
+        last_updated: updated,
+        provider_info: ["Traffic: 11.84 GB | 150 GB", "Expire: 2099-01-01"],
+      }),
+    ]);
+
+    const view = within(render(<Subscriptions />).container);
+    await waitFor(() => {
+      expect(view.getByText("flower")).toBeInTheDocument();
+    });
+    const expected = new Date(updated).toLocaleString(formatLocale());
+    const time = view.getByText(expected);
+    const title = view.getByText("flower").closest("[data-slot=item-title]");
+    const traffic = view.getByTestId(`sub-traffic-${sampleMeta().id}`);
+    expect(title).not.toContainElement(time);
+    expect(time).toHaveAttribute("data-slot", "item-description");
+    expect(traffic).not.toBe(time);
+    const row = view.getByText("flower").closest("[data-slot=item]");
+    expect(row?.querySelectorAll("[data-slot=item-description]")).toHaveLength(2);
   });
 
   it("shows a capsule toast when listing fails", async () => {
@@ -610,12 +668,16 @@ describe("Subscriptions", () => {
     );
     expect(view.queryByText("Traffic: 11.84 GB | 150 GB")).toBeNull();
     expect(view.queryByTestId(`sub-traffic-${otherId}`)).toBeNull();
-    // The used share is drawn as a progress bar, green while well under quota.
-    const bar = view.getByRole("progressbar", { name: t("subs.trafficBar") });
-    expect(bar).toHaveAttribute("aria-valuenow", "7.89");
-    expect(bar.firstElementChild).toHaveStyle({ width: "7.89%" });
-    expect(bar.firstElementChild?.className).toContain("bg-ok");
-    expect(view.queryByTestId(`sub-traffic-bar-${otherId}`)).toBeNull();
+    // Remaining quota washes the row like a connection, green while well under
+    // the limit. 11.84/150 used leaves 92.11%.
+    const row = view.getByText("sub-a").closest("[data-slot=item]");
+    const wash = view.getByTestId(`sub-remaining-${sampleMeta().id}`);
+    expect(row).toHaveClass("bg-muted");
+    expect(wash).toHaveStyle({ width: "92.11%" });
+    expect(wash.className).toContain("from-ok/5");
+    expect(wash.className).toContain("to-ok/20");
+    expect(view.queryByRole("progressbar")).toBeNull();
+    expect(view.queryByTestId(`sub-remaining-${otherId}`)).toBeNull();
   });
 
   it("merges header counters with a long-term expiry entry", async () => {
@@ -684,7 +746,8 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("legacy")).toBeInTheDocument();
     });
-    expect(view.getByText(t("subs.summaryNodes", { n: 5 }), { exact: false })).toBeInTheDocument();
+    // No update time, so the row does not invent a stats line from the old fields.
+    expect(container.querySelector("[data-slot=item-description]")).toBeNull();
   });
 
   it("imports with auto-update when the import switch is on", async () => {

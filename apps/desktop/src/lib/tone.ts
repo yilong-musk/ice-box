@@ -18,3 +18,10 @@ export const TONE_BG: Record<Tone, string> = {
   warn: "bg-warn",
   bad: "bg-destructive",
 };
+
+/** Left-to-right fade for a row wash; pair it with `bg-linear-to-r`. */
+export const TONE_WASH: Record<Tone, string> = {
+  ok: "from-ok/5 to-ok/20",
+  warn: "from-warn/5 to-warn/20",
+  bad: "from-destructive/5 to-destructive/20",
+};

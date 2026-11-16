@@ -17,7 +17,7 @@ import {
   subscriptionTrafficView,
   trafficTone,
 } from "../lib/subscriptions";
-import { TONE_BG } from "../lib/tone";
+import { TONE_WASH } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
@@ -220,24 +220,10 @@ export function Subscriptions({ active = true }: Props) {
     void run(() => api.setSubscriptionActive(s.id, true));
   }
 
-  /** `dateOnly` drops the time of day so the phone summary fits one line. */
-  function subscriptionSummary(s: SubscriptionMeta, dateOnly = false): string {
-    const parts = [
-      s.format,
-      t("subs.summaryNodes", { n: s.node_count }),
-      t("subs.summaryGroups", { n: s.group_count ?? 0 }),
-      t("subs.summaryRules", { n: s.rule_count ?? 0 }),
-    ];
-    if (s.has_dns) parts.push(t("subs.hasDns"));
-    if (s.last_updated) {
-      const updated = new Date(s.last_updated);
-      parts.push(
-        dateOnly
-          ? updated.toLocaleDateString(dateLocale)
-          : updated.toLocaleString(dateLocale),
-      );
-    }
-    return parts.join(" · ");
+  /** Update time only. Format and profile stats are not listed on the row. */
+  function subscriptionUpdatedAt(s: SubscriptionMeta): string | null {
+    if (!s.last_updated) return null;
+    return new Date(s.last_updated).toLocaleString(dateLocale);
   }
 
   return (
@@ -311,17 +297,28 @@ export function Subscriptions({ active = true }: Props) {
               <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
                 {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
+                  const updatedAt = subscriptionUpdatedAt(s);
                   const traffic = subscriptionTrafficView(
                     s.userinfo,
                     s.provider_info,
                   );
+                  const used = traffic?.ratio ?? null;
+                  const remaining =
+                    used != null ? Math.min(1, Math.max(0, 1 - used)) : null;
+                  const wash =
+                    used != null && remaining != null && remaining > 0
+                      ? TONE_WASH[trafficTone(used)]
+                      : null;
                   return (
                     <Item
                       key={s.id}
                       size="sm"
                       variant="outline"
                       className={cn(
-                        "relative bg-muted",
+                        // `isolate` belongs to the `-z-10` row wash below: it
+                        // keeps the fill inside this row's stacking context
+                        // instead of painting behind the card background.
+                        "relative isolate bg-muted",
                         s.active
                           ? "border-ok"
                           : "cursor-pointer hover:border-foreground/30 has-[[data-row-activate]:focus-visible]:border-ring has-[[data-row-activate]:focus-visible]:ring-[3px] has-[[data-row-activate]:focus-visible]:ring-ring/50",
@@ -341,6 +338,22 @@ export function Subscriptions({ active = true }: Props) {
                         activateSubscription(s);
                       }}
                     >
+                      {wash != null && remaining != null ? (
+                        // Same wash as a connection row: a left-aligned gradient
+                        // whose width is the share. Here that share is what
+                        // remains. Colour still follows the used-share bands.
+                        <div
+                          aria-hidden="true"
+                          className={cn(
+                            "pointer-events-none absolute inset-y-0 left-0 -z-10 rounded-lg bg-linear-to-r transition-[width] duration-500",
+                            wash,
+                          )}
+                          style={{
+                            width: `${Math.round(remaining * 10000) / 100}%`,
+                          }}
+                          data-testid={`sub-remaining-${s.id}`}
+                        />
+                      ) : null}
                       {s.active ? null : (
                         // Keyboard and screen-reader path: a real, named
                         // button; the row shows its focus ring instead.
@@ -354,40 +367,51 @@ export function Subscriptions({ active = true }: Props) {
                         />
                       )}
                       <ItemHeader className="flex-nowrap">
-                        <ItemTitle title={s.name} className="min-w-0">
-                          <span className="truncate">{s.name}</span>
+                        <ItemTitle className="min-w-0">
+                          <span className="min-w-0 truncate" title={s.name}>
+                            {s.name}
+                          </span>
                           {s.source === "file" ? (
                             <Label className="shrink-0 text-muted-foreground">
                               {t("subs.fileBadge")}
                             </Label>
                           ) : null}
+                          {/* Phone is too narrow for the time beside the title and the
+                              actions, so it stays on its own line below. */}
+                          {!phone && updatedAt ? (
+                            <span className="shrink-0 text-xs font-normal whitespace-nowrap tabular-nums text-muted-foreground">
+                              {updatedAt}
+                            </span>
+                          ) : null}
                         </ItemTitle>
-                        {/* The phone row is too narrow for labelled buttons:
-                            icons keep the actions on the title line, and the
-                            labels stay as accessible names. */}
+                        {/* Row actions are icon buttons on every shell; the
+                            labels stay as accessible names and hover titles. */}
                         <ItemActions className="shrink-0 flex-nowrap">
                           <Button
                             type="button"
-                            size={phone ? "icon-sm" : "sm"}
+                            size="icon-sm"
                             variant="outline"
                             aria-label={t("subs.share")}
                             title={t("subs.share")}
                             onClick={() => setShareTarget(s)}
                           >
-                            <Share />
-                            {phone ? null : t("subs.share")}
+                            <Share aria-hidden="true" />
                           </Button>
                           {s.source === "file" ? null : (
                             <Button
                               type="button"
-                              size={phone ? "icon-sm" : "sm"}
+                              size="icon-sm"
                               disabled={busy}
                               aria-label={
                                 updatingId === s.id
                                   ? t("common.updating")
                                   : t("common.update")
                               }
-                              title={phone ? t("common.update") : undefined}
+                              title={
+                                updatingId === s.id
+                                  ? t("common.updating")
+                                  : t("common.update")
+                              }
                               onClick={() =>
                                 void run(() => api.updateSubscription(s.id), {
                                   updatingId: s.id,
@@ -395,55 +419,35 @@ export function Subscriptions({ active = true }: Props) {
                                 })
                               }
                             >
-                              {phone ? (
-                                <RefreshCw
-                                  className={cn(
-                                    updatingId === s.id && "animate-spin",
-                                  )}
-                                />
-                              ) : updatingId === s.id ? (
-                                t("common.updating")
-                              ) : (
-                                t("common.update")
-                              )}
+                              <RefreshCw
+                                aria-hidden="true"
+                                className={cn(
+                                  updatingId === s.id && "animate-spin",
+                                )}
+                              />
                             </Button>
                           )}
                           <Button
                             type="button"
-                            size={phone ? "icon-sm" : "sm"}
+                            size="icon-sm"
                             variant="destructive"
                             disabled={busy}
                             aria-label={t("common.delete")}
-                            title={phone ? t("common.delete") : undefined}
+                            title={t("common.delete")}
                             onClick={() => setPendingDelete(s)}
                           >
-                            {phone ? <Trash2 /> : t("common.delete")}
+                            <Trash2 aria-hidden="true" />
                           </Button>
                         </ItemActions>
                       </ItemHeader>
-                      <ItemContent className="min-w-0">
-                        <ItemDescription
-                          className={phone ? "truncate" : undefined}
-                          title={phone ? subscriptionSummary(s) : undefined}
-                        >
-                          {subscriptionSummary(s, phone)}
-                        </ItemDescription>
-                        {traffic ? (
-                          // Desktop: a short bar leads the usage line. Phone:
-                          // the line is too narrow, so the bar sits above it.
-                          <div
-                            className={cn(
-                              "flex min-w-0",
-                              phone ? "flex-col gap-1.5 py-0.5" : "items-center gap-3",
-                            )}
-                          >
-                            {traffic.ratio != null ? (
-                              <TrafficBar
-                                ratio={traffic.ratio}
-                                className={phone ? "w-full" : "w-40 shrink-0"}
-                                testId={`sub-traffic-bar-${s.id}`}
-                              />
-                            ) : null}
+                      {(phone && updatedAt) || traffic || warnings.length > 0 ? (
+                        <ItemContent className="min-w-0">
+                          {phone && updatedAt ? (
+                            <ItemDescription className="truncate tabular-nums" title={updatedAt}>
+                              {updatedAt}
+                            </ItemDescription>
+                          ) : null}
+                          {traffic ? (
                             <ItemDescription
                               className="min-w-0 tabular-nums"
                               data-testid={`sub-traffic-${s.id}`}
@@ -452,14 +456,14 @@ export function Subscriptions({ active = true }: Props) {
                               {traffic.usage && traffic.expiry ? " · " : null}
                               {traffic.expiry}
                             </ItemDescription>
-                          </div>
-                        ) : null}
-                        {warnings.length > 0 ? (
-                          <ItemDescription className="text-warn">
-                            {warnings.map(formatUiMessage).join("；")}
-                          </ItemDescription>
-                        ) : null}
-                      </ItemContent>
+                          ) : null}
+                          {warnings.length > 0 ? (
+                            <ItemDescription className="text-warn">
+                              {warnings.map(formatUiMessage).join("；")}
+                            </ItemDescription>
+                          ) : null}
+                        </ItemContent>
+                      ) : null}
                       {phone || s.source === "file" ? null : (
                         <ItemFooter>
                           <Field orientation="horizontal" className="w-auto gap-1.5">
@@ -481,7 +485,7 @@ export function Subscriptions({ active = true }: Props) {
                             />
                             <FieldLabel
                               htmlFor={`sub-auto-${s.id}`}
-                              className="text-muted-foreground"
+                              className="leading-none text-muted-foreground"
                             >
                               {t("subs.autoUpdate")}
                             </FieldLabel>
@@ -577,37 +581,6 @@ export function Subscriptions({ active = true }: Props) {
           setPendingDelete(null);
           void run(() => api.removeSubscription(sub.id));
         }}
-      />
-    </div>
-  );
-}
-
-/** Quota usage as a thin progress bar, coloured by how much is used. Its
- * accessible name is a fixed label plus the percentage: the usage figures are
- * printed right next to it, so repeating them would read them out twice. */
-function TrafficBar({
-  ratio,
-  className,
-  testId,
-}: {
-  ratio: number;
-  className?: string;
-  testId: string;
-}) {
-  const percent = Math.round(ratio * 10000) / 100;
-  return (
-    <div
-      role="progressbar"
-      aria-label={t("subs.trafficBar")}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className={cn("h-2.5 overflow-hidden rounded-full bg-foreground/10", className)}
-      data-testid={testId}
-    >
-      <div
-        className={cn("h-full rounded-full", TONE_BG[trafficTone(ratio)])}
-        style={{ width: `${percent}%` }}
       />
     </div>
   );
