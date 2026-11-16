@@ -267,7 +267,7 @@ function ImportSubscriptionDialog({
                   />
                   <FieldLabel
                     htmlFor="import-sub-auto-update"
-                    className="text-muted-foreground"
+                    className="leading-none text-muted-foreground"
                   >
                     {t("subs.autoUpdate")}
                   </FieldLabel>

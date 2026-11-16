@@ -220,24 +220,10 @@ export function Subscriptions({ active = true }: Props) {
     void run(() => api.setSubscriptionActive(s.id, true));
   }
 
-  /** `dateOnly` drops the time of day so the phone summary fits one line. */
-  function subscriptionSummary(s: SubscriptionMeta, dateOnly = false): string {
-    const parts = [
-      s.format,
-      t("subs.summaryNodes", { n: s.node_count }),
-      t("subs.summaryGroups", { n: s.group_count ?? 0 }),
-      t("subs.summaryRules", { n: s.rule_count ?? 0 }),
-    ];
-    if (s.has_dns) parts.push(t("subs.hasDns"));
-    if (s.last_updated) {
-      const updated = new Date(s.last_updated);
-      parts.push(
-        dateOnly
-          ? updated.toLocaleDateString(dateLocale)
-          : updated.toLocaleString(dateLocale),
-      );
-    }
-    return parts.join(" · ");
+  /** Update time only. Format and profile stats are not listed on the row. */
+  function subscriptionUpdatedAt(s: SubscriptionMeta): string | null {
+    if (!s.last_updated) return null;
+    return new Date(s.last_updated).toLocaleString(dateLocale);
   }
 
   return (
@@ -311,6 +297,7 @@ export function Subscriptions({ active = true }: Props) {
               <ItemGroup aria-label={t("subs.listAria")} className="gap-3">
                 {items.map((s) => {
                   const warnings = s.parse_warnings ?? [];
+                  const updatedAt = subscriptionUpdatedAt(s);
                   const traffic = subscriptionTrafficView(
                     s.userinfo,
                     s.provider_info,
@@ -377,12 +364,21 @@ export function Subscriptions({ active = true }: Props) {
                         />
                       )}
                       <ItemHeader className="flex-nowrap">
-                        <ItemTitle title={s.name} className="min-w-0">
-                          <span className="truncate">{s.name}</span>
+                        <ItemTitle className="min-w-0">
+                          <span className="min-w-0 truncate" title={s.name}>
+                            {s.name}
+                          </span>
                           {s.source === "file" ? (
                             <Label className="shrink-0 text-muted-foreground">
                               {t("subs.fileBadge")}
                             </Label>
+                          ) : null}
+                          {/* Phone is too narrow for the time beside the title and the
+                              actions, so it stays on its own line below. */}
+                          {!phone && updatedAt ? (
+                            <span className="shrink-0 text-xs font-normal whitespace-nowrap tabular-nums text-muted-foreground">
+                              {updatedAt}
+                            </span>
                           ) : null}
                         </ItemTitle>
                         {/* Row actions are icon buttons on every shell; the
@@ -441,29 +437,30 @@ export function Subscriptions({ active = true }: Props) {
                           </Button>
                         </ItemActions>
                       </ItemHeader>
-                      <ItemContent className="min-w-0">
-                        <ItemDescription
-                          className={phone ? "truncate" : undefined}
-                          title={phone ? subscriptionSummary(s) : undefined}
-                        >
-                          {subscriptionSummary(s, phone)}
-                        </ItemDescription>
-                        {traffic ? (
-                          <ItemDescription
-                            className="min-w-0 tabular-nums"
-                            data-testid={`sub-traffic-${s.id}`}
-                          >
-                            {traffic.usage}
-                            {traffic.usage && traffic.expiry ? " · " : null}
-                            {traffic.expiry}
-                          </ItemDescription>
-                        ) : null}
-                        {warnings.length > 0 ? (
-                          <ItemDescription className="text-warn">
-                            {warnings.map(formatUiMessage).join("；")}
-                          </ItemDescription>
-                        ) : null}
-                      </ItemContent>
+                      {(phone && updatedAt) || traffic || warnings.length > 0 ? (
+                        <ItemContent className="min-w-0">
+                          {phone && updatedAt ? (
+                            <ItemDescription className="truncate tabular-nums" title={updatedAt}>
+                              {updatedAt}
+                            </ItemDescription>
+                          ) : null}
+                          {traffic ? (
+                            <ItemDescription
+                              className="min-w-0 tabular-nums"
+                              data-testid={`sub-traffic-${s.id}`}
+                            >
+                              {traffic.usage}
+                              {traffic.usage && traffic.expiry ? " · " : null}
+                              {traffic.expiry}
+                            </ItemDescription>
+                          ) : null}
+                          {warnings.length > 0 ? (
+                            <ItemDescription className="text-warn">
+                              {warnings.map(formatUiMessage).join("；")}
+                            </ItemDescription>
+                          ) : null}
+                        </ItemContent>
+                      ) : null}
                       {phone || s.source === "file" ? null : (
                         <ItemFooter>
                           <Field orientation="horizontal" className="w-auto gap-1.5">
@@ -485,7 +482,7 @@ export function Subscriptions({ active = true }: Props) {
                             />
                             <FieldLabel
                               htmlFor={`sub-auto-${s.id}`}
-                              className="text-muted-foreground"
+                              className="leading-none text-muted-foreground"
                             >
                               {t("subs.autoUpdate")}
                             </FieldLabel>

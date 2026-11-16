@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { t } from "../lib/i18n";
+import { formatLocale, t } from "../lib/i18n";
 import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { Subscriptions } from "./Subscriptions";
@@ -477,13 +477,17 @@ describe("Subscriptions", () => {
     });
   });
 
-  it("shows group/rule/dns stats and parse warnings", async () => {
+  it("shows only the update time, not format or profile stats", async () => {
+    const updated = "2026-11-13T01:28:47.000Z";
     listSubscriptions.mockResolvedValue([
       sampleMeta({
         name: "flower",
-        group_count: 21,
-        rule_count: 4270,
+        format: "sing_box",
+        node_count: 44,
+        group_count: 2,
+        rule_count: 3,
         has_dns: true,
+        last_updated: updated,
         parse_warnings: [
           { key: "parse.groupUnknownMember", params: { name: "x", member: "y" } },
         ],
@@ -495,14 +499,47 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("flower")).toBeInTheDocument();
     });
-    expect(view.getByText(t("subs.summaryGroups", { n: 21 }), { exact: false })).toBeInTheDocument();
-    expect(view.getByText(t("subs.summaryRules", { n: 4270 }), { exact: false })).toBeInTheDocument();
-    expect(view.getByText(t("subs.hasDns"), { exact: false })).toBeInTheDocument();
+    const expected = new Date(updated).toLocaleString(formatLocale());
+    const line = view.getByText(expected);
+    const title = line.closest("[data-slot=item-title]");
+    expect(title).not.toBeNull();
+    expect(title).toContainElement(view.getByText("flower"));
+    expect(line.closest("[data-slot=item-description]")).toBeNull();
+    expect(line).toHaveTextContent(expected);
+    expect(line.textContent).not.toContain("sing_box");
+    expect(line.textContent).not.toMatch(/节点|策略组|规则|DNS/);
+    expect(view.queryByText("sing_box")).not.toBeInTheDocument();
     expect(
       view.getByText(t("parse.groupUnknownMember", { name: "x", member: "y" }), {
         exact: false,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the update time on its own line on the phone", async () => {
+    phoneShell.value = true;
+    const updated = "2026-11-13T01:28:47.000Z";
+    listSubscriptions.mockResolvedValue([
+      sampleMeta({
+        name: "flower",
+        last_updated: updated,
+        provider_info: ["Traffic: 11.84 GB | 150 GB", "Expire: 2099-01-01"],
+      }),
+    ]);
+
+    const view = within(render(<Subscriptions />).container);
+    await waitFor(() => {
+      expect(view.getByText("flower")).toBeInTheDocument();
+    });
+    const expected = new Date(updated).toLocaleString(formatLocale());
+    const time = view.getByText(expected);
+    const title = view.getByText("flower").closest("[data-slot=item-title]");
+    const traffic = view.getByTestId(`sub-traffic-${sampleMeta().id}`);
+    expect(title).not.toContainElement(time);
+    expect(time).toHaveAttribute("data-slot", "item-description");
+    expect(traffic).not.toBe(time);
+    const row = view.getByText("flower").closest("[data-slot=item]");
+    expect(row?.querySelectorAll("[data-slot=item-description]")).toHaveLength(2);
   });
 
   it("shows a capsule toast when listing fails", async () => {
@@ -705,7 +742,8 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("legacy")).toBeInTheDocument();
     });
-    expect(view.getByText(t("subs.summaryNodes", { n: 5 }), { exact: false })).toBeInTheDocument();
+    // No update time, so the row does not invent a stats line from the old fields.
+    expect(container.querySelector("[data-slot=item-description]")).toBeNull();
   });
 
   it("imports with auto-update when the import switch is on", async () => {
