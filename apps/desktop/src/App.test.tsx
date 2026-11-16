@@ -276,6 +276,9 @@ describe("App", () => {
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.rules") }));
     expect(view.getByTestId("rules-panel")).toBeInTheDocument();
+    const addRuleButton = screen.getByRole("button", { name: t("rules.addCustom") });
+    expect(addRuleButton.closest("[data-titlebar-actions]")).not.toBeNull();
+    expect(view.getByTestId("rules-panel").contains(addRuleButton)).toBe(false);
 
     fireEvent.click(view.getByRole("button", { name: t("app.nav.subs") }));
     expect(view.getByTestId("subs-panel")).toBeInTheDocument();

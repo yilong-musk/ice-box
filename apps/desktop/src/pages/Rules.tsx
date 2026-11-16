@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Ban, CirclePlay, Pencil, Trash2 } from "lucide-react";
+import { Ban, CirclePlay, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -15,6 +15,7 @@ import { EmptyState } from "../components/EmptyState";
 import { RuleFormDialog } from "../components/RuleFormDialog";
 import { RuleJsonDialog } from "../components/RuleJsonDialog";
 import { RuleSetStatusDialog } from "../components/RuleSetStatusDialog";
+import { TitlebarActions } from "../components/TitlebarActions";
 import { ErrorAlert, WarnAlert } from "../components/StatusAlert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -354,14 +355,19 @@ export function Rules({ onNavigate, active = true }: Props) {
       size="sm"
       variant="outline"
       className="shrink-0"
+      aria-label={t("rules.addCustom")}
+      title={phone ? t("rules.addCustom") : undefined}
       onClick={() => setCustomForm({ mode: "add" })}
     >
-      {t("rules.addCustom")}
+      {phone ? <Plus aria-hidden="true" /> : t("rules.addCustom")}
     </Button>
   );
 
   return (
     <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="rules-panel">
+      {active ? (
+        <TitlebarActions>{addCustomButton}</TitlebarActions>
+      ) : null}
       {error && <ErrorAlert className="shrink-0">{error}</ErrorAlert>}
       {applyWarning && (
         <WarnAlert className="shrink-0" role="alert">
@@ -371,9 +377,6 @@ export function Rules({ onNavigate, active = true }: Props) {
 
       <Card size="sm" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0">
-          {/* On the phone the toolbar is only search + refresh; the add
-              button joins the end of the filter chips below, so it fills the
-              gap after the last chip instead of taking a row of its own. */}
           <CardAction
             className={cn(
               "col-span-2 col-start-1 flex w-full items-center justify-end gap-2",
@@ -408,15 +411,9 @@ export function Rules({ onNavigate, active = true }: Props) {
                 data-testid="rule-sets-button"
                 onClick={() => setRuleSetsOpen(true)}
               >
-                {(() => {
-                  const pending = ruleSets.filter((s) => s.state === "pending").length;
-                  return pending > 0
-                    ? t("rules.ruleSetsPending", { count: ruleSets.length, pending })
-                    : t("rules.ruleSets", { count: ruleSets.length });
-                })()}
+                {t("rules.ruleSetsManage")}
               </Button>
             ) : null}
-            {phone ? null : addCustomButton}
           </CardAction>
         </CardHeader>
         <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -453,7 +450,7 @@ export function Rules({ onNavigate, active = true }: Props) {
                 });
               }}
               // On the phone the group box is dissolved (display: contents)
-              // so its chips and the add button wrap as one flow.
+              // so its chips wrap as one flow.
               className={
                 phone
                   ? "contents"
@@ -476,7 +473,6 @@ export function Rules({ onNavigate, active = true }: Props) {
                 {t("rules.disabledCount", { count: overview.disabled })}
               </ToggleGroupItem>
             </ToggleGroup>
-            {phone ? addCustomButton : null}
           </div>
 
           {!showList ? (

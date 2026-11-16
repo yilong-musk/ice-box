@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
 import { Rules } from "./Rules";
@@ -104,6 +104,9 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Rules", () => {
   beforeEach(() => {
+    const actions = document.createElement("div");
+    actions.dataset.titlebarActions = "";
+    document.body.appendChild(actions);
     vi.clearAllMocks();
     phoneShell.value = false;
     getRuleOverview.mockResolvedValue(sampleOverview());
@@ -119,6 +122,11 @@ describe("Rules", () => {
       { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
       { tag: "Proxies", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
     ]);
+  });
+
+  afterEach(() => {
+    document.querySelector("[data-titlebar-actions]")?.remove();
+    vi.unstubAllGlobals();
   });
 
   it("shows the outbound beside the actions on desktop", async () => {
@@ -165,7 +173,7 @@ describe("Rules", () => {
     expect(container.querySelector("[data-slot='item-actions']")).not.toHaveTextContent(longOutbound);
   });
 
-  it("flows the add button after the filter chips on the phone", async () => {
+  it("shows an icon-only add button in the title bar on the phone", async () => {
     phoneShell.value = true;
     const { container } = render(<Rules />);
     const view = within(container);
@@ -176,29 +184,39 @@ describe("Rules", () => {
     expect(within(toolbar).getByRole("searchbox")).toHaveClass("min-w-0");
     expect(within(toolbar).queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
 
-    // The chips and the add button wrap as one flow: the group box is
-    // dissolved and the full-label add button is the flow's last item.
+    // The filter chips no longer carry the add button; it sits in the header
+    // beside the page title, compact as an icon with its label as the name.
     const filters = view.getByTestId("rules-filters");
     const group = within(filters).getByRole("radiogroup", { name: t("rules.filtersAria") });
     expect(group).toHaveClass("contents");
-    const add = within(filters).getByRole("button", { name: t("rules.addCustom") });
-    expect(add).toHaveTextContent(t("rules.addCustom"));
-    expect(filters.lastElementChild).toBe(add);
+    expect(within(filters).queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
+
+    const add = screen.getByRole("button", { name: t("rules.addCustom") });
+    expect(document.querySelector("[data-titlebar-actions]")).toContainElement(add);
+    expect(add).toHaveAttribute("title", t("rules.addCustom"));
+    expect(add.querySelector("svg")).not.toBeNull();
+    expect(add).not.toHaveTextContent(t("rules.addCustom"));
     fireEvent.click(add);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
-  it("keeps the add button in the wrapping toolbar on desktop", async () => {
+  it("keeps the add button in the title bar with its label on desktop", async () => {
     const { container } = render(<Rules />);
     const view = within(container);
     await view.findByText("youtube.com");
 
     const toolbar = view.getByTestId("rules-toolbar");
     expect(toolbar).toHaveClass("flex-wrap");
-    expect(within(toolbar).getByRole("button", { name: t("rules.addCustom") })).toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
     expect(
       within(view.getByTestId("rules-filters")).queryByRole("button", { name: t("rules.addCustom") }),
     ).toBeNull();
+
+    const add = screen.getByRole("button", { name: t("rules.addCustom") });
+    expect(document.querySelector("[data-titlebar-actions]")).toContainElement(add);
+    expect(add).toHaveTextContent(t("rules.addCustom"));
+    expect(add).toHaveAttribute("data-variant", "outline");
+    expect(view.getByTestId("rules-panel").contains(add)).toBe(false);
   });
 
   it("draws no arrow for an action-only rule on the phone", async () => {
@@ -661,7 +679,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
@@ -698,7 +716,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     const outbound = screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement;
     await waitFor(() => {
       expect(
@@ -719,7 +737,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     fireEvent.change(screen.getByLabelText(t("ruleForm.matcherType")), {
       target: { value: "ip_is_private" },
     });
@@ -744,7 +762,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     const addButton = screen.getByRole("button", {
       name: t("ruleForm.add"),
     }) as HTMLButtonElement;
@@ -768,7 +786,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "BiliVideo.COM" } });
     expect(input.value).toBe("bilivideo.com");
@@ -788,7 +806,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     const input = screen.getByLabelText(t("ruleForm.matchValue")) as HTMLInputElement;
     fireEvent.compositionStart(input);
     // Rewriting the field while the IME owns it makes WebKit re-commit the
@@ -807,7 +825,7 @@ describe("Rules", () => {
       expect(view.getByText("youtube.com")).toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
       target: { value: "x.io" },
     });
@@ -822,7 +840,7 @@ describe("Rules", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    fireEvent.click(view.getByRole("button", { name: t("rules.addCustom") }));
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
@@ -923,7 +941,7 @@ describe("Rules", () => {
     ]);
     render(<Rules />);
     const button = await screen.findByTestId("rule-sets-button");
-    expect(button.textContent).toBe(t("rules.ruleSetsPending", { count: 2, pending: 1 }));
+    expect(button.textContent).toBe(t("rules.ruleSetsManage"));
 
     fireEvent.click(button);
     const dialog = await screen.findByTestId("rule-set-status-dialog");
@@ -939,7 +957,7 @@ describe("Rules", () => {
     );
     expect(view.getAllByText(t("ruleSets.state.downloaded"))).toHaveLength(2);
     expect(screen.getByTestId("rule-sets-button").textContent).toBe(
-      t("rules.ruleSets", { count: 2 }),
+      t("rules.ruleSetsManage"),
     );
   });
 });
