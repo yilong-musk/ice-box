@@ -17,7 +17,7 @@ import {
   subscriptionTrafficView,
   trafficTone,
 } from "../lib/subscriptions";
-import { type Tone } from "../lib/tone";
+import { TONE_WASH } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CapsuleToast, useCapsuleToast } from "../components/CapsuleToast";
@@ -307,7 +307,7 @@ export function Subscriptions({ active = true }: Props) {
                     used != null ? Math.min(1, Math.max(0, 1 - used)) : null;
                   const wash =
                     used != null && remaining != null && remaining > 0
-                      ? REMAINING_WASH[trafficTone(used)]
+                      ? TONE_WASH[trafficTone(used)]
                       : null;
                   return (
                     <Item
@@ -315,6 +315,9 @@ export function Subscriptions({ active = true }: Props) {
                       size="sm"
                       variant="outline"
                       className={cn(
+                        // `isolate` belongs to the `-z-10` row wash below: it
+                        // keeps the fill inside this row's stacking context
+                        // instead of painting behind the card background.
                         "relative isolate bg-muted",
                         s.active
                           ? "border-ok"
@@ -582,10 +585,3 @@ export function Subscriptions({ active = true }: Props) {
     </div>
   );
 }
-
-/** Connection-row wash, coloured by the existing usage bands. */
-const REMAINING_WASH: Record<Tone, string> = {
-  ok: "from-ok/5 to-ok/20",
-  warn: "from-warn/5 to-warn/20",
-  bad: "from-destructive/5 to-destructive/20",
-};

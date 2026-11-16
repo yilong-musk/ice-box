@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
 import {
   connectionChain,
   connectionRule,
@@ -46,6 +47,7 @@ import {
 import { useGenerationGuard } from "../lib/generationGuard";
 import { formatBytes } from "../lib/traffic";
 import { t, useLanguagePreference } from "../lib/i18n";
+import { TONE_WASH } from "../lib/tone";
 
 const POLL_MS = 1000;
 /** Rows drawn at once. The list is redrawn every poll; search narrows a longer one. */
@@ -95,7 +97,10 @@ function ConnectionItem({
         // Drawn first so the row content paints over it.
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0 rounded-md bg-linear-to-r from-ok/5 to-ok/20 transition-[width] duration-500"
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-0 rounded-md bg-linear-to-r transition-[width] duration-500",
+            TONE_WASH.ok,
+          )}
           style={{ width: `${usage * 100}%` }}
           data-testid="connection-usage"
         />

@@ -506,9 +506,13 @@ describe("Subscriptions", () => {
     expect(title).toContainElement(view.getByText("flower"));
     expect(line.closest("[data-slot=item-description]")).toBeNull();
     expect(line).toHaveTextContent(expected);
-    expect(line.textContent).not.toContain("sing_box");
-    expect(line.textContent).not.toMatch(/节点|策略组|规则|DNS/);
-    expect(view.queryByText("sing_box")).not.toBeInTheDocument();
+    // The removed summary line printed the format and the profile stats. The
+    // suite renders English, so check the strings the row would actually show.
+    const row = view.getByText("flower").closest("[data-slot=item]");
+    expect(row).not.toBeNull();
+    for (const gone of ["sing_box", "44 nodes", "2 groups", "3 rules", "DNS"]) {
+      expect(row?.textContent ?? "").not.toContain(gone);
+    }
     expect(
       view.getByText(t("parse.groupUnknownMember", { name: "x", member: "y" }), {
         exact: false,
