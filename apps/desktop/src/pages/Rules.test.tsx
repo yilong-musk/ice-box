@@ -452,6 +452,33 @@ describe("Rules", () => {
     });
   });
 
+  it("renders row actions as icon buttons", async () => {
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText(INVERTED_CUSTOM)).toBeInTheDocument();
+    });
+
+    const customRow = view
+      .getByText(INVERTED_CUSTOM)
+      .closest("[data-slot=item]") as HTMLElement;
+    const builtinRow = view
+      .getByText("youtube.com")
+      .closest("[data-slot=item]") as HTMLElement;
+    const actions: Array<[HTMLElement, string]> = [
+      [customRow, t("common.edit")],
+      [customRow, t("common.delete")],
+      [builtinRow, t("common.disable")],
+    ];
+
+    for (const [row, label] of actions) {
+      const button = within(row).getByRole("button", { name: label });
+      expect(button.querySelector("svg")).toBeInTheDocument();
+      expect(button).not.toHaveTextContent(label);
+      expect(button).toHaveAttribute("title", label);
+    }
+  });
+
   it("edits a custom rule instead of disabling it", async () => {
     const { container } = render(<Rules />);
     const view = within(container);

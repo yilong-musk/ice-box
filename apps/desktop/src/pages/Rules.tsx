@@ -36,6 +36,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { Ban, CirclePlay, Pencil, Trash2 } from "lucide-react";
 import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -564,48 +565,66 @@ export function Rules({ onNavigate, active = true }: Props) {
                             </span>
                           </ItemDescription>
                         </ItemContent>
-                        <ItemActions className="flex-wrap">
+                        <ItemActions className="shrink-0 flex-nowrap">
                           {phone ? null : (
                             <Badge variant="outline" title={outboundLabel}>
                               {outboundLabel}
                             </Badge>
                           )}
+                          {/* Row actions are icon buttons; the labels serve as
+                              accessible names and hover titles. */}
                           {row.custom ? (
                             <Button
                               type="button"
-                              size="sm"
+                              size="icon-sm"
                               variant="outline"
                               disabled={busy}
+                              aria-label={t("common.edit")}
+                              title={t("common.edit")}
                               onClick={() =>
                                 customRuleEditable(row.rule)
                                   ? setCustomForm({ mode: "edit", row })
                                   : setJsonForm(row)
                               }
                             >
-                              {t("common.edit")}
+                              <Pencil aria-hidden="true" />
                             </Button>
                           ) : (
                             <Button
                               type="button"
-                              size="sm"
+                              size="icon-sm"
                               variant="outline"
                               disabled={busy}
+                              aria-label={
+                                row.disabled
+                                  ? t("common.enable")
+                                  : t("common.disable")
+                              }
+                              title={
+                                row.disabled
+                                  ? t("common.enable")
+                                  : t("common.disable")
+                              }
                               onClick={() => void onToggleDisabled(row)}
                             >
-                              {row.disabled
-                                ? t("common.enable")
-                                : t("common.disable")}
+                              {row.disabled ? (
+                                <CirclePlay aria-hidden="true" />
+                              ) : (
+                                <Ban aria-hidden="true" />
+                              )}
                             </Button>
                           )}
                           {row.custom ? (
                             <Button
                               type="button"
-                              size="sm"
+                              size="icon-sm"
                               variant="destructive"
                               disabled={busy}
+                              aria-label={t("common.delete")}
+                              title={t("common.delete")}
                               onClick={() => setPendingDelete(row)}
                             >
-                              {t("common.delete")}
+                              <Trash2 aria-hidden="true" />
                             </Button>
                           ) : null}
                         </ItemActions>
