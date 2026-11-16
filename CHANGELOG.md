@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Switches use the active green when on, so the enabled state reads at a glance.
+  The thumb also stays light in dark mode, so a checked switch is one solid
+  green field instead of green around a dark hole. Off is unchanged.
 
 ## [0.3.5] - 2026-11-14
 
