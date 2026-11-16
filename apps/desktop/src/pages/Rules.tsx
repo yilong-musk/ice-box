@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Ban, CirclePlay, Pencil, Trash2 } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -36,7 +37,6 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { Ban, CirclePlay, Pencil, Trash2 } from "lucide-react";
 import { isPhoneShell } from "@platform/shell";
 import { t, useLanguagePreference } from "../lib/i18n";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -567,8 +567,12 @@ export function Rules({ onNavigate, active = true }: Props) {
                         </ItemContent>
                         <ItemActions className="shrink-0 flex-nowrap">
                           {phone ? null : (
-                            <Badge variant="outline" title={outboundLabel}>
-                              {outboundLabel}
+                            <Badge
+                              variant="outline"
+                              className="max-w-48"
+                              title={outboundLabel}
+                            >
+                              <span className="truncate">{outboundLabel}</span>
                             </Badge>
                           )}
                           {/* Row actions are icon buttons; the labels serve as

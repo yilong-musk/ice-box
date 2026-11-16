@@ -465,10 +465,14 @@ describe("Rules", () => {
     const builtinRow = view
       .getByText("youtube.com")
       .closest("[data-slot=item]") as HTMLElement;
+    const disabledRow = view
+      .getByText("cn")
+      .closest("[data-slot=item]") as HTMLElement;
     const actions: Array<[HTMLElement, string]> = [
       [customRow, t("common.edit")],
       [customRow, t("common.delete")],
       [builtinRow, t("common.disable")],
+      [disabledRow, t("common.enable")],
     ];
 
     for (const [row, label] of actions) {
