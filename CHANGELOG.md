@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   page title, the same slot as the subscription import button. On the phone it
   is an icon-only button, and the rule-set button reads "Manage Rule-sets"
   instead of a count. A not-ready rule-set turns that button amber.
+- Subscription auto-update is one dropdown instead of a switch plus a second
+  dropdown: "Never" comes first, followed by the refresh intervals. It is the
+  same control in each subscription row and in the import dialog, and turning
+  auto-update off keeps the last frequency for when it is turned back on.
 
 ## [0.3.5] - 2026-11-14
 

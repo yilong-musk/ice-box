@@ -105,7 +105,6 @@ describe("Subscriptions", () => {
       expect(view.getByText("a")).toBeInTheDocument();
     });
     expect(view.queryByLabelText(t("subs.autoUpdate"))).not.toBeInTheDocument();
-    expect(view.queryByLabelText(t("subs.interval"))).not.toBeInTheDocument();
   });
 
   it("opens the import dialog from the subscription list", async () => {
@@ -752,7 +751,7 @@ describe("Subscriptions", () => {
     expect(container.querySelector("[data-slot=item-description]")).toBeNull();
   });
 
-  it("imports with auto-update when the import switch is on", async () => {
+  it("imports with auto-update when the import dropdown picks an interval", async () => {
     listSubscriptions.mockResolvedValue([]);
     const add = vi.mocked(api.addSubscription).mockResolvedValue({
       ...sampleMeta(),
@@ -765,13 +764,11 @@ describe("Subscriptions", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
     const dialog = await screen.findByRole("dialog");
-    const importSwitch = within(dialog).getByLabelText(t("subs.autoUpdate"));
-    expect(importSwitch).toBeChecked();
-
-    const interval = within(dialog).getByLabelText(t("subs.interval"));
-    expect(interval).toBeEnabled();
-    expect(interval).toHaveValue("twelve_hours");
-    fireEvent.change(interval, { target: { value: "six_hours" } });
+    const choice = within(dialog).getByLabelText(t("subs.autoUpdate"));
+    expect(choice).toHaveValue("twelve_hours");
+    // "Never" is the first option, then the intervals.
+    expect(within(choice).getAllByRole("option")[0]).toHaveValue("never");
+    fireEvent.change(choice, { target: { value: "six_hours" } });
 
     fireEvent.change(
       within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
@@ -789,6 +786,35 @@ describe("Subscriptions", () => {
     });
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("imports with auto-update off when the import dropdown stays on Never", async () => {
+    listSubscriptions.mockResolvedValue([]);
+    const add = vi.mocked(api.addSubscription).mockResolvedValue(sampleMeta());
+
+    render(<Subscriptions />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("subs.importTitle") })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: t("subs.importTitle") }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(t("subs.autoUpdate")), {
+      target: { value: "never" },
+    });
+    fireEvent.change(
+      within(dialog).getByPlaceholderText(t("subs.urlPlaceholder")),
+      { target: { value: "https://example.com/new" } },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: t("subs.importAction") }));
+
+    await waitFor(() => {
+      expect(add).toHaveBeenCalledWith(
+        "https://example.com/new",
+        undefined,
+        false,
+        "twelve_hours",
+      );
     });
   });
 
@@ -843,12 +869,17 @@ describe("Subscriptions", () => {
     expect(within(dialog).getByText(t("subs.shareDescFile"))).toBeInTheDocument();
   });
 
-  it("toggles auto-update per subscription via setSubscriptionAutoUpdate", async () => {
+  it("changes auto-update from a subscription row dropdown", async () => {
     const setAutoUpdate = vi.fn().mockResolvedValue({});
     vi.mocked(api.setSubscriptionAutoUpdate).mockImplementation(setAutoUpdate);
     listSubscriptions.mockResolvedValue([
       sampleMeta({ name: "a", auto_update: true, id: "11111111-1111-1111-1111-111111111111" }),
-      sampleMeta({ name: "b", auto_update: false, id: "22222222-2222-2222-2222-222222222222" }),
+      sampleMeta({
+        name: "b",
+        auto_update: false,
+        auto_update_interval: "six_hours",
+        id: "22222222-2222-2222-2222-222222222222",
+      }),
     ]);
 
     const { container } = render(<Subscriptions />);
@@ -856,46 +887,32 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(view.getByText("b")).toBeInTheDocument();
     });
-    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
-    const switches = within(rowB).getAllByRole("switch", {
-      name: t("subs.autoUpdate"),
-    });
-    expect(switches).toHaveLength(1);
-    expect(switches[0]).not.toBeChecked();
-    fireEvent.click(switches[0]);
+
+    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
+    const dropdownA = within(rowA).getByLabelText(t("subs.autoUpdate"));
+    expect(dropdownA).toHaveValue("one_hour");
+
+    // Turning auto-update off keeps the frequency the user had picked.
+    fireEvent.change(dropdownA, { target: { value: "never" } });
     await waitFor(() => {
       expect(setAutoUpdate).toHaveBeenCalledWith(
-        "22222222-2222-2222-2222-222222222222",
-        true,
+        "11111111-1111-1111-1111-111111111111",
+        false,
         "one_hour",
       );
     });
 
-    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
-    expect(within(rowA).getAllByRole("switch", { name: t("subs.autoUpdate") })[0]).toBeChecked();
-  });
-
-  it("changes the auto-update interval from a subscription row", async () => {
-    const setAutoUpdate = vi.fn().mockResolvedValue({});
-    vi.mocked(api.setSubscriptionAutoUpdate).mockImplementation(setAutoUpdate);
-    listSubscriptions.mockResolvedValue([
-      sampleMeta({ name: "a", auto_update: true, id: "11111111-1111-1111-1111-111111111111" }),
-    ]);
-
-    const { container } = render(<Subscriptions />);
-    const view = within(container);
-    await waitFor(() => {
-      expect(view.getByText("a")).toBeInTheDocument();
-    });
-    const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
-    const interval = within(rowA).getByLabelText(t("subs.interval"));
-    expect(interval).toHaveValue("one_hour");
-    fireEvent.change(interval, { target: { value: "twelve_hours" } });
+    // A subscription that is off shows "Never", and turning it back on saves
+    // the interval it still stores.
+    const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
+    const dropdownB = within(rowB).getByLabelText(t("subs.autoUpdate"));
+    expect(dropdownB).toHaveValue("never");
+    fireEvent.change(dropdownB, { target: { value: "six_hours" } });
     await waitFor(() => {
       expect(setAutoUpdate).toHaveBeenCalledWith(
-        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
         true,
-        "twelve_hours",
+        "six_hours",
       );
     });
   });
@@ -915,16 +932,18 @@ describe("Subscriptions", () => {
     });
     const rowA = view.getByText("a").closest("[data-slot=item]") as HTMLElement;
     const rowB = view.getByText("b").closest("[data-slot=item]") as HTMLElement;
-    // The only switch left in a row is auto-update; activation has none.
-    expect(within(rowB).getAllByRole("switch")).toHaveLength(1);
+    // Activation has no control of its own; the row's only control is the
+    // auto-update dropdown.
+    expect(within(rowB).queryAllByRole("switch")).toHaveLength(0);
+    expect(within(rowB).getByLabelText(t("subs.autoUpdate"))).toBeInTheDocument();
     expect(rowA).toHaveAttribute("aria-current", "true");
     expect(rowB).not.toHaveAttribute("aria-current");
 
     // Clicking the already-active row or a control inside a row does nothing.
     fireEvent.click(rowA);
-    const autoSwitch = within(rowB).getByRole("switch", { name: t("subs.autoUpdate") });
-    fireEvent.click(autoSwitch);
-    await waitFor(() => expect(autoSwitch).toBeEnabled());
+    const autoUpdate = within(rowB).getByLabelText(t("subs.autoUpdate"));
+    fireEvent.change(autoUpdate, { target: { value: "six_hours" } });
+    await waitFor(() => expect(autoUpdate).toBeEnabled());
     expect(setActive).not.toHaveBeenCalled();
 
     fireEvent.click(within(rowB).getByText("b"));
