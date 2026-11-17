@@ -13,3 +13,13 @@ export const PaneVisibleContext = createContext(true);
 export function usePaneVisible(): boolean {
   return useContext(PaneVisibleContext);
 }
+
+/**
+ * Tab of the pane around a page; null when a page renders on its own. Titles
+ * the row of title-bar slots the page's actions portal into.
+ */
+export const PaneTabContext = createContext<string | null>(null);
+
+export function usePaneTab(): string | null {
+  return useContext(PaneTabContext);
+}
