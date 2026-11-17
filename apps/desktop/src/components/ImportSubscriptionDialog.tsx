@@ -10,20 +10,19 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { Switch } from "@/components/ui/switch";
 import { ErrorAlert, WarnAlert } from "@/components/StatusAlert";
 import type { SubscriptionAutoUpdateInterval } from "@/api/client";
 import { isInsecureSubscriptionUrl } from "@/lib/subscriptions";
+import {
+  AUTO_UPDATE_INTERVALS,
+  AUTO_UPDATE_NEVER,
+  IMPORT_AUTO_UPDATE_INTERVAL,
+  autoUpdateNeverLabel,
+  intervalLabel,
+  parseAutoUpdateChoice,
+} from "@/lib/subscriptionAutoUpdate";
 import { t, useLanguagePreference } from "@/lib/i18n";
 import { isPhoneShell } from "@platform/shell";
-
-const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
-  "one_hour",
-  "three_hours",
-  "six_hours",
-  "twelve_hours",
-  "twenty_four_hours",
-];
 
 /** Matches `MAX_BODY_BYTES` in ice-subscription. */
 const MAX_SUBSCRIPTION_FILE_BYTES = 8 * 1024 * 1024;
@@ -35,6 +34,8 @@ type ImportSubscriptionDialogProps = {
   busy: boolean;
   error: string | null;
   onOpenChange: (open: boolean) => void;
+  /** `autoUpdate` is false when "Never" is chosen; `interval` is then the last
+   * chosen frequency, kept for when auto-update is turned back on. */
   onImportUrl: (
     url: string,
     name: string | undefined,
@@ -43,10 +44,6 @@ type ImportSubscriptionDialogProps = {
   ) => Promise<void>;
   onImportFile: (content: string, name: string | undefined) => Promise<void>;
 };
-
-function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
-  return t(`subs.interval.${interval}`);
-}
 
 function nameFromFilename(filename: string): string {
   const base = filename.split(/[/\\]/).pop() ?? "";
@@ -80,9 +77,9 @@ function ImportSubscriptionDialog({
   const [mode, setMode] = useState<ImportMode>("url");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
-  const [autoUpdate, setAutoUpdate] = useState(true);
-  const [autoUpdateInterval, setAutoUpdateInterval] =
-    useState<SubscriptionAutoUpdateInterval>("twelve_hours");
+  const [autoUpdateChoice, setAutoUpdateChoice] = useState<string>(
+    IMPORT_AUTO_UPDATE_INTERVAL,
+  );
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
@@ -92,8 +89,7 @@ function ImportSubscriptionDialog({
     setMode("url");
     setUrl("");
     setName("");
-    setAutoUpdate(true);
-    setAutoUpdateInterval("twelve_hours");
+    setAutoUpdateChoice(IMPORT_AUTO_UPDATE_INTERVAL);
     setFile(null);
     setFileError(null);
     setReading(false);
@@ -109,11 +105,15 @@ function ImportSubscriptionDialog({
     event.preventDefault();
     if (!canSubmit) return;
     if (mode === "url") {
+      const choice = parseAutoUpdateChoice(autoUpdateChoice);
+      const interval = choice?.autoUpdate
+        ? choice.interval
+        : IMPORT_AUTO_UPDATE_INTERVAL;
       await onImportUrl(
         url.trim(),
         name.trim() || undefined,
-        phone ? false : autoUpdate,
-        autoUpdateInterval,
+        phone ? false : (choice?.autoUpdate ?? false),
+        interval,
       );
       return;
     }
@@ -256,33 +256,20 @@ function ImportSubscriptionDialog({
                 />
               </Field>
               {phone || mode === "file" ? null : (
-                <Field orientation="horizontal" className="w-auto gap-1.5">
-                  <Switch
-                    id="import-sub-auto-update"
-                    size="sm"
-                    checked={autoUpdate}
-                    disabled={locked}
-                    aria-label={t("subs.autoUpdate")}
-                    onCheckedChange={setAutoUpdate}
-                  />
-                  <FieldLabel
-                    htmlFor="import-sub-auto-update"
-                    className="leading-none text-muted-foreground"
-                  >
+                <Field>
+                  <FieldLabel htmlFor="import-sub-auto-update">
                     {t("subs.autoUpdate")}
                   </FieldLabel>
                   <NativeSelect
+                    id="import-sub-auto-update"
                     size="sm"
-                    className="w-auto"
-                    aria-label={t("subs.interval")}
-                    value={autoUpdateInterval}
-                    disabled={locked || !autoUpdate}
-                    onChange={(event) =>
-                      setAutoUpdateInterval(
-                        event.target.value as SubscriptionAutoUpdateInterval,
-                      )
-                    }
+                    value={autoUpdateChoice}
+                    disabled={locked}
+                    onChange={(event) => setAutoUpdateChoice(event.target.value)}
                   >
+                    <NativeSelectOption value={AUTO_UPDATE_NEVER}>
+                      {autoUpdateNeverLabel()}
+                    </NativeSelectOption>
                     {AUTO_UPDATE_INTERVALS.map((interval) => (
                       <NativeSelectOption key={interval} value={interval}>
                         {intervalLabel(interval)}

@@ -681,7 +681,7 @@ export const api = {
       userinfo: null,
       provider_info: [],
       auto_update: autoUpdate,
-      auto_update_interval: autoUpdate ? interval : null,
+      auto_update_interval: interval,
       source: "remote",
     };
     subscriptions.push(sub);
@@ -747,7 +747,7 @@ export const api = {
     }
     return sub;
   },
-  async setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.auto_update = autoUpdate; sub.auto_update_interval = autoUpdate ? interval : null; return sub; },
+  async setSubscriptionAutoUpdate(id: string, autoUpdate: boolean, interval: SubscriptionAutoUpdateInterval): Promise<SubscriptionMeta> { await delay(); const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0]; sub.auto_update = autoUpdate; sub.auto_update_interval = interval; return sub; },
   async subscriptionShare(id: string, kind: "url" | "singbox"): Promise<string> {
     await delay();
     const sub = subscriptions.find((item) => item.id === id) ?? subscriptions[0];

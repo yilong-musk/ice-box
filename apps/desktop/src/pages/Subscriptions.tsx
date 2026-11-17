@@ -7,7 +7,6 @@ import {
   formatInvokeError,
   formatInvokeErrorTitle,
   formatUiMessage,
-  type SubscriptionAutoUpdateInterval,
   type SubscriptionMeta,
 } from "../api/client";
 import { useGenerationGuard } from "../lib/generationGuard";
@@ -17,6 +16,15 @@ import {
   subscriptionTrafficView,
   trafficTone,
 } from "../lib/subscriptions";
+import {
+  AUTO_UPDATE_INTERVALS,
+  AUTO_UPDATE_NEVER,
+  autoUpdateChoiceValue,
+  autoUpdateNeverLabel,
+  intervalLabel,
+  parseAutoUpdateChoice,
+  retainedAutoUpdateInterval,
+} from "../lib/subscriptionAutoUpdate";
 import { TONE_WASH } from "../lib/tone";
 import { clearNodesSnapshot } from "../lib/nodes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -49,22 +57,9 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { formatLocale, t, useLanguagePreference } from "../lib/i18n";
 import { isPhoneShell } from "@platform/shell";
-
-const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
-  "one_hour",
-  "three_hours",
-  "six_hours",
-  "twelve_hours",
-  "twenty_four_hours",
-];
-
-function intervalLabel(interval: SubscriptionAutoUpdateInterval): string {
-  return t(`subs.interval.${interval}`);
-}
 
 /** Anything interactive: native controls, labels, and any element that is
  * focusable or carries an ARIA role (custom widgets, Radix triggers, fields). */
@@ -466,23 +461,10 @@ export function Subscriptions({ active = true }: Props) {
                       ) : null}
                       {phone || s.source === "file" ? null : (
                         <ItemFooter>
+                          {/* One dropdown: "Never" first, then the intervals.
+                              It replaces a switch plus a second dropdown, so
+                              the off state is a frequency choice too. */}
                           <Field orientation="horizontal" className="w-auto gap-1.5">
-                            <Switch
-                              id={`sub-auto-${s.id}`}
-                              size="sm"
-                              checked={!!s.auto_update}
-                              disabled={busy}
-                              aria-label={t("subs.autoUpdate")}
-                              onCheckedChange={(checked) =>
-                                void run(() =>
-                                  api.setSubscriptionAutoUpdate(
-                                    s.id,
-                                    checked,
-                                    s.auto_update_interval ?? "one_hour",
-                                  ),
-                                )
-                              }
-                            />
                             <FieldLabel
                               htmlFor={`sub-auto-${s.id}`}
                               className="leading-none text-muted-foreground"
@@ -490,22 +472,30 @@ export function Subscriptions({ active = true }: Props) {
                               {t("subs.autoUpdate")}
                             </FieldLabel>
                             <NativeSelect
+                              id={`sub-auto-${s.id}`}
                               size="sm"
                               className="w-auto"
-                              aria-label={t("subs.interval")}
-                              value={s.auto_update_interval ?? "one_hour"}
-                              disabled={busy || !s.auto_update}
-                              onChange={(e) =>
+                              value={autoUpdateChoiceValue(s)}
+                              disabled={busy}
+                              onChange={(e) => {
+                                const choice = parseAutoUpdateChoice(
+                                  e.target.value,
+                                );
+                                if (!choice) return;
                                 void run(() =>
                                   api.setSubscriptionAutoUpdate(
                                     s.id,
-                                    s.auto_update,
-                                    e.target
-                                      .value as SubscriptionAutoUpdateInterval,
+                                    choice.autoUpdate,
+                                    choice.autoUpdate
+                                      ? choice.interval
+                                      : retainedAutoUpdateInterval(s),
                                   ),
-                                )
-                              }
+                                );
+                              }}
                             >
+                              <NativeSelectOption value={AUTO_UPDATE_NEVER}>
+                                {autoUpdateNeverLabel()}
+                              </NativeSelectOption>
                               {AUTO_UPDATE_INTERVALS.map((interval) => (
                                 <NativeSelectOption
                                   key={interval}
