@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Subscription rows show the remaining quota as the row's background wash
+  instead of a progress bar: green below 80% used, yellow up to 94%, red from
+  95%. The row keeps only the last update time, and share, update, and delete
+  are icon buttons.
+- Rule rows use icon buttons for edit, delete, and enable/disable.
 - Switches use the active green when on, so the enabled state reads at a glance.
   The thumb also stays light in dark mode, so a checked switch is one solid
   green field instead of green around a dark hole. Off is unchanged.
