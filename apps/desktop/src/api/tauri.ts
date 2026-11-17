@@ -119,7 +119,9 @@ export const api = {
         url,
         name: name ?? null,
         auto_update: autoUpdate,
-        auto_update_interval: autoUpdate ? interval : null,
+        // Stored even while auto-update is off: the backend only clears the
+        // flag, and the interval is what turning it back on restores.
+        auto_update_interval: interval,
       },
     }),
   importSubscriptionFile: (content: string, name?: string) =>

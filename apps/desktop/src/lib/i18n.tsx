@@ -235,7 +235,7 @@ const zh = {
   "subs.importFileReadFailed": "无法读取该文件。",
   "subs.fileBadge": "本地文件",
   "subs.autoUpdate": "自动更新",
-  "subs.autoUpdateNever": "永不",
+  "subs.autoUpdateNever": "从不更新",
   "subs.activateRow": "激活订阅 {name}",
   "subs.interval.one_hour": "1 小时",
   "subs.interval.three_hours": "3 小时",

@@ -16,6 +16,7 @@ import { isInsecureSubscriptionUrl } from "@/lib/subscriptions";
 import {
   AUTO_UPDATE_INTERVALS,
   AUTO_UPDATE_NEVER,
+  IMPORT_AUTO_UPDATE_INTERVAL,
   autoUpdateNeverLabel,
   intervalLabel,
   parseAutoUpdateChoice,
@@ -25,10 +26,6 @@ import { isPhoneShell } from "@platform/shell";
 
 /** Matches `MAX_BODY_BYTES` in ice-subscription. */
 const MAX_SUBSCRIPTION_FILE_BYTES = 8 * 1024 * 1024;
-
-/** Frequency stored with an import that starts on "Never": the dropdown's
- * default, kept so turning auto-update on later has a sensible interval. */
-const IMPORT_DEFAULT_INTERVAL: SubscriptionAutoUpdateInterval = "twelve_hours";
 
 type ImportMode = "url" | "file";
 
@@ -80,7 +77,9 @@ function ImportSubscriptionDialog({
   const [mode, setMode] = useState<ImportMode>("url");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
-  const [autoUpdateChoice, setAutoUpdateChoice] = useState<string>("twelve_hours");
+  const [autoUpdateChoice, setAutoUpdateChoice] = useState<string>(
+    IMPORT_AUTO_UPDATE_INTERVAL,
+  );
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
@@ -90,7 +89,7 @@ function ImportSubscriptionDialog({
     setMode("url");
     setUrl("");
     setName("");
-    setAutoUpdateChoice("twelve_hours");
+    setAutoUpdateChoice(IMPORT_AUTO_UPDATE_INTERVAL);
     setFile(null);
     setFileError(null);
     setReading(false);
@@ -107,7 +106,9 @@ function ImportSubscriptionDialog({
     if (!canSubmit) return;
     if (mode === "url") {
       const choice = parseAutoUpdateChoice(autoUpdateChoice);
-      const interval = choice?.autoUpdate ? choice.interval : IMPORT_DEFAULT_INTERVAL;
+      const interval = choice?.autoUpdate
+        ? choice.interval
+        : IMPORT_AUTO_UPDATE_INTERVAL;
       await onImportUrl(
         url.trim(),
         name.trim() || undefined,
@@ -255,14 +256,13 @@ function ImportSubscriptionDialog({
                 />
               </Field>
               {phone || mode === "file" ? null : (
-                <Field className="w-auto">
+                <Field>
                   <FieldLabel htmlFor="import-sub-auto-update">
                     {t("subs.autoUpdate")}
                   </FieldLabel>
                   <NativeSelect
                     id="import-sub-auto-update"
                     size="sm"
-                    className="w-auto"
                     value={autoUpdateChoice}
                     disabled={locked}
                     onChange={(event) => setAutoUpdateChoice(event.target.value)}

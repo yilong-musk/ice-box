@@ -5,6 +5,8 @@ import { t } from "./i18n";
 import {
   AUTO_UPDATE_INTERVALS,
   AUTO_UPDATE_NEVER,
+  DEFAULT_AUTO_UPDATE_INTERVAL,
+  IMPORT_AUTO_UPDATE_INTERVAL,
   autoUpdateChoiceValue,
   autoUpdateNeverLabel,
   intervalLabel,
@@ -73,5 +75,23 @@ describe("option labels", () => {
   it("reads Never and the intervals from the dictionary", () => {
     expect(autoUpdateNeverLabel()).toBe(t("subs.autoUpdateNever"));
     expect(intervalLabel("three_hours")).toBe(t("subs.interval.three_hours"));
+  });
+});
+
+describe("default intervals", () => {
+  it("keeps the import default out of the stored-meta fallback", () => {
+    // Two different things on purpose: a new import starts at twelve hours,
+    // while an entry with no stored interval falls back to the backend's
+    // one-hour cadence.
+    expect(IMPORT_AUTO_UPDATE_INTERVAL).not.toBe(DEFAULT_AUTO_UPDATE_INTERVAL);
+    expect(AUTO_UPDATE_INTERVALS).toContain(IMPORT_AUTO_UPDATE_INTERVAL);
+    expect(AUTO_UPDATE_INTERVALS).toContain(DEFAULT_AUTO_UPDATE_INTERVAL);
+  });
+
+  it("preselects the import default and shows it as auto-update on", () => {
+    expect(parseAutoUpdateChoice(IMPORT_AUTO_UPDATE_INTERVAL)).toEqual({
+      autoUpdate: true,
+      interval: IMPORT_AUTO_UPDATE_INTERVAL,
+    });
   });
 });

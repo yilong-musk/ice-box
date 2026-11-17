@@ -25,8 +25,21 @@ export const AUTO_UPDATE_INTERVALS: SubscriptionAutoUpdateInterval[] = [
  * the flag, and the backend keeps the stored interval. */
 export const AUTO_UPDATE_NEVER = "never";
 
+/** Frequency assumed when a stored subscription has none: an entry that
+ * predates interval selection or was written with auto-update off. It matches
+ * `AutoUpdateInterval::default_duration` in the backend, so the UI and the
+ * watchdog agree on when the next refresh is due. Do not fold this into
+ * [`IMPORT_AUTO_UPDATE_INTERVAL`]: that one is a product choice for new
+ * imports, not a fallback for data that already exists. */
 export const DEFAULT_AUTO_UPDATE_INTERVAL: SubscriptionAutoUpdateInterval =
   "one_hour";
+
+/** Frequency preselected in the import dialog, and stored with an import that
+ * starts on "Never" so turning auto-update on later has a sensible cadence.
+ * Unlike [`DEFAULT_AUTO_UPDATE_INTERVAL`] this never applies to stored
+ * subscriptions, only to a new one. */
+export const IMPORT_AUTO_UPDATE_INTERVAL: SubscriptionAutoUpdateInterval =
+  "twelve_hours";
 
 export type AutoUpdateChoice =
   | { autoUpdate: false }
