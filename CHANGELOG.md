@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-17
+
 ### Added
 
 - Each connection row has an edit button that opens the new custom-rule dialog,
