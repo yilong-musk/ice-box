@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Switches use the active green when on, so the enabled state reads at a glance.
   The thumb also stays light in dark mode, so a checked switch is one solid
   green field instead of green around a dark hole. Off is unchanged.
+- On the Rules page, Add Custom Rule moved into the window title bar beside the
+  page title, the same slot as the subscription import button. On the phone it
+  is an icon-only button, and the rule-set button reads "Manage Rule-sets"
+  instead of a count. A not-ready rule-set turns that button amber.
 
 ## [0.3.5] - 2026-11-14
 

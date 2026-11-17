@@ -274,8 +274,9 @@ const zh = {
 
   // --- rules page ---
   "rules.savedButApplyFailed": "已保存，但应用失败：{detail}",
-  "rules.addCustom": "+ 自定义规则",
+  "rules.addCustom": "自定义规则",
   "rules.ruleSetsManage": "规则集管理",
+  "rules.ruleSetsPendingHint": "规则集管理，{count} 个未就绪",
   "ruleSets.title": "规则集",
   "ruleSets.desc": "订阅和规则用到的规则集。下载的规则集随订阅更新一起检查更新，也可以手动刷新，使用前都会经过校验。",
   "ruleSets.empty": "当前订阅没有使用规则集",
@@ -836,8 +837,9 @@ const en: Record<MessageKey, string> = {
 
   // --- rules page ---
   "rules.savedButApplyFailed": "Saved, but applying failed: {detail}",
-  "rules.addCustom": "+ Add Custom Rule",
+  "rules.addCustom": "Add Custom Rule",
   "rules.ruleSetsManage": "Manage Rule-sets",
+  "rules.ruleSetsPendingHint": "Manage Rule-sets, {count} not ready",
   "ruleSets.title": "Rule-sets",
   "ruleSets.desc": "Rule-sets used by the subscription and your rules. Downloaded sets are checked for updates whenever the subscriptions update, or when you refresh them, and validated before use.",
   "ruleSets.empty": "The active subscription uses no rule-sets",

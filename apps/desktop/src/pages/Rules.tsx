@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Ban, CirclePlay, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ban, CirclePlay, Layers, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -355,13 +355,23 @@ export function Rules({ onNavigate, active = true }: Props) {
       size="sm"
       variant="outline"
       className="shrink-0"
-      aria-label={t("rules.addCustom")}
+      aria-label={phone ? t("rules.addCustom") : undefined}
       title={phone ? t("rules.addCustom") : undefined}
       onClick={() => setCustomForm({ mode: "add" })}
     >
-      {phone ? <Plus aria-hidden="true" /> : t("rules.addCustom")}
+      <Plus aria-hidden="true" />
+      {phone ? null : t("rules.addCustom")}
     </Button>
   );
+
+  // The rule-set button is the only page-level signal that a set is not ready:
+  // its rules are skipped until a copy arrives. Tinting it keeps that visible
+  // without the count that made it read like one of the filter chips.
+  const pendingRuleSets = ruleSets.filter((s) => s.state === "pending").length;
+  const ruleSetsHint =
+    pendingRuleSets > 0
+      ? t("rules.ruleSetsPendingHint", { count: pendingRuleSets })
+      : t("rules.ruleSetsManage");
 
   return (
     <div className="rules-panel flex min-h-0 flex-1 flex-col gap-3" data-testid="rules-panel">
@@ -405,13 +415,28 @@ export function Rules({ onNavigate, active = true }: Props) {
             {ruleSets.length > 0 ? (
               <Button
                 type="button"
-                size="sm"
+                size={phone ? "icon-sm" : "sm"}
                 variant="outline"
-                className="shrink-0"
+                // A set with no usable copy silently drops the rules that need
+                // it. Tinting the button keeps that visible without a count in
+                // the label, which read like one of the filter chips and took
+                // the search field's width on the phone.
+                className={cn(
+                  "shrink-0",
+                  pendingRuleSets > 0 && "border-warn/60 text-warn",
+                )}
                 data-testid="rule-sets-button"
+                aria-label={
+                  phone || pendingRuleSets > 0 ? ruleSetsHint : undefined
+                }
+                title={phone || pendingRuleSets > 0 ? ruleSetsHint : undefined}
                 onClick={() => setRuleSetsOpen(true)}
               >
-                {t("rules.ruleSetsManage")}
+                {phone ? (
+                  <Layers aria-hidden="true" />
+                ) : (
+                  t("rules.ruleSetsManage")
+                )}
               </Button>
             ) : null}
           </CardAction>

@@ -4,6 +4,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { t, isMessageKey } from "../lib/i18n";
 import { ruleTypeLabel } from "../lib/rules";
+import {
+  installTitlebarActionsSlot,
+  removeTitlebarActionsSlot,
+  titlebarActionsSlot,
+} from "../test/titlebar";
 import { Rules } from "./Rules";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
@@ -104,9 +109,7 @@ function sampleList(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Rules", () => {
   beforeEach(() => {
-    const actions = document.createElement("div");
-    actions.dataset.titlebarActions = "";
-    document.body.appendChild(actions);
+    installTitlebarActionsSlot();
     vi.clearAllMocks();
     phoneShell.value = false;
     getRuleOverview.mockResolvedValue(sampleOverview());
@@ -125,8 +128,7 @@ describe("Rules", () => {
   });
 
   afterEach(() => {
-    document.querySelector("[data-titlebar-actions]")?.remove();
-    vi.unstubAllGlobals();
+    removeTitlebarActionsSlot();
   });
 
   it("shows the outbound beside the actions on desktop", async () => {
@@ -192,7 +194,7 @@ describe("Rules", () => {
     expect(within(filters).queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
 
     const add = screen.getByRole("button", { name: t("rules.addCustom") });
-    expect(document.querySelector("[data-titlebar-actions]")).toContainElement(add);
+    expect(titlebarActionsSlot()).toContainElement(add);
     expect(add).toHaveAttribute("title", t("rules.addCustom"));
     expect(add.querySelector("svg")).not.toBeNull();
     expect(add).not.toHaveTextContent(t("rules.addCustom"));
@@ -213,8 +215,12 @@ describe("Rules", () => {
     ).toBeNull();
 
     const add = screen.getByRole("button", { name: t("rules.addCustom") });
-    expect(document.querySelector("[data-titlebar-actions]")).toContainElement(add);
+    expect(titlebarActionsSlot()).toContainElement(add);
+    // The visible label carries no literal "+"; a drawn glyph supplies it.
+    expect(t("rules.addCustom")).not.toContain("+");
+    expect(add.querySelector("svg")).not.toBeNull();
     expect(add).toHaveTextContent(t("rules.addCustom"));
+    expect(add.getAttribute("aria-label")).toBeNull();
     expect(add).toHaveAttribute("data-variant", "outline");
     expect(view.getByTestId("rules-panel").contains(add)).toBe(false);
   });
@@ -941,7 +947,14 @@ describe("Rules", () => {
     ]);
     render(<Rules />);
     const button = await screen.findByTestId("rule-sets-button");
+    // The label stays a fixed verb; the not-ready state is the amber tint and
+    // the extra line of the accessible name, not a count in the text.
     expect(button.textContent).toBe(t("rules.ruleSetsManage"));
+    expect(button).toHaveAttribute(
+      "aria-label",
+      t("rules.ruleSetsPendingHint", { count: 1 }),
+    );
+    expect(button.className).toContain("text-warn");
 
     fireEvent.click(button);
     const dialog = await screen.findByTestId("rule-set-status-dialog");
@@ -956,8 +969,32 @@ describe("Rules", () => {
       expect(view.queryByText(t("ruleSets.state.pending"))).toBeNull(),
     );
     expect(view.getAllByText(t("ruleSets.state.downloaded"))).toHaveLength(2);
-    expect(screen.getByTestId("rule-sets-button").textContent).toBe(
-      t("rules.ruleSetsManage"),
+    const settled = screen.getByTestId("rule-sets-button");
+    expect(settled.textContent).toBe(t("rules.ruleSetsManage"));
+    // With nothing pending the visible label is the accessible name and the
+    // button goes back to the plain outline treatment.
+    expect(settled.getAttribute("aria-label")).toBeNull();
+    expect(settled.className).not.toContain("text-warn");
+  });
+
+  it("shows the rule-set button as an icon on the phone", async () => {
+    phoneShell.value = true;
+    getRuleSetStatus.mockResolvedValue([
+      { tag: "geosite-cn", source: "download", url: "https://e.org/a.srs", state: "pending" },
+    ]);
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await view.findByText("youtube.com");
+
+    const toolbar = view.getByTestId("rules-toolbar");
+    const button = await within(toolbar).findByTestId("rule-sets-button");
+    expect(button.querySelector("svg")).not.toBeNull();
+    expect(button).not.toHaveTextContent(t("rules.ruleSetsManage"));
+    expect(button).toHaveAttribute(
+      "title",
+      t("rules.ruleSetsPendingHint", { count: 1 }),
     );
+    // The tint keeps a not-ready set visible without widening the toolbar.
+    expect(button.className).toContain("text-warn");
   });
 });
