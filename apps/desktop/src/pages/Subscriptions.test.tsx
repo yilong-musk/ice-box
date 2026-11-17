@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatLocale, t } from "../lib/i18n";
 import { api } from "../api/client";
 import { clearNodesSnapshot } from "../lib/nodes";
+import {
+  installTitlebarActionsSlot,
+  removeTitlebarActionsSlot,
+} from "../test/titlebar";
 import { Subscriptions } from "./Subscriptions";
 
 const phoneShell = vi.hoisted(() => ({ value: false }));
@@ -73,9 +77,7 @@ function sampleMeta(overrides: Partial<Record<string, unknown>> = {}) {
 
 describe("Subscriptions", () => {
   beforeEach(() => {
-    const actions = document.createElement("div");
-    actions.dataset.titlebarActions = "";
-    document.body.appendChild(actions);
+    installTitlebarActionsSlot();
     phoneShell.value = false;
     vi.clearAllMocks();
     stateChangedHandler = null;
@@ -88,7 +90,7 @@ describe("Subscriptions", () => {
   });
 
   afterEach(() => {
-    document.querySelector("[data-titlebar-actions]")?.remove();
+    removeTitlebarActionsSlot();
     vi.unstubAllGlobals();
   });
 

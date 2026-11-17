@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
 import { RuntimeStoreProvider } from "../lib/runtimeStore";
+import {
+  installTitlebarActionsSlot,
+  removeTitlebarActionsSlot,
+} from "../test/titlebar";
 import { Nodes } from "./Nodes";
 
 const listNodes = vi.fn();
@@ -57,9 +61,7 @@ function useFlatProfile() {
 
 describe("Nodes", () => {
   beforeEach(() => {
-    const actions = document.createElement("div");
-    actions.dataset.titlebarActions = "";
-    document.body.appendChild(actions);
+    installTitlebarActionsSlot();
     vi.clearAllMocks();
     phoneShell.value = false;
     stateChangedHandler = null;
@@ -118,7 +120,7 @@ describe("Nodes", () => {
   });
 
   afterEach(() => {
-    document.querySelector("[data-titlebar-actions]")?.remove();
+    removeTitlebarActionsSlot();
   });
 
   it("renders node list from backend", async () => {
