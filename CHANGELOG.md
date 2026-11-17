@@ -5,6 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Node delay tests now probe in the order the page draws the nodes: a
+  favorited member of an expanded strategy group is tested first instead of
+  where the subscription listed it.
+- Switching between two pages that both put a button in the window title bar
+  no longer flashes the outgoing page's button for a frame.
+
+### Security
+
+- The zip 4.x RUSTSEC-2026-0545 and RUSTSEC-2026-0548 advisories are ignored
+  under the same policy as the other zip 4.x advisories: published updater
+  assets are `.app.tar.gz` and raw NSIS executables, never zip archives.
+  RUSTSEC-2026-0543 (chrono unmaintained) is ignored until timestamps move off
+  chrono; no patched release exists.
+
 ## [0.3.6] - 2026-11-17
 
 ### Added
