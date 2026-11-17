@@ -7,8 +7,7 @@ import {
   applyGroupNowToNodes,
   applySelectedTagToNodes,
   clearNodesSnapshot,
-  delayTestTagsForGroup,
-  delayTestTagsForList,
+  delayTestTagsForSections,
   delayResultTone,
   formatDelay,
   groupLineupKey,
@@ -58,81 +57,52 @@ describe("delayResultTone", () => {
   });
 });
 
-describe("delayTestTagsForGroup", () => {
-  it("tests only the selected exit when collapsed", () => {
+describe("delayTestTagsForSections", () => {
+  it("probes an expanded group's cards in the drawn order", () => {
+    // Favorites are drawn above the other members; the probe must follow.
     expect(
-      delayTestTagsForGroup({
-        expanded: false,
-        groupNow: "node-a",
-        groupAll: ["node-a", "node-b"],
-      }),
+      delayTestTagsForSections([
+        {
+          group: { group_now: "node-a" },
+          collapsed: false,
+          cards: ["node-c", "node-a", "node-b"],
+        },
+      ]),
+    ).toEqual(["node-c", "node-a", "node-b"]);
+  });
+
+  it("probes only the current exit of a folded group", () => {
+    expect(
+      delayTestTagsForSections([
+        {
+          group: { group_now: "node-a" },
+          collapsed: true,
+          cards: ["node-a", "node-b"],
+        },
+      ]),
     ).toEqual(["node-a"]);
   });
 
-  it("returns no tags when collapsed without a selected exit", () => {
+  it("returns no tags for a folded group without an exit", () => {
     expect(
-      delayTestTagsForGroup({
-        expanded: false,
-        groupNow: null,
-        groupAll: ["node-a", "node-b"],
-      }),
+      delayTestTagsForSections([
+        { group: { group_now: null }, collapsed: true, cards: ["node-a"] },
+      ]),
     ).toEqual([]);
   });
 
-  it("tests every member when expanded", () => {
+  it("keeps section order and probes a repeated tag once", () => {
     expect(
-      delayTestTagsForGroup({
-        expanded: true,
-        groupNow: "node-a",
-        groupAll: ["node-a", "node-b"],
-      }),
-    ).toEqual(["node-a", "node-b"]);
-  });
-});
-
-describe("delayTestTagsForList", () => {
-  const nodes = [
-    { tag: "node-a", outbound_type: "socks", group_now: null, group_all: null },
-    { tag: "node-b", outbound_type: "vmess", group_now: null, group_all: null },
-    {
-      tag: "选择组",
-      outbound_type: "selector",
-      group_now: "node-a",
-      group_all: ["node-a", "node-b"],
-    },
-    {
-      tag: "自动组",
-      outbound_type: "urltest",
-      group_now: "node-b",
-      group_all: ["node-a", "node-b"],
-    },
-  ];
-
-  it("dedupes leaf tags and does not probe group tags when collapsed", () => {
-    expect(delayTestTagsForList(nodes, new Set())).toEqual(["node-a", "node-b"]);
-  });
-
-  it("includes every member of an expanded group once", () => {
-    expect(delayTestTagsForList(nodes, new Set(["选择组"]))).toEqual([
-      "node-a",
-      "node-b",
-    ]);
-  });
-
-  it("returns no tags when only collapsed groups lack an exit", () => {
-    expect(
-      delayTestTagsForList(
-        [
-          {
-            tag: "选择组",
-            outbound_type: "selector",
-            group_now: null,
-            group_all: ["node-a"],
-          },
-        ],
-        new Set(),
-      ),
-    ).toEqual([]);
+      delayTestTagsForSections([
+        { group: null, collapsed: false, cards: ["node-a"] },
+        {
+          group: { group_now: "node-b" },
+          collapsed: false,
+          cards: ["node-b", "node-a"],
+        },
+        { group: null, collapsed: false, cards: ["node-c"] },
+      ]),
+    ).toEqual(["node-a", "node-b", "node-c"]);
   });
 });
 

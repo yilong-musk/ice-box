@@ -33,8 +33,7 @@ import {
   applyFavoriteToNodes,
   applyGroupNowToNodes,
   applySelectedTagToNodes,
-  delayTestTagsForGroup,
-  delayTestTagsForList,
+  delayTestTagsForSections,
   delayResultTone,
   formatDelay,
   groupLineupKey,
@@ -566,8 +565,6 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   nodesRef.current = nodes;
   const runningRef = useRef(running);
   runningRef.current = running;
-  const expandedRef = useRef(expandedGroups);
-  expandedRef.current = expandedGroups;
   const onSelectRef = useRef<(tag: string) => void>(() => {});
   const onGroupSelectRef = useRef<(group: string, member: string) => void>(
     () => {},
@@ -915,36 +912,22 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     setBusy(false);
   }
 
-  const onTest = useCallback((node: NodeInfo) => {
-    void (async () => {
-      if (!isGroupType(node.outbound_type)) {
-        await testTags([node.tag]);
-        return;
-      }
-      const tags = delayTestTagsForGroup({
-        expanded: expandedRef.current.has(node.tag),
-        groupNow: node.group_now,
-        groupAll: node.group_all,
-      });
-      if (tags.length === 0) {
-        setError(t("nodes.noTestableGroup"));
-        return;
-      }
-      await testTags(tags);
-    })();
-  }, []);
-
   const onTestTag = useCallback((tag: string) => {
     void testTags([tag]);
   }, []);
 
   const onTestSection = useCallback((section: GridSection) => {
-    if (section.group) {
-      onTest(section.group);
+    // Probe the section in the order its cards are drawn: a folded group only
+    // shows its exit, an expanded one its members, favorites first.
+    const tags = delayTestTagsForSections([section]);
+    if (tags.length === 0) {
+      // A folded group with no exit has nothing to probe; a node-only section
+      // with no cards is simply empty, not an error.
+      if (section.group) setError(t("nodes.noTestableGroup"));
       return;
     }
-    void testTags(section.cards);
-  }, [onTest]);
+    void testTags(tags);
+  }, []);
 
   const onToggleFavorite = useCallback(
     (node: NodeInfo) => {
@@ -988,7 +971,10 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
 
   async function onBatchTest() {
     if (!running || orderedNodes.length === 0) return;
-    const tags = delayTestTagsForList(orderedNodes, expandedGroups);
+    // Probe in the order the sections and cards are drawn, so a favorited
+    // member (moved to the top of its group and of the standalone list) is
+    // measured before the nodes drawn below it.
+    const tags = delayTestTagsForSections(sections);
     if (tags.length === 0) {
       setError(t("nodes.noTestable"));
       return;
