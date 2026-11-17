@@ -33,7 +33,7 @@ tracing-appender = { workspace = true }
 chrono = { workspace = true }
 ureq = { workspace = true }
 fs2 = "0.4"
-tauri-plugin-updater = "2.11.0"
+tauri-plugin-updater = "2.14.1"
 tauri-plugin-process = "2.3.1"
 url = "2.5.8"
 tauri-plugin-dialog = "2"
