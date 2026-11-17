@@ -19,10 +19,6 @@ ignore = [
     # glib 0.18 is pinned by gtk 0.18 / webkit2gtk 2.0 (Tauri 2 Linux). gtk3-rs
     # is unmaintained; the 0.20 fix requires Tauri's GTK4 migration.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18 unsoundness is pinned by Tauri 2 GTK3; no upgrade until GTK4" },
-    # chrono has no patched release (RUSTSEC-2026-0543). The workspace uses it
-    # for RFC 3339 timestamps and config durations only; moving to time/jiff
-    # touches the stored config and journal formats, so it is separate work.
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; migration to time/jiff is separate work" },
 ]
 
 [licenses]

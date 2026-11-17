@@ -9,7 +9,6 @@ description = "TUN capture ownership, platform permission, and recovery journal 
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 ice-types = { workspace = true }

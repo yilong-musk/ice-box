@@ -9,6 +9,7 @@ use ice_engine::{AutoUpdateInterval, SubscriptionMeta};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// How often the watchdog wakes up to check for due auto-update subscriptions.
@@ -32,26 +33,18 @@ fn interval_of(meta: &SubscriptionMeta) -> Duration {
 
 /// A subscription is due when it has never been refreshed or its last refresh
 /// is older than its configured [`AutoUpdateInterval`].
-fn is_due(
-    last_updated: Option<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
-    interval: Duration,
-) -> bool {
+fn is_due(last_updated: Option<OffsetDateTime>, now: OffsetDateTime, interval: Duration) -> bool {
     match last_updated {
         None => true,
         Some(at) => {
-            let interval =
-                chrono::Duration::from_std(interval).unwrap_or_else(|_| chrono::Duration::zero());
-            now.signed_duration_since(at) >= interval
+            let interval = time::Duration::try_from(interval).unwrap_or(time::Duration::ZERO);
+            now - at >= interval
         }
     }
 }
 
 /// Ids of the auto-update subscriptions that are due for a refresh.
-pub(crate) fn due_auto_update_ids(
-    items: &[SubscriptionMeta],
-    now: chrono::DateTime<chrono::Utc>,
-) -> Vec<Uuid> {
+pub(crate) fn due_auto_update_ids(items: &[SubscriptionMeta], now: OffsetDateTime) -> Vec<Uuid> {
     items
         .iter()
         .filter(|m| m.auto_update && is_due(m.last_updated, now, interval_of(m)))
@@ -90,7 +83,7 @@ pub(crate) fn auto_update_due(state: &AppState, app: &AppHandle) -> bool {
             return true;
         }
     };
-    let due = due_auto_update_ids(&items, chrono::Utc::now());
+    let due = due_auto_update_ids(&items, OffsetDateTime::now_utc());
     if due.is_empty() {
         return true;
     }
@@ -208,11 +201,11 @@ fn run_subscription_watchdog_loop(app: &AppHandle, cancel: &crate::workers::Work
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use time::OffsetDateTime;
 
     fn meta(
         auto_update: bool,
-        last_updated: Option<chrono::DateTime<chrono::Utc>>,
+        last_updated: Option<OffsetDateTime>,
         interval: Option<AutoUpdateInterval>,
     ) -> SubscriptionMeta {
         SubscriptionMeta {
@@ -241,11 +234,11 @@ mod tests {
 
     #[test]
     fn due_ids_skip_disabled_and_fresh_subscriptions() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         let fresh = meta(true, Some(now), None);
-        let stale = meta(true, Some(now - chrono::Duration::hours(2)), None);
+        let stale = meta(true, Some(now - time::Duration::hours(2)), None);
         let never = meta(true, None, None);
-        let disabled = meta(false, Some(now - chrono::Duration::hours(2)), None);
+        let disabled = meta(false, Some(now - time::Duration::hours(2)), None);
         let items = vec![fresh, stale.clone(), never.clone(), disabled];
 
         let due = due_auto_update_ids(&items, now);
@@ -254,21 +247,21 @@ mod tests {
 
     #[test]
     fn due_ids_respect_each_subscriptions_interval() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         // 24h cadence, only 2h old: not due yet despite auto_update.
         let slow = meta(
             true,
-            Some(now - chrono::Duration::hours(2)),
+            Some(now - time::Duration::hours(2)),
             Some(AutoUpdateInterval::TwentyFourHours),
         );
         // 1h cadence, 2h old: due.
         let fast = meta(
             true,
-            Some(now - chrono::Duration::hours(2)),
+            Some(now - time::Duration::hours(2)),
             Some(AutoUpdateInterval::OneHour),
         );
         // Legacy flag without a stored interval falls back to the default.
-        let legacy = meta(true, Some(now - chrono::Duration::hours(2)), None);
+        let legacy = meta(true, Some(now - time::Duration::hours(2)), None);
         let items = vec![slow, fast.clone(), legacy.clone()];
 
         let due = due_auto_update_ids(&items, now);

@@ -535,7 +535,7 @@ impl MacosTunBackend {
         let mut journal = TunJournal::load(path)?
             .unwrap_or_else(|| TunJournal::new("unknown".into(), self.owner_token.clone()));
         journal.last_completed_step = step.to_string();
-        journal.updated_at = chrono::Utc::now().to_rfc3339();
+        journal.updated_at = ice_tun_journal::now_rfc3339();
         mutate(&mut journal);
         journal.save(path)
     }

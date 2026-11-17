@@ -4,10 +4,10 @@
 //! this reads the same GitHub `latest.json` the desktop updater uses, downloads
 //! the arm64 APK, and hands the file to the system installer.
 
-use chrono::{DateTime, Duration, Utc};
 use ice_config::{write_json_atomic, AppError, AppPaths, ErrorCode};
 use ice_subscription::{DirectFetcher, HttpFetcher};
 use serde::{Deserialize, Serialize};
+use time::{Duration, OffsetDateTime};
 
 pub const LATEST_JSON_URL: &str =
     "https://github.com/yilong-musk/ice-box/releases/latest/download/latest.json";
@@ -25,7 +25,8 @@ pub const UPDATE_APK_NAME: &str = "ice-box-update.apk";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct UpdateCheckState {
-    last_check_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    last_check_at: Option<OffsetDateTime>,
     #[serde(default)]
     available_version: Option<String>,
     #[serde(default)]
@@ -157,7 +158,7 @@ fn cached_response(state: &UpdateCheckState, installed: &str) -> CheckAppUpdateR
     }
 }
 
-fn check_is_due(state: &UpdateCheckState, now: DateTime<Utc>, startup: bool) -> bool {
+fn check_is_due(state: &UpdateCheckState, now: OffsetDateTime, startup: bool) -> bool {
     if startup {
         return true;
     }
@@ -189,7 +190,7 @@ pub fn check_release(
     if cfg!(debug_assertions) && background {
         return Ok(cached_response(&disk, installed));
     }
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     if background && !check_is_due(&disk, now, startup) {
         return Ok(cached_response(&disk, installed));
     }
@@ -227,7 +228,7 @@ pub fn check_release(
 
 pub fn record_check(paths: &AppPaths) -> Result<(), AppError> {
     let mut disk = load_state(paths);
-    disk.last_check_at = Some(Utc::now());
+    disk.last_check_at = Some(OffsetDateTime::now_utc());
     save_state(paths, &disk)
 }
 

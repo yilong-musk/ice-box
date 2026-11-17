@@ -7,11 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::Utc;
 use ice_config::{
     write_bytes_atomic, write_json_atomic, AppPaths, ConfigError, NormalizedOutbound,
     NormalizedProfile, UiMessage,
 };
+use time::macros::format_description;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
@@ -139,8 +140,12 @@ fn commit_staged_subscription(
 
     let final_dir = paths.sub_dir(id);
     if final_dir.exists() {
-        let ts = Utc::now().format("%Y%m%d%H%M%S%.f");
-        let old = old_profile_dir(paths, id, &ts.to_string());
+        let ts = OffsetDateTime::now_utc()
+            .format(format_description!(
+                "[year][month][day][hour][minute][second].[subsecond digits:9]"
+            ))
+            .unwrap_or_default();
+        let old = old_profile_dir(paths, id, &ts);
         fs::rename(&final_dir, &old).map_err(SubscriptionError::Io)?;
         if let Err(err) = fs::rename(&staging, &final_dir) {
             let _ = fs::rename(&old, &final_dir);
@@ -367,7 +372,7 @@ pub fn mark_refreshed_in_index(
     let meta = index.items.iter().find(|m| m.id == id)?.clone();
     let mut updated = meta;
     updated.last_error = None;
-    updated.last_updated = Some(Utc::now());
+    updated.last_updated = Some(OffsetDateTime::now_utc());
     if userinfo.is_some() {
         updated.userinfo = userinfo;
     }

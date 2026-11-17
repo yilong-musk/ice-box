@@ -10,7 +10,7 @@ use super::{
     display_worthy, format_display_line, parse_app_line, parse_core_line, Source, SCAN_PER_SOURCE,
 };
 use crate::log_tail::strip_ansi;
-use chrono::{DateTime, FixedOffset};
+use time::OffsetDateTime;
 
 /// Bytes read from the end of each source.
 const SCAN_BYTES: u64 = 4 * 1024 * 1024;
@@ -18,7 +18,7 @@ const SCAN_BYTES: u64 = 4 * 1024 * 1024;
 const LINE_BYTES: usize = 64 * 1024;
 
 pub(super) struct Line {
-    pub(super) ts: DateTime<FixedOffset>,
+    pub(super) ts: OffsetDateTime,
     pub(super) text: String,
 }
 

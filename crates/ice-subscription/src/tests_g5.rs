@@ -11,7 +11,6 @@ use super::{
     SubscriptionUserInfo, CLASH_SUPPORTED_TYPES, MAX_CLASH_PROXIES, MAX_URI_LINES,
 };
 use base64::Engine;
-use chrono::{Duration as ChronoDuration, Utc};
 use ice_config::{
     build_runtime_config, BuildInput, HostPlatform, LocalTemplate, NormalizedOutbound,
     NormalizedProfile,
@@ -24,6 +23,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use time::{Duration as TimeDuration, OffsetDateTime};
 use uuid::Uuid;
 
 fn fixtures_dir() -> PathBuf {
@@ -569,7 +569,7 @@ fn not_modified_refreshes_last_updated() {
             Some(AutoUpdateInterval::TwentyFourHours),
         )
         .unwrap();
-    let old = Utc::now() - ChronoDuration::days(2);
+    let old = OffsetDateTime::now_utc() - TimeDuration::days(2);
     let mut index = load_index(&paths).unwrap();
     index
         .items

@@ -8,5 +8,5 @@ description = "TUN mutation journal (tun-state.json) for ice-box capture recover
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true }
 ice-types = { workspace = true }

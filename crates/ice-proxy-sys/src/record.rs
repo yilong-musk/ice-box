@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use time::OffsetDateTime;
 
 use crate::{ProxyBackupFile, ProxyEndpoints, ProxySysError, SystemProxy};
 
@@ -47,7 +47,7 @@ pub fn apply_and_record(
             let record = ProxyBackupFile {
                 applied: true,
                 pending_apply: false,
-                applied_at: Some(Utc::now()),
+                applied_at: Some(OffsetDateTime::now_utc()),
                 endpoints: endpoints.clone(),
                 backup,
             };
@@ -256,7 +256,7 @@ mod tests {
         let seed = ProxyBackupFile {
             applied: true,
             pending_apply: false,
-            applied_at: Some(Utc::now()),
+            applied_at: Some(OffsetDateTime::now_utc()),
             endpoints: ProxyEndpoints {
                 http_host: "127.0.0.1".into(),
                 http_port: 17890,

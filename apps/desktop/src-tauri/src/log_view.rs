@@ -13,8 +13,10 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use ice_config::{AppError, ErrorCode};
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
 use crate::log_tail::LOG_TAIL_MAX;
 
@@ -78,11 +80,11 @@ fn parse_level(tok: &str) -> Option<Level> {
 }
 
 /// Parse a `tracing` fmt line: `2026-08-23T13:47:01.123456Z  INFO target: message`.
-fn parse_app_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
+fn parse_app_line(line: &str) -> Option<(OffsetDateTime, Level)> {
     let mut it = line.split_whitespace();
     let ts = it.next()?;
     let lvl = it.next()?;
-    let dt = DateTime::parse_from_rfc3339(ts).ok()?;
+    let dt = OffsetDateTime::parse(ts, &Rfc3339).ok()?;
     let level = parse_level(lvl)?;
     Some((dt, level))
 }
@@ -103,7 +105,7 @@ fn parse_tz_offset(tok: &str) -> Option<i32> {
 
 /// Parse a sing-box line: `+0800 2026-08-23 13:47:01 INFO message` (or, defensively,
 /// `2026-08-23 13:47:01 INFO message` without the zone prefix).
-fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
+fn parse_core_line(line: &str) -> Option<(OffsetDateTime, Level)> {
     let mut words = line.split_whitespace();
     let toks = [
         words.next()?,
@@ -124,14 +126,18 @@ fn parse_core_line(line: &str) -> Option<(DateTime<FixedOffset>, Level)> {
     if date.as_bytes().get(4) != Some(&b'-') {
         return None;
     }
-    let offset = if date_idx == 0 {
-        FixedOffset::east_opt(0)
+    let offset_seconds = if date_idx == 0 {
+        0
     } else {
-        FixedOffset::east_opt(parse_tz_offset(toks[0])?).or_else(|| FixedOffset::east_opt(0))
-    }?;
-    let naive =
-        NaiveDateTime::parse_from_str(&format!("{date}T{time}"), "%Y-%m-%dT%H:%M:%S").ok()?;
-    let dt = naive.and_local_timezone(offset).single()?;
+        parse_tz_offset(toks[0])?
+    };
+    let offset = UtcOffset::from_whole_seconds(offset_seconds).ok()?;
+    let naive = PrimitiveDateTime::parse(
+        &format!("{date}T{time}"),
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]"),
+    )
+    .ok()?;
+    let dt = naive.assume_offset(offset);
     let level = parse_level(toks[time_idx + 1])?;
     Some((dt, level))
 }
@@ -225,8 +231,11 @@ fn strip_leading_level(text: &str) -> &str {
     }
 }
 
-fn format_short_ts(ts: DateTime<FixedOffset>) -> String {
-    ts.format("%m-%d %H:%M:%S").to_string()
+fn format_short_ts(ts: OffsetDateTime) -> String {
+    ts.format(format_description!(
+        "[month]-[day] [hour]:[minute]:[second]"
+    ))
+    .unwrap_or_default()
 }
 
 fn skip_first_ws_token(text: &str) -> &str {
@@ -271,12 +280,7 @@ fn strip_leading_timestamp(text: &str) -> &str {
 
 /// Compact display line: `LEVEL MM-DD HH:MM:SS …` (no `[app]`/`[core]` tag).
 /// Connection lines are `LEVEL TIME TARGET → NODE`; everything else is `LEVEL TIME message`.
-fn format_display_line(
-    ts: DateTime<FixedOffset>,
-    source: Source,
-    level: Level,
-    raw: &str,
-) -> String {
+fn format_display_line(ts: OffsetDateTime, source: Source, level: Level, raw: &str) -> String {
     let time = format_short_ts(ts);
     let lvl = level.as_str();
     if source == Source::Core {
@@ -367,7 +371,10 @@ mod tests {
         let line = "2026-08-23T13:47:01.123456Z  INFO ice_core: sing-box ready on 127.0.0.1:17890";
         let (ts, level) = parse_app_line(line).expect("parse");
         assert_eq!(level, Level::Info);
-        assert_eq!(ts.to_rfc3339(), "2026-08-23T13:47:01.123456+00:00");
+        assert_eq!(
+            ts.format(&Rfc3339).expect("format"),
+            "2026-08-23T13:47:01.123456Z"
+        );
     }
 
     #[test]
@@ -375,7 +382,10 @@ mod tests {
         let line = "+0800 2026-08-23 13:47:01 INFO sing-box started (0.00s)";
         let (ts, level) = parse_core_line(line).expect("parse");
         assert_eq!(level, Level::Info);
-        assert_eq!(ts.to_rfc3339(), "2026-08-23T13:47:01+08:00");
+        assert_eq!(
+            ts.format(&Rfc3339).expect("format"),
+            "2026-08-23T13:47:01+08:00"
+        );
     }
 
     #[test]
@@ -387,7 +397,10 @@ mod tests {
         );
         let (ts, level) = parse_core_line(&strip_ansi(line)).expect("parse");
         assert_eq!(level, Level::Info);
-        assert_eq!(ts.to_rfc3339(), "2026-08-23T15:06:15+08:00");
+        assert_eq!(
+            ts.format(&Rfc3339).expect("format"),
+            "2026-08-23T15:06:15+08:00"
+        );
         assert!(display_worthy(Source::Core, level, &strip_ansi(line)));
     }
 
