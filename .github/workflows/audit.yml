@@ -46,5 +46,120 @@ jobs:
         run: npm install --global npm@11
 
       - name: Audit high and critical advisories
-        run: npm audit --audit-level=high
         working-directory: apps/${{ matrix.app }}
+        run: |
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          npm audit --json > "$report" || true
+          node - "$report" <<'JS'
+          const fs = require("node:fs");
+
+          // Temporary high/critical advisory exemptions with no patched release
+          // yet (mirrors deny.toml for RustSec). Keyed by GHSA ID -> package name.
+          const ALLOWED = new Map([
+            // picomatch <=4.0.7 (latest on npm) ReDoS on untrusted extglobs;
+            // pulled only by vite/vitest devDependencies for static project globs.
+            ["GHSA-fc5q-39xc-vjpf", "picomatch"],
+          ]);
+
+          const SEVERE = new Set(["high", "critical"]);
+          const GHSA_RE = /GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/i;
+
+          let report;
+          try {
+            report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          } catch (err) {
+            console.error(`npm audit did not return valid JSON: ${err.message}`);
+            process.exit(1);
+          }
+          if (
+            !report ||
+            report.error ||
+            report.auditReportVersion !== 2 ||
+            typeof report.vulnerabilities !== "object" ||
+            report.vulnerabilities === null
+          ) {
+            console.error(
+              "npm audit failed before producing a v2 report:",
+              report?.message ?? report,
+            );
+            process.exit(1);
+          }
+
+          const vulns = report.vulnerabilities;
+          const blocked = new Set();
+          const ignored = new Set();
+
+          function matchAllowed(via) {
+            if (!via || typeof via !== "object") return null;
+            const ghsa = String(via.url ?? "").match(GHSA_RE)?.[0];
+            return ghsa && ALLOWED.get(ghsa) === via.name ? ghsa : null;
+          }
+
+          // First pass: check every direct advisory object so cycles in the
+          // transitive dependency graph can never hide an unallowed advisory.
+          for (const entry of Object.values(vulns)) {
+            for (const via of entry?.via ?? []) {
+              if (!via || typeof via !== "object" || !SEVERE.has(via.severity)) {
+                continue;
+              }
+              const ghsa = matchAllowed(via);
+              if (ghsa) {
+                ignored.add(`${ghsa} (${via.name}: ${via.title})`);
+              } else {
+                blocked.add(
+                  `${via.name} [${via.severity}] ${via.title} (${via.url ?? "no url"})`,
+                );
+              }
+            }
+          }
+
+          // Second pass: recompute effective severity across string `via` edges
+          // so a high/critical entry with missing/unknown `via` fails closed.
+          const memo = new Map();
+          const visiting = new Set();
+          function hasUnignoredSevere(pkg) {
+            if (memo.has(pkg)) return memo.get(pkg);
+            if (visiting.has(pkg)) return false;
+            visiting.add(pkg);
+            const entry = vulns[pkg];
+            let severe = false;
+            if (entry && Array.isArray(entry.via) && entry.via.length > 0) {
+              for (const via of entry.via) {
+                if (typeof via === "string") {
+                  if (hasUnignoredSevere(via)) severe = true;
+                } else if (
+                  via &&
+                  typeof via === "object" &&
+                  SEVERE.has(via.severity) &&
+                  !matchAllowed(via)
+                ) {
+                  severe = true;
+                }
+              }
+            } else if (entry && SEVERE.has(entry.severity)) {
+              severe = true;
+            }
+            visiting.delete(pkg);
+            memo.set(pkg, severe);
+            return severe;
+          }
+
+          for (const [pkg, entry] of Object.entries(vulns)) {
+            if (SEVERE.has(entry?.severity) && hasUnignoredSevere(pkg) && blocked.size === 0) {
+              blocked.add(`${pkg} [${entry.severity}] (unrecognized via metadata)`);
+            }
+          }
+
+          for (const note of ignored) {
+            console.log(`npm audit: ignored allowlisted advisory ${note}`);
+          }
+          if (blocked.size > 0) {
+            console.error("npm audit: unignored high/critical advisories:");
+            for (const line of blocked) {
+              console.error(`  - ${line}`);
+            }
+            process.exit(1);
+          }
+          console.log("npm audit: OK (no unignored high/critical advisories)");
+          JS

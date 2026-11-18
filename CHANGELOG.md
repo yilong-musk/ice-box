@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Updated `rustix` to 1.1.6 for RUSTSEC-2026-0486.
 - Tauri moved to 2.12.6 and the in-app updater to 2.14.1, which pulls zip 9:
   the zip 4.x RUSTSEC advisories (2026-0367/-0368/-0369/-0429/-0545/-0548)
   and their `deny.toml` ignores are gone. `chrono` was replaced by `time` for
