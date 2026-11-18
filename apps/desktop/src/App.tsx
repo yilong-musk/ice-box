@@ -186,14 +186,22 @@ const NAV_ITEMS: {
   { id: "settings", labelKey: "app.nav.settings" },
 ];
 
-/** One title-bar container per tab: a page's actions never share a slot with
- * the page before it, and the shell shows only the current tab's container. A
- * hidden page whose deferred render has not dropped its portal yet is already
- * out of the bar, so switching between two pages that both put buttons there
- * cannot show both at once. `padding` insets the actions like the page content
- * below and applies only while the slot has buttons. */
-function TitlebarActionSlots({ tab, padding }: { tab: Tab; padding: string }) {
-  return NAV_ITEMS.map(({ id }) => (
+/** One title-bar container per mounted tab: a page's actions never share a slot
+ * with the page before it, and the shell shows only the current tab's
+ * container. A hidden page whose deferred render has not dropped its portal yet
+ * is already out of the bar, so switching between two pages that both put
+ * buttons there cannot show both at once. `padding` insets the actions like the
+ * page content below and applies only while the slot has buttons. */
+function TitlebarActionSlots({
+  items,
+  tab,
+  padding,
+}: {
+  items: readonly { id: Tab }[];
+  tab: Tab;
+  padding: string;
+}) {
+  return items.map(({ id }) => (
     <div
       key={id}
       data-titlebar-slot={id}
@@ -206,7 +214,15 @@ function TitlebarActionSlots({ tab, padding }: { tab: Tab; padding: string }) {
   ));
 }
 
-function TitleBar({ tab, label }: { tab: Tab; label: string }) {
+function TitleBar({
+  items,
+  tab,
+  label,
+}: {
+  items: readonly { id: Tab }[];
+  tab: Tab;
+  label: string;
+}) {
   const { open, isMobile } = useSidebar();
   const sidebarOpen = open && !isMobile;
   const windows = detectWindowChrome() === "windows-custom";
@@ -245,7 +261,7 @@ function TitleBar({ tab, label }: { tab: Tab; label: string }) {
         </div>
         {/* pr-7 matches the node list: page padding plus the small card padding. */}
         <div data-titlebar-actions className="flex h-full shrink-0 items-center">
-          <TitlebarActionSlots tab={tab} padding="not-empty:pr-7" />
+          <TitlebarActionSlots items={items} tab={tab} padding="not-empty:pr-7" />
         </div>
       </header>
     </div>
@@ -410,6 +426,7 @@ function AppShell() {
     if (item.id === "nodes") return !phone;
     return true;
   });
+  const slotItems = navItems.filter((item) => visited.has(item.id));
   const current = navItems.find((item) => item.id === tab);
 
   const pages = (
@@ -495,7 +512,7 @@ function AppShell() {
               {current ? t(current.labelKey) : ""}
             </h2>
             <div data-titlebar-actions className="flex shrink-0 items-center">
-              <TitlebarActionSlots tab={tab} padding="not-empty:pr-3" />
+              <TitlebarActionSlots items={slotItems} tab={tab} padding="not-empty:pr-3" />
             </div>
           </header>
           {recovery}
@@ -552,7 +569,13 @@ function AppShell() {
         style={SIDEBAR_PROVIDER_STYLE}
         data-testid={phone ? "tablet-shell" : undefined}
       >
-        {phone ? null : <TitleBar tab={tab} label={current ? t(current.labelKey) : ""} />}
+        {phone ? null : (
+          <TitleBar
+            items={slotItems}
+            tab={tab}
+            label={current ? t(current.labelKey) : ""}
+          />
+        )}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
@@ -630,7 +653,11 @@ function AppShell() {
                   data-titlebar-actions
                   className="ml-auto flex shrink-0 items-center"
                 >
-                  <TitlebarActionSlots tab={tab} padding="not-empty:pr-3" />
+                  <TitlebarActionSlots
+                    items={slotItems}
+                    tab={tab}
+                    padding="not-empty:pr-3"
+                  />
                 </div>
               </header>
             ) : null}
