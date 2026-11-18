@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Updated `rustix` to 1.1.6 for RUSTSEC-2026-0486.
 - The zip 4.x RUSTSEC-2026-0545 and RUSTSEC-2026-0548 advisories are ignored
   under the same policy as the other zip 4.x advisories: published updater
   assets are `.app.tar.gz` and raw NSIS executables, never zip archives.
