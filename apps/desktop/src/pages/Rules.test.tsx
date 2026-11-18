@@ -734,6 +734,48 @@ describe("Rules", () => {
     expect(
       within(outbound).getByRole("option", { name: t("ruleForm.directOption") }),
     ).toBeInTheDocument();
+    expect(
+      within(outbound).getByRole("option", { name: t("ruleForm.proxyOption") }),
+    ).toBeInTheDocument();
+    expect(
+      within(outbound).getByRole("option", { name: t("ruleForm.blockOption") }),
+    ).toBeInTheDocument();
+  });
+
+  it("submits built-in proxy outbound without duplicating a subscription proxy group", async () => {
+    listNodes.mockResolvedValue([
+      { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "proxy", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
+    ]);
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: t("rules.addCustom") }));
+    const outbound = screen.getByLabelText(t("ruleForm.outbound")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(within(outbound).getByRole("option", { name: "n1" })).toBeInTheDocument();
+    });
+    const proxyOptions = Array.from(outbound.options).filter(
+      (option) => option.value === "proxy",
+    );
+    expect(proxyOptions).toHaveLength(1);
+    expect(proxyOptions[0].textContent).toBe(t("ruleForm.proxyOption"));
+
+    fireEvent.change(screen.getByLabelText(t("ruleForm.matchValue")), {
+      target: { value: "openai.com" },
+    });
+    fireEvent.change(outbound, { target: { value: "proxy" } });
+    screen.getByRole("button", { name: t("ruleForm.add") }).click();
+
+    await waitFor(() => {
+      expect(addCustomRule).toHaveBeenCalledWith({
+        domain_suffix: ["openai.com"],
+        outbound: "proxy",
+      });
+    });
   });
 
   it("shows boolean matcher as checkbox", async () => {

@@ -36,7 +36,7 @@ pub use bundled_rule_set::{
     BUNDLED_RULE_SETS, BUNDLED_RULE_SET_TYPE,
 };
 pub use clash_secret::ensure_clash_api_secret;
-pub use custom_rule::validate_custom_rule_value;
+pub use custom_rule::{validate_custom_rule_value, PROXY_OUTBOUND};
 pub use error::{AppError, ErrorCode};
 pub use favorites::{
     load_node_favorites, remove_subscription_favorites, set_node_favorite, NodeFavorites,

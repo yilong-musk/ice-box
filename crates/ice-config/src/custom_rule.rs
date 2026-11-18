@@ -10,6 +10,11 @@ use serde_json::Value;
 
 use crate::profile::NormalizedProfile;
 
+/// Built-in custom-rule `outbound` value that routes through the active
+/// subscription's current proxy exit (`"proxy"` on flat profiles, or the main
+/// strategy group / fallback on grouped profiles).
+pub const PROXY_OUTBOUND: &str = "proxy";
+
 /// Validate a custom rule before it is persisted.
 ///
 /// `profile` is `None` when no active profile is available; rule-set

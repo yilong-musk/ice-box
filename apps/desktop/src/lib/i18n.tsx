@@ -458,10 +458,11 @@ const zh = {
   // --- custom rule form ---
   "ruleForm.title": "添加自定义规则",
   "ruleForm.desc":
-    "自定义规则优先于订阅规则生效，出口需为 direct / block 或现有节点 / 策略组标签。",
+    "自定义规则优先于订阅规则生效，出口需为 proxy / direct / block 或现有节点 / 策略组标签。",
   "ruleForm.matcherType": "匹配类型",
   "ruleForm.matchValue": "匹配值",
   "ruleForm.outbound": "出口",
+  "ruleForm.proxyOption": "proxy（当前代理）",
   "ruleForm.directOption": "direct（直连）",
   "ruleForm.blockOption": "block（拦截）",
   "ruleForm.strategyGroupSuffix": "（策略组）",
@@ -1021,10 +1022,11 @@ const en: Record<MessageKey, string> = {
   // --- custom rule form ---
   "ruleForm.title": "Add Custom Rule",
   "ruleForm.desc":
-    "Custom rules take effect before subscription rules. The outbound must be direct / block or an existing node / group tag.",
+    "Custom rules take effect before subscription rules. The outbound must be proxy / direct / block or an existing node / group tag.",
   "ruleForm.matcherType": "Match Type",
   "ruleForm.matchValue": "Match Value",
   "ruleForm.outbound": "Outbound",
+  "ruleForm.proxyOption": "proxy (Current Proxy)",
   "ruleForm.directOption": "direct (Direct)",
   "ruleForm.blockOption": "block (Block)",
   "ruleForm.strategyGroupSuffix": " (group)",

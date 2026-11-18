@@ -128,7 +128,10 @@ active: change one with `update_custom_rule` (which replaces the rule in place
 and keeps its position) or delete it with `remove_custom_rule`.
 `update_custom_rule` validates the new rule exactly like `add_custom_rule`:
 removed `geoip`/`geosite` matchers, unknown `rule_set` references, and
-non-numeric or out-of-range `port`/`source_port` values are rejected.
+non-numeric or out-of-range `port`/`source_port` values are rejected. Built-in
+`outbound` values are `"direct"`, `"block"`, and `"proxy"` (routes through the
+active subscription's current proxy exit across node and subscription
+switches).
 
 `list_connections` returns the core's live connections newest first, at most
 200 by default (`limit`, up to 2000). `keyword` narrows the list to

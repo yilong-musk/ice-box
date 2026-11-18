@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use crate::atomic::write_bytes_atomic;
+use crate::custom_rule::PROXY_OUTBOUND;
 use crate::is_loopback_host;
 use crate::runtime_config::{prepared_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
@@ -745,7 +746,7 @@ pub fn build_runtime_config(input: &BuildInput) -> Result<RuntimeConfig, ConfigE
                 (Vec::new(), Vec::new()),
                 |(mut usable, mut dropped), rule| {
                     if custom_rule_is_usable(rule, &tag_set, &sub_set_tags) {
-                        usable.push(rule.clone());
+                        usable.push(resolve_custom_rule_outbound(rule, &global_target));
                     } else {
                         dropped.push(serde_json::to_string(rule).unwrap_or_default());
                     }
@@ -2016,11 +2017,24 @@ fn custom_rule_is_usable(
     rule_set_tags: &std::collections::HashSet<&str>,
 ) -> bool {
     if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
-        if !outbound_tags.contains(out) {
+        if out != PROXY_OUTBOUND && !outbound_tags.contains(out) {
             return false;
         }
     }
     rule_set_refs_are_known(rule, rule_set_tags)
+}
+
+/// Rewrite the built-in `"proxy"` custom-rule target to this build's active
+/// proxy outbound (`"proxy"` on flat profiles, or the main strategy group /
+/// fallback on grouped profiles) while leaving the persisted rule untouched.
+fn resolve_custom_rule_outbound(rule: &Value, proxy_target: &str) -> Value {
+    let mut resolved = rule.clone();
+    if resolved.get("outbound").and_then(Value::as_str) == Some(PROXY_OUTBOUND) {
+        if let Some(obj) = resolved.as_object_mut() {
+            obj.insert("outbound".into(), Value::String(proxy_target.to_string()));
+        }
+    }
+    resolved
 }
 
 pub(crate) fn rule_set_refs_are_known(

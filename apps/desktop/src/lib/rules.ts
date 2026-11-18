@@ -120,6 +120,13 @@ export function ruleOutbound(row: RuleRow): string {
   return typeof v === "string" ? v : "";
 }
 
+/** App-defined custom-rule outbounds that survive subscription switches. */
+export const BUILTIN_RULE_OUTBOUNDS = ["direct", "proxy", "block"] as const;
+
+export function isBuiltinRuleOutbound(tag: string): boolean {
+  return (BUILTIN_RULE_OUTBOUNDS as readonly string[]).includes(tag);
+}
+
 export function pageCount(total: number, limit: number): number {
   return Math.max(1, Math.ceil(total / limit));
 }

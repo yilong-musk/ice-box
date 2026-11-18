@@ -1898,6 +1898,137 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
 }
 
 #[test]
+fn custom_rule_proxy_outbound_tracks_active_proxy_across_subscriptions() {
+    let mut overrides = RuleOverrides::default();
+    overrides.custom.push(json!({
+        "domain_suffix": ["ai.example"],
+        "outbound": "proxy",
+    }));
+    overrides.custom.push(json!({
+        "rule_set": ["missing-set"],
+        "outbound": "proxy",
+    }));
+
+    // Grouped profile with no `"proxy"` tag: `"outbound": "proxy"` resolves to
+    // the main group (`Proxies`) ahead of subscription rules, and unknown
+    // `rule_set` references are still skipped.
+    let grouped = NormalizedProfile {
+        nodes: vec![socks("hk"), socks("jp")],
+        groups: vec![NormalizedOutbound {
+            tag: "Proxies".into(),
+            outbound: Arc::new(json!({
+                "type": "selector",
+                "tag": "Proxies",
+                "outbounds": ["hk", "jp"],
+                "default": "hk",
+            })),
+        }],
+        route: NormalizedRoute {
+            final_outbound: "direct".into(),
+            rules: vec![json!({
+                "domain_suffix": ["ai.example"],
+                "outbound": "direct",
+            })],
+            rule_sets: Vec::new(),
+        },
+        dns: None,
+        default_outbound: Some("Proxies".into()),
+        parse_stats: ProfileParseStats::default(),
+    };
+    let mut selections = GroupSelections::new();
+    selections.insert("Proxies".into(), "jp".into());
+    let grouped_cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(grouped),
+        selected_tag: Some("jp".into()),
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: selections,
+        rule_overrides: overrides.clone(),
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+
+    let grouped_rules: Vec<(&str, &str)> = grouped_cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r.get("domain_suffix").is_some())
+        .map(|r| {
+            (
+                r["domain_suffix"][0].as_str().unwrap(),
+                r["outbound"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        grouped_rules,
+        [("ai.example", "Proxies"), ("ai.example", "direct")],
+        "custom proxy rule precedes subscription rules and targets the main group"
+    );
+    let proxies_group = grouped_cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["tag"] == "Proxies")
+        .unwrap();
+    assert_eq!(proxies_group["default"], "jp");
+    assert_eq!(
+        overrides.custom[0]["outbound"], "proxy",
+        "persisted override keeps the built-in proxy token"
+    );
+
+    // Switching to a flat subscription resolves the same persisted rule to the
+    // injected `"proxy"` selector following `selected_tag`.
+    let mut flat = NormalizedProfile::from_nodes_only(vec![socks("us"), socks("de")]);
+    flat.route.rules = vec![json!({
+        "domain_suffix": ["ai.example"],
+        "outbound": "direct",
+    })];
+    let flat_cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(flat),
+        selected_tag: Some("de".into()),
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: overrides,
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+
+    let flat_rules: Vec<(&str, &str)> = flat_cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r.get("domain_suffix").is_some())
+        .map(|r| {
+            (
+                r["domain_suffix"][0].as_str().unwrap(),
+                r["outbound"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        flat_rules,
+        [("ai.example", "proxy"), ("ai.example", "direct")]
+    );
+    let flat_selector = flat_cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(flat_selector["default"], "de");
+}
+
+#[test]
 fn custom_rules_with_unknown_rule_set_skipped_keeps_existing() {
     let mut profile = NormalizedProfile::from_nodes_only(vec![socks("a")]);
     profile.route.rule_sets = vec![json!({

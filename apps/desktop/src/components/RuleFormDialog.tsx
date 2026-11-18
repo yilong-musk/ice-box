@@ -21,6 +21,7 @@ import {
 import {
   buildCustomRule,
   customRuleFormValues,
+  isBuiltinRuleOutbound,
   RULE_MATCHER_DEFS,
   STRATEGY_GROUP_TYPES,
 } from "../lib/rules";
@@ -137,8 +138,7 @@ function RuleFormDialog({
 
   const isEditing = editing !== null;
   const outboundListed =
-    outbound === "direct" ||
-    outbound === "block" ||
+    isBuiltinRuleOutbound(outbound) ||
     nodeOptions.some((node) => node.tag === outbound);
 
   async function handleSubmit() {
@@ -287,17 +287,22 @@ function RuleFormDialog({
                 <NativeSelectOption value="direct">
                   {t("ruleForm.directOption")}
                 </NativeSelectOption>
+                <NativeSelectOption value="proxy">
+                  {t("ruleForm.proxyOption")}
+                </NativeSelectOption>
                 <NativeSelectOption value="block">
                   {t("ruleForm.blockOption")}
                 </NativeSelectOption>
-                {nodeOptions.map((n) => (
-                  <NativeSelectOption key={n.tag} value={n.tag}>
-                    {n.tag}
-                    {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
-                      ? t("ruleForm.strategyGroupSuffix")
-                      : ""}
-                  </NativeSelectOption>
-                ))}
+                {nodeOptions
+                  .filter((n) => !isBuiltinRuleOutbound(n.tag))
+                  .map((n) => (
+                    <NativeSelectOption key={n.tag} value={n.tag}>
+                      {n.tag}
+                      {STRATEGY_GROUP_TYPES.includes(n.outbound_type)
+                        ? t("ruleForm.strategyGroupSuffix")
+                        : ""}
+                    </NativeSelectOption>
+                  ))}
                 {!outboundListed ? (
                   <NativeSelectOption value={outbound}>
                     {outbound}

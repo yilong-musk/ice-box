@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 import type { RuleRow } from "../api/client";
 import { t } from "./i18n";
 import {
+  BUILTIN_RULE_OUTBOUNDS,
   MATCH_KEY_ORDER,
   RULE_TYPE_LABELS,
   buildCustomRule,
   customRuleEditable,
   customRuleFormValues,
+  isBuiltinRuleOutbound,
   pageCount,
   ruleMatchSummary,
   ruleOutbound,
@@ -120,6 +122,14 @@ describe("rule helpers", () => {
   it("extracts outbound target", () => {
     expect(ruleOutbound(row({ domain: ["x.com"], outbound: "Proxies" }))).toBe("Proxies");
     expect(ruleOutbound(row({ domain: ["x.com"] }))).toBe("");
+  });
+
+  it("identifies built-in custom-rule outbounds", () => {
+    expect(BUILTIN_RULE_OUTBOUNDS).toEqual(["direct", "proxy", "block"]);
+    expect(isBuiltinRuleOutbound("direct")).toBe(true);
+    expect(isBuiltinRuleOutbound("proxy")).toBe(true);
+    expect(isBuiltinRuleOutbound("block")).toBe(true);
+    expect(isBuiltinRuleOutbound("Proxies")).toBe(false);
   });
 
   it("computes page counts", () => {
