@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Custom rules can target the built-in `proxy` outbound: it always follows the
+  active subscription's current proxy exit, so one rule keeps working across
+  subscription switches and node picks without being re-pointed. A subscription
+  that defines its own `proxy` group keeps using it for its own rules; the
+  custom-rule form shows the built-in entry only once, since both end up at the
+  same exit.
+
 ### Fixed
 
 - Node delay tests now probe in the order the page draws the nodes: a
@@ -12,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   where the subscription listed it.
 - Switching between two pages that both put a button in the window title bar
   no longer flashes the outgoing page's button for a frame.
+- A custom logical rule whose nested match rules carry the built-in `proxy`
+  outbound no longer fails the whole config build (and with it Apply / Start)
+  after a subscription switch; nested outbounds are resolved like the top-level
+  one, and a nested unknown tag skips just that rule.
 
 ### Security
 

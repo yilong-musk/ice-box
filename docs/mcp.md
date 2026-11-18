@@ -131,7 +131,9 @@ removed `geoip`/`geosite` matchers, unknown `rule_set` references, and
 non-numeric or out-of-range `port`/`source_port` values are rejected. Built-in
 `outbound` values are `"direct"`, `"block"`, and `"proxy"` (routes through the
 active subscription's current proxy exit across node and subscription
-switches).
+switches). `"proxy"` always means that built-in, even when the active
+subscription defines an outbound with the same tag, and it applies to the
+`outbound` of nested rules inside a logical rule too.
 
 `list_connections` returns the core's live connections newest first, at most
 200 by default (`limit`, up to 2000). `keyword` narrows the list to

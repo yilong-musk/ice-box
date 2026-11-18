@@ -10,10 +10,32 @@ use serde_json::Value;
 
 use crate::profile::NormalizedProfile;
 
+/// Built-in custom-rule `outbound` value that connects directly.
+pub(crate) const DIRECT_OUTBOUND: &str = "direct";
+
+/// Built-in custom-rule `outbound` value that rejects the connection.
+pub(crate) const BLOCK_OUTBOUND: &str = "block";
+
 /// Built-in custom-rule `outbound` value that routes through the active
 /// subscription's current proxy exit (`"proxy"` on flat profiles, or the main
 /// strategy group / fallback on grouped profiles).
-pub const PROXY_OUTBOUND: &str = "proxy";
+///
+/// A custom rule's `"proxy"` always means this built-in, even when the active
+/// subscription defines an outbound with the same tag: both end up at the
+/// selected proxy exit, so the rule form keeps a single `proxy` entry and the
+/// subscription tag is not offered there.
+pub(crate) const PROXY_OUTBOUND: &str = "proxy";
+
+/// App-defined custom-rule outbounds, in the order the rule form lists them.
+/// Mirrored by `BUILTIN_RULE_OUTBOUNDS` in `apps/desktop/src/lib/rules.ts`;
+/// a Vitest parity test pins the two lists together.
+pub(crate) const BUILTIN_RULE_OUTBOUNDS: [&str; 3] =
+    [DIRECT_OUTBOUND, PROXY_OUTBOUND, BLOCK_OUTBOUND];
+
+/// Whether `tag` is an app-defined outbound that every build provides.
+pub(crate) fn is_builtin_rule_outbound(tag: &str) -> bool {
+    BUILTIN_RULE_OUTBOUNDS.contains(&tag)
+}
 
 /// Validate a custom rule before it is persisted.
 ///

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { RuleRow } from "../api/client";
 import { t } from "./i18n";
@@ -130,6 +133,33 @@ describe("rule helpers", () => {
     expect(isBuiltinRuleOutbound("proxy")).toBe(true);
     expect(isBuiltinRuleOutbound("block")).toBe(true);
     expect(isBuiltinRuleOutbound("Proxies")).toBe(false);
+  });
+
+  it("keeps built-in outbounds in parity with ice-config", () => {
+    const source = readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../../crates/ice-config/src/custom_rule.rs",
+      ),
+      "utf8",
+    );
+    const constants = new Map(
+      [...source.matchAll(/const (\w+)_OUTBOUND: &str = "(\w+)";/g)].map(
+        ([, name, value]) => [name, value],
+      ),
+    );
+    const list = source.match(/BUILTIN_RULE_OUTBOUNDS: \[&str; \d+\] =\s*\[([^\]]+)\]/);
+    expect(list).not.toBeNull();
+    const backend = (list?.[1] ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+      .map((entry) => {
+        const name = entry.replace(/_OUTBOUND$/, "");
+        expect(constants.has(name), `missing const for ${entry}`).toBe(true);
+        return constants.get(name);
+      });
+    expect(backend).toEqual([...BUILTIN_RULE_OUTBOUNDS]);
   });
 
   it("computes page counts", () => {

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use crate::atomic::write_bytes_atomic;
-use crate::custom_rule::PROXY_OUTBOUND;
+use crate::custom_rule::{is_builtin_rule_outbound, PROXY_OUTBOUND};
 use crate::is_loopback_host;
 use crate::runtime_config::{prepared_outbound, RuntimeConfig};
 use crate::selections::apply_group_selections;
@@ -2011,27 +2011,62 @@ fn validate_one_route_rule(
 /// True when a custom rule only references outbounds / rule-sets that exist in
 /// the current build; unknown references would otherwise fail route validation
 /// and block Apply / Start after a subscription switch.
+///
+/// Logical rules are walked like the route validator does: a nested rule can
+/// carry its own `outbound`, and letting an unknown one through would fail the
+/// whole build instead of just skipping that rule.
 fn custom_rule_is_usable(
     rule: &Value,
     outbound_tags: &std::collections::HashSet<String>,
     rule_set_tags: &std::collections::HashSet<&str>,
 ) -> bool {
     if let Some(out) = rule.get("outbound").and_then(|v| v.as_str()) {
-        if out != PROXY_OUTBOUND && !outbound_tags.contains(out) {
+        if !is_builtin_rule_outbound(out) && !outbound_tags.contains(out) {
+            return false;
+        }
+    }
+    if let Some(children) = logical_children(rule) {
+        if !children
+            .iter()
+            .all(|child| custom_rule_is_usable(child, outbound_tags, rule_set_tags))
+        {
             return false;
         }
     }
     rule_set_refs_are_known(rule, rule_set_tags)
 }
 
+/// `rules` of a logical route rule, or `None` for any other rule.
+fn logical_children(rule: &Value) -> Option<&[Value]> {
+    if rule.get("type").and_then(Value::as_str) != Some("logical") {
+        return None;
+    }
+    rule.get("rules")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+}
+
 /// Rewrite the built-in `"proxy"` custom-rule target to this build's active
 /// proxy outbound (`"proxy"` on flat profiles, or the main strategy group /
 /// fallback on grouped profiles) while leaving the persisted rule untouched.
+///
+/// A custom rule's `"proxy"` always means this built-in, even when the active
+/// subscription defines an outbound with the same tag: both resolve to the
+/// selected proxy exit, so the tag is shadowed for custom rules only.
 fn resolve_custom_rule_outbound(rule: &Value, proxy_target: &str) -> Value {
     let mut resolved = rule.clone();
-    if resolved.get("outbound").and_then(Value::as_str) == Some(PROXY_OUTBOUND) {
-        if let Some(obj) = resolved.as_object_mut() {
-            obj.insert("outbound".into(), Value::String(proxy_target.to_string()));
+    let is_logical = resolved.get("type").and_then(Value::as_str) == Some("logical");
+    let Some(obj) = resolved.as_object_mut() else {
+        return resolved;
+    };
+    if obj.get("outbound").and_then(Value::as_str) == Some(PROXY_OUTBOUND) {
+        obj.insert("outbound".into(), Value::String(proxy_target.to_string()));
+    }
+    if is_logical {
+        if let Some(children) = obj.get_mut("rules").and_then(Value::as_array_mut) {
+            for child in children.iter_mut() {
+                *child = resolve_custom_rule_outbound(child, proxy_target);
+            }
         }
     }
     resolved

@@ -120,7 +120,14 @@ export function ruleOutbound(row: RuleRow): string {
   return typeof v === "string" ? v : "";
 }
 
-/** App-defined custom-rule outbounds that survive subscription switches. */
+/**
+ * App-defined custom-rule outbounds. A custom rule's `"proxy"` always means the
+ * active subscription's current proxy exit, even when the subscription defines
+ * an outbound with that tag: both end up there, so the form offers one entry.
+ *
+ * Mirrors `BUILTIN_RULE_OUTBOUNDS` in `crates/ice-config/src/custom_rule.rs`;
+ * `rules.test.ts` pins the two lists together.
+ */
 export const BUILTIN_RULE_OUTBOUNDS = ["direct", "proxy", "block"] as const;
 
 export function isBuiltinRuleOutbound(tag: string): boolean {

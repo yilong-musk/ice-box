@@ -778,6 +778,60 @@ describe("Rules", () => {
     });
   });
 
+  it("keeps the built-in proxy outbound selected when editing", async () => {
+    listRules.mockResolvedValue(
+      sampleList({
+        total: 4,
+        items: [
+          ...sampleList().items,
+          {
+            index: null,
+            fingerprint: "fp-proxy",
+            rule: { domain_suffix: ["openai.com"], outbound: "proxy" },
+            custom: true,
+            disabled: false,
+            rule_type: "domain_suffix",
+          },
+        ],
+      }),
+    );
+    listNodes.mockResolvedValue([
+      { tag: "n1", outbound_type: "socks", group_now: null, group_all: null },
+      { tag: "proxy", outbound_type: "selector", group_now: "n1", group_all: ["n1"] },
+    ]);
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("openai.com")).toBeInTheDocument();
+    });
+
+    const row = view.getByText("openai.com").closest("[data-slot=item]") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: t("common.edit") }));
+
+    const outbound = (await screen.findByLabelText(
+      t("ruleForm.outbound"),
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(within(outbound).getByRole("option", { name: "n1" })).toBeInTheDocument();
+    });
+    // The built-in entry wins over the subscription's same-named group, so the
+    // select shows it once and stays on it.
+    const proxyOptions = Array.from(outbound.options).filter(
+      (option) => option.value === "proxy",
+    );
+    expect(proxyOptions).toHaveLength(1);
+    expect(proxyOptions[0].textContent).toBe(t("ruleForm.proxyOption"));
+    expect(outbound.value).toBe("proxy");
+
+    screen.getByRole("button", { name: t("ruleForm.save") }).click();
+    await waitFor(() => {
+      expect(updateCustomRule).toHaveBeenCalledWith("fp-proxy", {
+        domain_suffix: ["openai.com"],
+        outbound: "proxy",
+      });
+    });
+  });
+
   it("shows boolean matcher as checkbox", async () => {
     const { container } = render(<Rules />);
     const view = within(container);

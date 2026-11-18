@@ -1868,6 +1868,14 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
         "domain_suffix": ["ok.com"],
         "outbound": "a",
     }));
+    // A nested outbound is validated like the top-level one: an unknown tag
+    // skips this rule (as the route validator would reject the whole build).
+    overrides.custom.push(json!({
+        "type": "logical",
+        "mode": "or",
+        "outbound": "a",
+        "rules": [{ "domain_suffix": ["logical.com"], "outbound": "ghost-node" }],
+    }));
 
     let cfg = build_runtime_json(&BuildInput {
         template: LocalTemplate::default(),
@@ -1894,6 +1902,10 @@ fn custom_rules_with_unknown_outbound_skipped_not_fatal() {
         kept,
         ["ok.com", "keep.com"],
         "custom rule referencing a missing outbound is skipped, not fatal"
+    );
+    assert!(
+        rules.iter().all(|r| r["type"] != "logical"),
+        "a logical rule with an unknown nested outbound is skipped too"
     );
 }
 
@@ -2026,6 +2038,148 @@ fn custom_rule_proxy_outbound_tracks_active_proxy_across_subscriptions() {
         .find(|o| o["tag"] == "proxy")
         .unwrap();
     assert_eq!(flat_selector["default"], "de");
+}
+
+#[test]
+fn custom_proxy_outbound_shadows_a_subscription_proxy_group() {
+    // A subscription may define its own `proxy` group. For custom rules the
+    // built-in token wins so the form offers a single entry; subscription
+    // rules keep pointing at the group of that name.
+    let profile = NormalizedProfile {
+        nodes: vec![socks("hk"), socks("jp")],
+        groups: vec![
+            NormalizedOutbound {
+                tag: "Proxies".into(),
+                outbound: Arc::new(json!({
+                    "type": "selector",
+                    "tag": "Proxies",
+                    "outbounds": ["proxy", "jp"],
+                })),
+            },
+            NormalizedOutbound {
+                tag: "proxy".into(),
+                outbound: Arc::new(json!({
+                    "type": "selector",
+                    "tag": "proxy",
+                    "outbounds": ["hk"],
+                })),
+            },
+        ],
+        route: NormalizedRoute {
+            final_outbound: "Proxies".into(),
+            rules: vec![json!({
+                "domain_suffix": ["sub.example"],
+                "outbound": "proxy",
+            })],
+            rule_sets: Vec::new(),
+        },
+        dns: None,
+        default_outbound: Some("Proxies".into()),
+        parse_stats: ProfileParseStats::default(),
+    };
+    let mut overrides = RuleOverrides::default();
+    overrides.custom.push(json!({
+        "domain_suffix": ["custom.example"],
+        "outbound": "proxy",
+    }));
+
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: overrides,
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+
+    let rules: Vec<(&str, &str)> = cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r.get("domain_suffix").is_some())
+        .map(|r| {
+            (
+                r["domain_suffix"][0].as_str().unwrap(),
+                r["outbound"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        [("custom.example", "Proxies"), ("sub.example", "proxy")],
+        "the built-in token shadows the group for custom rules only"
+    );
+}
+
+#[test]
+fn custom_proxy_outbound_is_resolved_inside_logical_rules() {
+    let profile = NormalizedProfile {
+        nodes: vec![socks("hk"), socks("jp")],
+        groups: vec![NormalizedOutbound {
+            tag: "Proxies".into(),
+            outbound: Arc::new(json!({
+                "type": "selector",
+                "tag": "Proxies",
+                "outbounds": ["hk", "jp"],
+            })),
+        }],
+        route: NormalizedRoute {
+            final_outbound: "Proxies".into(),
+            rules: Vec::new(),
+            rule_sets: Vec::new(),
+        },
+        dns: None,
+        default_outbound: Some("Proxies".into()),
+        parse_stats: ProfileParseStats::default(),
+    };
+    let mut overrides = RuleOverrides::default();
+    // A nested `"proxy"` used to survive the usability filter and then fail
+    // route validation, blocking Apply / Start after a subscription switch.
+    overrides.custom.push(json!({
+        "type": "logical",
+        "mode": "or",
+        "outbound": "proxy",
+        "rules": [
+            { "domain_suffix": ["nested.example"], "outbound": "proxy" },
+            {
+                "type": "logical",
+                "mode": "and",
+                "rules": [{ "port": [443], "outbound": "proxy" }],
+            },
+        ],
+    }));
+
+    let cfg = build_runtime_json(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: GroupSelections::new(),
+        rule_overrides: overrides,
+        capture_intent: CaptureIntent::Diagnostic,
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .unwrap();
+
+    let rule = cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["type"] == "logical")
+        .expect("logical custom rule kept");
+    assert_eq!(rule["outbound"], "Proxies");
+    let children = rule["rules"].as_array().unwrap();
+    assert_eq!(children[0]["outbound"], "Proxies");
+    assert_eq!(children[1]["rules"][0]["outbound"], "Proxies");
 }
 
 #[test]
