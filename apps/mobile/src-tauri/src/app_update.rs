@@ -164,7 +164,7 @@ fn check_is_due(state: &UpdateCheckState, now: OffsetDateTime, startup: bool) ->
     }
     match state.last_check_at {
         None => true,
-        Some(at) => now >= at + CHECK_INTERVAL,
+        Some(at) => now - at >= CHECK_INTERVAL,
     }
 }
 
@@ -312,5 +312,19 @@ mod tests {
         let err = map_catalog_error("fetch failed: GET https://example.test: HTTP 404");
         assert!(err.is_code(ErrorCode::UpdateFeedUnavailable));
         assert!(!err.to_string().contains("example.test"));
+    }
+
+    #[test]
+    fn check_is_due_handles_boundary_and_legacy_timestamps() {
+        let now = OffsetDateTime::now_utc();
+        let far_future: UpdateCheckState =
+            serde_json::from_str(r#"{"last_check_at":"9999-12-31T23:59:59Z"}"#).unwrap();
+        assert!(!check_is_due(&far_future, now, false));
+        let legacy: UpdateCheckState =
+            serde_json::from_str(r#"{"last_check_at":"2026-01-01T00:00:00.123456789+00:00"}"#)
+                .unwrap();
+        assert!(check_is_due(&legacy, now, false));
+        let empty: UpdateCheckState = serde_json::from_str("{}").unwrap();
+        assert!(check_is_due(&empty, now, false));
     }
 }

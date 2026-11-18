@@ -429,6 +429,16 @@ mod tests {
         assert!(back.applied);
         assert_eq!(back.endpoints.http_port, 17890);
         assert_eq!(back.backup.extra["service"], "Wi-Fi");
+
+        // Legacy chrono `+00:00` timestamps and omitted `applied_at` must still load.
+        let mut legacy = serde_json::to_value(&record).expect("ser");
+        legacy["applied_at"] = serde_json::json!("2026-11-17T14:29:12.123456789+00:00");
+        let parsed: ProxyBackupFile = serde_json::from_value(legacy).expect("legacy chrono");
+        assert!(parsed.applied_at.is_some());
+        let mut omitted = serde_json::to_value(&record).expect("ser");
+        omitted.as_object_mut().unwrap().remove("applied_at");
+        let parsed: ProxyBackupFile = serde_json::from_value(omitted).expect("omitted applied_at");
+        assert!(parsed.applied_at.is_none());
     }
 
     #[test]

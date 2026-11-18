@@ -183,7 +183,7 @@ pub fn check_is_due(state: &UpdateCheckState, now: OffsetDateTime, startup: bool
     }
     match state.last_check_at {
         None => true,
-        Some(at) => now >= at + CHECK_INTERVAL,
+        Some(at) => now - at >= CHECK_INTERVAL,
     }
 }
 
@@ -560,6 +560,18 @@ mod tests {
             ..UpdateCheckState::default()
         };
         assert!(check_is_due(&old, now, false));
+
+        // Boundary RFC 3339 timestamps in `update-check.json` must not overflow
+        // `Date::MAX` when checking the 24h cooldown, and legacy chrono strings
+        // (`+00:00`, `Z`, `null`, omitted) must deserialize cleanly.
+        let far_future: UpdateCheckState = serde_json::from_str(
+            r#"{"last_check_at":"9999-12-31T23:59:59.999999999Z","last_prompt_at":"2026-11-17T14:29:12.123456+00:00"}"#,
+        )
+        .unwrap();
+        assert!(!check_is_due(&far_future, now, false));
+        assert!(far_future.last_prompt_at.is_some());
+        let empty: UpdateCheckState = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, UpdateCheckState::default());
     }
 
     #[test]
