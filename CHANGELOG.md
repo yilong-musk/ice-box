@@ -16,11 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Security
 
 - Updated `rustix` to 1.1.6 for RUSTSEC-2026-0486.
-- The zip 4.x RUSTSEC-2026-0545 and RUSTSEC-2026-0548 advisories are ignored
-  under the same policy as the other zip 4.x advisories: published updater
-  assets are `.app.tar.gz` and raw NSIS executables, never zip archives.
-  RUSTSEC-2026-0543 (chrono unmaintained) is ignored until timestamps move off
-  chrono; no patched release exists.
+- Tauri moved to 2.12.6 and the in-app updater to 2.14.1, which pulls zip 9:
+  the zip 4.x RUSTSEC advisories (2026-0367/-0368/-0369/-0429/-0545/-0548)
+  and their `deny.toml` ignores are gone. `chrono` was replaced by `time` for
+  RUSTSEC-2026-0543; journal, settings, subscription, and update-check
+  timestamps remain RFC 3339 strings on disk and in the API.
 
 ## [0.3.6] - 2026-11-17
 

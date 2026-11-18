@@ -63,12 +63,12 @@ pub use url::{
 };
 pub use userinfo::{parse_userinfo_header, provider_info_lines, SubscriptionUserInfo};
 
-use chrono::{DateTime, Utc};
 use ice_config::{
     HostPlatform, NormalizedOutbound, NormalizedProfile, NormalizedRoute, ProfileParseStats,
     UiMessage,
 };
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::decode::maybe_decode_base64 as decode_body;
@@ -151,7 +151,9 @@ pub struct SubscriptionMeta {
     pub has_dns: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parse_warnings: Vec<UiMessage>,
-    pub last_updated: Option<DateTime<Utc>>,
+    /// RFC 3339 timestamp on disk; the stored JSON shape is unchanged.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_updated: Option<OffsetDateTime>,
     pub last_error: Option<UiMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
@@ -349,7 +351,7 @@ pub(crate) fn meta_from_profile(
             .count(),
         has_dns: profile.dns.is_some(),
         parse_warnings: profile.parse_stats.warnings.clone(),
-        last_updated: Some(Utc::now()),
+        last_updated: Some(OffsetDateTime::now_utc()),
         last_error: None,
         etag,
         last_modified,

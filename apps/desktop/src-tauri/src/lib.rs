@@ -66,6 +66,14 @@ pub(crate) fn lock_poisoned(context: &str) -> ice_config::AppError {
     )
 }
 
+/// RFC 3339 timestamp for "now", used in log lines and pending records.
+/// The epoch stands in if the system clock is outside RFC 3339's year range.
+pub(crate) fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
 /// Panic log path, resolved after `AppPaths` is available in `setup`. Panics are
 /// written here so a crash on Windows (where the release binary has no console and
 /// stderr is discarded) still leaves a trace in `ice-box.log`.
@@ -96,7 +104,7 @@ fn install_panic_hook() {
                 .append(true)
                 .open(path)
             {
-                let _ = writeln!(file, "{} PANIC {line}", chrono::Utc::now().to_rfc3339());
+                let _ = writeln!(file, "{} PANIC {line}", now_rfc3339());
             }
         }
     }));

@@ -7,11 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::Utc;
 use ice_config::{
     write_bytes_atomic, write_json_atomic, AppPaths, ConfigError, NormalizedOutbound,
     NormalizedProfile, UiMessage,
 };
+use time::macros::format_description;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::SubscriptionError;
@@ -139,8 +140,8 @@ fn commit_staged_subscription(
 
     let final_dir = paths.sub_dir(id);
     if final_dir.exists() {
-        let ts = Utc::now().format("%Y%m%d%H%M%S%.f");
-        let old = old_profile_dir(paths, id, &ts.to_string());
+        let ts = old_profile_stamp(OffsetDateTime::now_utc());
+        let old = old_profile_dir(paths, id, &ts);
         fs::rename(&final_dir, &old).map_err(SubscriptionError::Io)?;
         if let Err(err) = fs::rename(&staging, &final_dir) {
             let _ = fs::rename(&old, &final_dir);
@@ -152,6 +153,17 @@ fn commit_staged_subscription(
     }
     sweep_old_profile_dirs_locked(paths, Some(id));
     Ok(())
+}
+
+fn old_profile_stamp(now: OffsetDateTime) -> String {
+    // Keep the suffix non-empty even if calendar formatting fails, so
+    // `parse_old_profile_dir` still recognizes the backup on crash recovery.
+    now.format(format_description!(
+        "[year][month][day][hour][minute][second].[subsecond digits:9]"
+    ))
+    .ok()
+    .filter(|ts| !ts.is_empty())
+    .unwrap_or_else(|| now.unix_timestamp_nanos().to_string())
 }
 
 fn old_profile_dir(paths: &SubscriptionPaths, id: Uuid, ts: &str) -> PathBuf {
@@ -367,7 +379,7 @@ pub fn mark_refreshed_in_index(
     let meta = index.items.iter().find(|m| m.id == id)?.clone();
     let mut updated = meta;
     updated.last_error = None;
-    updated.last_updated = Some(Utc::now());
+    updated.last_updated = Some(OffsetDateTime::now_utc());
     if userinfo.is_some() {
         updated.userinfo = userinfo;
     }
@@ -812,5 +824,57 @@ mod tests {
             started.elapsed()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_profile_stamp_stays_parseable_across_boundary_dates_and_legacy_meta_loads() {
+        let id = Uuid::new_v4();
+        let paths = SubscriptionPaths::from_root(Path::new("/tmp"));
+        for stamp in [
+            old_profile_stamp(OffsetDateTime::UNIX_EPOCH),
+            old_profile_stamp(
+                OffsetDateTime::parse(
+                    "9999-12-31T23:59:59.999999999Z",
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .unwrap(),
+            ),
+        ] {
+            let name = old_profile_dir(&paths, id, &stamp)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(parse_old_profile_dir(&name), Some(id));
+        }
+
+        // Existing index entries written by chrono (`Z`, `+00:00`, `null`, or omitted)
+        // must continue to deserialize identically under `time`.
+        for raw in [
+            r#""2026-11-17T14:29:12.123456789Z""#,
+            r#""2026-11-17T14:29:12.123456789+00:00""#,
+        ] {
+            let meta: SubscriptionMeta = serde_json::from_str(&format!(
+                r#"{{
+                    "id": "{id}",
+                    "name": "sub",
+                    "url": "https://example.com/sub",
+                    "active": true,
+                    "format": "sing_box",
+                    "node_count": 1,
+                    "group_count": 0,
+                    "rule_count": 0,
+                    "has_dns": false,
+                    "last_updated": {raw},
+                    "last_error": null
+                }}"#
+            ))
+            .unwrap();
+            assert_eq!(
+                meta.last_updated.map(|t| t.unix_timestamp_nanos()),
+                Some(1_794_925_752_123_456_789)
+            );
+        }
     }
 }

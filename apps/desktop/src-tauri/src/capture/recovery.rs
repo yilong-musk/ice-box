@@ -275,7 +275,7 @@ impl CaptureController {
         let candidate = self.reconciled_candidate(candidate);
         let pending = PendingSettingsRecord {
             candidate: candidate.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: crate::now_rfc3339(),
         };
         write_json_atomic(&self.paths.pending_settings(), &pending).map_err(AppError::from)?;
 

@@ -19,21 +19,6 @@ ignore = [
     # glib 0.18 is pinned by gtk 0.18 / webkit2gtk 2.0 (Tauri 2 Linux). gtk3-rs
     # is unmaintained; the 0.20 fix requires Tauri's GTK4 migration.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18 unsoundness is pinned by Tauri 2 GTK3; no upgrade until GTK4" },
-    # chrono has no patched release (RUSTSEC-2026-0543). The workspace uses it
-    # for RFC 3339 timestamps and config durations only; moving to time/jiff
-    # touches the stored config and journal formats, so it is separate work.
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; migration to time/jiff is separate work" },
-    # tauri-plugin-updater 2.11 pulls zip 4.x (default `zip` feature and direct
-    # Windows dep; zip 9 lands in updater 2.14.1 with Tauri 2.12). Until that
-    # bump, ZipArchive::extract runs only on ZIP bytes: macOS updater assets use
-    # tar+flate2 (`.app.tar.gz`) and Windows uses `extract_exe` on raw signed
-    # NSIS `*-setup.exe`, never `.exe.zip`.
-    { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
-    { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
-    { id = "RUSTSEC-2026-0369", reason = "zip 4.x symlink perms via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
-    { id = "RUSTSEC-2026-0429", reason = "zip 4.x symlink allocation abort via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
-    { id = "RUSTSEC-2026-0545", reason = "zip 4.x AES entry auth bypass via tauri-plugin-updater; aes-crypto is off and published assets are tar.gz / raw NSIS exe, not zip" },
-    { id = "RUSTSEC-2026-0548", reason = "zip 4.x ZipStreamReader name mismatch via tauri-plugin-updater; published assets are tar.gz / raw NSIS exe, not zip" },
 ]
 
 [licenses]

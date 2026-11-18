@@ -16,10 +16,19 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use ice_types::{ErrorCode, TunError};
+
+/// RFC 3339 timestamp for "now", shared by the journal and backup records.
+/// The epoch stands in if the system clock is outside RFC 3339's year range.
+pub fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
 
 /// Capture lifecycle states (`docs/tun.md`). `clean` means verified: no owned
 /// resource remains. `recovery_required` is fail-closed: ownership or
@@ -149,7 +158,7 @@ impl TunJournal {
             dns_after: None,
             owner_token,
             last_completed_step: steps::JOURNAL_PREPARING.to_string(),
-            updated_at: Utc::now().to_rfc3339(),
+            updated_at: now_rfc3339(),
         }
     }
 
@@ -227,7 +236,7 @@ impl TunJournal {
     ) -> Result<(), TunError> {
         self.state = state;
         self.last_completed_step = step.to_string();
-        self.updated_at = Utc::now().to_rfc3339();
+        self.updated_at = now_rfc3339();
         mutate(self);
         self.save(path)
     }

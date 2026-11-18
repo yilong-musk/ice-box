@@ -9,7 +9,6 @@
 use crate::orchestrate::current_settings;
 use crate::shutdown::graceful_stop_for_update;
 use crate::AppState;
-use chrono::{DateTime, Duration, Utc};
 use ice_config::{is_loopback_host, write_json_atomic, AppError, AppSettings, ErrorCode};
 use ice_core::CoreStatus;
 use serde::{Deserialize, Serialize};
@@ -17,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration as StdDuration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
+use time::{Duration, OffsetDateTime};
 use url::Url;
 
 /// In-session background checks repeat at most once per this interval after a
@@ -43,10 +43,11 @@ pub fn update_installing() -> bool {
 /// Persisted check / last-known-available state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateCheckState {
-    pub last_check_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_check_at: Option<OffsetDateTime>,
     /// Legacy field from the dialog-prompt design; ignored by current UI.
-    #[serde(default)]
-    pub last_prompt_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_prompt_at: Option<OffsetDateTime>,
     /// Legacy field from the dialog-prompt design; ignored by current UI.
     #[serde(default)]
     pub skipped_version: Option<String>,
@@ -176,13 +177,13 @@ pub fn save_update_check_state(
 
 /// True when a background check may reach GitHub. The launch round always may;
 /// in-session rounds wait out `CHECK_INTERVAL` from `last_check_at`.
-pub fn check_is_due(state: &UpdateCheckState, now: DateTime<Utc>, startup: bool) -> bool {
+pub fn check_is_due(state: &UpdateCheckState, now: OffsetDateTime, startup: bool) -> bool {
     if startup {
         return true;
     }
     match state.last_check_at {
         None => true,
-        Some(at) => now >= at + CHECK_INTERVAL,
+        Some(at) => now - at >= CHECK_INTERVAL,
     }
 }
 
@@ -283,7 +284,7 @@ pub async fn check_app_update(
         return Ok(cached_check_response(&disk, installed));
     }
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     if req.background && !check_is_due(&disk, now, req.startup) {
         return Ok(cached_check_response(&disk, installed));
     }
@@ -338,7 +339,7 @@ pub async fn check_app_update(
 /// clock alone so they cannot postpone the next in-session automatic check.
 fn record_successful_check(
     disk: &mut UpdateCheckState,
-    now: DateTime<Utc>,
+    now: OffsetDateTime,
     background: bool,
     available: Option<(String, Option<String>)>,
 ) {
@@ -357,7 +358,7 @@ fn record_successful_check(
     }
 }
 
-pub fn touch_last_check_at(path: &std::path::Path, now: DateTime<Utc>) -> Result<(), AppError> {
+pub fn touch_last_check_at(path: &std::path::Path, now: OffsetDateTime) -> Result<(), AppError> {
     let mut disk = load_update_check_state(path);
     disk.last_check_at = Some(now);
     save_update_check_state(path, &disk)
@@ -367,7 +368,7 @@ pub fn touch_last_check_at(path: &std::path::Path, now: DateTime<Utc>) -> Result
 pub async fn record_update_prompt(app: AppHandle) -> Result<(), AppError> {
     let paths = app.state::<AppState>().paths.clone();
     let mut disk = load_update_check_state(&paths.update_check());
-    disk.last_prompt_at = Some(Utc::now());
+    disk.last_prompt_at = Some(OffsetDateTime::now_utc());
     save_update_check_state(&paths.update_check(), &disk)
 }
 
@@ -377,7 +378,7 @@ pub async fn record_update_prompt(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn record_app_update_check(app: AppHandle) -> Result<(), AppError> {
     let paths = app.state::<AppState>().paths.clone();
-    touch_last_check_at(&paths.update_check(), Utc::now())
+    touch_last_check_at(&paths.update_check(), OffsetDateTime::now_utc())
 }
 
 #[tauri::command]
@@ -392,7 +393,7 @@ pub async fn skip_app_update(app: AppHandle, req: SkipAppUpdateRequest) -> Resul
     let paths = app.state::<AppState>().paths.clone();
     let mut disk = load_update_check_state(&paths.update_check());
     disk.skipped_version = Some(version);
-    disk.last_prompt_at = Some(Utc::now());
+    disk.last_prompt_at = Some(OffsetDateTime::now_utc());
     save_update_check_state(&paths.update_check(), &disk)
 }
 
@@ -547,7 +548,7 @@ mod tests {
 
     #[test]
     fn check_is_due_matches_24h() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         assert!(check_is_due(&UpdateCheckState::default(), now, false));
         let recent = UpdateCheckState {
             last_check_at: Some(now - Duration::hours(1)),
@@ -559,11 +560,23 @@ mod tests {
             ..UpdateCheckState::default()
         };
         assert!(check_is_due(&old, now, false));
+
+        // Boundary RFC 3339 timestamps in `update-check.json` must not overflow
+        // `Date::MAX` when checking the 24h cooldown, and legacy chrono strings
+        // (`+00:00`, `Z`, `null`, omitted) must deserialize cleanly.
+        let far_future: UpdateCheckState = serde_json::from_str(
+            r#"{"last_check_at":"9999-12-31T23:59:59.999999999Z","last_prompt_at":"2026-11-17T14:29:12.123456+00:00"}"#,
+        )
+        .unwrap();
+        assert!(!check_is_due(&far_future, now, false));
+        assert!(far_future.last_prompt_at.is_some());
+        let empty: UpdateCheckState = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, UpdateCheckState::default());
     }
 
     #[test]
     fn startup_check_ignores_the_cooldown() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         let recent = UpdateCheckState {
             last_check_at: Some(now),
             ..UpdateCheckState::default()
@@ -632,12 +645,12 @@ mod tests {
             ..UpdateCheckState::default()
         };
         save_update_check_state(&paths.update_check(), &state).unwrap();
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         touch_last_check_at(&paths.update_check(), now).unwrap();
         let loaded = load_update_check_state(&paths.update_check());
         assert_eq!(
-            loaded.last_check_at.map(|at| at.timestamp()),
-            Some(now.timestamp())
+            loaded.last_check_at.map(|at| at.unix_timestamp()),
+            Some(now.unix_timestamp())
         );
         assert_eq!(loaded.available_version.as_deref(), Some("0.1.8"));
         assert!(!check_is_due(&loaded, now + Duration::hours(1), false));
@@ -648,8 +661,8 @@ mod tests {
 
     #[test]
     fn manual_check_preserves_last_check_at() {
-        let earlier = Utc::now() - Duration::hours(3);
-        let now = Utc::now();
+        let earlier = OffsetDateTime::now_utc() - Duration::hours(3);
+        let now = OffsetDateTime::now_utc();
         let mut disk = UpdateCheckState {
             last_check_at: Some(earlier),
             ..UpdateCheckState::default()
@@ -661,8 +674,8 @@ mod tests {
             Some(("0.1.12".into(), Some("notes".into()))),
         );
         assert_eq!(
-            disk.last_check_at.map(|at| at.timestamp()),
-            Some(earlier.timestamp())
+            disk.last_check_at.map(|at| at.unix_timestamp()),
+            Some(earlier.unix_timestamp())
         );
         assert_eq!(disk.available_version.as_deref(), Some("0.1.12"));
         assert_eq!(disk.available_notes.as_deref(), Some("notes"));
@@ -671,8 +684,8 @@ mod tests {
 
     #[test]
     fn background_check_advances_last_check_at() {
-        let earlier = Utc::now() - Duration::hours(25);
-        let now = Utc::now();
+        let earlier = OffsetDateTime::now_utc() - Duration::hours(25);
+        let now = OffsetDateTime::now_utc();
         let mut disk = UpdateCheckState {
             last_check_at: Some(earlier),
             available_version: Some("0.1.10".into()),
@@ -680,8 +693,8 @@ mod tests {
         };
         record_successful_check(&mut disk, now, true, None);
         assert_eq!(
-            disk.last_check_at.map(|at| at.timestamp()),
-            Some(now.timestamp())
+            disk.last_check_at.map(|at| at.unix_timestamp()),
+            Some(now.unix_timestamp())
         );
         assert!(disk.available_version.is_none());
         assert!(!check_is_due(&disk, now + Duration::hours(1), false));

@@ -170,9 +170,9 @@ pub(crate) fn query_connections_use_case(
 /// date parser is not guaranteed to take nine fraction digits, so the page
 /// gets milliseconds.
 fn start_millis(start: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(start)
+    time::OffsetDateTime::parse(start, &time::format_description::well_known::Rfc3339)
         .ok()
-        .map(|time| time.timestamp_millis())
+        .map(|time| (time.unix_timestamp_nanos() / 1_000_000) as i64)
 }
 
 fn connection_row(info: ice_core::ConnectionInfo) -> ConnectionRow {

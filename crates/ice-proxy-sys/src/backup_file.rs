@@ -4,11 +4,12 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
 use ice_config::write_json_atomic;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{ProxyBackup, ProxyEndpoints, ProxySysError, SystemProxy};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProxyBackupFile {
     pub applied: bool,
@@ -16,7 +17,9 @@ pub struct ProxyBackupFile {
     /// Crash recovery restores from `backup` when this is set.
     #[serde(default)]
     pub pending_apply: bool,
-    pub applied_at: Option<DateTime<Utc>>,
+    /// RFC 3339 timestamp on disk; the stored JSON shape is unchanged.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub applied_at: Option<OffsetDateTime>,
     pub endpoints: ProxyEndpoints,
     pub backup: ProxyBackup,
 }
@@ -396,7 +399,7 @@ mod tests {
         ProxyBackupFile {
             applied,
             pending_apply: false,
-            applied_at: Some(Utc::now()),
+            applied_at: Some(OffsetDateTime::now_utc()),
             endpoints: ProxyEndpoints {
                 http_host: "127.0.0.1".into(),
                 http_port: 17890,
@@ -426,6 +429,16 @@ mod tests {
         assert!(back.applied);
         assert_eq!(back.endpoints.http_port, 17890);
         assert_eq!(back.backup.extra["service"], "Wi-Fi");
+
+        // Legacy chrono `+00:00` timestamps and omitted `applied_at` must still load.
+        let mut legacy = serde_json::to_value(&record).expect("ser");
+        legacy["applied_at"] = serde_json::json!("2026-11-17T14:29:12.123456789+00:00");
+        let parsed: ProxyBackupFile = serde_json::from_value(legacy).expect("legacy chrono");
+        assert!(parsed.applied_at.is_some());
+        let mut omitted = serde_json::to_value(&record).expect("ser");
+        omitted.as_object_mut().unwrap().remove("applied_at");
+        let parsed: ProxyBackupFile = serde_json::from_value(omitted).expect("omitted applied_at");
+        assert!(parsed.applied_at.is_none());
     }
 
     #[test]
