@@ -444,46 +444,41 @@ export function delayResultTone(ms: number): DelayResultTone {
   return "bad";
 }
 
-export type DelayProbeNode = {
-  tag: string;
-  outbound_type: string;
-  group_now?: string | null;
-  group_all?: string[] | null;
+/** One block of the node grid as drawn: a strategy group's header with its
+ * members, or a section of plain nodes. */
+export type DelayTestSection = {
+  /** The strategy group this section shows; null for plain nodes. */
+  group: { group_now?: string | null } | null;
+  /** Whether the group is folded: only its header, and so only its exit, is
+   * on screen. */
+  collapsed: boolean;
+  /** Card tags in display order (favorites first). */
+  cards: readonly string[];
 };
 
-/** Outbound tags to probe for a strategy-group delay test. */
-export function delayTestTagsForGroup(input: {
-  expanded: boolean;
-  groupNow: string | null | undefined;
-  groupAll: string[] | null | undefined;
-}): string[] {
-  if (input.expanded) {
-    return [...new Set(input.groupAll ?? [])];
-  }
-  return input.groupNow ? [input.groupNow] : [];
-}
-
-/** Leaf outbound tags to probe for a full-list delay test. */
-export function delayTestTagsForList(
-  nodes: DelayProbeNode[],
-  expandedGroups: ReadonlySet<string>,
+/**
+ * Leaf outbound tags to probe for a delay test, in the order the sections and
+ * their cards appear on screen: a folded group contributes only its current
+ * exit, an expanded one every card as displayed, so a favorited member is
+ * probed before the rest of its group. A tag reached twice is probed once, at
+ * its first position.
+ */
+export function delayTestTagsForSections(
+  sections: readonly DelayTestSection[],
 ): string[] {
   const seen = new Set<string>();
   const tags: string[] = [];
-  for (const n of nodes) {
-    const next = isGroupType(n.outbound_type)
-      ? delayTestTagsForGroup({
-          expanded: expandedGroups.has(n.tag),
-          groupNow: n.group_now,
-          groupAll: n.group_all,
-        })
-      : [n.tag];
-    for (const tag of next) {
-      if (tag && !seen.has(tag)) {
-        seen.add(tag);
-        tags.push(tag);
-      }
+  const push = (tag: string | null | undefined) => {
+    if (!tag || seen.has(tag)) return;
+    seen.add(tag);
+    tags.push(tag);
+  };
+  for (const section of sections) {
+    if (section.group && section.collapsed) {
+      push(section.group.group_now);
+      continue;
     }
+    for (const tag of section.cards) push(tag);
   }
   return tags;
 }

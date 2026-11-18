@@ -291,6 +291,43 @@ describe("App", () => {
     expect(view.getByTestId("settings-panel")).toBeInTheDocument();
   });
 
+  it("drops the outgoing page's title-bar actions in the switch frame", async () => {
+    const { container } = render(<App />);
+    const view = within(container);
+    // Only visited tabs of the current shell mount a title-bar slot.
+    expect(
+      Array.from(container.querySelectorAll("[data-titlebar-slot]")).map((el) =>
+        el.getAttribute("data-titlebar-slot"),
+      ),
+    ).toEqual(["home"]);
+
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.rules") }));
+    const add = await screen.findByRole("button", { name: t("rules.addCustom") });
+    const rulesSlot = add.closest("[data-titlebar-slot]");
+    expect(rulesSlot).toHaveAttribute("data-titlebar-slot", "rules");
+    expect(rulesSlot).not.toHaveAttribute("hidden");
+
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.subs") }));
+
+    // The hidden page keeps its portal until its offscreen render commits,
+    // but its slot is out of the bar at once: only Subscriptions' action shows.
+    expect(rulesSlot).toHaveAttribute("hidden");
+    const subsSlot = screen
+      .getByRole("button", { name: t("subs.importTitle") })
+      .closest("[data-titlebar-slot]");
+    expect(subsSlot).toHaveAttribute("data-titlebar-slot", "subs");
+    expect(screen.queryByRole("button", { name: t("rules.addCustom") })).toBeNull();
+
+    // Returning to Rules reuses its mounted slot and restores its action.
+    fireEvent.click(view.getByRole("button", { name: t("app.nav.rules") }));
+    expect(subsSlot).toHaveAttribute("hidden");
+    expect(rulesSlot).not.toHaveAttribute("hidden");
+    expect(
+      screen.getByRole("button", { name: t("rules.addCustom") }).closest("[data-titlebar-slot]"),
+    ).toBe(rulesSlot);
+    expect(container.querySelector('[data-titlebar-slot="apps"]')).toBeNull();
+  });
+
   it("orders Connections, MCP, and Settings from top to bottom", async () => {
     const { container } = render(<App />);
     const view = within(container);
@@ -443,7 +480,10 @@ describe("App", () => {
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
     const actions = container.querySelector("[data-titlebar] [data-titlebar-actions]");
     expect(actions).not.toBeNull();
-    expect(actions).toHaveClass("not-empty:pr-7");
+    // The nodes pane portals into its own slot, inset like the page content.
+    const nodesSlot = container.querySelector('[data-titlebar-slot="nodes"]');
+    expect(nodesSlot).toHaveClass("not-empty:pr-7");
+    expect(nodesSlot).not.toHaveAttribute("hidden");
     const batch = within(actions as HTMLElement).getByRole("button", {
       name: t("nodes.batchTest"),
     });

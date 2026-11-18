@@ -53,7 +53,7 @@ import {
 import { useThemePreference } from "./lib/theme";
 import { startBackgroundAppUpdateCheck } from "./lib/appUpdateCheck";
 import { RuntimeStoreProvider, useRuntimeStore } from "./lib/runtimeStore";
-import { PaneVisibleContext } from "./lib/paneVisibility";
+import { PaneTabContext, PaneVisibleContext } from "./lib/paneVisibility";
 
 type Tab =
   | "home"
@@ -95,16 +95,20 @@ const PANE_CLASS =
  * state and DOM are kept for the next visit.
  */
 function TabPane({
+  tab,
   active,
   children,
 }: {
+  tab: Tab;
   active: boolean;
   children: ReactNode;
 }) {
   return (
     <Activity mode={active ? "visible" : "hidden"}>
       <div className={PANE_CLASS} data-active={active ? "true" : "false"}>
-        {children}
+        <PaneTabContext value={tab}>
+          <PaneVisibleContext value={active}>{children}</PaneVisibleContext>
+        </PaneTabContext>
       </div>
     </Activity>
   );
@@ -120,9 +124,11 @@ function TabPane({
  * milliseconds for.
  */
 function KeptPane({
+  tab,
   active,
   children,
 }: {
+  tab: Tab;
   active: boolean;
   children: ReactNode;
 }) {
@@ -159,7 +165,9 @@ function KeptPane({
       data-active={active ? "true" : "false"}
       aria-hidden={active ? undefined : true}
     >
-      <PaneVisibleContext value={active}>{children}</PaneVisibleContext>
+      <PaneTabContext value={tab}>
+        <PaneVisibleContext value={active}>{children}</PaneVisibleContext>
+      </PaneTabContext>
     </div>
   );
 }
@@ -178,7 +186,43 @@ const NAV_ITEMS: {
   { id: "settings", labelKey: "app.nav.settings" },
 ];
 
-function TitleBar({ label }: { label: string }) {
+/** One title-bar container per mounted tab: a page's actions never share a slot
+ * with the page before it, and the shell shows only the current tab's
+ * container. A hidden page whose deferred render has not dropped its portal yet
+ * is already out of the bar, so switching between two pages that both put
+ * buttons there cannot show both at once. `padding` insets the actions like the
+ * page content below and applies only while the slot has buttons. */
+function TitlebarActionSlots({
+  items,
+  tab,
+  padding,
+}: {
+  items: readonly { id: Tab }[];
+  tab: Tab;
+  padding: string;
+}) {
+  return items.map(({ id }) => (
+    <div
+      key={id}
+      data-titlebar-slot={id}
+      hidden={id !== tab}
+      className={cn(
+        "flex h-full items-center gap-2",
+        id === tab && padding,
+      )}
+    />
+  ));
+}
+
+function TitleBar({
+  items,
+  tab,
+  label,
+}: {
+  items: readonly { id: Tab }[];
+  tab: Tab;
+  label: string;
+}) {
   const { open, isMobile } = useSidebar();
   const sidebarOpen = open && !isMobile;
   const windows = detectWindowChrome() === "windows-custom";
@@ -216,10 +260,9 @@ function TitleBar({ label }: { label: string }) {
           <h2 className="text-sm font-medium">{label}</h2>
         </div>
         {/* pr-7 matches the node list: page padding plus the small card padding. */}
-        <div
-          data-titlebar-actions
-          className="flex h-full shrink-0 items-center gap-2 not-empty:pr-7"
-        />
+        <div data-titlebar-actions className="flex h-full shrink-0 items-center">
+          <TitlebarActionSlots items={items} tab={tab} padding="not-empty:pr-7" />
+        </div>
       </header>
     </div>
   );
@@ -383,12 +426,13 @@ function AppShell() {
     if (item.id === "nodes") return !phone;
     return true;
   });
+  const slotItems = navItems.filter((item) => visited.has(item.id));
   const current = navItems.find((item) => item.id === tab);
 
   const pages = (
     <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
       {visited.has("home") && (
-        <KeptPane active={tab === "home"}>
+        <KeptPane tab="home" active={tab === "home"}>
           <HomePage
             onNavigate={selectTab}
             active={pageTab === "home"}
@@ -397,32 +441,32 @@ function AppShell() {
         </KeptPane>
       )}
       {!phone && visited.has("nodes") && (
-        <KeptPane active={tab === "nodes"}>
+        <KeptPane tab="nodes" active={tab === "nodes"}>
           <NodesPage onNavigate={selectTab} active={pageTab === "nodes"} />
         </KeptPane>
       )}
       {phone && visited.has("apps") && (
-        <TabPane active={tab === "apps"}>
+        <TabPane tab="apps" active={tab === "apps"}>
           <AppsPage active={tab === "apps"} />
         </TabPane>
       )}
       {visited.has("subs") && (
-        <TabPane active={tab === "subs"}>
+        <TabPane tab="subs" active={tab === "subs"}>
           <SubscriptionsPage active={tab === "subs"} />
         </TabPane>
       )}
       {visited.has("rules") && (
-        <TabPane active={tab === "rules"}>
+        <TabPane tab="rules" active={tab === "rules"}>
           <RulesPage onNavigate={selectTab} active={tab === "rules"} />
         </TabPane>
       )}
       {!phone && visited.has("connections") && (
-        <TabPane active={tab === "connections"}>
+        <TabPane tab="connections" active={tab === "connections"}>
           <ConnectionsPage active={tab === "connections"} />
         </TabPane>
       )}
       {visited.has("settings") && (
-        <TabPane active={tab === "settings"}>
+        <TabPane tab="settings" active={tab === "settings"}>
           <SettingsPage
             active={tab === "settings"}
             availableUpdate={availableUpdate}
@@ -432,7 +476,7 @@ function AppShell() {
         </TabPane>
       )}
       {desktop && visited.has("mcp") && (
-        <TabPane active={tab === "mcp"}>
+        <TabPane tab="mcp" active={tab === "mcp"}>
           <McpPage active={tab === "mcp"} />
         </TabPane>
       )}
@@ -467,10 +511,9 @@ function AppShell() {
             <h2 className="text-sm font-medium">
               {current ? t(current.labelKey) : ""}
             </h2>
-            <div
-              data-titlebar-actions
-              className="flex shrink-0 items-center gap-2 not-empty:pr-3"
-            />
+            <div data-titlebar-actions className="flex shrink-0 items-center">
+              <TitlebarActionSlots items={slotItems} tab={tab} padding="not-empty:pr-3" />
+            </div>
           </header>
           {recovery}
           <main
@@ -526,7 +569,13 @@ function AppShell() {
         style={SIDEBAR_PROVIDER_STYLE}
         data-testid={phone ? "tablet-shell" : undefined}
       >
-        {phone ? null : <TitleBar label={current ? t(current.labelKey) : ""} />}
+        {phone ? null : (
+          <TitleBar
+            items={slotItems}
+            tab={tab}
+            label={current ? t(current.labelKey) : ""}
+          />
+        )}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
@@ -602,8 +651,14 @@ function AppShell() {
                 </h2>
                 <div
                   data-titlebar-actions
-                  className="ml-auto flex shrink-0 items-center gap-2 not-empty:pr-3"
-                />
+                  className="ml-auto flex shrink-0 items-center"
+                >
+                  <TitlebarActionSlots
+                    items={slotItems}
+                    tab={tab}
+                    padding="not-empty:pr-3"
+                  />
+                </div>
               </header>
             ) : null}
             {recovery}

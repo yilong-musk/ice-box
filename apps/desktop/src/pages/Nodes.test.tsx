@@ -59,6 +59,31 @@ function useFlatProfile() {
   listNodes.mockImplementation(async () => FLAT_NODES.map((node) => ({ ...node })));
 }
 
+/** A group with a favorited member: the page draws that member first. */
+const FAVORITE_GROUP_NODES = [
+  { tag: "node-a", outbound_type: "vmess", group_now: null, group_all: null },
+  {
+    tag: "node-b",
+    outbound_type: "vmess",
+    group_now: null,
+    group_all: null,
+    favorite: true,
+    favorite_rank: 0,
+  },
+  {
+    tag: "选择组",
+    outbound_type: "selector",
+    group_now: "node-a",
+    group_all: ["node-a", "node-b"],
+  },
+];
+
+function useFavoriteGroup() {
+  listNodes.mockImplementation(async () =>
+    FAVORITE_GROUP_NODES.map((node) => ({ ...node })),
+  );
+}
+
 describe("Nodes", () => {
   beforeEach(() => {
     installTitlebarActionsSlot();
@@ -935,6 +960,23 @@ describe("Nodes", () => {
     expect(testNodeDelay).not.toHaveBeenCalledWith("选择组");
   });
 
+  it("probes an expanded group's members in the order the page draws them", async () => {
+    useFavoriteGroup();
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await expandGroup(view, "选择组");
+
+    // The favorited member is drawn above the other one.
+    expect(rowTitles(container)).toEqual(["选择组", "node-b", "node-a"]);
+
+    await clickGroupDelayTest(view, "选择组", true);
+
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledTimes(2);
+    });
+    expect(testNodeDelay.mock.calls.map(([tag]) => tag)).toEqual(["node-b", "node-a"]);
+  });
+
   it("marks a failed single-node delay test on the cell without a page alert", async () => {
     testNodeDelay.mockRejectedValueOnce("probe timed out");
     const { container } = render(<Nodes />);
@@ -1042,6 +1084,22 @@ describe("Nodes", () => {
       const probed = testNodeDelay.mock.calls.map(([tag]) => tag);
       expect(probed.sort()).toEqual(["hk-1", "hk-2", "hk-3", "node-a"]);
     });
+  });
+
+  it("batch-tests an expanded group in the order the page draws it", async () => {
+    useFavoriteGroup();
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    await expandGroup(view, "选择组");
+
+    expect(rowTitles(container)).toEqual(["选择组", "node-b", "node-a"]);
+
+    fireEvent.click(await screen.findByRole("button", { name: t("nodes.batchTest") }));
+
+    await waitFor(() => {
+      expect(testNodeDelay).toHaveBeenCalledTimes(2);
+    });
+    expect(testNodeDelay.mock.calls.map(([tag]) => tag)).toEqual(["node-b", "node-a"]);
   });
 
   it("expands a strategy group from the keyboard", async () => {
