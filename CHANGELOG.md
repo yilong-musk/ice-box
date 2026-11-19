@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the landing IP. The country is the `loc` field from the same Cloudflare
   trace that supplies the IP. An unknown code is left off.
 
+### Changed
+
+- Home’s memory bar is the current total. Core and app fill it by their
+  share, so the bar no longer keeps an empty stretch of scale past the
+  reading. The tick labels under the bar are gone. The total still takes
+  the colour of its band.
+
 ### Fixed
 
 - A subscription outbound that would collide with a tag the app owns is
