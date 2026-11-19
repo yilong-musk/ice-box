@@ -1370,6 +1370,41 @@ mod tests {
         bin
     }
 
+    /// Live stub whose executable image is the file at `path`.
+    ///
+    /// The image has to be a real binary copied under the `sing-box` name:
+    /// `/proc/<pid>/exe` and `proc_pidpath` report the exec'd file, so a
+    /// symlink or a shell script would report `sleep` / `sh` instead.
+    ///
+    /// `argv[0]` stays `sleep` on purpose. Ubuntu 26.04 ships coreutils as a
+    /// single multicall binary that dispatches on `argv[0]`, so a copy invoked
+    /// as `sing-box` exits with `coreutils: unknown program '8'` before the
+    /// tests can look at it.
+    #[cfg(unix)]
+    fn install_singbox_stub(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|candidate| Path::new(candidate).is_file())
+            .expect("sleep binary");
+        fs::copy(sleep, path).expect("copy sleep as sing-box");
+        let mut perm = fs::metadata(path).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(path, perm).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn spawn_singbox_stub(path: &Path, seconds: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+
+        std::process::Command::new(path)
+            .arg0("sleep")
+            .arg(seconds)
+            .spawn()
+            .expect("spawn sing-box stub")
+    }
+
     /// Free loopback port for tests. Suite-wide counter in a fixed range
     /// below the OS ephemeral range (Linux default 32768+, macOS / Windows
     /// 49152+), so a concurrent test's `:0` bind can never land on it; the
@@ -1486,25 +1521,8 @@ mod tests {
     fn adopt_external_accepts_live_process_named_sing_box() {
         let dir = temp_root("adopt-live");
         let bin = dir.join("sing-box");
-        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-            .into_iter()
-            .find(|p| Path::new(p).is_file())
-            .expect("sleep binary");
-        // Copy, do not symlink: `proc_pidpath` / `/proc/pid/exe` report the
-        // real image. A symlink to `sleep` would look like `sleep`, not
-        // `sing-box`.
-        fs::copy(sleep, &bin).expect("copy sleep as sing-box");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perm = fs::metadata(&bin).unwrap().permissions();
-            perm.set_mode(0o755);
-            fs::set_permissions(&bin, perm).unwrap();
-        }
-        let mut child = std::process::Command::new(&bin)
-            .arg("8")
-            .spawn()
-            .expect("spawn sing-box stub");
+        install_singbox_stub(&bin);
+        let mut child = spawn_singbox_stub(&bin, "8");
         let pid = child.id();
         let paths = paths_in(&dir, bin.clone());
         let mut core = mock_ctrl(
@@ -1531,26 +1549,11 @@ mod tests {
         let other = temp_root("reclaim-other");
         let ours = dir.join("sing-box");
         let foreign = other.join("sing-box");
-        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-            .into_iter()
-            .find(|p| Path::new(p).is_file())
-            .expect("sleep binary");
         // Copy (do not symlink): canonicalize must distinguish the two images.
-        for dest in [&ours, &foreign] {
-            fs::copy(sleep, dest).expect("copy sleep as sing-box");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perm = fs::metadata(dest).unwrap().permissions();
-                perm.set_mode(0o755);
-                fs::set_permissions(dest, perm).unwrap();
-            }
-        }
+        install_singbox_stub(&ours);
+        install_singbox_stub(&foreign);
 
-        let mut foreign_child = std::process::Command::new(&foreign)
-            .arg("8")
-            .spawn()
-            .expect("spawn foreign sing-box");
+        let mut foreign_child = spawn_singbox_stub(&foreign, "8");
         let foreign_pid = foreign_child.id();
         let pid_file = dir.join("sing-box.pid");
         write_pid(&pid_file, foreign_pid).unwrap();
@@ -1564,10 +1567,7 @@ mod tests {
         let _ = foreign_child.kill();
         let _ = foreign_child.wait();
 
-        let mut ours_child = std::process::Command::new(&ours)
-            .arg("8")
-            .spawn()
-            .expect("spawn our sing-box");
+        let mut ours_child = spawn_singbox_stub(&ours, "8");
         let ours_pid = ours_child.id();
         write_pid(&pid_file, ours_pid).unwrap();
         core.reclaim_orphan_pid(&pid_file, &[ours.as_path()])
