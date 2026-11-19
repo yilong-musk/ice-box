@@ -203,18 +203,29 @@ fn show_main_window(app: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 const WINDOW_CORNER_RADIUS: f64 = 0.01;
 
-/// Square the macOS window mask.
+/// Square the window corners.
 ///
-/// No public API does this. The private setter stores an associated radius and
-/// rebuilds the corner mask; `0.01` collapses that mask to a 1pt cap, which
-/// reads as a square corner. A future OS may ignore the selector, so a missing
-/// one is skipped instead of crashing.
+/// macOS has no public API for this. The private setter stores an associated
+/// radius and rebuilds the corner mask; `0.01` collapses that mask to a 1pt
+/// cap, which reads as a square corner. `<= 0` clears the override and a
+/// titled window snaps back to the 16pt system mask. A future OS may ignore
+/// the selector, so a missing one is skipped instead of crashing.
 ///
-/// Rebuilding that mask off the main thread throws and aborts the process.
-/// Tray Quit and Cmd+Q run `request_tray_quit` on a `spawn_blocking` worker,
-/// and the failure path that keeps the app open calls this after showing the
-/// window. An off-thread caller is queued onto the main thread; setup, tray
-/// menus, and the focus watchdog are already there and apply it immediately.
+/// Windows 11 rounds this window on its own. tao keeps `WS_CAPTION` and
+/// `WS_SIZEBOX` so DWM can draw the system shadow, and that frame is what DWM
+/// rounds. `DWMWCP_DONOTROUND` is the public opt-out; the shadow stays, and
+/// the corners are square, which is as close as Windows gets to the 1pt cap.
+/// Windows 10 rejects the attribute. Its windows are already square, so the
+/// error is ignored.
+///
+/// Rebuilding the macOS mask off the main thread throws and aborts the
+/// process. Tray Quit and Cmd+Q run `request_tray_quit` on a `spawn_blocking`
+/// worker, and the failure path that keeps the app open calls this after
+/// showing the window. An off-thread caller is queued onto the main thread;
+/// setup, tray menus, and the focus watchdog are already there and apply it
+/// immediately. `hwnd()` also has to run on that thread, so Windows takes the
+/// same path: `run_on_main_thread` runs the closure before returning when the
+/// caller is already there.
 pub(crate) fn square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     #[cfg(target_os = "macos")]
     {
@@ -229,7 +240,18 @@ pub(crate) fn square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWi
         }
         apply_square_window_corners(window);
     }
-    #[cfg(not(target_os = "macos"))]
+    // No main-thread marker on Windows. `run_on_main_thread` runs the closure
+    // before returning when the caller is already on the UI thread, and queues
+    // it otherwise. `hwnd()` waits on that thread, so the attribute is applied
+    // there either way.
+    #[cfg(windows)]
+    {
+        let scheduled = window.clone();
+        let _ = window
+            .clone()
+            .run_on_main_thread(move || apply_square_window_corners(&scheduled));
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = window;
     }
@@ -255,6 +277,36 @@ fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<
         return;
     }
     let () = unsafe { objc2::msg_send![ns_window, _setCornerRadius: WINDOW_CORNER_RADIUS] };
+}
+
+/// Ask DWM not to round this window. The caller is on the UI thread.
+#[cfg(windows)]
+fn apply_square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+
+    let Ok(handle) = window.hwnd() else {
+        return;
+    };
+    // Tauri's `HWND` is the `windows` crate's public tuple around the same
+    // pointer `windows-sys` takes.
+    let hwnd = handle.0;
+    if hwnd.is_null() {
+        return;
+    }
+    let preference = DWMWCP_DONOTROUND;
+    // SAFETY: `hwnd` is this webview's live top-level window. The call only
+    // stores a DWM corner preference. Windows 10 does not recognize the
+    // attribute and returns an error, leaving its already-square window as it is.
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&preference) as u32,
+        )
+    };
 }
 
 fn bootstrap_data_dir(
