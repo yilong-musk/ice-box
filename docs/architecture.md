@@ -371,7 +371,9 @@ While the core is running and Settings → Inbound → **Probe public exit IP**
 (`probe_exit_ip`, default on) is enabled, status assembly may start a
 background HTTPS probe through the local Mixed inbound to
 `https://www.cloudflare.com/cdn-cgi/trace`. The response’s public IP populates
-Home’s landing address. Probes are keyed by the selected outbound, cached for
+Home’s landing address, and the `loc` country on that same response is drawn
+as a flag in front of the address. `XX` and any value that is not an ISO
+alpha-2 code are omitted. Probes are keyed by the selected outbound, cached for
 about 30 seconds, and never run when the setting is off or the core is stopped.
 Turning the setting off is the supported opt-out; the app does not use
 plaintext third-party IP lookup fallbacks.

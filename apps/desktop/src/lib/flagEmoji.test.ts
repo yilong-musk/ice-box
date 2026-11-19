@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyFlagEmojiPolyfill,
+  countryFlagEmoji,
   FLAG_EMOJI_FONT,
 } from "./flagEmoji";
 
@@ -36,6 +37,14 @@ describe("applyFlagEmojiPolyfill", () => {
       throw new Error("canvas unavailable");
     });
     expect(applyFlagEmojiPolyfill("/TwemojiCountryFlags.woff2")).toBe(false);
+  });
+
+  it("turns a probed country code into its flag", () => {
+    expect(countryFlagEmoji("HK")).toBe("🇭🇰");
+    expect(countryFlagEmoji("hk")).toBe("🇭🇰");
+    expect(countryFlagEmoji("XX")).toBeNull();
+    expect(countryFlagEmoji("T1")).toBeNull();
+    expect(countryFlagEmoji(null)).toBeNull();
   });
 
   it("skips injection when document is unavailable", () => {

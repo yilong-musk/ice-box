@@ -18,3 +18,16 @@ export function applyFlagEmojiPolyfill(fontUrl: string): boolean {
     return false;
   }
 }
+
+/** Regional-indicator flag for an ISO 3166-1 alpha-2 code. `XX` is
+ * Cloudflare's unknown country and has no flag. */
+export function countryFlagEmoji(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const upper = code.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(upper) || upper === "XX") return null;
+  const base = 0x1f1e6;
+  return String.fromCodePoint(
+    base + upper.charCodeAt(0) - 65,
+    base + upper.charCodeAt(1) - 65,
+  );
+}

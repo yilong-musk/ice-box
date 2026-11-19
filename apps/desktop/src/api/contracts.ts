@@ -71,6 +71,8 @@ export type SelectedOutbound = {
   group_now: string | null;
   /** Public IP observed by a probe through the mixed inbound. */
   landing_ip?: string | null;
+  /** ISO 3166-1 alpha-2 country from the same probe. */
+  landing_country?: string | null;
 };
 
 

@@ -48,6 +48,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
 import { cn } from "@/lib/utils";
+import { countryFlagEmoji } from "../lib/flagEmoji";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
 import { resolveShellProxyEndpoint } from "../lib/shellProxy";
 import { useTransient } from "../lib/transient";
@@ -517,6 +518,8 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // A snapshot that just changed the selection still carries the previous
   // sample's landing address. Hide it until status catches up.
   const landingIp = snapshotWins ? null : statusOutbound?.landing_ip;
+  const landingCountry = snapshotWins ? null : statusOutbound?.landing_country;
+  const landingFlag = landingIp ? countryFlagEmoji(landingCountry) : null;
   const outboundRows: {
     label: string;
     value: string;
@@ -524,11 +527,16 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
     testId?: string;
   }[] = [{ label: t("home.outbound.node"), value: currentNodeLabel }];
   // Mobile status does not carry a landing IP and the compact layout cannot
-  // afford a permanent "Exit IP —" row.
+  // afford a permanent "Exit IP —" row. The flag is the probed exit country,
+  // not the country written into the node name.
   if (!phone || landingIp) {
     outboundRows.push({
       label: t("home.outbound.ip"),
-      value: landingIp || t("common.dash"),
+      value: landingIp
+        ? landingFlag
+          ? `${landingFlag} ${landingIp}`
+          : landingIp
+        : t("common.dash"),
       valueClassName: "font-mono tabular-nums",
       testId: "home-outbound-ip",
     });

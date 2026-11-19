@@ -223,18 +223,21 @@ pub(crate) fn outbound_summary(
     let shown_now = group_now.filter(|_| is_group);
     // Exit probes hit a third-party HTTPS endpoint through the mixed inbound.
     // Off by settings (`probe_exit_ip`) or when the core is stopped.
-    let landing_ip = if running && probe_exit_ip_enabled(settings) {
+    let (landing_ip, landing_country) = if running && probe_exit_ip_enabled(settings) {
         match (settings, exit_proxy_url(state, settings)) {
             (Some(settings), Some(proxy)) => {
                 let key =
                     exit_probe_cache_key(settings, &proxy, &outbound.tag, shown_now.as_deref());
-                super::exit_probe::observe(&key, &proxy)
+                match super::exit_probe::observe(&key, &proxy) {
+                    Some(sample) => (Some(sample.ip), sample.country),
+                    None => (None, None),
+                }
             }
-            _ => None,
+            _ => (None, None),
         }
     } else {
         super::exit_probe::clear();
-        None
+        (None, None)
     };
     (
         true,
@@ -243,6 +246,7 @@ pub(crate) fn outbound_summary(
             outbound_type: ty,
             group_now: shown_now,
             landing_ip,
+            landing_country,
         }),
     )
 }

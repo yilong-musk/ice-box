@@ -4,9 +4,10 @@
 //!
 //! The configured server address is often a hostname, and it is not the
 //! address a destination sees. This probe sends one HTTPS request through the
-//! local proxy to Cloudflare's trace endpoint and reads the IP from the far end.
-//! Status reads only consult the cache; the request runs on a background thread. See
-//! `docs/architecture.md` (Trust boundaries) and the `probe_exit_ip` setting.
+//! local proxy to Cloudflare's trace endpoint and reads the IP and country
+//! from the far end. Status reads only consult the cache; the request runs on
+//! a background thread. See `docs/architecture.md` (Trust boundaries) and the
+//! `probe_exit_ip` setting.
 
 use std::io::Read;
 use std::net::IpAddr;
@@ -17,11 +18,19 @@ const FRESH: Duration = Duration::from_secs(30);
 const RETRY_AFTER_MISS: Duration = Duration::from_secs(15);
 const TRACE_URL: &str = "https://www.cloudflare.com/cdn-cgi/trace";
 
+/// One successful trace. `country` is absent when Cloudflare reports an
+/// unknown location or a value that is not an ISO alpha-2 code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExitSample {
+    pub ip: String,
+    pub country: Option<String>,
+}
+
 struct Cache {
     generation: u64,
     key: String,
     fetched_at: Instant,
-    ip: Option<String>,
+    sample: Option<ExitSample>,
     inflight_key: Option<String>,
 }
 
@@ -31,7 +40,7 @@ impl Cache {
             generation: 0,
             key: String::new(),
             fetched_at: Instant::now(),
-            ip: None,
+            sample: None,
             inflight_key: None,
         }
     }
@@ -56,17 +65,17 @@ pub(crate) fn clear() {
 
 /// Cached exit for `key`. Starts a probe when the sample is missing or stale.
 /// Returns immediately; the first sample appears on a later status read.
-pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<String> {
+pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<ExitSample> {
     let mut slot = lock();
     let same = slot.key == key;
     let age = slot.fetched_at.elapsed();
     let fresh = same
-        && if slot.ip.is_some() {
+        && if slot.sample.is_some() {
             age < FRESH
         } else {
             age < RETRY_AFTER_MISS
         };
-    let current = if same { slot.ip.clone() } else { None };
+    let current = if same { slot.sample.clone() } else { None };
     if fresh || slot.inflight_key.as_deref() == Some(key) {
         return current;
     }
@@ -78,7 +87,7 @@ pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<String> {
     let spawned = std::thread::Builder::new()
         .name("exit-probe".into())
         .spawn(move || {
-            let ip = fetch_exit(&proxy_url);
+            let sample = fetch_exit(&proxy_url);
             let mut slot = lock();
             if slot.generation != generation
                 || slot.inflight_key.as_deref() != Some(probe_key.as_str())
@@ -88,7 +97,7 @@ pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<String> {
             slot.inflight_key = None;
             slot.key = probe_key;
             slot.fetched_at = Instant::now();
-            slot.ip = ip;
+            slot.sample = sample;
         });
     if spawned.is_err() {
         let mut slot = lock();
@@ -99,7 +108,7 @@ pub(crate) fn observe(key: &str, proxy_url: &str) -> Option<String> {
     current
 }
 
-fn fetch_exit(proxy_url: &str) -> Option<String> {
+fn fetch_exit(proxy_url: &str) -> Option<ExitSample> {
     let proxy = ureq::Proxy::new(proxy_url).ok()?;
     let agent = ureq::AgentBuilder::new()
         .proxy(proxy)
@@ -122,17 +131,35 @@ fn read_limited(agent: &ureq::Agent, url: &str) -> Option<String> {
     Some(body)
 }
 
-fn parse_trace(body: &str) -> Option<String> {
+fn parse_trace(body: &str) -> Option<ExitSample> {
     let mut ip = None;
+    let mut country = None;
     for line in body.lines() {
         if let Some(value) = line.strip_prefix("ip=") {
             let value = value.trim();
             if value.parse::<IpAddr>().is_ok() {
                 ip = Some(value.to_string());
             }
+        } else if let Some(value) = line.strip_prefix("loc=") {
+            country = country_code(value);
         }
     }
-    ip
+    ip.map(|ip| ExitSample { ip, country })
+}
+
+/// Cloudflare's `loc` is an ISO 3166-1 alpha-2 country, or `XX` when unknown.
+/// Tor (`T1`) and anything else that is not two letters is not a flag.
+fn country_code(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    let bytes = value.as_bytes();
+    if bytes.len() != 2 || !bytes.iter().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    let code = value.to_ascii_uppercase();
+    if code == "XX" {
+        return None;
+    }
+    Some(code)
 }
 
 #[cfg(test)]
@@ -140,9 +167,22 @@ mod tests {
     use super::{fetch_exit, parse_trace};
 
     #[test]
-    fn trace_yields_the_observed_ip() {
-        let body = "ip=1.36.1.1\nloc=HK\ncolo=HKG\n";
-        assert_eq!(parse_trace(body).as_deref(), Some("1.36.1.1"));
+    fn trace_yields_the_observed_ip_and_country() {
+        let body = "ip=1.36.1.1\nloc=hk\ncolo=HKG\n";
+        let sample = parse_trace(body).expect("sample");
+        assert_eq!(sample.ip, "1.36.1.1");
+        assert_eq!(sample.country.as_deref(), Some("HK"));
+    }
+
+    #[test]
+    fn trace_drops_a_country_that_has_no_flag() {
+        let unknown = parse_trace("ip=1.36.1.1\nloc=XX\n").expect("ip");
+        assert_eq!(unknown.country, None);
+        let tor = parse_trace("ip=1.36.1.1\nloc=T1\n").expect("ip");
+        assert_eq!(tor.country, None);
+        let colo = parse_trace("ip=1.36.1.1\nloc=HKG\n").expect("ip");
+        assert_eq!(colo.country, None);
+        assert!(parse_trace("loc=HK\ncolo=HKG\n").is_none());
     }
 
     #[test]
