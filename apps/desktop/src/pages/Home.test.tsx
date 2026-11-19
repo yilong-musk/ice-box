@@ -188,6 +188,7 @@ describe("Home", () => {
         outbound_type: "selector",
         group_now: "HK-1",
         landing_ip: "1.36.1.1",
+        landing_country: "HK",
       },
       ...tunStatus,
     });
@@ -230,7 +231,9 @@ describe("Home", () => {
       .getByText(t("home.outboundTitle"))
       .closest("[data-slot=card]") as HTMLElement;
     expect(within(outboundCard).getByText("Proxies → HK-1")).toBeInTheDocument();
-    expect(within(outboundCard).getByTestId("home-outbound-ip")).toHaveTextContent("1.36.1.1");
+    expect(within(outboundCard).getByTestId("home-outbound-ip")).toHaveTextContent(
+      "🇭🇰 1.36.1.1",
+    );
     expect(within(outboundCard).queryByTestId("home-outbound-region")).toBeNull();
     expect(view.getByTestId("home-panel")).toBeInTheDocument();
     // Outbound mode is its own module, beside the proxy status card.

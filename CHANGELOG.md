@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Home’s outbound card shows the probed exit country as a flag in front of
+  the landing IP. The country is the `loc` field from the same Cloudflare
+  trace that supplies the IP. An unknown code is left off.
+
 ### Fixed
 
 - A subscription outbound that would collide with a tag the app owns is

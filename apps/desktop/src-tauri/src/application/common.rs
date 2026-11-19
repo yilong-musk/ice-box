@@ -182,6 +182,9 @@ pub struct SelectedOutbound {
     pub group_now: Option<String>,
     /// Public IP seen by a probe sent through the mixed inbound.
     pub landing_ip: Option<String>,
+    /// ISO 3166-1 alpha-2 country of that IP, from the same probe. Absent when
+    /// the probe has not landed or Cloudflare did not report a country.
+    pub landing_country: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
