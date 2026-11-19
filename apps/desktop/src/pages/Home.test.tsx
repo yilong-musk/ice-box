@@ -357,6 +357,7 @@ describe("Home", () => {
       expect(view.getByTestId("home-health-memory")).toHaveTextContent("52 MB");
     });
     const row = view.getByTestId("home-health-memory");
+    expect(row.className).toContain("text-xl");
     expect(row.className).toContain("text-ok");
     expect(row).toHaveAttribute(
       "title",
@@ -380,14 +381,16 @@ describe("Home", () => {
       expect(view.getByTestId("home-memory-core")).toHaveTextContent("14 MB");
     });
     expect(view.getByTestId("home-memory-app")).toHaveTextContent("38 MB");
-    // Drawn against the 100 MB scale.
-    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "14%" });
-    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "38%" });
+    // The bar is the 52 MB total: 14 of 52, then the rest. No empty scale.
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "26.92%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "73.08%" });
     expect(view.getByTestId("home-memory-bar")).toHaveAccessibleName(
       t("home.memory.tooltip", { core: "14 MB", app: "38 MB" }),
-    );  });
+    );
+    expect(view.queryByTestId("home-memory-pie")).toBeNull();
+  });
 
-  it("fills the memory bar once usage passes the scale", async () => {
+  it("fills the memory bar with the core and app split when usage is high", async () => {
     getStatus.mockResolvedValue(
       statusWithMemory({
         app_bytes: 150 * 1024 * 1024,
@@ -407,7 +410,7 @@ describe("Home", () => {
     expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-destructive");
   });
 
-  it("grows the memory scale in 50 MB steps so labels stay apart", async () => {
+  it("draws the bar as the split of the total, not a fixed scale", async () => {
     getStatus.mockResolvedValue(
       statusWithMemory({
         app_bytes: 35 * 1024 * 1024,
@@ -422,15 +425,12 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByTestId("home-health-memory")).toHaveTextContent("105 MB");
     });
-    // 105 MB rounds the scale up to 150, not to 105 right next to the 100 tick.
-    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "46.67%" });
-    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "23.33%" });
-    expect(view.getByTestId("home-memory-tick-100")).toHaveStyle({ left: "66.67%" });
-    expect(view.getByTestId("home-memory-tick-150")).toHaveTextContent("150 MB");
-    expect(view.queryByTestId("home-memory-tick-105")).toBeNull();
+    // 70 of 105, then the rest. A 150 MB scale would have left the bar partly empty.
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "66.67%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "33.33%" });
   });
 
-  it("draws the bands and scale the backend sends", async () => {
+  it("draws the bands the backend sends", async () => {
     // The macOS backend reports bands 20 MB above the baseline.
     getStatus.mockResolvedValue(
       statusWithMemory({
@@ -449,17 +449,11 @@ describe("Home", () => {
     });
     // 72 MB is yellow against the baseline bands and green against these.
     expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-ok");
-    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "18.33%" });
-    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "41.67%" });
-    expect(view.getByTestId("home-memory-tick-80")).toHaveStyle({ left: "66.67%" });
-    expect(view.getByTestId("home-memory-tick-120")).toHaveTextContent("120 MB");
-    expect(view.queryByTestId("home-memory-tick-60")).toBeNull();
-    expect(view.queryByTestId("home-memory-tick-100")).toBeNull();
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "30.56%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "69.44%" });
   });
 
-  it("grows the scale from the red mark so its label keeps clear of the end", async () => {
-    // 121 MB against a 120 MB red mark: a scale rounded to the next multiple
-    // of 50 would end at 150, only a fifth of the bar past the 120 label.
+  it("colours the full bar from the total even past the red mark", async () => {
     getStatus.mockResolvedValue(
       statusWithMemory({
         app_bytes: 91 * 1024 * 1024,
@@ -475,9 +469,8 @@ describe("Home", () => {
     await waitFor(() => {
       expect(view.getByTestId("home-health-memory")).toHaveTextContent("121 MB");
     });
-    expect(view.getByTestId("home-memory-tick-120")).toHaveStyle({ left: "70.59%" });
-    expect(view.getByTestId("home-memory-tick-170")).toHaveTextContent("170 MB");
-    expect(view.queryByTestId("home-memory-tick-150")).toBeNull();
+    expect(view.getByTestId("home-memory-bar-core")).toHaveStyle({ width: "24.79%" });
+    expect(view.getByTestId("home-memory-bar-app")).toHaveStyle({ width: "75.21%" });
     expect(view.getByTestId("home-memory-bar-core").className).toContain("bg-destructive");
   });
 

@@ -1,24 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /**
- * Home memory card: the total footprint, a stacked bar split into core and
- * app, and a legend with each part's figure.
+ * Home memory card: the total footprint, a bar split into core and app, and
+ * a legend with each part's figure.
  *
- * The bar is drawn against a scale that ends where the red band starts (the
- * sample's `bad_mb`: 100 MB, or 120 MB on macOS), so how full it is shows how
- * close usage is to that band. Above it the scale grows in 50 MB steps past
- * the red mark, so that mark stays readable and the bar shows how far into the
- * red band usage has gone. The bar and the total take the colour of the band
- * the total falls in.
+ * The bar is the current total, not a scale with empty room past it. Core and
+ * app each take their share of that total, so the two segments fill the bar.
+ * Both segments, and the total, take the colour of the band the total falls in.
  */
 
 import type { MemoryUsage } from "@/api/contracts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { t } from "@/lib/i18n";
 import {
-  displayMemoryMb,
   formatMemory,
-  DEFAULT_MEMORY_BANDS,
   formatMemoryPart,
   memoryLabel,
   memoryMb,
@@ -26,23 +21,6 @@ import {
 } from "@/lib/memory";
 import { TONE_BG, TONE_TEXT, type Tone } from "@/lib/tone";
 import { cn } from "@/lib/utils";
-
-/** Past the red band's start the scale grows in these steps, counted from
- * that mark: the end label is always at least one step away from the red
- * mark's label, whatever the bands are. */
-const SCALE_STEP_MB = 50;
-
-/** An inner label closer than this share of the bar to either end is dropped
- * (its gap marker stays), so it never runs into the end labels. */
-const MIN_LABEL_GAP = 0.12;
-
-/** Bar length in MB for a displayed total: the start of the red band
- * (`badMb`) until usage passes it. */
-function memoryScaleMb(totalMb: number, badMb: number): number {
-  return totalMb <= badMb
-    ? badMb
-    : badMb + Math.ceil((totalMb - badMb) / SCALE_STEP_MB) * SCALE_STEP_MB;
-}
 
 /** Core segment: the full band colour. */
 const TONE_CORE = TONE_BG;
@@ -53,6 +31,17 @@ const TONE_APP: Record<Tone, string> = {
   warn: "bg-warn/40",
   bad: "bg-destructive/40",
 };
+
+/** Percent of the bar, rounded to 0.01. The two parts share one total, so the
+ * app segment is whatever the core segment does not take. */
+function sharePct(partMb: number, totalMb: number): number {
+  if (totalMb <= 0) return 0;
+  return Math.round((partMb / totalMb) * 10000) / 100;
+}
+
+function widthOf(share: number): string {
+  return `${share}%`;
+}
 
 /** Hover text for the total: the breakdown, or why the core is missing. */
 function memoryTip(memory: MemoryUsage | undefined, coreRunning: boolean) {
@@ -82,19 +71,9 @@ export function MemoryCard({
   // Rounded per-part figures, the same ones the legend prints.
   const coreMb = memory?.core_bytes != null ? memoryMb(memory.core_bytes) : 0;
   const appMb = memory?.app_bytes != null ? memoryMb(memory.app_bytes) : 0;
-  const bands = memory?.bands ?? DEFAULT_MEMORY_BANDS;
-  const scale = memoryScaleMb(memory ? displayMemoryMb(memory) : 0, bands.bad_mb);
-  // Scale labels: the start, and where the bar turns yellow and red. Past the
-  // red mark the scale grows, and its end gets a label of its own.
-  const baseTicks = [0, bands.warn_mb, bands.bad_mb];
-  const ticks = scale > bands.bad_mb ? [...baseTicks, scale] : baseTicks;
-  const labels = ticks.filter(
-    (mb) =>
-      mb === 0 ||
-      mb === scale ||
-      (mb / scale >= MIN_LABEL_GAP && mb / scale <= 1 - MIN_LABEL_GAP),
-  );
-  const pct = (mb: number) => `${Math.round((mb / scale) * 10000) / 100}%`;
+  const totalMb = coreMb + appMb;
+  const coreShare = sharePct(coreMb, totalMb);
+  const appShare = totalMb <= 0 ? 0 : Math.round((100 - coreShare) * 100) / 100;
 
   const coreValue =
     memory?.core_bytes != null
@@ -122,63 +101,28 @@ export function MemoryCard({
         </span>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col justify-center gap-4">
-        <div className="flex flex-col gap-1.5">
-          <div className="relative">
-            <div
-              role="img"
-              aria-label={tip ?? label}
-              className="flex h-3 w-full overflow-hidden rounded-full bg-muted"
-              data-testid="home-memory-bar"
-            >
-              <div
-                className={cn(
-                  "h-full transition-[width] duration-500",
-                  tone ? TONE_CORE[tone] : "bg-muted-foreground",
-                )}
-                style={{ width: pct(coreMb) }}
-                data-testid="home-memory-bar-core"
-              />
-              <div
-                className={cn(
-                  "h-full transition-[width] duration-500",
-                  tone ? TONE_APP[tone] : "bg-muted-foreground/40",
-                )}
-                style={{ width: pct(appMb) }}
-                data-testid="home-memory-bar-app"
-              />
-            </div>
-            {/* Band boundaries cut through the bar as thin gaps. */}
-            {ticks.filter((mb) => mb > 0 && mb < scale).map((mb) => (
-              <span
-                key={mb}
-                aria-hidden="true"
-                className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-card"
-                style={{ left: pct(mb) }}
-              />
-            ))}
-          </div>
+        <div
+          role="img"
+          aria-label={tip ?? label}
+          className="flex h-3 w-full overflow-hidden rounded-full bg-muted"
+          data-testid="home-memory-bar"
+        >
           <div
-            aria-hidden="true"
-            className="relative h-3.5 font-mono text-[10px] leading-none text-muted-foreground tabular-nums"
-          >
-            {labels.map((mb) => (
-              <span
-                key={mb}
-                className={cn(
-                  "absolute top-0 whitespace-nowrap",
-                  mb === 0
-                    ? ""
-                    : mb === scale
-                      ? "-translate-x-full"
-                      : "-translate-x-1/2",
-                )}
-                style={{ left: pct(mb) }}
-                data-testid={`home-memory-tick-${mb}`}
-              >
-                {mb === scale ? `${mb} MB` : mb}
-              </span>
-            ))}
-          </div>
+            className={cn(
+              "h-full transition-[width] duration-500",
+              tone ? TONE_CORE[tone] : "bg-muted-foreground",
+            )}
+            style={{ width: widthOf(coreShare) }}
+            data-testid="home-memory-bar-core"
+          />
+          <div
+            className={cn(
+              "h-full transition-[width] duration-500",
+              tone ? TONE_APP[tone] : "bg-muted-foreground/40",
+            )}
+            style={{ width: widthOf(appShare) }}
+            data-testid="home-memory-bar-app"
+          />
         </div>
         <div className="flex flex-col gap-1.5 text-xs">
           <LegendItem
