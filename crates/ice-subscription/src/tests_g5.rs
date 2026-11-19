@@ -2518,11 +2518,12 @@ fn node_named_direct_leaves_the_builtin_direct_outbound_in_place() {
     assert_eq!(rule_outbound, "direct");
 }
 
-/// A Clash subscription whose proxy group is named `proxy` used to feed the
-/// injected selector's tag into `PUT /proxies/proxy`; the group is renamed and
-/// its own references follow.
+/// A Clash proxy group named `proxy` is a real selector. The builder does not
+/// inject another one when groups exist, and node switching targets the group
+/// by tag, so the name stays. Renaming it would drop favorites and per-group
+/// selections stored under `proxy`.
 #[test]
-fn clash_group_named_proxy_is_renamed_with_its_references() {
+fn clash_group_named_proxy_keeps_its_name_and_builds() {
     let raw = r#"
 proxies:
   - name: n1
@@ -2541,13 +2542,12 @@ rules:
   - MATCH,proxy
 "#;
     let profile = super::parse_clash_profile(raw, HostPlatform::MacOs).expect("parse");
-    assert!(profile.nodes.iter().all(|n| n.tag != "proxy"));
     let group = profile
         .groups
         .iter()
-        .find(|g| g.outbound["tag"] == "proxy-2")
-        .expect("renamed group");
-    assert_eq!(group.outbound["tag"], "proxy-2");
+        .find(|g| g.tag == "proxy")
+        .expect("group keeps the name proxy");
+    assert_eq!(group.outbound["tag"], "proxy");
     let main = profile
         .groups
         .iter()
@@ -2557,8 +2557,187 @@ rules:
         .as_array()
         .unwrap()
         .iter()
+        .any(|m| m == "proxy"));
+    assert!(profile.route.rules.iter().any(|r| r["outbound"] == "proxy"));
+    assert_eq!(profile.route.final_outbound, "proxy");
+
+    let cfg = build_runtime_config(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: Some("n1".into()),
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: Default::default(),
+        rule_overrides: Default::default(),
+        capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("a group named proxy must build")
+    .to_json_value()
+    .unwrap();
+
+    let proxy_outbounds: Vec<&serde_json::Value> = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["tag"] == "proxy")
+        .collect();
+    assert_eq!(
+        proxy_outbounds.len(),
+        1,
+        "the group is the only outbound tagged proxy"
+    );
+    assert_eq!(proxy_outbounds[0]["type"], "selector");
+}
+
+/// A flat Clash subscription has no selector in the source. `DOMAIN,x,proxy`
+/// and `MATCH,proxy` name the node. After that node is renamed, the targets
+/// stay `proxy`, which the builder fills with the injected selector, so the
+/// rule follows the current selection rather than the renamed node. This
+/// subscription used to fail with `duplicate tag proxy`.
+#[test]
+fn flat_clash_proxy_node_rules_stay_on_the_injected_selector() {
+    let raw = r#"
+proxies:
+  - name: proxy
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+  - name: jp
+    type: socks5
+    server: 127.0.0.1
+    port: 1081
+rules:
+  - DOMAIN,x.example,proxy
+  - MATCH,proxy
+"#;
+    let profile = super::parse_clash_profile(raw, HostPlatform::MacOs).expect("parse");
+    assert!(profile.groups.is_empty());
+    assert_eq!(
+        profile
+            .nodes
+            .iter()
+            .map(|n| n.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["proxy-2", "jp"]
+    );
+    assert_eq!(profile.route.rules[0]["outbound"], "proxy");
+    assert_eq!(profile.route.final_outbound, "proxy");
+
+    let cfg = build_runtime_config(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: Some("jp".into()),
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: Default::default(),
+        rule_overrides: Default::default(),
+        capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("flat clash with a node named proxy must build")
+    .to_json_value()
+    .unwrap();
+
+    let selector = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
+        .expect("injected proxy selector");
+    assert_eq!(selector["default"], "jp");
+    assert!(selector["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
         .any(|m| m == "proxy-2"));
-    assert!(profile.route.rules.iter().all(|r| r["outbound"] != "proxy"));
+    let rule = cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["domain"][0] == "x.example")
+        .expect("subscription rule");
+    assert_eq!(rule["outbound"], "proxy");
+    assert_eq!(cfg["route"]["final"], "proxy");
+}
+
+/// A sing-box `dns` outbound is dropped at parse. A rule that still names it
+/// used to survive pruning, because `dns` was treated as always present, and
+/// Apply failed with `unknown outbound: dns`. The same rule aimed at `dns-out`
+/// was already rewritten to `direct`.
+#[test]
+fn dropped_dns_outbound_rule_is_rewritten_and_builds() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"jp","server":"127.0.0.1","server_port":1080},
+            {"type":"dns","tag":"dns"}
+        ],
+        "route": {
+            "final": "jp",
+            "rules": [{"protocol":"dns","outbound":"dns"}]
+        }
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert!(profile.nodes.iter().all(|n| n.tag != "dns"));
+    assert!(profile.groups.is_empty());
+    assert_eq!(profile.route.rules[0]["outbound"], "direct");
+    assert!(profile
+        .parse_stats
+        .warnings
+        .iter()
+        .any(|w| w.key == "parse.routeOutboundMissing"));
+
+    let cfg = build_runtime_config(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: Default::default(),
+        rule_overrides: Default::default(),
+        capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("a dropped dns outbound must not block Apply")
+    .to_json_value()
+    .unwrap();
+
+    assert!(cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|o| o["tag"] != "dns"));
+    assert!(cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["outbound"] != "dns"));
+}
+
+/// A proxy node tagged `dns` is renamed, and the rule that named it follows.
+/// Pruning must not then rewrite that followed reference to `direct`.
+#[test]
+fn node_named_dns_keeps_its_rule_after_prune() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"dns","server":"127.0.0.1","server_port":1080},
+            {"type":"socks","tag":"jp","server":"127.0.0.1","server_port":1081}
+        ],
+        "route": {
+            "final": "dns",
+            "rules": [{"domain_suffix":["a.example"],"outbound":"dns"}]
+        }
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert_eq!(profile.nodes[0].tag, "dns-2");
+    assert_eq!(profile.route.rules[0]["outbound"], "dns-2");
+    assert_eq!(profile.route.final_outbound, "dns-2");
 }
 
 /// Snapshots written before the rename existed are migrated on read.

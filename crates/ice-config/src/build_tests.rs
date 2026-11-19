@@ -3333,9 +3333,11 @@ fn share_singbox_config_is_a_portable_document() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0]["domain"][0], "example.com");
 
-    // The exported copy keeps the subscription's own node names (unlike the
-    // runtime profile, which renames reserved tags); only the injected
-    // selector moves to the next free tag.
+    // This function does not rename. Given a profile that still has a node
+    // tagged `proxy` (a direct call, or a sing-box body shared from the raw
+    // document), that node keeps its name and the injected selector takes the
+    // next free tag. Clash and URI shares pass the already-renamed profile,
+    // so the node is `proxy-2` and the selector is `proxy`.
     let named_proxy = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
         socks("proxy"),
         socks("n2"),
@@ -3369,6 +3371,46 @@ fn share_singbox_config_is_a_portable_document() {
     let node = outbounds
         .iter()
         .find(|outbound| outbound["tag"] == "proxy")
+        .unwrap();
+    assert_eq!(node["type"], "socks");
+}
+
+/// Clash and URI export the profile after reserved tags are renamed. The node
+/// is already `proxy-2`, so the injected selector takes the free tag `proxy`.
+#[test]
+fn share_of_a_renamed_flat_profile_uses_proxy_for_the_selector() {
+    let mut profile = NormalizedProfile::from_nodes_only(vec![socks("proxy"), socks("jp")]);
+    crate::rename_reserved_outbounds(&mut profile);
+    let shared = share_singbox_config(&profile).expect("share renamed profile");
+    let value: Value = serde_json::from_str(&shared).unwrap();
+    let tags: Vec<&str> = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|outbound| outbound["tag"].as_str())
+        .collect();
+    assert!(tags.contains(&"proxy-2"));
+    assert!(tags.contains(&"jp"));
+    assert!(tags.contains(&"direct"));
+    assert!(tags.contains(&"block"));
+    assert!(tags.contains(&"proxy"));
+    let selector = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["type"] == "selector")
+        .expect("selector");
+    assert_eq!(selector["tag"], "proxy");
+    assert!(selector["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member == "proxy-2"));
+    let node = value["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outbound| outbound["tag"] == "proxy-2")
         .unwrap();
     assert_eq!(node["type"], "socks");
 }

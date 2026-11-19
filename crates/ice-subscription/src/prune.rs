@@ -190,9 +190,19 @@ fn collect_unknown_rule_sets(rule: &Value, known_sets: &HashSet<String>, tags: &
 }
 
 fn known_tags(profile: &NormalizedProfile) -> HashSet<String> {
+    // `direct` and `block` are emitted by the builder. `proxy` is the selector
+    // injected for a group-less profile, and a grouped profile may still use
+    // the name for its own outbound. `dns` is reserved so a subscription node
+    // cannot take it, but the builder never emits a dns outbound and the
+    // sing-box parser drops `type: dns`. Treating `dns` as always present
+    // would keep a rule that pointed at the dropped outbound, and Apply would
+    // fail with "unknown outbound: dns". A dangling `dns` reference is
+    // rewritten like any other missing tag (`dns-out`).
     let mut known: HashSet<String> = RESERVED_OUTBOUND_TAGS
         .iter()
-        .map(|s| (*s).to_string())
+        .copied()
+        .filter(|tag| *tag != "dns")
+        .map(str::to_string)
         .collect();
     for n in &profile.nodes {
         known.insert(n.tag.clone());
@@ -258,6 +268,26 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.key == "parse.droppedDetour"));
+    }
+
+    #[test]
+    fn dangling_dns_tag_is_rewritten_like_any_other_missing_outbound() {
+        let mut p = profile(vec![], vec![]);
+        p.route.rules = vec![json!({"protocol": "dns", "outbound": "dns"})];
+        p.route.final_outbound = "dns".into();
+        prune_dangling_refs(&mut p);
+        assert_eq!(p.route.rules[0]["outbound"], "direct");
+        assert_eq!(p.route.final_outbound, "direct");
+        assert!(p
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.key == "parse.routeOutboundMissing"));
+        assert!(p
+            .parse_stats
+            .warnings
+            .iter()
+            .any(|w| w.key == "parse.routeFinalMissing"));
     }
 
     #[test]

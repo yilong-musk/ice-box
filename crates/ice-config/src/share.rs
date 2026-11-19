@@ -110,12 +110,16 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         return Err(ConfigError::EmptyOutbounds);
     }
 
-    // A flat node list gets a selector. `proxy` is the usual tag; a node that
-    // already uses it keeps that name and the selector takes the next free one.
-    // The exported copy deliberately keeps subscription node names as the
-    // source spelled them, unlike the runtime profile (which renames reserved
-    // tags, see `crate::rename_reserved_outbounds`), so the document imports
-    // elsewhere with the names the provider uses.
+    // A flat node list gets a selector. `proxy` is the preferred tag. If this
+    // profile still has an outbound named `proxy`, the selector takes the next
+    // free tag so the document stays loadable.
+    //
+    // This function does not rename. It writes the profile it was given. A
+    // sing-box subscription is shared from the raw document
+    // (`share_singbox_document`), which still has the provider's names. Clash
+    // and URI subscriptions are shared from the stored profile, which
+    // `rename_reserved_outbounds` has already renamed, so a node that was
+    // `proxy` is `proxy-2` here and the selector can use `proxy`.
     let has_group = outbounds
         .iter()
         .any(|outbound| share_type_is_group(outbound_type(outbound)));

@@ -7,15 +7,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- A subscription outbound that reuses an app-owned tag is renamed at import
-  (`proxy` → `proxy-2`, and likewise `direct`, `block`, `dns`). Previously a
-  node named `proxy` on a group-less subscription collided with the injected
-  selector and made Apply / Start fail with `duplicate tag proxy`, while a node
-  named `direct` / `block` silently replaced the built-in outbound, sending
-  "direct" rules — including the TUN bypass rules — through the subscription
-  server. Subscription details show a warning for each renamed node, profiles
-  saved before the fix are migrated when read, and the app keeps the reserved
-  names for itself.
+- A subscription outbound that would collide with a tag the app owns is
+  renamed at import. `direct`, `block`, and `dns` are always renamed
+  (`direct` → `direct-2`, and the same for `block` and `dns`): a node named
+  `direct` or `block` used to replace the built-in outbound, sending "direct"
+  rules — including the TUN bypass rules — through the subscription server.
+  `proxy` is renamed on a group-less subscription, where the builder injects
+  a selector of that name and a node also tagged `proxy` used to make Apply /
+  Start fail with `duplicate tag proxy`. A group or node that is the only
+  outbound named `proxy` on a subscription that already has groups is left
+  as-is: that profile does not get an injected selector, and node switching
+  already targets it. Two outbounds that share the tag are still split, and
+  rules follow the first in declaration order. A tag that is renamed no
+  longer matches a favorite, a saved group selection, or the selected node,
+  so those picks fall back to the subscription default. A new import records
+  a warning for each renamed outbound. A profile saved before this change is
+  renamed when it is read, and that migration does not add the warning to the
+  subscription's stored details.
+- On a group-less Clash subscription, a rule or `route.final` that named a
+  node `proxy` stays on `proxy` after that node is renamed to `proxy-2`.
+  `proxy` is the injected selector, so the rule follows the current selection
+  rather than the renamed node. That subscription used to fail Apply with
+  `duplicate tag proxy`.
+- A sing-box route rule that targets a `dns` outbound the parser drops
+  (`{"type":"dns","tag":"dns"}`) is rewritten to `direct`, the same as a rule
+  that targeted any other missing outbound such as `dns-out`. It used to be
+  kept, because `dns` was treated as always present, and Apply then failed
+  with `route rule references unknown outbound: dns`.
 - Node delay tests now probe in the order the page draws the nodes: a
   favorited member of an expanded strategy group is tested first instead of
   where the subscription listed it.

@@ -3,11 +3,14 @@
 //! Outbound tags the app owns, and the rename that keeps imported
 //! subscriptions from claiming them.
 //!
-//! `direct` / `block` are emitted by the config builder itself, `proxy` names
+//! `direct` / `block` are emitted by the config builder itself. `proxy` names
 //! the selector injected for a group-less profile (and the tag the Clash API
-//! switches, see `ice_core::SELECTOR_TAG`), and `dns` is treated as always
-//! available by profile pruning. A subscription outbound that reuses one of
-//! those names either fails the build or silently hijacks the target:
+//! switches on that profile, see `ice_core::SELECTOR_TAG`). `dns` is reserved
+//! so a subscription node cannot take it; the builder never emits a dns
+//! outbound, and a route rule left pointing at a dropped `type: dns` outbound
+//! is rewritten to `direct` by profile pruning. A subscription outbound that
+//! reuses one of those names either fails the build or silently hijacks the
+//! target:
 //!
 //! * a node tagged `proxy` on a group-less profile duplicates the injected
 //!   selector, and validation rejects the config (`duplicate tag proxy`);
@@ -15,15 +18,21 @@
 //!   `direct` rule — including the reserved TUN bypass rules — routes through
 //!   the subscription server instead of leaving the machine.
 //!
-//! Parsers rename a colliding subscription outbound to `name-2`, `name-3`, ...
-//! and keep the reserved name for the app, so the hard-coded names elsewhere
-//! (`ice_core::SELECTOR_TAG`, the desktop node pick, the URI split-routing
-//! detour) stay valid.
+//! Parsers rename those outbounds to `name-2`, `name-3`, ... and keep the
+//! reserved name for the app. `proxy` is the exception when the profile
+//! already has groups and only one outbound uses that tag: the builder
+//! injects no selector, so the outbound is the profile's own group or node.
+//! Renaming it would drop favorites, per-group selections, and the selected
+//! node stored under that tag, without fixing a build failure. Two outbounds
+//! that already share `proxy` are still split, or the build fails with
+//! `duplicate tag proxy`. References follow the first of those in declaration
+//! order (nodes, then groups).
 //!
-//! Only the runtime profile is renamed. The exported sing-box copy
-//! ([`crate::share_singbox_config`]) keeps subscription node names verbatim so
-//! the document matches the provider and imports elsewhere unchanged; its
-//! injected selector just takes the next free tag.
+//! [`crate::share_singbox_config`] does not rename. It writes the profile it
+//! is given. A sing-box subscription is shared from the raw document, which
+//! still has the provider's names. Clash and URI subscriptions are shared
+//! from the stored profile, so a tag this pass renamed is what the copy
+//! contains.
 
 use std::collections::{HashMap, HashSet};
 
@@ -40,6 +49,11 @@ pub fn is_reserved_outbound_tag(tag: &str) -> bool {
 }
 
 /// First free tag among `preferred`, `preferred-2`, `preferred-3`, ...
+///
+/// The scan stops at `u32::MAX`. If every numeric suffix is already taken,
+/// this returns `{preferred}-fallback`, which can itself already be in
+/// `taken`. A profile that has used the whole suffix range is outside what
+/// import tries to repair.
 pub fn fresh_outbound_tag(taken: &HashSet<String>, preferred: &str) -> String {
     if !taken.contains(preferred) {
         return preferred.to_string();
@@ -65,9 +79,16 @@ pub fn rename_reserved_outbounds(profile: &mut NormalizedProfile) -> Vec<UiMessa
     let mut taken: HashSet<String> = profile.all_tags().into_iter().collect();
     let mut renamed: HashMap<String, String> = HashMap::new();
     let mut warnings = Vec::new();
+    let rename_proxy = proxy_tag_must_move(profile);
 
     for outbound in profile.nodes.iter_mut().chain(profile.groups.iter_mut()) {
-        rename_outbound(outbound, &mut taken, &mut renamed, &mut warnings);
+        rename_outbound(
+            outbound,
+            &mut taken,
+            &mut renamed,
+            &mut warnings,
+            rename_proxy,
+        );
     }
     if renamed.is_empty() {
         return warnings;
@@ -94,14 +115,42 @@ pub fn rename_reserved_outbounds(profile: &mut NormalizedProfile) -> Vec<UiMessa
     warnings
 }
 
+/// Whether a `proxy` tag has to move off the name the app may also use.
+///
+/// A group-less profile gets an injected selector named `proxy`, so every
+/// subscription outbound with that tag has to move. A grouped profile does
+/// not: one outbound named `proxy` is that profile's own group or node, and
+/// node switching already targets it. Two outbounds that share the tag
+/// duplicate each other and still have to be split.
+fn proxy_tag_must_move(profile: &NormalizedProfile) -> bool {
+    let proxies = profile
+        .nodes
+        .iter()
+        .chain(profile.groups.iter())
+        .filter(|outbound| outbound.tag == "proxy")
+        .count();
+    if proxies == 0 {
+        return false;
+    }
+    profile.groups.is_empty() || proxies > 1
+}
+
+fn outbound_tag_must_move(tag: &str, rename_proxy: bool) -> bool {
+    if tag == "proxy" {
+        return rename_proxy;
+    }
+    is_reserved_outbound_tag(tag)
+}
+
 fn rename_outbound(
     outbound: &mut NormalizedOutbound,
     taken: &mut HashSet<String>,
     renamed: &mut HashMap<String, String>,
     warnings: &mut Vec<UiMessage>,
+    rename_proxy: bool,
 ) {
     let old = outbound.tag.clone();
-    if !is_reserved_outbound_tag(&old) {
+    if !outbound_tag_must_move(&old, rename_proxy) {
         return;
     }
     let new = fresh_outbound_tag(taken, &old);
@@ -126,8 +175,12 @@ fn rename_outbound(
 /// profile always gets the `proxy` selector, so a reference to those names
 /// keeps meaning the app-owned outbound — the fail-safe direction (traffic
 /// that a rule sends `direct` stops being proxied rather than the reverse).
-/// Every other reserved name can only have referred to the subscription's own
-/// outbound, so its references move along.
+/// On a flat Clash subscription the source had no selector: `DOMAIN,x,proxy`
+/// and `MATCH,proxy` named the node. After the rename those rules stay on
+/// `proxy` and therefore follow the current selection. That subscription
+/// used to fail with `duplicate tag proxy`. Every other reserved name can
+/// only have referred to the subscription's own outbound, so its references
+/// move along.
 fn reference_targets(renamed: &HashMap<String, String>, flat: bool) -> HashMap<String, String> {
     renamed
         .iter()
@@ -334,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_group_named_proxy_takes_its_references_along() {
+    fn grouped_group_named_proxy_keeps_its_name() {
         let mut profile = grouped(
             vec![socks("n1")],
             vec![selector("proxy", &["n1"]), selector("main", &["proxy"])],
@@ -342,16 +395,36 @@ mod tests {
         );
         profile.route.rules = vec![json!({"domain": ["a.example"], "outbound": "proxy"})];
         profile.default_outbound = Some("proxy".into());
-        rename_reserved_outbounds(&mut profile);
-        assert_eq!(profile.groups[0].tag, "proxy-2");
-        assert_eq!(profile.groups[0].outbound["tag"], "proxy-2");
-        // A grouped profile injects no `proxy` selector, so the references
-        // move with the group.
-        assert_eq!(profile.route.final_outbound, "proxy-2");
-        assert_eq!(profile.route.rules[0]["outbound"], "proxy-2");
-        assert_eq!(profile.groups[1].outbound["outbounds"], json!(["proxy-2"]));
-        assert_eq!(profile.groups[1].outbound["default"], "proxy-2");
-        assert_eq!(profile.default_outbound.as_deref(), Some("proxy-2"));
+        let warnings = rename_reserved_outbounds(&mut profile);
+        // A grouped profile injects no `proxy` selector, and node switching
+        // targets this group. Renaming it would drop stored selections.
+        assert!(warnings.is_empty());
+        assert_eq!(profile.groups[0].tag, "proxy");
+        assert_eq!(profile.groups[0].outbound["tag"], "proxy");
+        assert_eq!(profile.route.final_outbound, "proxy");
+        assert_eq!(profile.route.rules[0]["outbound"], "proxy");
+        assert_eq!(profile.groups[1].outbound["outbounds"], json!(["proxy"]));
+        assert_eq!(profile.groups[1].outbound["default"], "proxy");
+        assert_eq!(profile.default_outbound.as_deref(), Some("proxy"));
+    }
+
+    #[test]
+    fn grouped_node_named_proxy_keeps_its_name() {
+        let mut profile = grouped(
+            vec![socks("proxy"), socks("jp")],
+            vec![selector("main", &["proxy", "jp"])],
+            "main",
+        );
+        profile.route.rules = vec![json!({"domain": ["a.example"], "outbound": "proxy"})];
+        let warnings = rename_reserved_outbounds(&mut profile);
+        assert!(warnings.is_empty());
+        assert_eq!(profile.nodes[0].tag, "proxy");
+        assert_eq!(profile.nodes[0].outbound["tag"], "proxy");
+        assert_eq!(profile.route.rules[0]["outbound"], "proxy");
+        assert_eq!(
+            profile.groups[0].outbound["outbounds"],
+            json!(["proxy", "jp"])
+        );
     }
 
     #[test]
@@ -404,15 +477,27 @@ mod tests {
     }
 
     #[test]
-    fn two_colliding_outbounds_get_distinct_names() {
+    fn two_colliding_outbounds_get_distinct_names_and_refs_follow_the_first() {
         let mut profile = grouped(
             vec![socks("proxy"), socks("jp")],
-            vec![selector("proxy", &["jp"])],
+            vec![selector("proxy", &["jp"]), selector("main", &["proxy"])],
             "proxy",
         );
+        profile.route.rules = vec![json!({"domain": ["a.example"], "outbound": "proxy"})];
+        profile.default_outbound = Some("proxy".into());
         rename_reserved_outbounds(&mut profile);
+        // Nodes are visited before groups, so the node takes `proxy-2` and
+        // every reference follows it. The group keeps its own new name.
         assert_eq!(profile.nodes[0].tag, "proxy-2");
+        assert_eq!(profile.nodes[0].outbound["tag"], "proxy-2");
         assert_eq!(profile.groups[0].tag, "proxy-3");
+        assert_eq!(profile.groups[0].outbound["tag"], "proxy-3");
+        assert_eq!(profile.route.final_outbound, "proxy-2");
+        assert_eq!(profile.route.rules[0]["outbound"], "proxy-2");
+        assert_eq!(profile.groups[1].outbound["outbounds"], json!(["proxy-2"]));
+        assert_eq!(profile.groups[1].outbound["default"], "proxy-2");
+        assert_eq!(profile.default_outbound.as_deref(), Some("proxy-2"));
+        assert_eq!(profile.groups[0].outbound["outbounds"], json!(["jp"]));
     }
 
     #[test]
