@@ -122,33 +122,36 @@ pub fn parse_uri_list_profile(raw: &str) -> Result<NormalizedProfile, Subscripti
 
     dedupe_tags(&mut nodes);
 
-    let default_outbound = nodes[0].tag.clone();
-    // Rule-less share-link subscriptions route through the injected `proxy`
-    // selector (so the UI's node selection takes effect); built-in split
-    // routing rules + DNS are attached at profile load time
-    // (`apply_builtin_default_rules`), honoring the app's settings toggle.
-    let route = NormalizedRoute {
-        rules: Vec::new(),
-        final_outbound: "proxy".into(),
-        ..Default::default()
-    };
-
-    if truncated > 0 {
-        warnings.push(crate::limits::Limits::warning("nodes", truncated));
-    }
-
-    Ok(NormalizedProfile {
+    // A subscription node may be tagged like an app-owned outbound; rename it
+    // before the profile's own references are derived, so a flat profile can
+    // still inject its `proxy` selector and no `direct` rule gets hijacked.
+    let mut profile = NormalizedProfile {
         nodes,
         groups: Vec::new(),
-        route,
+        route: NormalizedRoute {
+            rules: Vec::new(),
+            final_outbound: "proxy".into(),
+            ..Default::default()
+        },
         dns: None,
-        default_outbound: Some(default_outbound),
+        default_outbound: None,
         parse_stats: ProfileParseStats {
             skipped_proxies: skipped,
             warnings,
             ..Default::default()
         },
-    })
+    };
+    crate::reserved::rename_reserved_tags(&mut profile);
+    profile.default_outbound = profile.nodes.first().map(|n| n.tag.clone());
+
+    if truncated > 0 {
+        profile
+            .parse_stats
+            .warnings
+            .push(crate::limits::Limits::warning("nodes", truncated));
+    }
+
+    Ok(profile)
 }
 
 /// Reason a single URI line could not become a node.

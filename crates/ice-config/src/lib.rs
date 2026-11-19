@@ -16,6 +16,7 @@ mod favorites;
 mod profile;
 mod redact;
 mod remote_rule_set;
+mod reserved;
 mod rule_overrides;
 mod runtime_config;
 mod selections;
@@ -54,6 +55,9 @@ pub use remote_rule_set::{
     is_downloadable_rule_set_url, legacy_geo_rule_set_names, portable_remote_for_download,
     required_rule_set_urls, rule_set_cache_meta_path, rule_set_cache_path, upstream_url_for_name,
     DOWNLOAD_RULE_SET_TYPE,
+};
+pub use reserved::{
+    fresh_outbound_tag, is_reserved_outbound_tag, rename_reserved_outbounds, RESERVED_OUTBOUND_TAGS,
 };
 pub use rule_overrides::{
     load_rule_overrides, rule_fingerprint, rule_matches_fingerprint, rule_type_of,

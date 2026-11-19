@@ -574,6 +574,7 @@ const zh = {
   "parse.droppedDetour": "已丢弃出站 {tag}：detour {detour} 不存在",
   "parse.trimmedGroup": "已修剪策略组 {tag}：丢弃 {dropped} 个缺失成员",
   "parse.droppedEmptyGroup": "已丢弃空策略组 {tag}",
+  "parse.renamedReservedTag": "出站 {tag} 与内置出站同名，已重命名为 {new_tag}",
   "parse.routeOutboundMissing": "路由规则出站 {outbound} 缺失，回退到 {fallback}",
   "parse.routeFinalMissing": "路由 final {outbound} 缺失，回退到 {fallback}",
   "parse.routeRuleSetMissing": "路由规则引用了不可用的 rule_set {rule_set}，已跳过",
@@ -1141,6 +1142,8 @@ const en: Record<MessageKey, string> = {
   "parse.droppedDetour": "Dropped outbound {tag}: detour {detour} is missing",
   "parse.trimmedGroup": "Trimmed group {tag}: dropped {dropped} missing members",
   "parse.droppedEmptyGroup": "Dropped empty group {tag}",
+  "parse.renamedReservedTag":
+    "Outbound {tag} collides with a built-in outbound; renamed to {new_tag}",
   "parse.routeOutboundMissing": "Route rule outbound {outbound} is missing; falling back to {fallback}",
   "parse.routeFinalMissing": "Route final {outbound} is missing; falling back to {fallback}",
   "parse.routeRuleSetMissing": "Route rule references unavailable rule_set {rule_set}; skipped",

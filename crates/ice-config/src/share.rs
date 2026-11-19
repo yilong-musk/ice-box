@@ -31,6 +31,7 @@ use crate::{
 };
 
 use crate::bundled_rule_set::{portable_remote_for_bundled, upstream_url};
+use crate::reserved::fresh_outbound_tag;
 
 /// Action / DNS keys that are not match conditions.
 const RULE_META_KEYS: &[&str] = &[
@@ -109,15 +110,23 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
         return Err(ConfigError::EmptyOutbounds);
     }
 
-    // A flat node list gets a selector. `proxy` is the usual tag; a node that
-    // already uses it keeps that name and the selector takes the next free one.
+    // A flat node list gets a selector. `proxy` is the preferred tag. If this
+    // profile still has an outbound named `proxy`, the selector takes the next
+    // free tag so the document stays loadable.
+    //
+    // This function does not rename. It writes the profile it was given. A
+    // sing-box subscription is shared from the raw document
+    // (`share_singbox_document`), which still has the provider's names. Clash
+    // and URI subscriptions are shared from the stored profile, which
+    // `rename_reserved_outbounds` has already renamed, so a node that was
+    // `proxy` is `proxy-2` here and the selector can use `proxy`.
     let has_group = outbounds
         .iter()
         .any(|outbound| share_type_is_group(outbound_type(outbound)));
     let selector_tag = if has_group {
         None
     } else {
-        let tag = fresh_share_tag(&tag_set, "proxy");
+        let tag = fresh_outbound_tag(&tag_set, "proxy");
         let node_tags: Vec<String> = outbounds
             .iter()
             .filter(|outbound| share_value_is_proxy(outbound))
@@ -546,19 +555,6 @@ fn share_type_is_group(ty: &str) -> bool {
         ty,
         "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance"
     )
-}
-
-fn fresh_share_tag(tags: &HashSet<String>, preferred: &str) -> String {
-    if !tags.contains(preferred) {
-        return preferred.to_string();
-    }
-    for n in 2..u32::MAX {
-        let candidate = format!("{preferred}-{n}");
-        if !tags.contains(&candidate) {
-            return candidate;
-        }
-    }
-    format!("{preferred}-fallback")
 }
 
 fn push_portable_rule_set(set: &Value, sets: &mut Vec<Value>, tags: &mut HashSet<String>) {
