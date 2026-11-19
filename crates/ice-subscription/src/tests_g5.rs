@@ -2391,3 +2391,207 @@ fn builtin_dns_detours_through_a_group_when_final_is_direct() {
         .any(|s| s["tag"] == "remote-dns" && s["detour"] == "select"));
     assert_eq!(profile.route.final_outbound, "direct", "final is kept");
 }
+
+/// Issue #114: a share-link node tagged `proxy` used to collide with the
+/// selector the builder injects for a group-less profile, so Apply / Start
+/// failed with `duplicate tag proxy`.
+#[test]
+fn uri_list_node_named_proxy_builds_a_flat_config() {
+    let raw = "ss://YWVzLTEyOC1nY206c2VjcmV0@ss.example.xyz:8388#proxy\n\
+               ss://YWVzLTEyOC1nY206c2VjcmV0@ss.example.xyz:8389#jp\n";
+    let mut profile = parse_uri_list_profile(raw).expect("parse");
+    assert_eq!(
+        profile
+            .nodes
+            .iter()
+            .map(|n| n.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["proxy-2", "jp"]
+    );
+    assert_eq!(
+        profile.route.final_outbound, "proxy",
+        "injected selector tag"
+    );
+    assert!(profile
+        .parse_stats
+        .warnings
+        .iter()
+        .any(|w| w.key == "parse.renamedReservedTag"));
+
+    super::apply_builtin_default_rules(&mut profile, HostPlatform::MacOs);
+    let cfg = build_runtime_config(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: Some("jp".into()),
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: Default::default(),
+        rule_overrides: Default::default(),
+        capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("flat profile with a node named proxy must build")
+    .to_json_value()
+    .unwrap();
+
+    let tags: Vec<&str> = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["tag"].as_str())
+        .collect();
+    let mut unique = tags.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        tags.len(),
+        unique.len(),
+        "outbound tags must be unique: {tags:?}"
+    );
+    let selector = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
+        .expect("injected proxy selector");
+    assert_eq!(selector["default"], "jp");
+    assert!(selector["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m == "proxy-2"));
+}
+
+/// Issue #114: a node tagged `direct` used to shadow the built-in outbound,
+/// sending every "direct" rule (including the TUN bypass rules) through the
+/// subscription server.
+#[test]
+fn node_named_direct_leaves_the_builtin_direct_outbound_in_place() {
+    let raw = r#"{
+        "outbounds": [
+            {"type":"socks","tag":"direct","server":"127.0.0.1","server_port":1080},
+            {"type":"socks","tag":"jp","server":"127.0.0.1","server_port":1081}
+        ],
+        "route": {"final": "direct", "rules": [{"domain_suffix":["a.example"],"outbound":"direct"}]}
+    }"#;
+    let profile = parse_singbox_profile(raw).expect("parse");
+    assert_eq!(profile.nodes[0].tag, "direct-2");
+    assert_eq!(profile.route.rules[0]["outbound"], "direct");
+    assert_eq!(profile.route.final_outbound, "direct");
+
+    let cfg = build_runtime_config(&BuildInput {
+        template: LocalTemplate::default(),
+        profile: Arc::new(profile),
+        selected_tag: None,
+        geoip_rule_set_dir: None,
+        rule_set_cache_dir: None,
+        group_selections: Default::default(),
+        rule_overrides: Default::default(),
+        capture_intent: Default::default(),
+        tun_exclude_package: None,
+        shared_root: None,
+        platform: HostPlatform::MacOs,
+    })
+    .expect("build")
+    .to_json_value()
+    .unwrap();
+
+    let direct = cfg["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["tag"] == "direct")
+        .expect("built-in direct outbound");
+    assert_eq!(
+        direct["type"], "direct",
+        "must not be the subscription node"
+    );
+    let rule_outbound = cfg["route"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["domain_suffix"].is_array())
+        .expect("subscription rule")["outbound"]
+        .clone();
+    assert_eq!(rule_outbound, "direct");
+}
+
+/// A Clash subscription whose proxy group is named `proxy` used to feed the
+/// injected selector's tag into `PUT /proxies/proxy`; the group is renamed and
+/// its own references follow.
+#[test]
+fn clash_group_named_proxy_is_renamed_with_its_references() {
+    let raw = r#"
+proxies:
+  - name: n1
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+proxy-groups:
+  - name: proxy
+    type: select
+    proxies: [n1]
+  - name: main
+    type: select
+    proxies: [proxy, n1]
+rules:
+  - DOMAIN-SUFFIX,a.example,proxy
+  - MATCH,proxy
+"#;
+    let profile = super::parse_clash_profile(raw, HostPlatform::MacOs).expect("parse");
+    assert!(profile.nodes.iter().all(|n| n.tag != "proxy"));
+    let group = profile
+        .groups
+        .iter()
+        .find(|g| g.outbound["tag"] == "proxy-2")
+        .expect("renamed group");
+    assert_eq!(group.outbound["tag"], "proxy-2");
+    let main = profile
+        .groups
+        .iter()
+        .find(|g| g.tag == "main")
+        .expect("main group");
+    assert!(main.outbound["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m == "proxy-2"));
+    assert!(profile.route.rules.iter().all(|r| r["outbound"] != "proxy"));
+}
+
+/// Snapshots written before the rename existed are migrated on read.
+#[test]
+fn read_profile_migrates_a_persisted_reserved_tag() {
+    let paths = temp_subs("reserved-tag");
+    let id = Uuid::new_v4();
+    fs::create_dir_all(paths.sub_dir(id)).unwrap();
+    let persisted = serde_json::json!({
+        "nodes": [
+            {"tag":"proxy","outbound":{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1080}},
+            {"tag":"jp","outbound":{"type":"socks","tag":"jp","server":"127.0.0.1","server_port":1081}}
+        ],
+        "groups": [],
+        "route": {"rules": [], "final": "proxy"},
+        "default_outbound": "proxy"
+    });
+    fs::write(paths.profile(id), persisted.to_string()).unwrap();
+
+    let profile = read_profile(&paths, id).expect("read");
+    assert_eq!(
+        profile
+            .nodes
+            .iter()
+            .map(|n| n.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["proxy-2", "jp"]
+    );
+    assert_eq!(profile.default_outbound.as_deref(), Some("proxy-2"));
+    assert_eq!(profile.route.final_outbound, "proxy");
+
+    // Idempotent: a second read does not rename again.
+    let again = read_profile(&paths, id).expect("read");
+    assert_eq!(again.nodes[0].tag, "proxy-2");
+    let _ = fs::remove_dir_all(paths.root());
+}

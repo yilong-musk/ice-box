@@ -11,6 +11,7 @@ mod fetch;
 mod limits;
 mod merge;
 mod prune;
+mod reserved;
 mod rule_set_download;
 mod share;
 mod store;
@@ -519,6 +520,7 @@ pub fn parse_singbox_profile(raw: &str) -> Result<NormalizedProfile, Subscriptio
             default_outbound,
             parse_stats,
         };
+        crate::reserved::rename_reserved_tags(&mut profile);
         crate::prune::prune_dangling_refs(&mut profile);
         profile
     })

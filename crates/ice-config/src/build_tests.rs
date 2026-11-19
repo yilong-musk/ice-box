@@ -3333,6 +3333,9 @@ fn share_singbox_config_is_a_portable_document() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0]["domain"][0], "example.com");
 
+    // The exported copy keeps the subscription's own node names (unlike the
+    // runtime profile, which renames reserved tags); only the injected
+    // selector moves to the next free tag.
     let named_proxy = share_singbox_config(&NormalizedProfile::from_nodes_only(vec![
         socks("proxy"),
         socks("n2"),
@@ -3767,6 +3770,23 @@ fn generated_configs_pass_pinned_core_check() {
             })),
         },
     ]);
+    // Issue #114: subscription tags colliding with the app-owned built-ins are
+    // renamed at parse time; the core must accept the result. Built directly
+    // here (not through a parser) so the shape is pinned even if a loader
+    // regresses.
+    let mut colliding = NormalizedProfile::from_nodes_only(vec![
+        socks("proxy"),
+        socks("direct"),
+        socks("block"),
+        socks("dns"),
+        socks("jp"),
+    ]);
+    crate::rename_reserved_outbounds(&mut colliding);
+    colliding.route.rules = vec![
+        json!({ "domain_suffix": ["a.example"], "outbound": "direct" }),
+        json!({ "domain_suffix": ["b.example"], "outbound": "proxy-2" }),
+    ];
+    colliding.route.final_outbound = "proxy".into();
 
     let cases = vec![
         (
@@ -3895,6 +3915,23 @@ fn generated_configs_pass_pinned_core_check() {
                 platform: HostPlatform::MacOs,
             })
             .expect("hysteria2"),
+        ),
+        (
+            "renamed-reserved-tags",
+            build_runtime_json(&BuildInput {
+                template: LocalTemplate::default(),
+                profile: Arc::new(colliding),
+                selected_tag: Some("jp".into()),
+                geoip_rule_set_dir: None,
+                rule_set_cache_dir: None,
+                group_selections: GroupSelections::new(),
+                rule_overrides: RuleOverrides::default(),
+                capture_intent: CaptureIntent::Diagnostic,
+                tun_exclude_package: None,
+                shared_root: None,
+                platform: HostPlatform::MacOs,
+            })
+            .expect("renamed reserved tags"),
         ),
         (
             "bundled-geosite",

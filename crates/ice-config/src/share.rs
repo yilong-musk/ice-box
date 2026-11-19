@@ -31,6 +31,7 @@ use crate::{
 };
 
 use crate::bundled_rule_set::{portable_remote_for_bundled, upstream_url};
+use crate::reserved::fresh_outbound_tag;
 
 /// Action / DNS keys that are not match conditions.
 const RULE_META_KEYS: &[&str] = &[
@@ -111,13 +112,17 @@ pub fn share_singbox_config(profile: &NormalizedProfile) -> Result<String, Confi
 
     // A flat node list gets a selector. `proxy` is the usual tag; a node that
     // already uses it keeps that name and the selector takes the next free one.
+    // The exported copy deliberately keeps subscription node names as the
+    // source spelled them, unlike the runtime profile (which renames reserved
+    // tags, see `crate::rename_reserved_outbounds`), so the document imports
+    // elsewhere with the names the provider uses.
     let has_group = outbounds
         .iter()
         .any(|outbound| share_type_is_group(outbound_type(outbound)));
     let selector_tag = if has_group {
         None
     } else {
-        let tag = fresh_share_tag(&tag_set, "proxy");
+        let tag = fresh_outbound_tag(&tag_set, "proxy");
         let node_tags: Vec<String> = outbounds
             .iter()
             .filter(|outbound| share_value_is_proxy(outbound))
@@ -546,19 +551,6 @@ fn share_type_is_group(ty: &str) -> bool {
         ty,
         "selector" | "urltest" | "fallback" | "loadbalance" | "load-balance"
     )
-}
-
-fn fresh_share_tag(tags: &HashSet<String>, preferred: &str) -> String {
-    if !tags.contains(preferred) {
-        return preferred.to_string();
-    }
-    for n in 2..u32::MAX {
-        let candidate = format!("{preferred}-{n}");
-        if !tags.contains(&candidate) {
-            return candidate;
-        }
-    }
-    format!("{preferred}-fallback")
 }
 
 fn push_portable_rule_set(set: &Value, sets: &mut Vec<Value>, tags: &mut HashSet<String>) {

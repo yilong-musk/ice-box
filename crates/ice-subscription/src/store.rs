@@ -430,6 +430,9 @@ pub fn read_profile(
     };
     // Profiles saved before info entries were omitted still contain them.
     crate::userinfo::detach_provider_info_nodes(&mut profile);
+    // Profiles saved before reserved tags were renamed still carry them; the
+    // rename is idempotent, so already-migrated snapshots are untouched.
+    crate::reserved::rename_reserved_tags(&mut profile);
     Ok(profile)
 }
 

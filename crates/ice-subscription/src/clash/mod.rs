@@ -136,6 +136,9 @@ pub fn parse_clash_profile(
             default_outbound,
             parse_stats: stats,
         };
+        // Before pruning: a renamed outbound is what later rule / member
+        // references must resolve to.
+        crate::reserved::rename_reserved_tags(&mut profile);
         crate::prune::prune_dangling_refs(&mut profile);
         profile
     })

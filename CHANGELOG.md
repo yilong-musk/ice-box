@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A subscription outbound that reuses an app-owned tag is renamed at import
+  (`proxy` → `proxy-2`, and likewise `direct`, `block`, `dns`). Previously a
+  node named `proxy` on a group-less subscription collided with the injected
+  selector and made Apply / Start fail with `duplicate tag proxy`, while a node
+  named `direct` / `block` silently replaced the built-in outbound, sending
+  "direct" rules — including the TUN bypass rules — through the subscription
+  server. Subscription details show a warning for each renamed node, profiles
+  saved before the fix are migrated when read, and the app keeps the reserved
+  names for itself.
 - Node delay tests now probe in the order the page draws the nodes: a
   favorited member of an expanded strategy group is tested first instead of
   where the subscription listed it.

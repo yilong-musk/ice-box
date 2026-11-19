@@ -5,10 +5,8 @@
 
 use std::collections::HashSet;
 
-use ice_config::{NormalizedProfile, UiMessage};
+use ice_config::{NormalizedProfile, UiMessage, RESERVED_OUTBOUND_TAGS};
 use serde_json::{json, Value};
-
-const BUILTIN_TAGS: &[&str] = &["direct", "block", "dns", "proxy"];
 
 /// Make `profile` self-consistent after allowlist filtering or size caps.
 pub fn prune_dangling_refs(profile: &mut NormalizedProfile) {
@@ -192,7 +190,10 @@ fn collect_unknown_rule_sets(rule: &Value, known_sets: &HashSet<String>, tags: &
 }
 
 fn known_tags(profile: &NormalizedProfile) -> HashSet<String> {
-    let mut known: HashSet<String> = BUILTIN_TAGS.iter().map(|s| (*s).to_string()).collect();
+    let mut known: HashSet<String> = RESERVED_OUTBOUND_TAGS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     for n in &profile.nodes {
         known.insert(n.tag.clone());
     }
