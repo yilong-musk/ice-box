@@ -197,6 +197,40 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Draw the bundled artwork in the Dock with no system plate behind it.
+///
+/// macOS 26 puts a light plate behind a bundled icon that does not fill the
+/// squircle. Dev never shows that plate: Tauri calls
+/// `-[NSApplication setApplicationIconImage:]` with `icons/icon.icns`, and it
+/// only does so under `cfg(dev)`. A packaged app keeps the bundle icon, so
+/// the Dock shows the plate until we set the same image. The call replaces
+/// the running Dock tile. Finder and Launchpad keep the bundle icon.
+///
+/// `RunEvent::Ready` is on the main thread, which the setter requires. A
+/// missing image is skipped: a bad decode must not take the process down.
+#[cfg(target_os = "macos")]
+fn apply_plain_dock_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    const ICON: &[u8] = include_bytes!("../icons/icon.icns");
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("dock icon: skipped, not on the main thread");
+        return;
+    };
+    let data = NSData::with_bytes(ICON);
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        tracing::warn!("dock icon: skipped, the bundled icns did not decode");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: `image` is this process's own icon. The setter replaces the
+    // Dock tile for this process and does not retain anything else.
+    unsafe { app.setApplicationIconImage(Some(&image)) };
+}
+
 /// Near-zero radius that AppKit keeps. `-[NSWindow _setCornerRadius:]` treats
 /// `<= 0` as "clear the override", and a titled window (this overlay title bar
 /// included) then snaps back to the 16pt system mask.
@@ -586,6 +620,10 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(event, RunEvent::Ready) {
+            apply_plain_dock_icon();
+        }
         if let RunEvent::ExitRequested { api, .. } = event {
             if crate::app_update::update_installing() {
                 if let Some(mcp) = app_handle.try_state::<mcp::McpService>() {

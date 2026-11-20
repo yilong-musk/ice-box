@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- On macOS the running app's Dock icon is the plain switch, the same artwork
+  dev mode shows. macOS 26 otherwise puts a light plate behind a bundled icon
+  that does not fill the squircle. Finder and Launchpad still use the bundled
+  icon.
+
 ## [0.3.7] - 2026-11-20
 
 ### Added
