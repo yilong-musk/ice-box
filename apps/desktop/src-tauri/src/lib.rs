@@ -247,9 +247,7 @@ pub(crate) fn square_window_corners<R: tauri::Runtime>(window: &tauri::WebviewWi
     #[cfg(windows)]
     {
         let scheduled = window.clone();
-        let _ = window
-            .clone()
-            .run_on_main_thread(move || apply_square_window_corners(&scheduled));
+        let _ = window.run_on_main_thread(move || apply_square_window_corners(&scheduled));
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
