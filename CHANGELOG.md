@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-20
+
 ### Added
 
 - Home’s outbound card shows the probed exit country as a flag in front of
@@ -17,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   share, so the bar no longer keeps an empty stretch of scale past the
   reading. The tick labels under the bar are gone. The total still takes
   the colour of its band.
+- On Windows 11 the main window corners are square, in line with the rest of
+  the interface. The system shadow and the resize edges stay. Windows 10
+  windows were already square.
 
 ### Fixed
 
