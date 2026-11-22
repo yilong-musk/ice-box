@@ -226,8 +226,8 @@ fn apply_plain_dock_icon() {
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
-    // SAFETY: `image` is this process's own icon. The setter replaces the
-    // Dock tile for this process and does not retain anything else.
+    // SAFETY: always passes `Some`, never `None` (the setter might not allow
+    // `None`), and `mtm` proves the main-thread affinity AppKit requires.
     unsafe { app.setApplicationIconImage(Some(&image)) };
 }
 
