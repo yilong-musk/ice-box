@@ -67,26 +67,129 @@ fn map_tun(err: TunError) -> AppError {
 /// ~2 s before the start fails fast and stays fail-closed.
 fn wait_for_core_ports_released(settings: &AppSettings) -> bool {
     // 7 * 300 ms = 2.1 s: the 1.5 s monitor read-loop bound + 0.6 s margin.
-    const RELEASE_WAIT_TRIES: u32 = 7;
-    const RELEASE_WAIT_DELAY_MS: u64 = 300;
+    wait_for_core_ports_released_within(settings, CORE_PORT_RELEASE_WAIT_SHORT)
+}
+
+/// Default budget: the `/traffic` CLOSE_WAIT case described above.
+const CORE_PORT_RELEASE_WAIT_SHORT: std::time::Duration = std::time::Duration::from_millis(2100);
+
+/// Budget after the *elevated* core stops (TUN disable). A root-owned core
+/// can leave the inbound port blocked for far longer than the `/traffic`
+/// CLOSE_WAIT window (observed: ~30 s on macOS after a TUN disable while
+/// proxied clients were connected to the mixed port). Starting the
+/// app-managed core inside that window fails at once with `bind: address
+/// already in use`, so wait it out instead of failing the transition.
+pub(crate) const CORE_PORT_RELEASE_WAIT_AFTER_ELEVATED: std::time::Duration =
+    std::time::Duration::from_secs(45);
+
+const CORE_PORT_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Poll until both core ports are bindable or `budget` runs out. When the
+/// short budget is exceeded, the current holders are logged once (see
+/// [`log_core_port_holders`]) so a slow release leaves evidence behind.
+fn wait_for_core_ports_released_within(
+    settings: &AppSettings,
+    budget: std::time::Duration,
+) -> bool {
     let probes: [(String, u16); 2] = [
         (settings.mixed_listen.clone(), settings.mixed_port),
         (settings.clash_api_listen.clone(), settings.clash_api_port),
     ];
-    for _ in 0..RELEASE_WAIT_TRIES {
-        if probes
+    let started = std::time::Instant::now();
+    let deadline = started + budget;
+    let mut diagnosed = false;
+    loop {
+        let blocked: Vec<&(String, u16)> = probes
             .iter()
-            .all(|(host, port)| ice_core::tcp_bind_available(host, *port))
-        {
+            .filter(|(host, port)| !ice_core::tcp_bind_available(host, *port))
+            .collect();
+        if blocked.is_empty() {
+            if diagnosed {
+                tracing::info!(
+                    waited_ms = started.elapsed().as_millis() as u64,
+                    "core ports released after an extended wait"
+                );
+            }
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(RELEASE_WAIT_DELAY_MS));
+        if !diagnosed && started.elapsed() >= CORE_PORT_RELEASE_WAIT_SHORT {
+            diagnosed = true;
+            for (host, port) in &blocked {
+                log_core_port_holders(host, *port);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(CORE_PORT_RELEASE_POLL);
+    }
+    if !diagnosed {
+        for (host, port) in &probes {
+            log_core_port_holders(host, *port);
+        }
     }
     tracing::warn!(
         "core ports not bindable after {} ms; the next core start may fail with bind: address already in use",
-        u64::from(RELEASE_WAIT_TRIES) * RELEASE_WAIT_DELAY_MS
+        budget.as_millis()
     );
     false
+}
+
+/// Diagnostic only: log who holds `port` (process, user, TCP state). Runs
+/// unprivileged, so sockets owned by a root process may be missing from the
+/// listing; an empty listing while the bind probe still fails points at a
+/// root-owned holder (e.g. the just-stopped elevated core's sockets).
+fn log_core_port_holders(host: &str, port: u16) {
+    #[cfg(unix)]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-nP", &format!("-iTCP:{port}")])
+            .output();
+        match output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = text.lines().skip(1).take(40).collect();
+                tracing::warn!(
+                    host,
+                    port,
+                    holders = lines.len(),
+                    listing = %lines.join(" | "),
+                    "core port still blocked; current holders (unprivileged view, root-owned sockets may be hidden)"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(host, port, error = %err, "core port still blocked; lsof unavailable");
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("netstat")
+            .args(["-ano", "-p", "TCP"])
+            .output();
+        match output {
+            Ok(out) => {
+                let needle = format!(":{port} ");
+                let text = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = text
+                    .lines()
+                    .filter(|line| line.contains(&needle))
+                    .take(40)
+                    .map(str::trim)
+                    .collect();
+                tracing::warn!(
+                    host,
+                    port,
+                    holders = lines.len(),
+                    listing = %lines.join(" | "),
+                    "core port still blocked; current holders"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(host, port, error = %err, "core port still blocked; netstat unavailable");
+            }
+        }
+    }
 }
 
 /// The backend that currently captures traffic (`docs/tun.md` status payload).

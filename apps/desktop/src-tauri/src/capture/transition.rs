@@ -549,6 +549,24 @@ impl CaptureController {
         // that may signal a root-owned process) and verifies teardown — then
         // stop the app-managed core. Both must succeed before the journal is
         // marked clean; an unverified release is fail-closed.
+        // Close the elevated core's live connections first (best effort,
+        // through its Clash API): clients proxied through the mixed port then
+        // tear down their side before the root-owned core is signalled, so
+        // its sockets on the inbound port do not outlive it and block the
+        // app-managed core's restart with `bind: address already in use`.
+        let elevated_endpoints =
+            build_core_paths_best_effort(&self.paths, settings, binary.clone()).health_endpoints();
+        // 2 s overall: a stuck API must not hold up the TUN disable.
+        match ice_core::close_all_connections_timed(
+            &elevated_endpoints,
+            std::time::Duration::from_secs(2),
+        ) {
+            Ok(()) => tracing::info!("disable_tun: closed elevated core connections"),
+            Err(err) => {
+                tracing::warn!(error = %err, "disable_tun: closing elevated core connections failed; continuing")
+            }
+        }
+
         tracing::info!(iface = ?applied.interface_name, "disable_tun: restore start");
         let restore_result = backend.restore(&applied);
         tracing::info!(result = ?restore_result.as_ref().map(|_| "ok").map_err(|e| e.message.as_str()), "disable_tun: restore done");
@@ -628,11 +646,14 @@ impl CaptureController {
             tracing::info!("disable_tun: regenerating diagnostic config and restarting core");
             self.rewrite_config(settings, CaptureIntent::Diagnostic)?;
             let core_paths = build_core_paths(&self.paths, settings, binary)?;
-            // The app's own clash API `/traffic` stream can still hold the
-            // clash port in CLOSE_WAIT right after the elevated core's
-            // shutdown; wait for the ports to be bindable again before the
-            // restart (macOS would otherwise fail the fresh bind).
-            if !wait_for_core_ports_released(settings) {
+            // The ports can stay blocked after the elevated core's shutdown:
+            // the app's own `/traffic` stream in CLOSE_WAIT (short), or
+            // sockets left behind by the root-owned core (observed ~30 s on
+            // macOS). Wait with the extended budget so the restart does not
+            // fail with `bind: address already in use`; a slow release logs
+            // the current port holders for diagnosis.
+            if !wait_for_core_ports_released_within(settings, CORE_PORT_RELEASE_WAIT_AFTER_ELEVATED)
+            {
                 tracing::warn!("disable_tun: core ports still occupied after restore");
             }
             core.start(&core_paths).map_err(AppError::from)?;
