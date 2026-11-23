@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { t } from "./i18n";
 import {
+  activeSubscriptionRevision,
   applyFavoriteToNodes,
   applyGroupNowToNodes,
   applySelectedTagToNodes,
@@ -402,6 +403,42 @@ describe("snapshot member lists", () => {
       { tag: "a", outbound_type: "socks", group_now: null, group_all: null },
     ];
     expect(withoutGroupMembers(nodes)).toBe(nodes);
+  });
+});
+
+describe("activeSubscriptionRevision", () => {
+  const sub = (id: string, active: boolean, last_updated: string | null) => ({
+    id,
+    active,
+    last_updated,
+  });
+
+  it("is null without an active subscription", () => {
+    expect(activeSubscriptionRevision([])).toBeNull();
+    expect(activeSubscriptionRevision([sub("a", false, "t1")])).toBeNull();
+  });
+
+  it("follows the active subscription's id and last update", () => {
+    const base = activeSubscriptionRevision([sub("a", true, "t1"), sub("b", false, "t1")]);
+    expect(base).not.toBeNull();
+    // Another subscription's update does not move it.
+    expect(
+      activeSubscriptionRevision([sub("a", true, "t1"), sub("b", false, "t2")]),
+    ).toBe(base);
+    // A refresh of the active one does.
+    expect(
+      activeSubscriptionRevision([sub("a", true, "t2"), sub("b", false, "t1")]),
+    ).not.toBe(base);
+    // So does activating another one with the same timestamp.
+    expect(
+      activeSubscriptionRevision([sub("a", false, "t1"), sub("b", true, "t1")]),
+    ).not.toBe(base);
+  });
+
+  it("treats a never-updated subscription as a revision of its own", () => {
+    const never = activeSubscriptionRevision([sub("a", true, null)]);
+    expect(never).not.toBeNull();
+    expect(activeSubscriptionRevision([sub("a", true, "t1")])).not.toBe(never);
   });
 });
 

@@ -30,6 +30,7 @@ import {
   visibleSections,
 } from "../lib/virtualNodes";
 import {
+  activeSubscriptionRevision,
   applyFavoriteToNodes,
   applyGroupNowToNodes,
   applySelectedTagToNodes,
@@ -559,6 +560,25 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   // Delay results and probes from an older lineup are dropped: a reused tag
   // may now name another server.
   const lineupRef = useRef(0);
+  // Last seen revision of the active subscription (`undefined` until the
+  // first successful read). When it moves, the subscription was refreshed or
+  // another one activated, and every delay result is dropped like a lineup
+  // change: the provider may have moved a tag to another server. This is
+  // deliberate even for a refresh that found the content unchanged (a 304
+  // still moves `last_updated`); a refresh is when results are expected to
+  // start over.
+  const subscriptionRevisionRef = useRef<string | null | undefined>(undefined);
+  // Set when a read fails before any revision is known. The first successful
+  // read then has no baseline to compare with, so it drops the results
+  // instead of silently adopting a revision an update may already have moved.
+  const subscriptionReadFailedRef = useRef(false);
+  // Set when a poll (not a state-changed event) saw the revision move. The
+  // backend writes the subscription index before it reloads the core, so a
+  // poll can land in between; a probe started then still reaches the old
+  // servers. The backend announces the end of the reload with a
+  // state-changed event, and the refresh it triggers drops the results once
+  // more.
+  const subscriptionUnsettledRef = useRef(false);
   // When each finished delay result was written, by tag; drives the expiry.
   const delayStampsRef = useRef(new Map<string, number>());
   const nodesRef = useRef(nodes);
@@ -684,7 +704,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     };
   }, []);
 
-  const refresh = useCallback(async (opts?: { allowDuringFavorite?: boolean }) => {
+  const refresh = useCallback(async (opts?: {
+    allowDuringFavorite?: boolean;
+    /** Triggered by `app://state-changed`: the backend finished a change. */
+    fromStateChange?: boolean;
+  }) => {
     // A favorite write owns the optimistic list until its post-success refresh.
     // That refresh passes `allowDuringFavorite` because the single-flight guard
     // intentionally stays set until the list has caught up with the backend.
@@ -697,16 +721,48 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       // made the node list flash "proxy service not running" or keep stale
       // Test/Select controls. One status read per poll is cheap.
       const statusPromise = api.getStatus();
-      const [n, settings, status] = await Promise.all([
+      // The active subscription's revision: every successful refresh (manual
+      // or auto, changed or not) moves `last_updated`. Best-effort, so a
+      // failed read never blanks the node list.
+      const subscriptionsPromise = api.listSubscriptions().catch(() => null);
+      const [n, settings, status, subscriptions] = await Promise.all([
         api.listNodes(),
         api.getSettings(),
         statusPromise,
+        subscriptionsPromise,
       ]);
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
       const runningNow = status?.core.status === "running";
       const prevNodes = nodesRef.current;
-      if (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n)) {
+      let subscriptionUpdated = false;
+      if (Array.isArray(subscriptions)) {
+        const revision = activeSubscriptionRevision(subscriptions);
+        const prevRevision = subscriptionRevisionRef.current;
+        subscriptionRevisionRef.current = revision;
+        if (prevRevision === undefined) {
+          // No baseline yet. After a failed read an update may have slipped
+          // by unseen, so start over instead of keeping the results.
+          subscriptionUpdated = subscriptionReadFailedRef.current;
+          subscriptionReadFailedRef.current = false;
+        } else {
+          subscriptionUpdated = prevRevision !== revision;
+        }
+        if (opts?.fromStateChange) {
+          // The backend has finished applying the change: drop once more any
+          // result probed between the index write and the core reload.
+          if (subscriptionUnsettledRef.current) subscriptionUpdated = true;
+          subscriptionUnsettledRef.current = false;
+        } else if (subscriptionUpdated) {
+          subscriptionUnsettledRef.current = true;
+        }
+      } else if (subscriptionRevisionRef.current === undefined) {
+        subscriptionReadFailedRef.current = true;
+      }
+      if (
+        subscriptionUpdated ||
+        (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n))
+      ) {
         lineupRef.current += 1;
         delayStampsRef.current.clear();
         setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));
@@ -740,7 +796,7 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     void api
       .listenStateChanged(() => {
         if (!activeRef.current) return;
-        void refresh();
+        void refresh({ fromStateChange: true });
       })
       .then((off) => {
         if (cancelled) off();

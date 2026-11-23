@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { NodeInfo } from "../api/client";
+import type { NodeInfo, SubscriptionMeta } from "../api/client";
 import { t } from "./i18n";
 
 export type DelayCell = number | "error" | "testing" | null;
@@ -126,6 +126,20 @@ function sameMembers(left: string[], right: string[]): boolean {
     if (left[i] !== right[i]) return false;
   }
   return true;
+}
+
+/**
+ * Revision of the active subscription: its id plus `last_updated`, which every
+ * successful refresh (manual or automatic) moves, including one the provider
+ * answered with "not modified". `null` when none is active. A change means the
+ * node delay results no longer apply; that a no-change refresh also counts is
+ * intended.
+ */
+export function activeSubscriptionRevision(
+  subscriptions: Pick<SubscriptionMeta, "id" | "active" | "last_updated">[],
+): string | null {
+  const active = subscriptions.find((s) => s.active);
+  return active ? `${active.id}@${active.last_updated ?? ""}` : null;
 }
 
 /**

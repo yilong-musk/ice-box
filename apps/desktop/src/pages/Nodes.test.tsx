@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../lib/i18n";
 import { clearNodesSnapshot, readNodesSnapshot, writeNodesSnapshot } from "../lib/nodes";
-import { RuntimeStoreProvider } from "../lib/runtimeStore";
+import { RUNTIME_STATUS_FALLBACK_MS, RuntimeStoreProvider } from "../lib/runtimeStore";
 import {
   installTitlebarActionsSlot,
   removeTitlebarActionsSlot,
@@ -20,6 +20,7 @@ const setNodeFavorite = vi.fn();
 const setGroupSelection = vi.fn();
 const testNodeDelay = vi.fn();
 const listenStateChanged = vi.fn();
+const listSubscriptions = vi.fn();
 const phoneShell = { value: false };
 
 vi.mock("@platform/shell", () => ({
@@ -39,6 +40,7 @@ vi.mock("../api/client", () => ({
     setGroupSelection: (...args: unknown[]) => setGroupSelection(...args),
     testNodeDelay: (...args: unknown[]) => testNodeDelay(...args),
     listenStateChanged: (...args: unknown[]) => listenStateChanged(...args),
+    listSubscriptions: (...args: unknown[]) => listSubscriptions(...args),
   },
   formatInvokeError: (err: unknown) => String(err),
 }));
@@ -90,6 +92,7 @@ describe("Nodes", () => {
     vi.clearAllMocks();
     phoneShell.value = false;
     stateChangedHandler = null;
+    listSubscriptions.mockResolvedValue([]);
     listenStateChanged.mockImplementation((handler: () => void) => {
       stateChangedHandler = handler;
       return Promise.resolve(() => {});
@@ -530,6 +533,171 @@ describe("Nodes", () => {
     });
     expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
     expect(view.getByRole("button", { name: "选择组", expanded: false })).toBeInTheDocument();
+  });
+
+  it("drops delay results when the active subscription is updated", async () => {
+    testNodeDelay.mockRejectedValue("probe timed out");
+    useFlatProfile();
+    const sub = (lastUpdated: string) => [
+      { id: "sub-1", active: true, last_updated: lastUpdated },
+      { id: "sub-2", active: false, last_updated: "2026-11-01T00:00:00Z" },
+    ];
+    listSubscriptions.mockResolvedValue(sub("2026-11-23T08:00:00Z"));
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const rowOf = (tag: string) =>
+      within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    });
+
+    // A refresh without an update keeps the result.
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+
+    // An update of another (inactive) subscription keeps it too.
+    listSubscriptions.mockResolvedValue([
+      { id: "sub-1", active: true, last_updated: "2026-11-23T08:00:00Z" },
+      { id: "sub-2", active: false, last_updated: "2026-11-23T09:00:00Z" },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+
+    // The active subscription was updated with the same lineup: results drop.
+    listSubscriptions.mockResolvedValue(sub("2026-11-23T09:30:00Z"));
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
+    });
+  });
+
+  it("drops delay results when another subscription with the same lineup is activated", async () => {
+    testNodeDelay.mockRejectedValue("probe timed out");
+    useFlatProfile();
+    listSubscriptions.mockResolvedValue([
+      { id: "sub-1", active: true, last_updated: "2026-11-23T08:00:00Z" },
+      { id: "sub-2", active: false, last_updated: "2026-11-23T08:00:00Z" },
+    ]);
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const rowOf = (tag: string) =>
+      within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    });
+
+    listSubscriptions.mockResolvedValue([
+      { id: "sub-1", active: false, last_updated: "2026-11-23T08:00:00Z" },
+      { id: "sub-2", active: true, last_updated: "2026-11-23T08:00:00Z" },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
+    });
+  });
+
+  it("drops delay results after a failed first subscription read", async () => {
+    testNodeDelay.mockRejectedValue("probe timed out");
+    useFlatProfile();
+    listSubscriptions.mockRejectedValue("index unreadable");
+    const { container } = render(<Nodes />);
+    const view = within(container);
+    const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+    const rowOf = (tag: string) =>
+      within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    });
+
+    // An update may have happened unseen: the first good read has no
+    // baseline, so it starts over.
+    listSubscriptions.mockResolvedValue([
+      { id: "sub-1", active: true, last_updated: "2026-11-23T09:30:00Z" },
+    ]);
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
+    });
+
+    // From then on the revision is the baseline.
+    fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+    await waitFor(() => {
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    });
+    await act(async () => {
+      stateChangedHandler?.();
+    });
+    expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+  });
+
+  it("drops results probed between a polled update and the backend's announcement", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      testNodeDelay.mockRejectedValue("probe timed out");
+      useFlatProfile();
+      listSubscriptions.mockResolvedValue([
+        { id: "sub-1", active: true, last_updated: "2026-11-23T08:00:00Z" },
+      ]);
+      const { container } = render(<Nodes />);
+      const view = within(container);
+      const nodeList = await view.findByRole("list", { name: t("nodes.listAria") });
+      const rowOf = (tag: string) =>
+        within(nodeList).getAllByText(tag)[0].closest(ROW) as HTMLElement;
+
+      // A poll sees the index already written, before the core reloaded.
+      listSubscriptions.mockResolvedValue([
+        { id: "sub-1", active: true, last_updated: "2026-11-23T09:30:00Z" },
+      ]);
+      const callsBefore = listSubscriptions.mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(RUNTIME_STATUS_FALLBACK_MS + 100);
+      });
+      await waitFor(() => {
+        expect(listSubscriptions.mock.calls.length).toBeGreaterThan(callsBefore);
+      });
+
+      // A probe in that window still reached the old servers.
+      fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+      await waitFor(() => {
+        expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+      });
+
+      // The announcement after the reload drops it, though the revision did
+      // not move again.
+      await act(async () => {
+        stateChangedHandler?.();
+      });
+      await waitFor(() => {
+        expect(within(rowOf("node-a")).queryByTestId("delay-error")).toBeNull();
+      });
+
+      // Later announcements keep new results.
+      fireEvent.click(within(rowOf("node-a")).getByRole("button", { name: t("nodes.testNodeAria", { node: "node-a" }) }));
+      await waitFor(() => {
+        expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+      });
+      await act(async () => {
+        stateChangedHandler?.();
+      });
+      expect(within(rowOf("node-a")).getByTestId("delay-error")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops results of a delay test that spans a lineup change", async () => {
