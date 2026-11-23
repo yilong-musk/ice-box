@@ -129,9 +129,11 @@ function sameMembers(left: string[], right: string[]): boolean {
 }
 
 /**
- * Revision of the active subscription: its id plus `last_updated`, which a
- * successful update (manual or automatic) moves. `null` when none is active.
- * A change means the node delay results no longer apply.
+ * Revision of the active subscription: its id plus `last_updated`, which every
+ * successful refresh (manual or automatic) moves, including one the provider
+ * answered with "not modified". `null` when none is active. A change means the
+ * node delay results no longer apply; that a no-change refresh also counts is
+ * intended.
  */
 export function activeSubscriptionRevision(
   subscriptions: Pick<SubscriptionMeta, "id" | "active" | "last_updated">[],
