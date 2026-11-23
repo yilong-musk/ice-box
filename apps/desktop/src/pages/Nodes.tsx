@@ -30,6 +30,7 @@ import {
   visibleSections,
 } from "../lib/virtualNodes";
 import {
+  activeSubscriptionRevision,
   applyFavoriteToNodes,
   applyGroupNowToNodes,
   applySelectedTagToNodes,
@@ -559,6 +560,11 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   // Delay results and probes from an older lineup are dropped: a reused tag
   // may now name another server.
   const lineupRef = useRef(0);
+  // Last seen revision of the active subscription (`undefined` until the
+  // first read). When it moves, the subscription was updated (or another one
+  // activated) and every delay result is dropped, like a lineup change: the
+  // provider may have moved a tag to another server.
+  const subscriptionRevisionRef = useRef<string | null | undefined>(undefined);
   // When each finished delay result was written, by tag; drives the expiry.
   const delayStampsRef = useRef(new Map<string, number>());
   const nodesRef = useRef(nodes);
@@ -697,16 +703,34 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
       // made the node list flash "proxy service not running" or keep stale
       // Test/Select controls. One status read per poll is cheap.
       const statusPromise = api.getStatus();
-      const [n, settings, status] = await Promise.all([
+      // The active subscription's revision: a successful update (manual or
+      // auto) moves `last_updated`. Optional and best-effort, so a failed read
+      // never blanks the node list.
+      const subscriptionsPromise =
+        typeof api.listSubscriptions === "function"
+          ? api.listSubscriptions().catch(() => null)
+          : Promise.resolve(null);
+      const [n, settings, status, subscriptions] = await Promise.all([
         api.listNodes(),
         api.getSettings(),
         statusPromise,
+        subscriptionsPromise,
       ]);
       if (isStale(gen) || !activeRef.current) return;
       const selected = resolveSelectedTag(settings.selected_tag, n);
       const runningNow = status?.core.status === "running";
       const prevNodes = nodesRef.current;
-      if (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n)) {
+      let subscriptionUpdated = false;
+      if (Array.isArray(subscriptions)) {
+        const revision = activeSubscriptionRevision(subscriptions);
+        const prevRevision = subscriptionRevisionRef.current;
+        subscriptionRevisionRef.current = revision;
+        subscriptionUpdated = prevRevision !== undefined && prevRevision !== revision;
+      }
+      if (
+        subscriptionUpdated ||
+        (prevNodes.length > 0 && !sameNodeLineup(prevNodes, n))
+      ) {
         lineupRef.current += 1;
         delayStampsRef.current.clear();
         setDelays((prev) => (Object.keys(prev).length === 0 ? prev : {}));

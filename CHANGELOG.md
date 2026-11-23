@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dev mode shows. macOS 26 otherwise puts a light plate behind a bundled icon
   that does not fill the squircle. Finder and Launchpad still use the bundled
   icon.
+- Nodes: a successful update of the active subscription, manual or
+  automatic, clears every node's delay result, even when the node list keeps
+  the same tags. The provider may have moved a tag to another server, so an
+  old result no longer described that node.
 
 ## [0.3.7] - 2026-11-20
 
