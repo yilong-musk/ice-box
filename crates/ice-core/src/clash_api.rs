@@ -117,8 +117,15 @@ fn clash_get_capped(
 }
 
 fn clash_delete(endpoints: &HealthEndpoints, path: &str) -> Result<(), CoreError> {
+    clash_delete_with(&shared_agent(), endpoints, path)
+}
+
+fn clash_delete_with(
+    agent: &ureq::Agent,
+    endpoints: &HealthEndpoints,
+    path: &str,
+) -> Result<(), CoreError> {
     let url = format!("{}{}", base_url(endpoints)?, path);
-    let agent = shared_agent();
     let response = apply_clash_auth(agent.delete(&url), endpoints)
         .call()
         .map_err(|e| clash_api_err(path, e))?;
@@ -655,23 +662,12 @@ pub fn close_all_connections_timed(
     endpoints: &HealthEndpoints,
     timeout: Duration,
 ) -> Result<(), CoreError> {
-    let path = "/connections";
-    let url = format!("{}{}", base_url(endpoints)?, path);
     // Pooling off for the same CLOSE_WAIT reason as [`shared_agent`].
     let agent = ureq::AgentBuilder::new()
         .timeout(timeout)
         .max_idle_connections(0)
         .build();
-    let response = apply_clash_auth(agent.delete(&url), endpoints)
-        .call()
-        .map_err(|e| clash_api_err(path, e))?;
-    let status = response.status();
-    if !(200..300).contains(&status) {
-        let mut text = String::new();
-        let _ = response.into_reader().take(512).read_to_string(&mut text);
-        return Err(clash_api_err(path, format!("HTTP {status}: {text}")));
-    }
-    Ok(())
+    clash_delete_with(&agent, endpoints, "/connections")
 }
 
 fn percent_encode_path(s: &str) -> String {

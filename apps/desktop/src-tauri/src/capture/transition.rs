@@ -550,10 +550,13 @@ impl CaptureController {
         // stop the app-managed core. Both must succeed before the journal is
         // marked clean; an unverified release is fail-closed.
         // Close the elevated core's live connections first (best effort,
-        // through its Clash API): clients proxied through the mixed port then
-        // tear down their side before the root-owned core is signalled, so
-        // its sockets on the inbound port do not outlive it and block the
-        // app-managed core's restart with `bind: address already in use`.
+        // through its Clash API). Hypothesis, not a confirmed root cause:
+        // long-lived proxied connections on the mixed port outlive the
+        // root-owned core and block the app-managed core's restart with
+        // `bind: address already in use`. Closing them while the core is
+        // still up makes the core the active closer, so its side goes to
+        // TIME_WAIT, which the SO_REUSEADDR bind probe does not count as
+        // blocked.
         let elevated_endpoints =
             build_core_paths_best_effort(&self.paths, settings, binary.clone()).health_endpoints();
         // 2 s overall: a stuck API must not hold up the TUN disable.

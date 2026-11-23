@@ -64,13 +64,15 @@ fn map_tun(err: TunError) -> AppError {
 /// a live holder exists, not during the `TIME_WAIT` window. The budget is
 /// the monitor's 1.5 s read-loop bound plus a 0.6 s margin: a normal
 /// hand-off settles within it, while a genuinely held port stalls at most
-/// ~2 s before the start fails fast and stays fail-closed.
+/// ~2 s before the start fails fast and stays fail-closed. (After an
+/// elevated core stop the budget is longer; see
+/// [`CORE_PORT_RELEASE_WAIT_AFTER_ELEVATED`].)
 fn wait_for_core_ports_released(settings: &AppSettings) -> bool {
-    // 7 * 300 ms = 2.1 s: the 1.5 s monitor read-loop bound + 0.6 s margin.
     wait_for_core_ports_released_within(settings, CORE_PORT_RELEASE_WAIT_SHORT)
 }
 
 /// Default budget: the `/traffic` CLOSE_WAIT case described above.
+/// 2.1 s = the 1.5 s monitor read-loop bound + 0.6 s margin.
 const CORE_PORT_RELEASE_WAIT_SHORT: std::time::Duration = std::time::Duration::from_millis(2100);
 
 /// Budget after the *elevated* core stops (TUN disable). A root-owned core
@@ -79,14 +81,21 @@ const CORE_PORT_RELEASE_WAIT_SHORT: std::time::Duration = std::time::Duration::f
 /// proxied clients were connected to the mixed port). Starting the
 /// app-managed core inside that window fails at once with `bind: address
 /// already in use`, so wait it out instead of failing the transition.
+///
+/// The extended wait only covers sockets left behind without a live
+/// listener: once the diagnostic listing shows a process actually
+/// listening on a core port (e.g. another proxy app took the mixed port),
+/// the wait stops early and the start fails fast as before.
 pub(crate) const CORE_PORT_RELEASE_WAIT_AFTER_ELEVATED: std::time::Duration =
     std::time::Duration::from_secs(45);
 
 const CORE_PORT_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Poll until both core ports are bindable or `budget` runs out. When the
-/// short budget is exceeded, the current holders are logged once (see
-/// [`log_core_port_holders`]) so a slow release leaves evidence behind.
+/// Poll until both core ports are bindable or `budget` runs out. Once the
+/// short budget (or `budget`, if smaller) is exceeded, the holders of the
+/// blocked ports are logged once (see [`log_core_port_holders`]) so a slow
+/// release leaves evidence behind. If that listing shows a live listener on
+/// a blocked port, waiting longer cannot help and the wait ends early.
 fn wait_for_core_ports_released_within(
     settings: &AppSettings,
     budget: std::time::Duration,
@@ -96,37 +105,43 @@ fn wait_for_core_ports_released_within(
         (settings.clash_api_listen.clone(), settings.clash_api_port),
     ];
     let started = std::time::Instant::now();
-    let deadline = started + budget;
+    let diagnose_after = budget.min(CORE_PORT_RELEASE_WAIT_SHORT);
     let mut diagnosed = false;
     loop {
         let blocked: Vec<&(String, u16)> = probes
             .iter()
             .filter(|(host, port)| !ice_core::tcp_bind_available(host, *port))
             .collect();
+        // One clock read per round: the diagnose and deadline checks must
+        // agree, or a round could hit the deadline without diagnosing.
+        let elapsed = started.elapsed();
         if blocked.is_empty() {
             if diagnosed {
                 tracing::info!(
-                    waited_ms = started.elapsed().as_millis() as u64,
+                    waited_ms = elapsed.as_millis() as u64,
                     "core ports released after an extended wait"
                 );
             }
             return true;
         }
-        if !diagnosed && started.elapsed() >= CORE_PORT_RELEASE_WAIT_SHORT {
+        if !diagnosed && elapsed >= diagnose_after {
             diagnosed = true;
+            let mut live_listener = false;
             for (host, port) in &blocked {
-                log_core_port_holders(host, *port);
+                live_listener |= log_core_port_holders(host, *port);
+            }
+            if live_listener && elapsed < budget {
+                tracing::warn!(
+                    waited_ms = elapsed.as_millis() as u64,
+                    "core port held by a live listener; not waiting out the remaining budget"
+                );
+                return false;
             }
         }
-        if std::time::Instant::now() >= deadline {
+        if elapsed >= budget {
             break;
         }
-        std::thread::sleep(CORE_PORT_RELEASE_POLL);
-    }
-    if !diagnosed {
-        for (host, port) in &probes {
-            log_core_port_holders(host, *port);
-        }
+        std::thread::sleep(CORE_PORT_RELEASE_POLL.min(budget - elapsed));
     }
     tracing::warn!(
         "core ports not bindable after {} ms; the next core start may fail with bind: address already in use",
@@ -139,7 +154,12 @@ fn wait_for_core_ports_released_within(
 /// unprivileged, so sockets owned by a root process may be missing from the
 /// listing; an empty listing while the bind probe still fails points at a
 /// root-owned holder (e.g. the just-stopped elevated core's sockets).
-fn log_core_port_holders(host: &str, port: u16) {
+///
+/// Returns `true` when the listing shows a live listener on `port`: a
+/// process is actively serving it, so waiting for a release is pointless.
+/// Returns `false` when no listener is visible or the listing is unavailable
+/// (the caller then keeps waiting).
+fn log_core_port_holders(host: &str, port: u16) -> bool {
     #[cfg(unix)]
     {
         let output = std::process::Command::new("lsof")
@@ -149,46 +169,73 @@ fn log_core_port_holders(host: &str, port: u16) {
             Ok(out) => {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let lines: Vec<&str> = text.lines().skip(1).take(40).collect();
+                let live_listener = lines.iter().any(|line| line.contains("(LISTEN)"));
                 tracing::warn!(
                     host,
                     port,
                     holders = lines.len(),
+                    live_listener,
                     listing = %lines.join(" | "),
                     "core port still blocked; current holders (unprivileged view, root-owned sockets may be hidden)"
                 );
+                live_listener
             }
             Err(err) => {
                 tracing::warn!(host, port, error = %err, "core port still blocked; lsof unavailable");
+                false
             }
         }
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        // A GUI process spawning a console program would flash a window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let output = std::process::Command::new("netstat")
             .args(["-ano", "-p", "TCP"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         match output {
             Ok(out) => {
-                let needle = format!(":{port} ");
+                let suffix = format!(":{port}");
                 let text = String::from_utf8_lossy(&out.stdout);
-                let lines: Vec<&str> = text
+                // Columns: proto, local, foreign, state, pid. Match on the
+                // local/foreign address columns rather than a substring.
+                let rows: Vec<Vec<&str>> = text
                     .lines()
-                    .filter(|line| line.contains(&needle))
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>())
+                    .filter(|cols| {
+                        cols.len() >= 5
+                            && (cols[1].ends_with(&suffix) || cols[2].ends_with(&suffix))
+                    })
                     .take(40)
-                    .map(str::trim)
                     .collect();
+                // A listener has a wildcard foreign address (`0.0.0.0:0` /
+                // `[::]:0`); the state column is localized, so don't match on it.
+                let live_listener = rows
+                    .iter()
+                    .any(|cols| cols[1].ends_with(&suffix) && cols[2].ends_with(":0"));
+                let listing: Vec<String> = rows.iter().map(|cols| cols.join(" ")).collect();
                 tracing::warn!(
                     host,
                     port,
-                    holders = lines.len(),
-                    listing = %lines.join(" | "),
+                    holders = rows.len(),
+                    live_listener,
+                    listing = %listing.join(" | "),
                     "core port still blocked; current holders"
                 );
+                live_listener
             }
             Err(err) => {
                 tracing::warn!(host, port, error = %err, "core port still blocked; netstat unavailable");
+                false
             }
         }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (host, port);
+        false
     }
 }
 
