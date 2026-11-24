@@ -42,7 +42,7 @@ import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
 import { isDesktopShell, isPhoneShell } from "@platform/shell";
-import { detectWindowChrome } from "@platform/windowChrome";
+import { detectWindowChrome, runWindowCommand } from "@platform/windowChrome";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   readLanguagePreference,
@@ -212,6 +212,35 @@ function TitlebarActionSlots({
       )}
     />
   ));
+}
+
+/** Height of the title bar strip the content slides up under (h-12). */
+const TITLEBAR_PX = 48;
+const INTERACTIVE_SELECTOR =
+  'button, a, input, select, textarea, label, summary, [role="button"], [role="link"], [role="switch"], [role="checkbox"], [role="tab"], [role="menuitem"], [role="slider"], [contenteditable=""], [contenteditable="true"], [data-no-window-drag]';
+
+/**
+ * The content column sits on top of the title bar (-mt-12), so the header's
+ * drag region underneath never gets the pointer on the right-hand side.
+ * Treat a press in the top strip of the content as a title bar press:
+ * drag the window, double-click to maximize, unless it lands on a control.
+ */
+function isTitlebarPress(e: React.MouseEvent<HTMLElement>): boolean {
+  if (e.button !== 0) return false;
+  const top = e.currentTarget.getBoundingClientRect().top;
+  if (e.clientY - top >= TITLEBAR_PX) return false;
+  const target = e.target as Element | null;
+  return !target?.closest?.(INTERACTIVE_SELECTOR);
+}
+
+function onContentTitlebarMouseDown(e: React.MouseEvent<HTMLElement>) {
+  if (!isTitlebarPress(e) || e.detail > 1) return;
+  void runWindowCommand("startDragging");
+}
+
+function onContentTitlebarDoubleClick(e: React.MouseEvent<HTMLElement>) {
+  if (!isTitlebarPress(e)) return;
+  void runWindowCommand("toggleMaximize");
 }
 
 function TitleBar({ label }: { label: string }) {
@@ -638,6 +667,8 @@ function AppShell() {
               // remains the drag region.
               !phone && "relative z-10 -mt-12",
             )}
+            onMouseDown={phone ? undefined : onContentTitlebarMouseDown}
+            onDoubleClick={phone ? undefined : onContentTitlebarDoubleClick}
             data-testid="app-content"
           >
             {phone ? (

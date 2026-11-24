@@ -38,6 +38,9 @@ export async function runWindowCommand(command: WindowCommand): Promise<void> {
       case "close":
         await current.close();
         return;
+      case "startDragging":
+        await current.startDragging();
+        return;
     }
   } catch {
     // Browser preview and unit tests are not inside Tauri.

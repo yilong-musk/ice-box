@@ -2,4 +2,4 @@
 
 /** Presentation capabilities shared by native and browser window adapters. */
 export type WindowChrome = "macos-overlay" | "windows-custom" | "plain";
-export type WindowCommand = "minimize" | "toggleMaximize" | "close";
+export type WindowCommand = "minimize" | "toggleMaximize" | "close" | "startDragging";
