@@ -396,6 +396,7 @@ export function Subscriptions({ active = true }: Props) {
                             <Button
                               type="button"
                               size="icon-sm"
+                              variant="outline"
                               disabled={busy}
                               aria-label={
                                 updatingId === s.id
