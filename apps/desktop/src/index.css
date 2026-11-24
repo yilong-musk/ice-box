@@ -249,7 +249,8 @@
 
 
 /* Navigation icons (components/NavIcon.tsx): rounded line glyphs stroked in
-   the button's text color. 16px beside a label, 24px on the collapsed rail. */
+   the button's text color. 16px in the phone tab bar, 20px beside a sidebar
+   label, 24px on the collapsed rail. */
 .nav-icon {
   display: block;
   width: 16px;

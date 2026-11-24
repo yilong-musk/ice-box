@@ -4,8 +4,9 @@
  * Navigation icons: rounded line glyphs on a 24-unit grid, in the spirit of
  * SF Symbols. One ink: strokes take the menu button's text color, so a
  * selected item and an idle one differ the way the label does. Drawn at
- * 16px in the expanded sidebar and the phone tab bar, 24px on the collapsed
- * icon rail (see `.nav-icon` in index.css); the stroke scales with the size.
+ * 16px in the phone tab bar, 20px in the expanded sidebar and 24px on the
+ * collapsed icon rail (see `.nav-icon` in index.css); the stroke scales with
+ * the size.
  */
 
 import type { ReactNode } from "react";
