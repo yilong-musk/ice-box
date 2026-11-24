@@ -24,6 +24,41 @@ export function isMacosHost(
   return detectWindowChrome(userAgent, platform) === "macos-overlay";
 }
 
+/**
+ * Grow or shrink the window's width by `delta` CSS px, keeping its left edge,
+ * and set its minimum size. A maximized or fullscreen window keeps its size
+ * (only the minimum changes). The minimum is lowered before shrinking and
+ * raised after growing, so it never blocks the resize.
+ */
+export async function resizeWindowWidthBy(
+  delta: number,
+  min: { width: number; height: number },
+): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const { LogicalSize } = await import("@tauri-apps/api/dpi");
+    const current = getCurrentWindow();
+    const minSize = new LogicalSize(min.width, min.height);
+    const fixed = (await current.isMaximized()) || (await current.isFullscreen());
+    if (fixed || delta === 0) {
+      await current.setMinSize(minSize);
+      return;
+    }
+    const scale = await current.scaleFactor();
+    const inner = (await current.innerSize()).toLogical(scale);
+    const next = new LogicalSize(Math.max(min.width, inner.width + delta), inner.height);
+    if (delta < 0) {
+      await current.setMinSize(minSize);
+      await current.setSize(next);
+    } else {
+      await current.setSize(next);
+      await current.setMinSize(minSize);
+    }
+  } catch {
+    // Browser preview and unit tests are not inside Tauri.
+  }
+}
+
 export async function runWindowCommand(command: WindowCommand): Promise<void> {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");

@@ -6,3 +6,8 @@ export type { WindowChrome, WindowCommand } from "../../desktop/src/lib/windowCh
 export function detectWindowChrome(_userAgent?: string, _platform?: string): WindowChrome { return "plain"; }
 export function isMacosHost(_userAgent?: string, _platform?: string): boolean { return false; }
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
+
+export async function resizeWindowWidthBy(
+  _delta: number,
+  _min: { width: number; height: number },
+): Promise<void> {}

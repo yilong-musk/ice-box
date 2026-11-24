@@ -248,13 +248,21 @@
 }
 
 
-/* Navigation glyphs (docs/brand/nav-icons). One ink, filled with the button's
-   text color. Shown at their 16px grid; the button around them is unchanged. */
+/* Navigation icons (components/NavIcon.tsx): rounded line glyphs stroked in
+   the button's text color. 16px beside a label, 24px on the collapsed rail. */
 .nav-icon {
   display: block;
   width: 16px;
   height: 16px;
   flex: none;
+}
+[data-sidebar="menu-button"] .nav-icon {
+  width: 20px;
+  height: 20px;
+}
+[data-collapsible="icon"] [data-sidebar="menu-button"] .nav-icon {
+  width: 24px;
+  height: 24px;
 }
 
 /* Apple-style interaction defaults: arrow cursor on controls, selectable

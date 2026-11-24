@@ -430,7 +430,9 @@ describe("App", () => {
       fireEvent.click(
         within(titlebar as HTMLElement).getByRole("button", { name: "Toggle Sidebar" }),
       );
-      expect(controls.parentElement).toHaveClass("w-[8.25rem]");
+      // Collapsed to the icon rail, the strip follows the rail's width, which
+      // leaves room for the caption buttons.
+      expect(controls.parentElement).toHaveClass("w-(--sidebar-width-icon)");
       expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,

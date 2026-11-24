@@ -14,3 +14,8 @@ export function isMacosHost(): boolean {
 }
 
 export async function runWindowCommand(_command: WindowCommand): Promise<void> {}
+
+export async function resizeWindowWidthBy(
+  _delta: number,
+  _min: { width: number; height: number },
+): Promise<void> {}

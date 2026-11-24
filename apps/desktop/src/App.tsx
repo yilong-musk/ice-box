@@ -12,8 +12,13 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { ArrowUpCircle } from "lucide-react";
-import { api, formatUiMessage, type CheckAppUpdateResponse, type StatusResponse } from "./api/client";
+import { ArrowUpCircle, ChevronsLeft, ChevronsRight } from "lucide-react";
+import {
+  api,
+  formatUiMessage,
+  type CheckAppUpdateResponse,
+  type StatusResponse,
+} from "./api/client";
 import { Home } from "./pages/Home";
 import { Nodes } from "./pages/Nodes";
 import { Apps } from "./pages/Apps";
@@ -42,7 +47,11 @@ import { WindowControls } from "@/components/WindowControls";
 import { cn } from "@/lib/utils";
 import { APP_VERSION } from "./lib/appVersion";
 import { isDesktopShell, isPhoneShell } from "@platform/shell";
-import { detectWindowChrome, runWindowCommand } from "@platform/windowChrome";
+import {
+  detectWindowChrome,
+  resizeWindowWidthBy,
+  runWindowCommand,
+} from "@platform/windowChrome";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   readLanguagePreference,
@@ -65,7 +74,26 @@ type Tab =
   | "mcp"
   | "connections";
 
-const SIDEBAR_WIDTH = "12rem";
+const SIDEBAR_WIDTH = "13rem";
+
+/** Expanded (labels) or collapsed (icon rail) sidebar, kept across launches. */
+const SIDEBAR_OPEN_STORAGE_KEY = "ice-box.sidebar-open";
+
+function readSidebarOpen(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function writeSidebarOpen(open: boolean) {
+  try {
+    window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, String(open));
+  } catch {
+    // Storage unavailable: the choice lasts for this session only.
+  }
+}
 
 // Every visited page stays mounted. Memoized pages with stable props skip the
 // shell re-render on a tab switch. Each page subscribes to language changes on
@@ -79,14 +107,50 @@ const ConnectionsPage = memo(Connections);
 const SettingsPage = memo(Settings);
 const McpPage = memo(Mcp);
 
+/**
+ * Collapsed rail width. It must leave room for the system window buttons in
+ * its top strip: the Windows caption buttons (3 × w-11 = 8.25rem) or the
+ * macOS traffic lights (inset 14px, ~52px wide, so 5rem keeps the same
+ * margin on the right). Elsewhere: a 48px button plus 8px on each side.
+ */
+const SIDEBAR_WIDTH_ICON = (() => {
+  const chrome = detectWindowChrome();
+  if (chrome === "windows-custom") return "9rem";
+  if (chrome === "macos-overlay") return "5.5rem";
+  return "4.5rem";
+})();
+
 const SIDEBAR_PROVIDER_STYLE = {
   "--sidebar-width": SIDEBAR_WIDTH,
+  "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
 } as CSSProperties;
+
+/** Expanded minus collapsed sidebar width, in CSS px (1rem = 16px). */
+const SIDEBAR_WIDTH_DELTA_PX =
+  (Number.parseFloat(SIDEBAR_WIDTH) - Number.parseFloat(SIDEBAR_WIDTH_ICON)) * 16;
+
+/**
+ * Window minimum size. 720 x 500 (tauri.conf.json) is for the expanded
+ * sidebar; collapsed, the minimum shrinks by the same delta so the content
+ * pane keeps the same minimum width.
+ */
+/** The launch-time window size adjustment runs once per app start. */
+let launchWindowSizeApplied = false;
+
+function windowMinSize(open: boolean): { width: number; height: number } {
+  return { width: open ? 720 : 720 - SIDEBAR_WIDTH_DELTA_PX, height: 500 };
+}
+
+/**
+ * Menu button classes. Collapsed to the icon rail, each button becomes a
+ * 48px square centred in the rail, with a 24px icon and no label.
+ */
+const NAV_BUTTON_CLASS =
+  "h-10 gap-3 rounded-lg px-3 text-[15px] [&_svg:not(.nav-icon)]:size-5 group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-xl group-data-[collapsible=icon]:[&_.nav-icon]:size-6 group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-5 group-data-[collapsible=icon]:[&>span]:hidden";
 
 /** All panes share one grid cell, so a hidden pane that keeps its layout has
  * exactly the size it will have when shown again. */
-const PANE_CLASS =
-  "col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col";
+const PANE_CLASS = "col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col";
 
 /**
  * A page that stays mounted while its tab is not shown. Hidden, <Activity>
@@ -206,10 +270,7 @@ function TitlebarActionSlots({
       key={id}
       data-titlebar-slot={id}
       hidden={id !== tab}
-      className={cn(
-        "flex h-full items-center gap-2",
-        id === tab && padding,
-      )}
+      className={cn("flex h-full items-center gap-2", id === tab && padding)}
     />
   ));
 }
@@ -258,14 +319,19 @@ function TitleBar({ label }: { label: string }) {
           "relative z-20 flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
           sidebarOpen
             ? "w-(--sidebar-width)"
-            : windows
-              ? "w-[8.25rem]"
-              : "w-0",
+            : isMobile
+              ? windows
+                ? "w-[8.25rem]"
+                : "w-0"
+              : "w-(--sidebar-width-icon)",
         )}
       >
         <WindowControls />
         <div
-          className={cn("h-full", sidebarOpen && "min-w-0 flex-1")}
+          className={cn(
+            "h-full",
+            (sidebarOpen || !isMobile) && "min-w-0 flex-1",
+          )}
           data-tauri-drag-region
           aria-hidden="true"
         />
@@ -294,7 +360,72 @@ function App() {
   );
 }
 
+/** Collapse the sidebar to its icon rail, or expand it back to labels. */
+function SidebarCollapseToggle({ className }: { className?: string }) {
+  const { open, toggleSidebar } = useSidebar();
+  const label = t(open ? "app.nav.collapse" : "app.nav.expand");
+  // Not a SidebarMenu: the toggle is window chrome, not a navigation entry,
+  // so the main nav stays the first (and only) menu in the sidebar. No
+  // wrapper either: on the brand row the button is positioned on its own,
+  // and a wrapper left in the flow would add a flex gap and push the logo
+  // and name off centre.
+  return (
+    <SidebarMenuButton
+      type="button"
+      tooltip={label}
+      aria-label={label}
+      aria-expanded={open}
+      data-testid="sidebar-collapse-toggle"
+      // Icon only, in the sidebar footer above the brand.
+      className={cn(
+        NAV_BUTTON_CLASS,
+        // Quiet chrome: faint, small icon, no fill; it only firms up on
+        // hover, like the sidebar toggle in macOS apps.
+        "size-10 justify-center px-0! text-sidebar-foreground/40 hover:bg-sidebar-hover! hover:text-sidebar-foreground/80 [&_svg]:size-4! [&_svg]:stroke-[1.75]",
+        className,
+      )}
+      onClick={toggleSidebar}
+    >
+      {open ? (
+        <ChevronsLeft aria-hidden="true" />
+      ) : (
+        <ChevronsRight aria-hidden="true" />
+      )}
+    </SidebarMenuButton>
+  );
+}
+
 function AppShell() {
+  const [sidebarOpen, setSidebarOpen] = useState(readSidebarOpen);
+  const sidebarOpenRef = useRef(sidebarOpen);
+  const onSidebarOpenChange = useCallback((next: boolean) => {
+    // Collapsing or expanding changes the window width by the sidebar's
+    // width difference, so the content pane on the right keeps its width.
+    // (Not inside the state updater: StrictMode runs updaters twice.)
+    if (
+      sidebarOpenRef.current !== next &&
+      !window.matchMedia("(max-width: 767px)").matches
+    ) {
+      void resizeWindowWidthBy(
+        next ? SIDEBAR_WIDTH_DELTA_PX : -SIDEBAR_WIDTH_DELTA_PX,
+        windowMinSize(next),
+      );
+    }
+    sidebarOpenRef.current = next;
+    setSidebarOpen(next);
+    writeSidebarOpen(next);
+  }, []);
+  // At launch the window has its configured size, which is the expanded
+  // width. If the saved state is collapsed, shrink it by the sidebar delta so
+  // expanding later returns to the configured width, not wider. Guarded at
+  // module level: StrictMode runs effects twice in dev.
+  useEffect(() => {
+    if (launchWindowSizeApplied) return;
+    launchWindowSizeApplied = true;
+    const open = readSidebarOpen();
+    const shrink = !open && !window.matchMedia("(max-width: 767px)").matches;
+    void resizeWindowWidthBy(shrink ? -SIDEBAR_WIDTH_DELTA_PX : 0, windowMinSize(open));
+  }, []);
   const [tab, setTab] = useState<Tab>("home");
   const [visited, setVisited] = useState<ReadonlySet<Tab>>(
     () => new Set<Tab>(["home"]),
@@ -504,7 +635,10 @@ function AppShell() {
   const recovery = status?.proxy_recovery_warning?.length ? (
     <div className="px-4 pt-3">
       <ErrorAlert>
-        {status.proxy_recovery_warning.map(formatUiMessage).filter(Boolean).join("；")}
+        {status.proxy_recovery_warning
+          .map(formatUiMessage)
+          .filter(Boolean)
+          .join("；")}
       </ErrorAlert>
     </div>
   ) : null;
@@ -530,7 +664,11 @@ function AppShell() {
               {current ? t(current.labelKey) : ""}
             </h2>
             <div data-titlebar-actions className="flex shrink-0 items-center">
-              <TitlebarActionSlots items={slotItems} tab={tab} padding="not-empty:pr-3" />
+              <TitlebarActionSlots
+                items={slotItems}
+                tab={tab}
+                padding="not-empty:pr-3"
+              />
             </div>
           </header>
           {recovery}
@@ -579,7 +717,8 @@ function AppShell() {
   return (
     <TooltipProvider>
       <SidebarProvider
-        defaultOpen
+        open={sidebarOpen}
+        onOpenChange={onSidebarOpenChange}
         className={cn(
           "flex h-svh w-full flex-col overflow-hidden bg-background text-foreground",
           phone && "pt-[env(safe-area-inset-top)]",
@@ -587,17 +726,18 @@ function AppShell() {
         style={SIDEBAR_PROVIDER_STYLE}
         data-testid={phone ? "tablet-shell" : undefined}
       >
-        {phone ? null : (
-          <TitleBar label={current ? t(current.labelKey) : ""} />
-        )}
+        {phone ? null : <TitleBar label={current ? t(current.labelKey) : ""} />}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
-            collapsible="offcanvas"
+            collapsible="icon"
             side="left"
             variant="sidebar"
             className={phone ? undefined : "border-sidebar-border"}
           >
+            {/* Starts right below the title bar strip. Nothing may tuck up
+                under it: the strip (z-20, caption buttons and drag region)
+                sits above the sidebar and would swallow the clicks. */}
             <SidebarContent className={phone ? undefined : "pt-12"}>
               <SidebarGroup>
                 <SidebarMenu aria-label={t("app.nav.aria")}>
@@ -607,7 +747,8 @@ function AppShell() {
                         type="button"
                         isActive={tab === id}
                         aria-current={tab === id ? "page" : undefined}
-                        className="h-8 rounded-md px-2.5 text-[13px]"
+                        tooltip={t(labelKey)}
+                        className={NAV_BUTTON_CLASS}
                         onClick={() => selectTab(id)}
                       >
                         <NavIcon name={id} />
@@ -619,20 +760,35 @@ function AppShell() {
               </SidebarGroup>
             </SidebarContent>
             <SidebarFooter className="p-0 items-center justify-center">
-              <div className="flex w-full select-none flex-col items-center justify-center gap-1 px-4 py-2.5">
+              {/* Collapsed to the icon rail, only the status logo (full
+                  size, the rail is wide enough) and the update arrow stay. */}
+              <div className="flex w-full select-none flex-col items-center justify-center gap-1 px-4 py-2.5 group-data-[collapsible=icon]:px-0">
                 <div
-                  className="flex w-full items-center justify-center gap-2.5"
+                  className="relative flex w-full items-center justify-center gap-2.5 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1"
                   data-tauri-drag-region
                   data-testid="app-brand-row"
                 >
-                  <StatusLogo status={status} />
-                  <h1 className="font-heading text-sm font-medium tracking-tight">
+                  {/* Collapse toggle on the brand row: at its right edge when
+                      expanded (the logo and name stay centred), stacked above
+                      the logo on the narrow collapsed rail. */}
+                  {phone ? null : (
+                    // Placed with top-1/2 and a negative margin (no
+                    // translate the button's own transitions could override).
+                    // -mt-[14px] instead of the exact -mt-4 (half of 32px):
+                    // the row's optical middle, the "ice-box" text, sits a
+                    // little below the logo's box centre.
+                    <SidebarCollapseToggle className="absolute top-1/2 -right-3 -mt-3 size-7! rounded-md group-data-[collapsible=icon]:static group-data-[collapsible=icon]:mt-0 group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md group-data-[collapsible=icon]:[&_svg:not(.nav-icon)]:size-4!" />
+                  )}
+                  <div className="shrink-0">
+                    <StatusLogo status={status} />
+                  </div>
+                  <h1 className="font-heading text-sm font-medium tracking-tight group-data-[collapsible=icon]:hidden">
                     ice-box
                   </h1>
                 </div>
                 <div className="flex items-center justify-center gap-1">
                   <p
-                    className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums"
+                    className="text-[11px] leading-none text-sidebar-foreground/50 tabular-nums group-data-[collapsible=icon]:hidden"
                     aria-label={t("app.versionAria", { version: APP_VERSION })}
                     data-tauri-drag-region
                   >
