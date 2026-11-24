@@ -152,8 +152,9 @@ const TURN_MS = 1200;
 const DRIFT_DEG_PER_S = 8;
 /** Expand / collapse flight, on the iOS sheet curve. */
 const EXPAND_MS = 560;
-/** Must match lm-zoom-out in index.css, so the canvas and frame land together. */
-const COLLAPSE_MS = 420;
+/** Plain close: must match lm-close in index.css (the canvas goes back to the
+ * card once the dialog has faded out). */
+const COLLAPSE_MS = 200;
 /** How long an expand waits for the dialog's map slot to mount. */
 const SLOT_WAIT_MS = 500;
 const SLOT_SELECTOR = "[data-landing-slot]";
@@ -759,6 +760,9 @@ function createEngine(
     if (document.visibilityState === "visible" && (turning || drifting || flight)) kick();
   };
 
+  /** Pending hand-back of the canvas to the card after a plain close. */
+  let closeTimer = 0;
+
   /** Lift the canvas onto the stage where it is now, then fly it. */
   const startFlight = (toMorph: number, targetEl: () => Element | null, ms: number) => {
     const box = boxOf(canvas);
@@ -888,6 +892,10 @@ function createEngine(
     setExpanded(open) {
       if (open === expanded) return;
       expanded = open;
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+        closeTimer = 0;
+      }
       if (open) {
         // Same value the dialog reads while rendering, for its pins.
         flatLonC = landingFlatCenter();
@@ -895,10 +903,25 @@ function createEngine(
         canvas.style.cursor = "";
         startFlight(1, () => document.querySelector(SLOT_SELECTOR), EXPAND_MS);
       } else {
-        startFlight(0, () => host, COLLAPSE_MS);
+        // Plain close: no flight back. The canvas stays in the dialog's slot
+        // and fades out with it, then returns to the card as a globe (behind
+        // the fading overlay). Mid-expand, it lands on the card right away.
+        if (flight) {
+          land(null);
+          return;
+        }
+        closeTimer = window.setTimeout(
+          () => {
+            closeTimer = 0;
+            if (!expanded) land(null);
+          },
+          reduceMotion ? 0 : COLLAPSE_MS,
+        );
       }
     },
     dispose() {
+      if (closeTimer) clearTimeout(closeTimer);
+      closeTimer = 0;
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       flight = null;

@@ -507,13 +507,13 @@ code,
   animation: lm-zoom-in 560ms var(--lm-ease) both;
 }
 .landing-map-dialog[data-state="closed"] {
-  animation: lm-zoom-out 420ms var(--lm-ease) both;
+  animation: lm-close 200ms ease-out both;
 }
 .landing-map-overlay[data-state="open"] {
   animation: lm-fade-in 420ms var(--lm-ease) both;
 }
 .landing-map-overlay[data-state="closed"] {
-  animation: lm-fade-out 380ms var(--lm-ease) both;
+  animation: lm-fade-out 200ms ease-out both;
 }
 /* Title, legend and hint arrive after the map has mostly landed, and leave
    first on close, so the shrinking box carries only the map. */
@@ -568,25 +568,15 @@ code,
     clip-path: inset(0px 0px 0px 0px round 12px);
   }
 }
-@keyframes lm-zoom-out {
+/* Plain close: a short fade with a slight shrink, in place. The canvas stays
+   in the dialog and goes back to the card afterwards (COLLAPSE_MS). */
+@keyframes lm-close {
   from {
     transform: translate(-50%, -50%);
-    clip-path: inset(0px 0px 0px 0px round 12px);
     opacity: 1;
-  }
-  /* The canvas flies back on its own layer above the dialog, so the frame
-     (background, border, shadow) only has to get out of the way: it is gone
-     well before it reaches the card, instead of covering it as a dark box. */
-  25% {
-    opacity: 1;
-  }
-  65% {
-    opacity: 0;
   }
   to {
-    transform: translate(-50%, -50%) translate(var(--lm-dx), var(--lm-dy)) scale(var(--lm-s));
-    clip-path: var(--lm-clip);
-    box-shadow: 0 0 0 0 transparent;
+    transform: translate(-50%, -50%) scale(0.96);
     opacity: 0;
   }
 }
