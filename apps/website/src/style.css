@@ -550,6 +550,9 @@ main {
   aspect-ratio: 860 / 620;
   transform: translate(-50%, -50%);
   overflow: hidden;
+  /* The app window has the system's rounded corners (macOS / Windows 11),
+     so the Live Demo window does too. */
+  border-radius: 10px;
   background: #111;
 }
 

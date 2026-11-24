@@ -202,7 +202,7 @@ describe("Rules", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
-  it("keeps the add button in the title bar with its label on desktop", async () => {
+  it("keeps the add button as an icon-only floating action on desktop", async () => {
     const { container } = render(<Rules />);
     const view = within(container);
     await view.findByText("youtube.com");
@@ -219,8 +219,11 @@ describe("Rules", () => {
     // The visible label carries no literal "+"; a drawn glyph supplies it.
     expect(t("rules.addCustom")).not.toContain("+");
     expect(add.querySelector("svg")).not.toBeNull();
-    expect(add).toHaveTextContent(t("rules.addCustom"));
-    expect(add.getAttribute("aria-label")).toBeNull();
+    // Icon only: the name lives in the accessible name and tooltip.
+    expect(add).toHaveTextContent("");
+    expect(add).toHaveAttribute("aria-label", t("rules.addCustom"));
+    expect(add).toHaveAttribute("title", t("rules.addCustom"));
+    expect(add).toHaveAttribute("data-icon-only");
     expect(add).toHaveAttribute("data-variant", "outline");
     expect(view.getByTestId("rules-panel").contains(add)).toBe(false);
   });
@@ -881,6 +884,24 @@ describe("Rules", () => {
     await waitFor(() => {
       expect(removeCustomRule).toHaveBeenCalledWith("fp-custom");
     });
+  });
+
+  it("hides the pager when every rule fits on one page", async () => {
+    listRules.mockResolvedValue(
+      sampleList({ offset: 0, limit: 100, total: 30 }),
+    );
+    const { container } = render(<Rules />);
+    const view = within(container);
+    await waitFor(() => {
+      expect(view.getByText("youtube.com")).toBeInTheDocument();
+    });
+    expect(view.queryByTestId("rules-pager")).toBeNull();
+    expect(
+      view.queryByRole("button", { name: t("rules.nextPage") }),
+    ).toBeNull();
+    expect(
+      view.queryByRole("button", { name: t("rules.prevPage") }),
+    ).toBeNull();
   });
 
   it("paginates with server-side offset", async () => {

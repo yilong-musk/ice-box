@@ -157,7 +157,7 @@ describe("Subscriptions", () => {
     await waitFor(() => {
       expect(listSubscriptions.mock.calls.length).toBeGreaterThan(fetchesBefore);
       const row = view.getByText("sub-b").closest("[data-slot=item]");
-      expect(row).toHaveClass("border-ok");
+      expect(row).toHaveClass("border-primary");
     });
     expect(clearNodesSnapshot).toHaveBeenCalled();
   });
@@ -182,11 +182,11 @@ describe("Subscriptions", () => {
     const rows = list.querySelectorAll("[data-slot=item]");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveAttribute("data-variant", "outline");
-    expect(rows[0]).toHaveClass("bg-muted", "border-ok");
+    expect(rows[0]).toHaveClass("bg-muted", "border-primary");
     expect(rows[0]).not.toHaveClass("border-border");
     expect(rows[1]).toHaveAttribute("data-variant", "outline");
     expect(rows[1]).toHaveClass("bg-muted", "border-border");
-    expect(rows[1]).not.toHaveClass("border-ok");
+    expect(rows[1]).not.toHaveClass("border-primary");
   });
 
   it("does not drop the node snapshot when a tray event did not switch subscriptions", async () => {

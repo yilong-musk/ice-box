@@ -207,11 +207,11 @@ export function TrafficChart({ running, paused = false, className }: Props) {
     () => ({
       down: {
         label: t("traffic.down"),
-        color: "var(--ok)",
+        color: "var(--traffic-down)",
       },
       up: {
         label: t("traffic.up"),
-        color: "var(--primary)",
+        color: "var(--traffic-up)",
       },
     }),
     [language],
@@ -460,11 +460,11 @@ export function TrafficChart({ running, paused = false, className }: Props) {
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col gap-2", className)}>
       <div className="flex shrink-0 justify-end gap-3 font-mono text-xs">
-        <span className="text-ok">
-          ↓ {latest ? formatRate(latest.down) : "—"}
+        <span data-testid="traffic-rate-down">
+          <span className="text-traffic-down">↓</span> {latest ? formatRate(latest.down) : "—"}
         </span>
-        <span className="text-primary">
-          ↑ {latest ? formatRate(latest.up) : "—"}
+        <span data-testid="traffic-rate-up">
+          <span className="text-traffic-up">↑</span> {latest ? formatRate(latest.up) : "—"}
         </span>
       </div>
       {error && (

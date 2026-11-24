@@ -637,7 +637,7 @@ export function Settings({
         {/* data-loaded lets browser smoke tests wait for the settings and
             status reads instead of guessing with a timeout. */}
         <div
-          className="mx-auto flex w-full max-w-3xl flex-col gap-5 pb-4"
+          className="mx-auto flex w-full max-w-2xl flex-col gap-6 pt-1 pb-6"
           data-testid="settings-stack"
           data-loaded={loaded ? "true" : "false"}
         >

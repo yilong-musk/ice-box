@@ -2,14 +2,13 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePaneVisible } from "@/lib/paneVisibility";
-import { Copy, Power, Terminal } from "lucide-react";
+import { Copy, Maximize2, Power, Terminal } from "lucide-react";
 import {
   api,
   formatInvokeError,
   formatUiMessage,
   type AppSettings,
   type CoreState,
-  type McpStatus,
   type NodeInfo,
   type ProxyMode,
   type StatusResponse,
@@ -33,6 +32,7 @@ import { ProxyModePicker } from "../components/ProxyModePicker";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -47,6 +47,8 @@ import {
 } from "@/components/ui/item";
 import { Switch } from "@/components/ui/switch";
 import { TunInstallDialog, useTunInstallDialog } from "../components/TunInstallDialog";
+import { LandingMap, type LandingMapState } from "@/components/LandingMap";
+import { LandingMapDialog } from "@/components/LandingMapDialog";
 import { cn } from "@/lib/utils";
 import { countryFlagEmoji } from "../lib/flagEmoji";
 import { t, useLanguagePreference, type MessageKey } from "../lib/i18n";
@@ -127,8 +129,8 @@ function jsonEqual(a: unknown, b: unknown): boolean {
 }
 
 /** Keep the current object when a re-read returns the same content, so a
- * poll or tab reactivation does not re-render Home for nothing. Settings and
- * MCP status are small plain JSON. */
+ * poll or tab reactivation does not re-render Home for nothing. Settings are
+ * small plain JSON. */
 function keepIfSame<T>(prev: T | null, next: T): T {
   return prev != null && jsonEqual(prev, next) ? prev : next;
 }
@@ -142,7 +144,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   runtimeRef.current = runtime;
   const pollGenRef = useRef(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [selectedTag, setSelectedTag] = useState<string>("");
@@ -150,6 +151,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
+  const [landingMapOpen, setLandingMapOpen] = useState(false);
   /** Optimistic TUN-toggle state while a settings save is in flight. Cleared
    * when fresh status arrives so the control snaps back on failure. */
   const [tunOverride, setTunOverride] = useState<boolean | null>(null);
@@ -191,17 +193,11 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
         const settingsPromise = wantSettings
           ? api.getSettings()
           : Promise.resolve(null);
-        const mcpPromise = phone
-          ? Promise.resolve(null)
-          : api.getMcpStatus().catch(() => null);
-
-        const [s, nextSettings, nextMcpStatus] = await Promise.all([
+        const [s, nextSettings] = await Promise.all([
           statusPromise,
           settingsPromise,
-          mcpPromise,
         ]);
         if (gen !== pollGenRef.current || !activeRef.current) return;
-        if (nextMcpStatus) setMcpStatus((prev) => keepIfSame(prev, nextMcpStatus));
 
         // A node switch may land while this fetch is in flight. Keep the
         // snapshot selection instead of regressing to stale settings.
@@ -519,28 +515,44 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // sample's landing address. Hide it until status catches up.
   const landingIp = snapshotWins ? null : statusOutbound?.landing_ip;
   const landingCountry = snapshotWins ? null : statusOutbound?.landing_country;
+  const originIp = snapshotWins ? null : statusOutbound?.origin_ip;
+  const originCountry = snapshotWins ? null : statusOutbound?.origin_country;
   const landingFlag = landingIp ? countryFlagEmoji(landingCountry) : null;
+  // Landing probe: the exit IP and region a destination sees, measured
+  // through the mixed inbound (`probe_exit_ip`). The node itself is shown in
+  // the proxy status card.
+  const probeEnabled = settings?.probe_exit_ip !== false;
+  const landingPending = running && probeEnabled && !landingIp;
+  const landingMapState: LandingMapState = landingIp
+    ? "located"
+    : !probeEnabled
+      ? "off"
+      : landingPending
+        ? "probing"
+        : "idle";
   const outboundRows: {
     label: string;
     value: string;
     valueClassName?: string;
     testId?: string;
-  }[] = [{ label: t("home.outbound.node"), value: currentNodeLabel }];
-  // Mobile status does not carry a landing IP and the compact layout cannot
-  // afford a permanent "Exit IP —" row. The flag is the probed exit country,
-  // not the country written into the node name.
-  if (!phone || landingIp) {
-    outboundRows.push({
+  }[] = [
+    {
       label: t("home.outbound.ip"),
       value: landingIp
         ? landingFlag
           ? `${landingFlag} ${landingIp}`
           : landingIp
-        : t("common.dash"),
-      valueClassName: "font-mono tabular-nums",
+        : !probeEnabled
+          ? t("home.landing.off")
+          : landingPending
+            ? t("home.landing.probing")
+            : t("common.dash"),
+      valueClassName: landingIp
+        ? "font-mono tabular-nums"
+        : "text-muted-foreground",
       testId: "home-outbound-ip",
-    });
-  }
+    },
+  ];
 
   const tunCardVisible =
     !tunUiHidden &&
@@ -693,20 +705,6 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
   // Memory is core + app main-process memory — the physical footprint on
   // macOS, the private working set on Windows.
   const memory = status?.memory;
-  const mcpSupported = mcpStatus?.supported === true;
-  const mcpRunning = mcpStatus?.supported === true && mcpStatus.running;
-  const mcpValue = mcpRunning
-    ? t("mcp.running")
-    : mcpSupported
-      ? t("mcp.stopped")
-      : t("common.dash");
-  const mcpValueClassName = mcpRunning
-    ? "text-ok"
-    : mcpStatus?.error
-      ? "text-destructive"
-      : mcpSupported
-        ? "text-muted-foreground"
-        : undefined;
   const powerOn = phone ? vpnActive : proxyOn;
   const canToggle = phone ? !busy : canToggleProxy;
   // The button names the backend it starts/stops: TUN when configured (or
@@ -851,7 +849,7 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                   size="icon"
                   className={cn(
                     "size-12 shrink-0 rounded-full",
-                    vpnConnected && "bg-ok text-white hover:bg-ok/90",
+                    vpnConnected && "bg-primary text-primary-foreground hover:bg-primary/90",
                   )}
                   title={powerTitle}
                 >
@@ -963,18 +961,18 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                     )}
                   </div>
                 )}
-                {/* Desktop only: the phone shell has no MCP service. */}
+                {/* Desktop: the node traffic currently leaves through. */}
                 {!phone && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                      {t("home.health.mcp")}
+                      {t("home.outbound.node")}
                     </span>
                     <span
-                      className={cn("truncate text-sm", mcpValueClassName)}
-                      title={mcpStatus?.error ?? mcpValue}
-                      data-testid="home-health-mcp"
+                      className="min-w-0 truncate text-sm"
+                      title={currentNodeLabel}
+                      data-testid="home-proxy-current-node"
                     >
-                      {mcpValue}
+                      {currentNodeLabel}
                     </span>
                   </div>
                 )}
@@ -1018,13 +1016,36 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 <CardTitle className="text-xs font-medium text-muted-foreground">
                   {t("home.outboundTitle")}
                 </CardTitle>
+                <CardAction>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="-my-1.5 -mr-1.5 text-muted-foreground"
+                    aria-label={t("home.landingMap.expand")}
+                    title={t("home.landingMap.expand")}
+                    data-testid="home-landing-expand"
+                    onClick={() => setLandingMapOpen(true)}
+                  >
+                    <Maximize2 />
+                  </Button>
+                </CardAction>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col">
-                <ItemGroup className="w-full flex-1 gap-0">
+              <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
+                {/* The globe scales with the card: it takes the height the
+                    card has left (at least 64px), so the column never
+                    overflows into a scrollbar. */}
+                <LandingMap
+                  country={landingCountry}
+                  state={landingMapState}
+                  expanded={landingMapOpen}
+                  className="h-auto min-h-16 flex-1"
+                />
+                <ItemGroup className="w-full shrink-0 gap-0">
                   {outboundRows.map((row, index) => (
                     <div key={row.label} className="flex flex-1 flex-col">
                       {index > 0 ? <ItemSeparator className="my-0" /> : null}
-                      <Item size="xs" className="flex-1 justify-between rounded-none px-0">
+                      <Item size="xs" className="flex-1 justify-between rounded-none px-0 pb-0">
                         <ItemDescription className="whitespace-nowrap">{row.label}</ItemDescription>
                         <ItemTitle
                           className={cn("min-w-0 flex-1 justify-end", row.valueClassName)}
@@ -1039,14 +1060,24 @@ export function Home({ onBusyChange, onNavigate, active = true, onStatus }: Prop
                 </ItemGroup>
               </CardContent>
             </Card>
+            <LandingMapDialog
+              open={landingMapOpen}
+              onOpenChange={setLandingMapOpen}
+              country={landingCountry}
+              ip={landingIp}
+              originCountry={originCountry}
+              originIp={originIp}
+            />
 
-            <Card size="sm" className="flex w-full min-h-fit min-w-0 flex-1 flex-col">
+            {/* Inbound keeps its content height; the landing probe card above
+                takes the rest of the column, so the globe gets the space. */}
+            <Card size="sm" className="flex w-full min-h-fit min-w-0 shrink-0 flex-col">
               <CardHeader>
                 <CardTitle className="text-xs font-medium text-muted-foreground">
                   {t("home.inboundTitle")}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="flex min-h-0 flex-1 flex-col justify-between gap-3">
+              <CardContent className="flex flex-col gap-3">
                 <p className="text-center font-mono text-sm tabular-nums" data-testid="home-inbound-address">
                   {inboundLabel}
                 </p>

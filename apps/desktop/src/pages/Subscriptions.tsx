@@ -234,14 +234,14 @@ export function Subscriptions({ active = true }: Props) {
             variant="outline"
             disabled={busy}
             aria-label={t("subs.importTitle")}
-            title={phone ? t("subs.importTitle") : undefined}
+            title={t("subs.importTitle")}
+            data-icon-only=""
             onClick={() => {
               setError(null);
               setImportOpen(true);
             }}
           >
-            {phone ? <Plus /> : null}
-            {phone ? null : t("subs.importTitle")}
+            <Plus aria-hidden="true" />
           </Button>
         </TitlebarActions>
       ) : null}
@@ -315,7 +315,7 @@ export function Subscriptions({ active = true }: Props) {
                         // instead of painting behind the card background.
                         "relative isolate bg-muted",
                         s.active
-                          ? "border-ok"
+                          ? "border-primary"
                           : "cursor-pointer hover:border-foreground/30 has-[[data-row-activate]:focus-visible]:border-ring has-[[data-row-activate]:focus-visible]:ring-[3px] has-[[data-row-activate]:focus-visible]:ring-ring/50",
                       )}
                       aria-current={s.active ? "true" : undefined}

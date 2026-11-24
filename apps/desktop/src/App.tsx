@@ -65,7 +65,7 @@ type Tab =
   | "mcp"
   | "connections";
 
-const SIDEBAR_WIDTH = "11rem";
+const SIDEBAR_WIDTH = "12rem";
 
 // Every visited page stays mounted. Memoized pages with stable props skip the
 // shell re-render on a tab switch. Each page subscribes to language changes on
@@ -214,29 +214,21 @@ function TitlebarActionSlots({
   ));
 }
 
-function TitleBar({
-  items,
-  tab,
-  label,
-}: {
-  items: readonly { id: Tab }[];
-  tab: Tab;
-  label: string;
-}) {
+function TitleBar({ label }: { label: string }) {
   const { open, isMobile } = useSidebar();
   const sidebarOpen = open && !isMobile;
   const windows = detectWindowChrome() === "windows-custom";
 
   return (
-    <div className="flex h-12 shrink-0 border-b" data-titlebar>
+    <div className="flex h-12 shrink-0" data-titlebar>
       {/* Caption buttons sit in this sidebar-width strip so the divider stays
           aligned. With the sidebar closed the strip shrinks to the three
           w-11 buttons (8.25rem), a concrete width so the transition runs. */}
       <div
         className={cn(
-          "flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
+          "relative z-20 flex h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-linear",
           sidebarOpen
-            ? "w-(--sidebar-width) border-r border-sidebar-border bg-sidebar"
+            ? "w-(--sidebar-width)"
             : windows
               ? "w-[8.25rem]"
               : "w-0",
@@ -253,16 +245,13 @@ function TitleBar({
         <div className="flex h-full shrink-0 items-center px-2 md:hidden">
           <SidebarTrigger />
         </div>
+        {/* No page title: the selected sidebar item already names the page.
+            The strip stays as the window drag region. */}
         <div
           className="flex h-full min-w-0 flex-1 select-none items-center px-4"
           data-tauri-drag-region
-        >
-          <h2 className="text-sm font-medium">{label}</h2>
-        </div>
-        {/* pr-7 matches the node list: page padding plus the small card padding. */}
-        <div data-titlebar-actions className="flex h-full shrink-0 items-center">
-          <TitlebarActionSlots items={items} tab={tab} padding="not-empty:pr-7" />
-        </div>
+          aria-label={label}
+        />
       </header>
     </div>
   );
@@ -570,20 +559,17 @@ function AppShell() {
         data-testid={phone ? "tablet-shell" : undefined}
       >
         {phone ? null : (
-          <TitleBar
-            items={slotItems}
-            tab={tab}
-            label={current ? t(current.labelKey) : ""}
-          />
+          <TitleBar label={current ? t(current.labelKey) : ""} />
         )}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar
             collapsible="offcanvas"
             side="left"
-            className={phone ? undefined : "top-12! h-[calc(100svh-3rem)]!"}
+            variant="sidebar"
+            className={phone ? undefined : "border-sidebar-border"}
           >
-            <SidebarContent>
+            <SidebarContent className={phone ? undefined : "pt-12"}>
               <SidebarGroup>
                 <SidebarMenu aria-label={t("app.nav.aria")}>
                   {navItems.map(({ id, labelKey }) => (
@@ -592,7 +578,7 @@ function AppShell() {
                         type="button"
                         isActive={tab === id}
                         aria-current={tab === id ? "page" : undefined}
-                        className="text-sm"
+                        className="h-8 rounded-md px-2.5 text-[13px]"
                         onClick={() => selectTab(id)}
                       >
                         <NavIcon name={id} />
@@ -643,7 +629,17 @@ function AppShell() {
             </SidebarFooter>
           </Sidebar>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              // Pages slide up under the empty title bar and use that height;
+              // page actions sit in a toolbar row inside the content instead.
+              // The caption strip (z-20) stays on top; the sidebar strip
+              // remains the drag region.
+              !phone && "relative z-10 -mt-12",
+            )}
+            data-testid="app-content"
+          >
             {phone ? (
               <header className="flex shrink-0 items-center px-4 pt-3">
                 <h2 className="text-sm font-medium">
@@ -665,11 +661,23 @@ function AppShell() {
 
             <main
               className={cn(
-                "content-main content-fill min-h-0 flex-1 overflow-hidden p-4",
+                "content-main content-fill relative min-h-0 flex-1 overflow-hidden p-4",
                 phone && "pb-[max(1rem,env(safe-area-inset-bottom))]",
               )}
               data-testid="app-main"
             >
+              {phone ? null : (
+                // Page actions (batch test, import, add rule) float at the
+                // bottom right of the content. Hidden while the current page
+                // puts nothing in its slot.
+                <div
+                  data-titlebar-actions
+                  data-page-toolbar
+                  className="absolute right-6 bottom-6 z-30 flex items-center gap-2"
+                >
+                  <TitlebarActionSlots items={slotItems} tab={tab} padding="" />
+                </div>
+              )}
               {pages}
             </main>
           </div>

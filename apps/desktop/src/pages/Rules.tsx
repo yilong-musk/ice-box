@@ -355,12 +355,13 @@ export function Rules({ onNavigate, active = true }: Props) {
       size="sm"
       variant="outline"
       className="shrink-0"
-      aria-label={phone ? t("rules.addCustom") : undefined}
-      title={phone ? t("rules.addCustom") : undefined}
+      aria-label={t("rules.addCustom")}
+      title={t("rules.addCustom")}
+      // Desktop: a round icon-only floating button, like import subscription.
+      data-icon-only={phone ? undefined : ""}
       onClick={() => setCustomForm({ mode: "add" })}
     >
       <Plus aria-hidden="true" />
-      {phone ? null : t("rules.addCustom")}
     </Button>
   );
 
@@ -660,7 +661,8 @@ export function Rules({ onNavigate, active = true }: Props) {
               </ItemGroup>
             </ScrollArea>
           )}
-          {showList ? (
+          {/* A single page needs no pager. */}
+          {showList && pages > 1 ? (
             <div
               data-testid="rules-pager"
               data-visible={nearBottom ? "true" : "false"}

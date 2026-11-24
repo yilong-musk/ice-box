@@ -98,3 +98,11 @@ afterEach(() => {
   document.documentElement.classList.remove("dark");
   document.documentElement.style.colorScheme = "";
 });
+
+// jsdom has no canvas backend and logs "Not implemented" for getContext.
+// Components that draw (the landing globe) treat a null context as "no
+// globe", so tests stub it quietly.
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: () => null,
+});

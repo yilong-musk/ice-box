@@ -191,7 +191,7 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.set_focus();
-                crate::square_window_corners(&win);
+                crate::round_window_corners(&win);
             }
             QuitOutcome::ProxyRestoreFailed
         }
@@ -204,7 +204,7 @@ pub fn request_tray_quit<R: Runtime>(app: &AppHandle<R>) -> QuitOutcome {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.set_focus();
-                crate::square_window_corners(&win);
+                crate::round_window_corners(&win);
             }
             QuitOutcome::StopFailed
         }

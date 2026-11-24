@@ -79,14 +79,15 @@ function StatCell({
 
 const TONE_CHIP = {
   neutral: "bg-muted text-foreground",
-  down: "bg-ok/10 text-ok",
-  up: "bg-primary/10 text-primary",
+  down: "bg-traffic-down/10 text-traffic-down",
+  up: "bg-traffic-up/10 text-traffic-up",
 } as const;
 
 const TONE_VALUE = {
   neutral: "text-foreground",
-  down: "text-ok",
-  up: "text-primary",
+  // Figures stay neutral; only the arrow chip carries the direction colour.
+  down: "text-foreground",
+  up: "text-foreground",
 } as const;
 
 export function ConnectionStatsCard({ running, active, paused = false, className }: Props) {

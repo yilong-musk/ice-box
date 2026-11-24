@@ -55,12 +55,96 @@ fn lock() -> std::sync::MutexGuard<'static, Cache> {
     cache().lock().unwrap_or_else(|err| err.into_inner())
 }
 
-/// Drop a sample from a core that is no longer running.
+/// Drop a sample from a core that is no longer running (and the origin
+/// sample with it, so a later run measures again).
 pub(crate) fn clear() {
     let mut slot = lock();
     let generation = slot.generation.wrapping_add(1);
     *slot = Cache::empty();
     slot.generation = generation;
+    drop(slot);
+    let mut origin = origin_lock();
+    origin.generation = origin.generation.wrapping_add(1);
+    origin.fetched_at = None;
+    origin.sample = None;
+    origin.inflight = false;
+}
+
+/// How long a measured origin is reused. It does not depend on the node, only
+/// on the user's own network, so it is refreshed far less often.
+const ORIGIN_FRESH: Duration = Duration::from_secs(300);
+
+struct OriginCache {
+    generation: u64,
+    fetched_at: Option<Instant>,
+    sample: Option<ExitSample>,
+    inflight: bool,
+}
+
+fn origin_lock() -> std::sync::MutexGuard<'static, OriginCache> {
+    static ORIGIN: OnceLock<Mutex<OriginCache>> = OnceLock::new();
+    ORIGIN
+        .get_or_init(|| {
+            Mutex::new(OriginCache {
+                generation: 0,
+                fetched_at: None,
+                sample: None,
+                inflight: false,
+            })
+        })
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
+/// The user's own public IP and country: the same trace, sent without the
+/// local proxy. In system-proxy mode the app's own requests do not use the
+/// system proxy; under TUN they are captured, but the reserved
+/// `process_name: ice-box` rule (`docs/tun.md`) routes them to `direct`, so
+/// the far end still sees the real origin. Same cache-and-background shape as
+/// [`observe`].
+pub(crate) fn observe_origin() -> Option<ExitSample> {
+    let mut slot = origin_lock();
+    let current = slot.sample.clone();
+    let ttl = if slot.sample.is_some() {
+        ORIGIN_FRESH
+    } else {
+        RETRY_AFTER_MISS
+    };
+    let fresh = slot.fetched_at.is_some_and(|at| at.elapsed() < ttl);
+    if fresh || slot.inflight {
+        return current;
+    }
+    slot.inflight = true;
+    let generation = slot.generation;
+    drop(slot);
+    let spawned = std::thread::Builder::new()
+        .name("origin-probe".into())
+        .spawn(move || {
+            let sample = fetch_origin();
+            let mut slot = origin_lock();
+            if slot.generation != generation {
+                return;
+            }
+            slot.inflight = false;
+            slot.fetched_at = Some(Instant::now());
+            slot.sample = sample;
+        });
+    if spawned.is_err() {
+        origin_lock().inflight = false;
+    }
+    current
+}
+
+fn fetch_origin() -> Option<ExitSample> {
+    // No proxy on the agent: ureq does not read the system / env proxy unless
+    // asked to, so this dials Cloudflare directly.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(5))
+        .timeout_write(Duration::from_secs(5))
+        .max_idle_connections(0)
+        .build();
+    read_limited(&agent, TRACE_URL).and_then(|body| parse_trace(&body))
 }
 
 /// Cached exit for `key`. Starts a probe when the sample is missing or stale.

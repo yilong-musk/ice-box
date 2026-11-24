@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CircleCheck, Gauge, Star } from "lucide-react";
+import { ChevronRight, CircleCheck, Gauge, Star, X } from "lucide-react";
 import {
   api,
   formatInvokeError,
@@ -219,7 +219,7 @@ const NodeCard = memo(function NodeCard({
       className={cn(
         "relative flex min-w-0 flex-col justify-center rounded-lg border px-3 transition-colors",
         current
-          ? "border-ok/60 bg-ok/10"
+          ? "border-primary/60 bg-primary/8"
           : "border-border bg-muted/20",
         selectable && !current && "hover:border-foreground/25 hover:bg-muted/50",
       )}
@@ -257,7 +257,7 @@ const NodeCard = memo(function NodeCard({
       <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         {current ? (
           <CircleCheck
-            className="size-3.5 shrink-0 text-ok"
+            className="size-3.5 shrink-0 text-primary"
             role="img"
             aria-label={t("nodes.inUse")}
           />
@@ -508,6 +508,10 @@ const SectionBlock = memo(function SectionBlock({
   );
 });
 
+/** How long the floating batch button ignores clicks after switching between
+ * "test" and "cancel". */
+const BATCH_TOGGLE_GUARD_MS = 400;
+
 export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   // Row trimming follows the phone shell, not `embedded`: embedding is about
   // the card chrome, the narrow screen is what forces the compact row.
@@ -551,6 +555,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   const [selectionPending, setSelectionPending] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const cancelRef = useRef(false);
+  /** When the floating batch button last switched between test and cancel.
+   * A double click would otherwise start a test and cancel it at once. */
+  const batchToggleAtRef = useRef(0);
   const favoriteInFlightRef = useRef(false);
   const selectionInFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -1026,6 +1033,8 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
   }, []);
 
   async function onBatchTest() {
+    // Single-flight: a batch already running is not started again.
+    if (busy) return;
     if (!running || orderedNodes.length === 0) return;
     // Probe in the order the sections and cards are drawn, so a favorited
     // member (moved to the top of its group and of the standalone list) is
@@ -1122,6 +1131,9 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
     [layout.rows, viewportTop, viewport.height],
   );
 
+  // Desktop floating button: while a batch test runs, the same button turns
+  // into its cancel button instead of adding a second one beside it.
+  const floatingCancel = !compact && !embedded && busy && !!batchProgress;
   const batchButton = (
     <>
       {embedded && busy && batchProgress ? (
@@ -1136,21 +1148,55 @@ export function Nodes({ onNavigate, active = true, embedded = false }: Props) {
         type="button"
         size="sm"
         variant={compact ? "ghost" : "outline"}
-        disabled={!running || busy || favoritePending || nodes.length === 0}
-        aria-label={compact ? t("nodes.batchTest") : undefined}
-        title={compact ? t("nodes.batchTest") : undefined}
-        onClick={() => void onBatchTest()}
+        disabled={
+          floatingCancel
+            ? false
+            : !running || busy || favoritePending || nodes.length === 0
+        }
+        // Desktop: an icon-only floating button; the name stays as its
+        // accessible name and tooltip.
+        aria-label={
+          floatingCancel
+            ? t("common.cancel")
+            : compact || !embedded
+              ? t("nodes.batchTest")
+              : undefined
+        }
+        title={
+          floatingCancel
+            ? `${t("common.cancel")} · ${batchProgress}`
+            : compact || !embedded
+              ? t("nodes.batchTest")
+              : undefined
+        }
+        data-icon-only={!compact && !embedded ? "" : undefined}
+        data-cancel={floatingCancel ? "" : undefined}
+        onClick={() => {
+          if (!compact && !embedded) {
+            // Ignore the second click of a double click: the button has just
+            // turned into the other action under the pointer.
+            const now = Date.now();
+            if (now - batchToggleAtRef.current < BATCH_TOGGLE_GUARD_MS) return;
+            batchToggleAtRef.current = now;
+          }
+          if (floatingCancel) onCancelBatch();
+          else void onBatchTest();
+        }}
       >
         {compact ? (
           <>
             <Gauge data-icon="inline-start" aria-hidden="true" />
             {t("nodes.test")}
           </>
-        ) : (
+        ) : embedded ? (
           t("nodes.batchTest")
+        ) : floatingCancel ? (
+          <X aria-hidden="true" />
+        ) : (
+          <Gauge aria-hidden="true" />
         )}
       </Button>
-      {busy && batchProgress ? (
+      {busy && batchProgress && !floatingCancel ? (
         <Button type="button" size="sm" variant="outline" onClick={onCancelBatch}>
           {t("common.cancel")}
         </Button>

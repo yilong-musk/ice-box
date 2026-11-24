@@ -60,11 +60,11 @@ const MAX_ROWS = 300;
 function TrafficPair({ down, up }: { down: number; up: number }) {
   return (
     <>
-      <span className="text-ok" data-testid="traffic-down">
-        ↓ {formatBytes(down)}
+      <span data-testid="traffic-down">
+        <span className="text-traffic-down">↓</span> {formatBytes(down)}
       </span>{" "}
-      <span className="text-primary" data-testid="traffic-up">
-        ↑ {formatBytes(up)}
+      <span data-testid="traffic-up">
+        <span className="text-traffic-up">↑</span> {formatBytes(up)}
       </span>
     </>
   );

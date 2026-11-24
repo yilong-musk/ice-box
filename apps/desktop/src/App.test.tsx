@@ -414,13 +414,17 @@ describe("App", () => {
       expect(minimize.compareDocumentPosition(maximize)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
-      const title = titlebar!.querySelector("h2");
+      // No page title any more; the header's drag strip follows the controls.
+      expect(titlebar!.querySelector("h2")).toBeNull();
+      const title = titlebar!.querySelector("header [data-tauri-drag-region]");
       expect(title).not.toBeNull();
       expect(controls.compareDocumentPosition(title!)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
       expect(titlebar!.firstElementChild).toBe(controls.parentElement);
-      expect(controls.parentElement).toHaveClass("bg-sidebar");
+      // The caption strip has no sidebar fill of its own; it only keeps the
+      // sidebar's width and overlays the sidebar's top row.
+      expect(controls.parentElement).not.toHaveClass("bg-sidebar");
       expect(controls.parentElement).toHaveClass("w-(--sidebar-width)");
 
       fireEvent.click(
@@ -441,7 +445,8 @@ describe("App", () => {
     const { container } = render(<App />);
     const titlebar = container.querySelector("[data-titlebar]");
     expect(titlebar).not.toBeNull();
-    expect(titlebar!.querySelector("h2")).toHaveTextContent(t("app.nav.home"));
+    // The page title was removed: the selected sidebar item names the page.
+    expect(titlebar!.querySelector("h2")).toBeNull();
     const sidebar = container.querySelector('[data-slot="sidebar"]');
     expect(sidebar).not.toBeNull();
     expect(titlebar!.compareDocumentPosition(sidebar!)).toBe(
@@ -453,7 +458,8 @@ describe("App", () => {
     const { container } = render(<App />);
     const regions = container.querySelectorAll("[data-tauri-drag-region]");
     expect(regions.length).toBe(4);
-    expect(regions[1]).toHaveTextContent(t("app.nav.home"));
+    expect(regions[1]).toHaveAttribute("aria-label", t("app.nav.home"));
+    expect(regions[1]).toBeEmptyDOMElement();
     expect(regions[2]).toHaveTextContent("ice-box");
     expect(regions[3]).toHaveTextContent(APP_VERSION);
   });
@@ -478,11 +484,13 @@ describe("App", () => {
       expect(view.getByText("proxy-1")).toBeInTheDocument();
     });
     expect(view.queryByText(t("nodes.emptyTitle"))).toBeNull();
-    const actions = container.querySelector("[data-titlebar] [data-titlebar-actions]");
+    // Page actions moved out of the title bar into a floating action area in
+    // the content, so every page can start at the window top.
+    expect(container.querySelector("[data-titlebar] [data-titlebar-actions]")).toBeNull();
+    const actions = container.querySelector("[data-page-toolbar]");
     expect(actions).not.toBeNull();
-    // The nodes pane portals into its own slot, inset like the page content.
     const nodesSlot = container.querySelector('[data-titlebar-slot="nodes"]');
-    expect(nodesSlot).toHaveClass("not-empty:pr-7");
+    expect(actions!.contains(nodesSlot)).toBe(true);
     expect(nodesSlot).not.toHaveAttribute("hidden");
     const batch = within(actions as HTMLElement).getByRole("button", {
       name: t("nodes.batchTest"),
