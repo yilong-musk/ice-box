@@ -21,7 +21,35 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const PREVIEW_PORT = 4179;
-const VIEWPORT = { width: 1440, height: 1200 };
+const VIEWPORT = { width: 1440, height: 1400 };
+/** Page background kept around the showcase in the shot. */
+const SHOT_PAD = 28;
+
+/**
+ * Shot-only page styles, injected after the page has loaded. The sticky nav
+ * is hidden so it cannot overlap the showcase once that is scrolled to the
+ * top, and the showcase is lifted above the wallpaper (SHOT_WALLPAPER).
+ */
+const SHOT_STYLE = `
+  .site-nav { visibility: hidden !important; }
+  .showcase { z-index: 2; }
+`;
+
+/**
+ * Wallpaper behind the windows in the shot, like a desktop background. The
+ * dark landing page sits only a few lightness steps under the app's dark
+ * cards, so in the README the windows melted into it; over soft colour the
+ * dark app and phone stand off clearly. Shot only: the live site keeps its
+ * own background. Laid on an element sized to the shot, so the whole
+ * gradient is in frame (on <body> it would stretch over the full page).
+ */
+const SHOT_WALLPAPER = [
+  "radial-gradient(60% 75% at 8% 0%, oklch(0.66 0.13 250 / 92%), transparent 70%)",
+  "radial-gradient(55% 70% at 95% 5%, oklch(0.64 0.14 312 / 88%), transparent 70%)",
+  "radial-gradient(65% 80% at 100% 100%, oklch(0.73 0.115 52 / 88%), transparent 70%)",
+  "radial-gradient(60% 75% at 0% 100%, oklch(0.68 0.1 198 / 88%), transparent 70%)",
+  "linear-gradient(135deg, oklch(0.54 0.115 268), oklch(0.58 0.12 328))",
+].join(", ");
 
 const TARGETS = [
   {
@@ -196,6 +224,59 @@ async function waitForShowcase(page, target) {
   });
 }
 
+/**
+ * The area to shoot: the showcase plus the phone frame (which can reach past
+ * the showcase box), with SHOT_PAD of page around it. The area is scrolled to
+ * the top of the viewport first; a clip used to be cut off at the viewport's
+ * bottom edge, which cropped the phone. Fails rather than crop.
+ */
+async function shotClip(page) {
+  const area = () =>
+    page.evaluate(() => {
+      const boxes = [".showcase", ".phone-frame"]
+        .map((sel) => document.querySelector(sel)?.getBoundingClientRect())
+        .filter((box) => box && box.width > 0 && box.height > 0);
+      if (boxes.length === 0) return null;
+      const left = Math.min(...boxes.map((b) => b.left));
+      const top = Math.min(...boxes.map((b) => b.top));
+      const right = Math.max(...boxes.map((b) => b.right));
+      const bottom = Math.max(...boxes.map((b) => b.bottom));
+      return { left, top, right, bottom, scrollY: window.scrollY };
+    });
+  const before = await area();
+  if (!before) throw new Error("Showcase is not visible");
+  await page.evaluate((y) => window.scrollTo(0, y), before.scrollY + before.top - SHOT_PAD);
+  const box = await area();
+  const clip = {
+    x: Math.max(0, box.left - SHOT_PAD),
+    y: Math.max(0, box.top - SHOT_PAD),
+    width: box.right - box.left + SHOT_PAD * 2,
+    height: box.bottom - box.top + SHOT_PAD * 2,
+  };
+  if (clip.x + clip.width > VIEWPORT.width || clip.y + clip.height > VIEWPORT.height) {
+    throw new Error(`Shot area ${JSON.stringify(clip)} does not fit the ${VIEWPORT.width}x${VIEWPORT.height} viewport`);
+  }
+  await page.evaluate(
+    ({ clip, wallpaper }) => {
+      const el = document.createElement("div");
+      el.setAttribute("aria-hidden", "true");
+      Object.assign(el.style, {
+        position: "fixed",
+        left: `${clip.x}px`,
+        top: `${clip.y}px`,
+        width: `${clip.width}px`,
+        height: `${clip.height}px`,
+        zIndex: "1",
+        pointerEvents: "none",
+        background: wallpaper,
+      });
+      document.body.append(el);
+    },
+    { clip, wallpaper: SHOT_WALLPAPER },
+  );
+  return clip;
+}
+
 if (!fs.existsSync(path.join(websiteDir, "node_modules/playwright"))) {
   console.error(
     "compose-hero: install website deps first:\n" +
@@ -244,15 +325,8 @@ try {
           timeout: 60_000,
         });
         await waitForShowcase(page, target);
-        const box = await page.locator(".showcase").boundingBox();
-        if (!box) throw new Error("Showcase is not visible");
-        const pad = 28;
-        const clip = {
-          x: Math.max(0, box.x - pad),
-          y: Math.max(0, box.y - pad),
-          width: Math.min(VIEWPORT.width - Math.max(0, box.x - pad), box.width + pad * 2),
-          height: Math.min(VIEWPORT.height - Math.max(0, box.y - pad), box.height + pad * 2),
-        };
+        await page.addStyleTag({ content: SHOT_STYLE });
+        const clip = await shotClip(page);
         const png = await page.screenshot({ type: "png", clip });
         const outFile = path.join(repoRoot, target.output);
         fs.mkdirSync(path.dirname(outFile), { recursive: true });
